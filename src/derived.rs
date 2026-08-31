@@ -220,6 +220,20 @@ impl View {
             .collect()
     }
 
+    /// 放置されたまま残っている claim。
+    /// 時間だけで判断すると長時間の作業を誤検出するため、プロセスの生存も併せて見る。
+    /// 検出するだけで、解放は人手に委ねる (docs/data-model.md D-6)。
+    pub fn stale_claims(&self, threshold_hours: i64) -> Vec<(&Issue, &Claim)> {
+        let now = Utc::now();
+        self.iter()
+            .filter_map(|i| i.progress.claim().map(|c| (i, c)))
+            .filter(|(_, c)| {
+                let elapsed = now.signed_duration_since(c.at).num_hours();
+                elapsed >= threshold_hours && !crate::actor::process_alive(c.pid)
+            })
+            .collect()
+    }
+
     /// 進捗。分母は採用したものだけ (docs/axes.md §3)。
     pub fn group_progress(&self, g: &GroupId) -> GroupProgress {
         let issues = self.issues_in(g);

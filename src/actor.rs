@@ -50,3 +50,12 @@ pub fn session_key() -> String {
 pub fn pid() -> i32 {
     std::process::id() as i32
 }
+
+/// そのプロセスがまだ生きているか。1 マシン前提なので PID で判定できる。
+/// 権限が無い場合 (EPERM) も存在はしているので、生存とみなす。
+pub fn process_alive(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    unsafe { libc::kill(pid, 0) == 0 || *libc::__error() == libc::EPERM }
+}

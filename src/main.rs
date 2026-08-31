@@ -42,6 +42,18 @@ enum Command {
     },
     /// 変更の履歴を見る
     Log { id: String },
+    /// 放置されたまま残っている着手を探す
+    Stale {
+        /// これより長く動きがないものを対象にする
+        #[arg(long, default_value_t = 24)]
+        hours: i64,
+    },
+    /// 着手を取り消して未着手に戻す
+    Release {
+        id: String,
+        #[arg(short, long)]
+        reason: Option<String>,
+    },
     /// 全 issue を見る
     List,
     /// 詳細を見る
@@ -169,6 +181,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Start { id } => cmd_start(&id),
         Command::Done { id, reason } => cmd_done(&id, reason),
         Command::Log { id } => cmd_log(&id),
+        Command::Stale { hours } => cmd_stale(hours),
+        Command::Release { id, reason } => cmd_release(&id, reason),
         Command::List => cmd_list(),
         Command::Show { id } => cmd_show(&id),
         Command::Decide(c) => cmd_decide(c),
@@ -628,5 +642,39 @@ fn cmd_log(id: &str) -> Result<(), Box<dyn std::error::Error>> {
             None => println!(),
         }
     }
+    Ok(())
+}
+
+fn cmd_stale(hours: i64) -> Result<(), Box<dyn std::error::Error>> {
+    let (_, view) = load()?;
+    let stale = view.stale_claims(hours);
+    if stale.is_empty() {
+        println!("放置された着手はありません");
+        return Ok(());
+    }
+    for (issue, claim) in stale {
+        let elapsed = chrono::Utc::now()
+            .signed_duration_since(claim.at)
+            .num_hours();
+        println!("{}  {}", issue.id, issue.title);
+        println!(
+            "  {} が {} 時間前に着手 (プロセス {} は終了しています)",
+            claim.actor, elapsed, claim.pid
+        );
+        println!("  解放するなら: axon release {}", issue.id);
+    }
+    Ok(())
+}
+
+fn cmd_release(id: &str, reason: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut store = Store::open()?;
+    let id = store.resolve_id(id)?;
+    let before = store.get(&id)?;
+    let Some(claim) = before.progress.claim() else {
+        return Err(format!("{id} は着手されていません").into());
+    };
+    let who = claim.actor.clone();
+    store.apply(&id, Change::Release, &ctx(reason))?;
+    println!("{id} の着手 ({who}) を取り消しました");
     Ok(())
 }

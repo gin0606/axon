@@ -334,6 +334,16 @@ impl Store {
                     return Err(DbError::CannotClaim { id: id.to_string(), reason });
                 }
             }
+            Change::Release => {
+                tx.execute(
+                    "UPDATE issues
+                        SET progress = 'not_started',
+                            claimed_actor = NULL, claimed_session = NULL,
+                            claimed_pid = NULL, claimed_at = NULL, updated_at = ?2
+                      WHERE id = ?1",
+                    params![id.as_str(), now],
+                )?;
+            }
             Change::End => {
                 tx.execute(
                     "UPDATE issues
@@ -478,6 +488,8 @@ pub struct Event {
 /// 状態を変える操作。`Store::apply` 以外から状態を書き換えない。
 pub enum Change {
     Claim(Claim),
+    /// 着手を取り消して未着手に戻す。放置された claim を人手で解放するために使う。
+    Release,
     End,
     Decide(Commitment),
     SetCondition(Option<Condition>),
@@ -544,6 +556,11 @@ fn describe(before: &Issue, change: &Change) -> (&'static str, Option<String>, O
             "progress",
             Some(before.progress.as_db().to_string()),
             Some("in_progress".to_string()),
+        ),
+        Change::Release => (
+            "progress",
+            Some(before.progress.as_db().to_string()),
+            Some("not_started".to_string()),
         ),
         Change::End => (
             "progress",
