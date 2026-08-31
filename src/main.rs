@@ -554,76 +554,126 @@ fn cmd_show(id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let (store, view) = load()?;
     let id = store.resolve_id(id)?;
     let issue = view.get(&id).ok_or("issue が見つかりません")?;
+    print!("{}", render_show(&view, issue));
+    Ok(())
+}
 
-    println!("{}  {}", issue.id, issue.title);
+/// show の本文。該当が無い区分で空の見出しを出さないため、行の無いブロックは落とす。
+fn render_show(view: &View, issue: &Issue) -> String {
+    let mut blocks: Vec<Vec<String>> = Vec::new();
+
     let when = match &issue.condition {
         None => "常に浮上".to_string(),
         Some(Condition::At(d)) => format!("{d} 以降"),
         Some(Condition::AfterIssue(r)) => format!("{r} が終わった後"),
     };
-    println!(
-        "進行: {}  採否: {}  時期: {}",
-        issue.progress.label(),
-        issue.commitment.label(),
-        when
-    );
-    if let Some(c) = issue.progress.claim() {
-        println!("着手: {} ({})", c.actor, c.at.format("%Y-%m-%d %H:%M"));
+    let mut head = vec![
+        format!("{}  {}", issue.id, issue.title),
+        format!(
+            "進行: {}  採否: {}  時期: {}",
+            issue.progress.label(),
+            issue.commitment.label(),
+            when
+        ),
+    ];
+    let group = issue.group.as_ref().and_then(|g| view.group(g));
+    if let Some(g) = group {
+        head.push(if g.name == g.slug {
+            format!("グループ: {}", g.slug)
+        } else {
+            format!("グループ: {}  {}", g.slug, g.name)
+        });
     }
+    if let Some(c) = issue.progress.claim() {
+        head.push(format!(
+            "着手: {} ({})",
+            c.actor,
+            c.at.format("%Y-%m-%d %H:%M")
+        ));
+    }
+    blocks.push(head);
+
     if let Some(d) = &issue.description {
-        println!("\n{d}");
+        blocks.push(vec![d.clone()]);
     }
 
-    let waiting: Vec<_> = view
-        .depends_on(&id)
-        .into_iter()
-        .filter(|d| !d.is_terminal())
-        .collect();
-    if !waiting.is_empty() {
-        println!();
-        for d in &waiting {
-            println!("待ち: {}  {}{}", d.id, d.title, blocker_note(&view, d));
-        }
+    let deps = view.depends_on(&issue.id);
+    let waiting: Vec<&Issue> = deps.iter().copied().filter(|d| !d.is_terminal()).collect();
+    let mut relations = Vec::new();
+    for d in &waiting {
+        relations.push(format!(
+            "待ち: {}  {}{}",
+            d.id,
+            d.title,
+            blocker_note(view, d)
+        ));
     }
-    let lost: Vec<_> = view
-        .depends_on(&id)
-        .into_iter()
-        .filter(|d| d.commitment == Commitment::Rejected)
-        .collect();
-    for d in lost {
-        println!("前提喪失: {} が不採用になっています", d.id);
+    for d in deps
+        .iter()
+        .filter(|d| d.is_terminal() && d.commitment != Commitment::Rejected)
+    {
+        relations.push(format!("済み: {}  {}", d.id, d.title));
+    }
+    for d in deps.iter().filter(|d| d.commitment == Commitment::Rejected) {
+        relations.push(format!("前提喪失: {} が不採用になっています", d.id));
     }
 
     // 直接の依存より奥に原因があるときだけ、遡った結果を出す
-    let causes = view.blocked_reason(&id);
-    let direct: Vec<_> = waiting.iter().map(|d| &d.id).collect();
-    for c in causes.iter().filter(|c| !direct.contains(&&c.id)) {
-        println!("原因: {}  {}{}", c.id, c.title, blocker_note(&view, c));
+    let direct: Vec<&IssueId> = waiting.iter().map(|d| &d.id).collect();
+    for c in view
+        .blocked_reason(&issue.id)
+        .iter()
+        .filter(|c| !direct.contains(&&c.id))
+    {
+        relations.push(format!(
+            "原因: {}  {}{}",
+            c.id,
+            c.title,
+            blocker_note(view, c)
+        ));
     }
 
+    for d in view.dependents(&issue.id) {
+        relations.push(format!("後続: {}  {}{}", d.id, d.title, dependent_note(d)));
+    }
+    blocks.push(relations);
+
     for (g, blockers) in view.group_blocked_reason(issue) {
-        println!();
-        println!(
+        let mut block = vec![format!(
             "グループ {} が {} を待っています",
-            issue
-                .group
-                .as_ref()
-                .and_then(|x| view.group(x))
-                .map(|x| x.slug.as_str())
-                .unwrap_or("?"),
+            group.map(|x| x.slug.as_str()).unwrap_or("?"),
             g.slug
-        );
+        )];
         for b in blockers {
-            println!(
+            block.push(format!(
                 "  {}  [{}/{}]  {}",
                 b.id,
                 b.progress.label(),
                 b.commitment.label(),
                 b.title
-            );
+            ));
         }
+        blocks.push(block);
     }
-    Ok(())
+
+    let body = blocks
+        .into_iter()
+        .filter(|b| !b.is_empty())
+        .map(|b| b.join("\n"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    format!("{body}\n")
+}
+
+/// 後続がすでに終端なら、これを終わらせても動き出さないことを添える。
+fn dependent_note(issue: &Issue) -> &'static str {
+    if issue.commitment == Commitment::Rejected {
+        " ← 不採用"
+    } else if matches!(issue.progress, Progress::Ended) {
+        " ← 終了済み"
+    } else {
+        ""
+    }
 }
 
 /// 止まっている理由のうち、状態表示だけでは読み取れないものを添える。
@@ -867,4 +917,136 @@ fn cmd_write(
         println!("{id} の{w}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn iid(id: &str) -> IssueId {
+        IssueId::from_stored(id)
+    }
+
+    fn issue(id: &str, progress: Progress, commitment: Commitment) -> Issue {
+        let now = Utc::now();
+        Issue {
+            id: iid(id),
+            title: format!("{id} の作業"),
+            description: None,
+            progress,
+            commitment,
+            condition: None,
+            group: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn accepted(id: &str) -> Issue {
+        issue(id, Progress::NotStarted, Commitment::Accepted)
+    }
+
+    fn done(id: &str) -> Issue {
+        issue(id, Progress::Ended, Commitment::Accepted)
+    }
+
+    fn rejected(id: &str) -> Issue {
+        issue(id, Progress::NotStarted, Commitment::Rejected)
+    }
+
+    fn group(slug: &str, name: &str) -> Group {
+        Group {
+            id: GroupId::from_stored(slug),
+            slug: slug.to_string(),
+            name: name.to_string(),
+            description: None,
+            parent: None,
+        }
+    }
+
+    fn view(issues: Vec<Issue>, deps: &[(&str, &str)], groups: Vec<Group>) -> View {
+        View::new(
+            issues,
+            deps.iter().map(|(a, b)| (iid(a), iid(b))).collect(),
+            groups,
+            Vec::new(),
+        )
+    }
+
+    fn show(view: &View, id: &str) -> String {
+        render_show(view, view.get(&iid(id)).unwrap())
+    }
+
+    #[test]
+    fn show_without_relations_is_state_only() {
+        let v = view(vec![accepted("a")], &[], Vec::new());
+        assert_eq!(
+            show(&v, "a"),
+            "a  a の作業\n進行: 未着手  採否: 採用  時期: 常に浮上\n"
+        );
+    }
+
+    #[test]
+    fn show_lists_resolved_dependencies() {
+        let v = view(
+            vec![accepted("a"), done("b"), accepted("c")],
+            &[("a", "b"), ("a", "c")],
+            Vec::new(),
+        );
+        let out = show(&v, "a");
+        assert!(out.contains("待ち: c  c の作業"), "{out}");
+        assert!(out.contains("済み: b  b の作業"), "{out}");
+    }
+
+    #[test]
+    fn rejected_dependency_is_not_listed_as_resolved() {
+        let v = view(
+            vec![
+                accepted("a"),
+                issue("b", Progress::Ended, Commitment::Rejected),
+            ],
+            &[("a", "b")],
+            Vec::new(),
+        );
+        let out = show(&v, "a");
+        assert!(out.contains("前提喪失: b が不採用になっています"), "{out}");
+        assert!(!out.contains("済み:"), "{out}");
+    }
+
+    #[test]
+    fn show_lists_dependents() {
+        let v = view(
+            vec![accepted("a"), accepted("b"), done("c"), rejected("d")],
+            &[("b", "a"), ("c", "a"), ("d", "a")],
+            Vec::new(),
+        );
+        let out = show(&v, "a");
+        assert!(out.contains("後続: b  b の作業\n"), "{out}");
+        assert!(out.contains("後続: c  c の作業 ← 終了済み"), "{out}");
+        assert!(out.contains("後続: d  d の作業 ← 不採用"), "{out}");
+    }
+
+    #[test]
+    fn show_lists_group() {
+        let mut i = accepted("a");
+        i.group = Some(GroupId::from_stored("cli"));
+        let v = view(vec![i], &[], vec![group("cli", "CLI")]);
+        assert!(
+            show(&v, "a").contains("グループ: cli  CLI"),
+            "{}",
+            show(&v, "a")
+        );
+    }
+
+    #[test]
+    fn group_line_omits_name_equal_to_slug() {
+        let mut i = accepted("a");
+        i.group = Some(GroupId::from_stored("cli"));
+        let v = view(vec![i], &[], vec![group("cli", "cli")]);
+        assert!(
+            show(&v, "a").contains("グループ: cli\n"),
+            "{}",
+            show(&v, "a")
+        );
+    }
 }
