@@ -19,76 +19,30 @@
 二重持ちをやめたことで、br が払っていたコストが消える:
 エクスポートの肥大化、差分の churn、コンフリクト解決、worktree 間の状態分岐の追跡。
 
-## スキーマ案
+## スキーマ
 
-```sql
-CREATE TABLE groups (
-  id          TEXT PRIMARY KEY,
-  slug        TEXT NOT NULL UNIQUE,          -- CLI で打つ識別子 (例: auth, ledger)
-  name        TEXT NOT NULL,
-  description TEXT,
-  parent_id   TEXT REFERENCES groups(id),    -- 階層。NULL なら root
-  created_at  TEXT NOT NULL,
-  updated_at  TEXT NOT NULL
-);
+正は `src/db.rs`。ここには構成と、そこから読み取りにくい意図だけ書く。
 
-CREATE TABLE issues (
-  id          TEXT PRIMARY KEY,              -- <prefix>-<rand6> (例: myproj-a3f9k2)
-  title       TEXT NOT NULL,
-  description TEXT,
-  group_id    TEXT REFERENCES groups(id),    -- NULL 可 (どのグループにも属さない)
+| テーブル | 役割 |
+| --- | --- |
+| `meta` | ID の接頭辞などの設定 |
+| `issues` | A / B / C と claim。C は `cond_kind` + 値の列で直和型を表す |
+| `issue_deps` | issue 間の依存 (前提の 1 種類のみ) |
+| `groups` | 機能群。`parent_id` で階層を持つ |
+| `group_deps` | グループ間の依存 |
+| `events` | 状態変更の履歴 |
 
-  -- A: 進行
-  progress    TEXT NOT NULL CHECK (progress IN ('not_started','in_progress','ended')),
-  -- B: 採否
-  commitment  TEXT NOT NULL CHECK (commitment IN ('undecided','accepted','rejected')),
+設計上の要点:
 
-  -- C: 再浮上条件 (直和型を kind + 値で表現)
-  cond_kind   TEXT CHECK (cond_kind IN ('date','after_issue','after_group')),
-  cond_date   TEXT,                          -- cond_kind='date' のとき
-  cond_ref    TEXT,                          -- cond_kind='after_*' のとき
+- **導出値をテーブルに持たない**。ready / blocked / orphaned / 進捗はすべて計算する。
+　br は blocked をキャッシュし、その整合性維持のために parity 検査の仕組みまで抱えていた
+- **claim は `progress = 'in_progress'` のときだけ存在する**。
+　CHECK 制約で縛り、読み出し時も `Progress::from_db` が食い違いを弾く
+- **C の直和型は CHECK 制約で整合性を保つ**。
+　`cond_kind` が取る値ごとに、どの列が埋まっているべきかを縛る
+- **スキーマは `user_version` で版を持つ**。開くたびに不足分だけ流す
 
-  -- 並行作業の claim (A=in_progress のときのみ非 NULL)
-  claimed_actor   TEXT,      -- 表示用: "claude-code" / "codex" / "gin0606@feature-auth"
-  claimed_session TEXT,      -- 一意性: セッション ID。無ければ自動生成
-  claimed_pid     INTEGER,   -- stale 検出のプロセス生存確認用
-  claimed_at      TEXT,
-
-  created_at  TEXT NOT NULL,
-  updated_at  TEXT NOT NULL,
-
-  -- claim は着手中のときだけ
-  CHECK (
-    (progress = 'in_progress' AND claimed_session IS NOT NULL) OR
-    (progress <> 'in_progress' AND claimed_session IS NULL)
-  ),
-
-  -- C の直和型としての整合性
-  CHECK (
-    (cond_kind IS NULL   AND cond_date IS NULL AND cond_ref IS NULL) OR
-    (cond_kind = 'date'  AND cond_date IS NOT NULL AND cond_ref IS NULL) OR
-    (cond_kind LIKE 'after_%' AND cond_ref IS NOT NULL AND cond_date IS NULL)
-  )
-);
-
-CREATE TABLE issue_deps (                    -- D: issue 間依存 (前提の 1 種類のみ)
-  issue_id      TEXT NOT NULL REFERENCES issues(id),
-  depends_on_id TEXT NOT NULL REFERENCES issues(id),
-  PRIMARY KEY (issue_id, depends_on_id),
-  CHECK (issue_id <> depends_on_id)
-);
-
-CREATE TABLE group_deps (                    -- グループ間依存
-  group_id      TEXT NOT NULL REFERENCES groups(id),
-  depends_on_id TEXT NOT NULL REFERENCES groups(id),
-  PRIMARY KEY (group_id, depends_on_id),
-  CHECK (group_id <> depends_on_id)
-);
-```
-
-導出値 (ready / blocked / orphaned / blockedReason / 進捗) はテーブルに持たず、
-クエリまたはアプリケーション層で計算する。**キャッシュテーブルを持たない**
-(br は blocked をキャッシュし、その整合性維持に苦労していた)。
+`Condition::AfterGroup` (条件にグループを指定する) はまだ無い。
 
 ## 決着した論点
 
