@@ -229,3 +229,134 @@ impl Issue {
         matches!(self.progress, Progress::Ended) || self.commitment == Commitment::Rejected
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn claim() -> Claim {
+        Claim {
+            actor: "tester".to_string(),
+            session: "s".to_string(),
+            pid: 1,
+            at: Utc::now(),
+        }
+    }
+
+    fn issue(progress: Progress, commitment: Commitment) -> Issue {
+        let now = Utc::now();
+        Issue {
+            id: IssueId::from_stored("t-1"),
+            title: "t".to_string(),
+            description: None,
+            progress,
+            commitment,
+            condition: None,
+            group: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    /// 「着手中なら claim がある」は型で表せているので、外から来た値を載せる境界だけが検査点。
+    #[test]
+    fn progress_from_db_requires_claim_to_match_state() {
+        assert!(matches!(
+            Progress::from_db("not_started", None),
+            Ok(Progress::NotStarted)
+        ));
+        assert!(matches!(
+            Progress::from_db("ended", None),
+            Ok(Progress::Ended)
+        ));
+        assert!(matches!(
+            Progress::from_db("in_progress", Some(claim())),
+            Ok(Progress::InProgress(_))
+        ));
+        assert!(matches!(
+            Progress::from_db("in_progress", None),
+            Err(ParseError::MissingClaim)
+        ));
+        assert!(matches!(
+            Progress::from_db("not_started", Some(claim())),
+            Err(ParseError::UnexpectedClaim)
+        ));
+        assert!(matches!(
+            Progress::from_db("ended", Some(claim())),
+            Err(ParseError::UnexpectedClaim)
+        ));
+        assert!(matches!(
+            Progress::from_db("bogus", None),
+            Err(ParseError::Progress(_))
+        ));
+    }
+
+    #[test]
+    fn progress_round_trips_through_db_representation() {
+        for p in [
+            Progress::NotStarted,
+            Progress::Ended,
+            Progress::InProgress(claim()),
+        ] {
+            assert_eq!(Progress::from_db(p.as_db(), p.claim().cloned()).unwrap(), p);
+        }
+    }
+
+    #[test]
+    fn commitment_round_trips_and_rejects_unknown() {
+        for c in [
+            Commitment::Undecided,
+            Commitment::Accepted,
+            Commitment::Rejected,
+        ] {
+            assert_eq!(Commitment::from_db(c.as_db()).unwrap(), c);
+        }
+        assert!(matches!(
+            Commitment::from_db("bogus"),
+            Err(ParseError::Commitment(_))
+        ));
+    }
+
+    #[test]
+    fn condition_from_db_needs_columns_matching_its_kind() {
+        let date = Condition::from_db("date", Some("2026-01-31"), None).unwrap();
+        assert_eq!(date, Condition::At("2026-01-31".parse().unwrap()));
+        assert_eq!(date.kind_db(), "date");
+
+        let after = Condition::from_db("after_issue", None, Some("t-1")).unwrap();
+        assert_eq!(after, Condition::AfterIssue(IssueId::from_stored("t-1")));
+        assert_eq!(after.kind_db(), "after_issue");
+
+        assert!(Condition::from_db("date", None, Some("t-1")).is_err());
+        assert!(Condition::from_db("date", None, None).is_err());
+        assert!(Condition::from_db("after_issue", Some("2026-01-31"), None).is_err());
+        assert!(Condition::from_db("date", Some("not-a-date"), None).is_err());
+        assert!(Condition::from_db("bogus", None, None).is_err());
+    }
+
+    #[test]
+    fn generated_ids_use_the_restricted_alphabet() {
+        for _ in 0..200 {
+            let id = IssueId::generate("axon");
+            let suffix = id.as_str().strip_prefix("axon-").expect("接頭辞が付く");
+            assert_eq!(suffix.len(), ID_LEN);
+            assert!(suffix.bytes().all(|b| ID_ALPHABET.contains(&b)), "{id}");
+            assert!(!suffix.contains(['i', 'l', 'o', 'u']));
+        }
+        let g = GroupId::generate();
+        assert_eq!(
+            g.as_str().strip_prefix("g-").expect("接頭辞が付く").len(),
+            ID_LEN
+        );
+    }
+
+    #[test]
+    fn terminal_covers_both_axes() {
+        assert!(issue(Progress::Ended, Commitment::Accepted).is_terminal());
+        assert!(issue(Progress::NotStarted, Commitment::Rejected).is_terminal());
+        assert!(issue(Progress::Ended, Commitment::Rejected).is_terminal());
+        assert!(!issue(Progress::NotStarted, Commitment::Accepted).is_terminal());
+        assert!(!issue(Progress::NotStarted, Commitment::Undecided).is_terminal());
+        assert!(!issue(Progress::InProgress(claim()), Commitment::Accepted).is_terminal());
+    }
+}

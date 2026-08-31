@@ -320,3 +320,600 @@ pub enum TriageReason {
     /// 依存先が不採用になり、前提を失った
     Orphaned,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+
+    fn iid(id: &str) -> IssueId {
+        IssueId::from_stored(id)
+    }
+
+    fn gid(id: &str) -> GroupId {
+        GroupId::from_stored(id)
+    }
+
+    fn issue(id: &str, progress: Progress, commitment: Commitment) -> Issue {
+        let now = Utc::now();
+        Issue {
+            id: iid(id),
+            title: id.to_string(),
+            description: None,
+            progress,
+            commitment,
+            condition: None,
+            group: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn accepted(id: &str) -> Issue {
+        issue(id, Progress::NotStarted, Commitment::Accepted)
+    }
+
+    fn undecided(id: &str) -> Issue {
+        issue(id, Progress::NotStarted, Commitment::Undecided)
+    }
+
+    fn rejected(id: &str) -> Issue {
+        issue(id, Progress::NotStarted, Commitment::Rejected)
+    }
+
+    fn done(id: &str) -> Issue {
+        issue(id, Progress::Ended, Commitment::Accepted)
+    }
+
+    /// 「完了 かつ 不採用」。
+    fn done_rejected(id: &str) -> Issue {
+        issue(id, Progress::Ended, Commitment::Rejected)
+    }
+
+    /// pid 0 は `process_alive` が常に死んでいると判定するため、OS に依存せず stale を作れる。
+    fn claim(pid: i32, hours_ago: i64) -> Claim {
+        Claim {
+            actor: "tester".to_string(),
+            session: "s".to_string(),
+            pid,
+            at: Utc::now() - Duration::hours(hours_ago),
+        }
+    }
+
+    fn in_progress(id: &str, c: Claim) -> Issue {
+        issue(id, Progress::InProgress(c), Commitment::Accepted)
+    }
+
+    fn in_group(mut i: Issue, g: &str) -> Issue {
+        i.group = Some(gid(g));
+        i
+    }
+
+    fn with_cond(mut i: Issue, c: Condition) -> Issue {
+        i.condition = Some(c);
+        i
+    }
+
+    fn group(id: &str, parent: Option<&str>) -> Group {
+        Group {
+            id: gid(id),
+            slug: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            parent: parent.map(gid),
+        }
+    }
+
+    fn view(issues: Vec<Issue>, deps: &[(&str, &str)]) -> View {
+        View::new(
+            issues,
+            deps.iter().map(|(a, b)| (iid(a), iid(b))).collect(),
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    fn view_with_groups(
+        issues: Vec<Issue>,
+        deps: &[(&str, &str)],
+        groups: Vec<Group>,
+        group_deps: &[(&str, &str)],
+    ) -> View {
+        View::new(
+            issues,
+            deps.iter().map(|(a, b)| (iid(a), iid(b))).collect(),
+            groups,
+            group_deps.iter().map(|(a, b)| (gid(a), gid(b))).collect(),
+        )
+    }
+
+    fn ids(issues: &[&Issue]) -> Vec<String> {
+        let mut v: Vec<String> = issues.iter().map(|i| i.id.to_string()).collect();
+        v.sort();
+        v
+    }
+
+    // ---- ready の定義 ----
+
+    #[test]
+    fn ready_requires_accepted_and_not_started() {
+        let v = view(
+            vec![accepted("a"), undecided("b"), rejected("c"), done("d")],
+            &[],
+        );
+        assert_eq!(ids(&v.ready()), ["a"]);
+    }
+
+    #[test]
+    fn in_progress_is_not_ready() {
+        let v = view(vec![in_progress("a", claim(1, 0))], &[]);
+        assert!(v.ready().is_empty());
+    }
+
+    /// spec: invReadyExclusive — ready なら blocked でも orphaned でもない。
+    #[test]
+    fn inv_ready_exclusive() {
+        let v = view(
+            vec![
+                accepted("a"),
+                accepted("b"),
+                accepted("c"),
+                accepted("w"),
+                rejected("z"),
+            ],
+            &[("b", "w"), ("c", "z")],
+        );
+        for i in v.ready() {
+            assert!(!v.is_blocked(&i.id), "{} が blocked なのに ready", i.id);
+            assert!(!v.is_orphaned(&i.id), "{} が orphaned なのに ready", i.id);
+        }
+        assert_eq!(ids(&v.ready()), ["a", "w"]);
+    }
+
+    /// spec: invRejectedDoneStillBlocks — 「完了 かつ 不採用」の依存先は解放しない。
+    #[test]
+    fn inv_rejected_done_still_blocks() {
+        let v = view(vec![accepted("y"), done_rejected("x")], &[("y", "x")]);
+        assert!(!v.is_blocked(&iid("y")), "終端なので blocked ではない");
+        assert!(v.is_orphaned(&iid("y")));
+        assert!(!v.is_ready(v.get(&iid("y")).unwrap()));
+    }
+
+    // ---- D-1 派生: orphaned は推移させない ----
+
+    /// spec の invNoHiddenDeadlock は意図的に違反する (docs/axes.md D-1 派生)。
+    #[test]
+    fn orphaned_does_not_propagate() {
+        let v = view(
+            vec![accepted("y"), accepted("x"), rejected("z")],
+            &[("y", "x"), ("x", "z")],
+        );
+        assert!(v.is_orphaned(&iid("x")));
+        assert!(
+            !v.is_orphaned(&iid("y")),
+            "orphaned は直接の依存先だけを見る"
+        );
+        assert_eq!(ids(&v.blocked_reason(&iid("y"))), ["x"]);
+    }
+
+    /// spec: invBlockedHasCause / invCauseIsUnresolved
+    #[test]
+    fn inv_blocked_has_cause() {
+        let v = view(
+            vec![accepted("y"), accepted("x"), accepted("w"), done("d")],
+            &[("y", "x"), ("y", "d"), ("x", "w")],
+        );
+        let cause = v.blocked_reason(&iid("y"));
+        assert!(v.is_blocked(&iid("y")));
+        assert!(!cause.is_empty(), "blocked なら原因が 1 つ以上ある");
+        assert!(
+            cause.iter().all(|i| !i.is_terminal()),
+            "原因は未終端のものだけ"
+        );
+        assert_eq!(ids(&cause), ["w"], "中継の x ではなく鎖の先頭を指す");
+    }
+
+    #[test]
+    fn deferred_dependency_is_a_root_cause() {
+        let future = Utc::now().date_naive() + Duration::days(7);
+        let v = view(
+            vec![
+                accepted("y"),
+                with_cond(accepted("x"), Condition::At(future)),
+                accepted("w"),
+            ],
+            &[("y", "x"), ("x", "w")],
+        );
+        assert_eq!(ids(&v.blocked_reason(&iid("y"))), ["x"]);
+    }
+
+    #[test]
+    fn cause_walk_stops_on_dependency_cycle() {
+        let v = view(
+            vec![accepted("a"), accepted("b")],
+            &[("a", "b"), ("b", "a")],
+        );
+        assert!(v.is_blocked(&iid("a")));
+        assert!(v.blocked_reason(&iid("a")).is_empty());
+    }
+
+    // ---- C: 浮上条件 ----
+
+    #[test]
+    fn condition_at_surfaces_on_or_before_today() {
+        let today = Utc::now().date_naive();
+        let v = view(
+            vec![
+                with_cond(accepted("past"), Condition::At(today - Duration::days(1))),
+                with_cond(accepted("today"), Condition::At(today)),
+                with_cond(accepted("future"), Condition::At(today + Duration::days(1))),
+            ],
+            &[],
+        );
+        assert_eq!(ids(&v.ready()), ["past", "today"]);
+    }
+
+    /// spec: invCondRefSatisfiedByRejection — C の参照先が不採用でも浮上する。
+    #[test]
+    fn inv_cond_ref_satisfied_by_rejection() {
+        let v = view(
+            vec![
+                with_cond(accepted("y"), Condition::AfterIssue(iid("x"))),
+                rejected("x"),
+            ],
+            &[],
+        );
+        assert!(v.is_ready(v.get(&iid("y")).unwrap()));
+    }
+
+    /// spec: invCondAndDepDiffer — 同じ相手でも C 参照と D 依存で挙動が分かれる。
+    /// この非対称が C-1 差し替えの根拠 (docs/axes.md C-1)。
+    #[test]
+    fn inv_cond_and_dep_differ() {
+        let by_cond = view(
+            vec![
+                with_cond(accepted("y"), Condition::AfterIssue(iid("x"))),
+                rejected("x"),
+            ],
+            &[],
+        );
+        let by_dep = view(vec![accepted("y"), rejected("x")], &[("y", "x")]);
+        assert!(
+            by_cond.is_ready(by_cond.get(&iid("y")).unwrap()),
+            "C 参照は浮上する"
+        );
+        assert!(by_dep.is_orphaned(&iid("y")), "D 依存は前提を失う");
+        assert!(!by_dep.is_ready(by_dep.get(&iid("y")).unwrap()));
+    }
+
+    #[test]
+    fn condition_ref_to_missing_issue_surfaces() {
+        let v = view(
+            vec![with_cond(accepted("y"), Condition::AfterIssue(iid("gone")))],
+            &[],
+        );
+        assert!(v.is_surfaced(v.get(&iid("y")).unwrap()));
+    }
+
+    #[test]
+    fn condition_ref_waits_for_unterminated_issue() {
+        let v = view(
+            vec![
+                with_cond(accepted("y"), Condition::AfterIssue(iid("x"))),
+                accepted("x"),
+            ],
+            &[],
+        );
+        assert!(!v.is_surfaced(v.get(&iid("y")).unwrap()));
+        assert_eq!(ids(&v.ready()), ["x"]);
+    }
+
+    // ---- グループ ----
+
+    /// spec: invGroupBlockedNotReady
+    #[test]
+    fn inv_group_blocked_not_ready() {
+        let v = view_with_groups(
+            vec![in_group(accepted("a"), "g1"), in_group(accepted("b"), "g0")],
+            &[],
+            vec![group("g0", None), group("g1", None)],
+            &[("g1", "g0")],
+        );
+        let a = v.get(&iid("a")).unwrap();
+        assert!(v.is_group_blocked(a));
+        assert!(!v.is_ready(a));
+        assert_eq!(ids(&v.ready()), ["b"]);
+    }
+
+    #[test]
+    fn group_dependency_applies_to_descendants() {
+        let v = view_with_groups(
+            vec![
+                in_group(accepted("a"), "child"),
+                in_group(accepted("b"), "g0"),
+            ],
+            &[],
+            vec![
+                group("g0", None),
+                group("parent", None),
+                group("child", Some("parent")),
+            ],
+            &[("parent", "g0")],
+        );
+        assert!(v.is_group_blocked(v.get(&iid("a")).unwrap()));
+    }
+
+    /// spec: invRejectedDoesNotPinGroup (docs/axes.md G-3)
+    #[test]
+    fn inv_rejected_does_not_pin_group() {
+        let v = view_with_groups(
+            vec![
+                in_group(accepted("a"), "g1"),
+                in_group(done("b"), "g0"),
+                in_group(rejected("c"), "g0"),
+            ],
+            &[],
+            vec![group("g0", None), group("g1", None)],
+            &[("g1", "g0")],
+        );
+        assert!(v.group_satisfied(&gid("g0")));
+        assert!(v.is_ready(v.get(&iid("a")).unwrap()));
+    }
+
+    #[test]
+    fn undecided_child_pins_group() {
+        let v = view_with_groups(
+            vec![
+                in_group(accepted("a"), "g1"),
+                in_group(undecided("b"), "g0"),
+            ],
+            &[],
+            vec![group("g0", None), group("g1", None)],
+            &[("g1", "g0")],
+        );
+        assert!(!v.group_satisfied(&gid("g0")));
+        assert!(v.is_group_blocked(v.get(&iid("a")).unwrap()));
+    }
+
+    /// spec の invFullProgressReleases は意図的に違反する (docs/axes.md §6)。
+    #[test]
+    fn full_progress_does_not_release_group_with_undecided() {
+        let v = view_with_groups(
+            vec![
+                in_group(accepted("a"), "g1"),
+                in_group(done("b"), "g0"),
+                in_group(undecided("c"), "g0"),
+            ],
+            &[],
+            vec![group("g0", None), group("g1", None)],
+            &[("g1", "g0")],
+        );
+        let p = v.group_progress(&gid("g0"));
+        assert_eq!(p.ratio(), Some(1.0), "採用分は全て終わっている");
+        assert_eq!(p.undecided, 1);
+        assert!(
+            !v.group_satisfied(&gid("g0")),
+            "未判断が残るので完了ではない"
+        );
+        assert!(v.is_group_blocked(v.get(&iid("a")).unwrap()));
+    }
+
+    /// spec: invGroupCompleteImpliesFullProgress — 逆方向は成り立つ。
+    #[test]
+    fn inv_group_complete_implies_full_progress() {
+        let v = view_with_groups(
+            vec![in_group(done("a"), "g0"), in_group(rejected("b"), "g0")],
+            &[],
+            vec![group("g0", None)],
+            &[],
+        );
+        assert!(v.group_satisfied(&gid("g0")));
+        assert_eq!(v.group_progress(&gid("g0")).ratio(), Some(1.0));
+    }
+
+    /// spec: invProgressSubset — 分子は分母の部分集合。
+    #[test]
+    fn inv_progress_subset() {
+        let v = view_with_groups(
+            vec![
+                in_group(done("a"), "g0"),
+                in_group(accepted("b"), "g0"),
+                in_group(undecided("c"), "g0"),
+                in_group(rejected("d"), "g0"),
+            ],
+            &[],
+            vec![group("g0", None)],
+            &[],
+        );
+        let p = v.group_progress(&gid("g0"));
+        assert!(p.done <= p.total);
+        assert_eq!((p.done, p.total, p.undecided), (1, 2, 1));
+    }
+
+    #[test]
+    fn progress_ratio_is_none_without_accepted() {
+        let v = view_with_groups(
+            vec![in_group(undecided("a"), "g0")],
+            &[],
+            vec![group("g0", None)],
+            &[],
+        );
+        assert_eq!(v.group_progress(&gid("g0")).ratio(), None);
+    }
+
+    /// spec: invGroupBlockedHasCause — グループ依存で止まっている原因を説明できる。
+    #[test]
+    fn inv_group_blocked_has_cause() {
+        let v = view_with_groups(
+            vec![
+                in_group(accepted("a"), "g1"),
+                in_group(accepted("b"), "g0"),
+                in_group(done("c"), "g0"),
+            ],
+            &[],
+            vec![group("g0", None), group("g1", None)],
+            &[("g1", "g0")],
+        );
+        let a = v.get(&iid("a")).unwrap();
+        let reason = v.group_blocked_reason(a);
+        assert_eq!(reason.len(), 1);
+        let (g, blockers) = &reason[0];
+        assert_eq!(g.slug, "g0");
+        assert_eq!(ids(blockers), ["b"], "終わっている c は原因に挙げない");
+    }
+
+    #[test]
+    fn group_waiting_on_lists_unsatisfied_targets() {
+        let v = view_with_groups(
+            vec![in_group(accepted("b"), "g0"), in_group(done("c"), "gdone")],
+            &[],
+            vec![group("g0", None), group("gdone", None), group("g1", None)],
+            &[("g1", "g0"), ("g1", "gdone")],
+        );
+        let waiting: Vec<&str> = v
+            .group_waiting_on(&gid("g1"))
+            .iter()
+            .map(|g| g.slug.as_str())
+            .collect();
+        assert_eq!(waiting, ["g0"]);
+    }
+
+    #[test]
+    fn issues_in_includes_descendant_groups() {
+        let v = view_with_groups(
+            vec![
+                in_group(accepted("a"), "parent"),
+                in_group(accepted("b"), "child"),
+            ],
+            &[],
+            vec![group("parent", None), group("child", Some("parent"))],
+            &[],
+        );
+        assert_eq!(ids(&v.issues_in(&gid("parent"))), ["a", "b"]);
+        assert_eq!(ids(&v.issues_in(&gid("child"))), ["b"]);
+    }
+
+    #[test]
+    fn group_traversal_stops_on_cycle() {
+        let v = view_with_groups(
+            vec![in_group(accepted("a"), "g1")],
+            &[],
+            vec![group("g1", Some("g2")), group("g2", Some("g1"))],
+            &[],
+        );
+        assert_eq!(ids(&v.issues_in(&gid("g1"))), ["a"]);
+        assert!(!v.is_group_blocked(v.get(&iid("a")).unwrap()));
+    }
+
+    #[test]
+    fn issue_without_group_is_never_group_blocked() {
+        let v = view_with_groups(
+            vec![accepted("a"), in_group(accepted("b"), "g0")],
+            &[],
+            vec![group("g0", None), group("g1", None)],
+            &[("g1", "g0")],
+        );
+        let a = v.get(&iid("a")).unwrap();
+        assert!(!v.is_group_blocked(a));
+        assert!(v.group_blocked_reason(a).is_empty());
+    }
+
+    #[test]
+    fn group_lookup_by_id() {
+        let v = view_with_groups(Vec::new(), &[], vec![group("g0", None)], &[]);
+        assert_eq!(v.groups().len(), 1);
+        assert_eq!(v.group(&gid("g0")).unwrap().slug, "g0");
+        assert!(v.group(&gid("nope")).is_none());
+    }
+
+    // ---- 一覧 ----
+
+    #[test]
+    fn triage_lists_undecided_and_orphaned() {
+        let v = view(
+            vec![
+                undecided("u"),
+                accepted("y"),
+                rejected("x"),
+                accepted("ok"),
+                done("d"),
+            ],
+            &[("y", "x")],
+        );
+        let got: Vec<(String, &str)> = v
+            .triage()
+            .into_iter()
+            .map(|(i, r)| {
+                let reason = match r {
+                    TriageReason::Undecided => "undecided",
+                    TriageReason::Orphaned => "orphaned",
+                };
+                (i.id.to_string(), reason)
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("u".to_string(), "undecided"),
+                ("y".to_string(), "orphaned")
+            ]
+        );
+    }
+
+    #[test]
+    fn triage_skips_terminal_orphans() {
+        let v = view(vec![done("y"), rejected("x")], &[("y", "x")]);
+        assert!(v.triage().is_empty());
+    }
+
+    #[test]
+    fn newly_ready_after_lists_only_fully_unblocked() {
+        let v = view(
+            vec![
+                done("x"),
+                accepted("a"),
+                accepted("b"),
+                accepted("other"),
+                undecided("u"),
+            ],
+            &[("a", "x"), ("b", "x"), ("b", "other"), ("u", "x")],
+        );
+        assert_eq!(ids(&v.newly_ready_after(&iid("x"))), ["a"]);
+    }
+
+    #[test]
+    fn depends_on_and_dependents_are_symmetric() {
+        let v = view(vec![accepted("a"), accepted("b")], &[("a", "b")]);
+        assert_eq!(ids(&v.depends_on(&iid("a"))), ["b"]);
+        assert_eq!(ids(&v.dependents(&iid("b"))), ["a"]);
+        assert!(v.depends_on(&iid("b")).is_empty());
+    }
+
+    #[test]
+    fn stale_claims_need_both_age_and_dead_process() {
+        let alive = std::process::id() as i32;
+        let v = view(
+            vec![
+                in_progress("old_dead", claim(0, 48)),
+                in_progress("old_alive", claim(alive, 48)),
+                in_progress("fresh_dead", claim(0, 0)),
+                accepted("not_started"),
+            ],
+            &[],
+        );
+        let stale: Vec<String> = v
+            .stale_claims(24)
+            .iter()
+            .map(|(i, _)| i.id.to_string())
+            .collect();
+        assert_eq!(stale, ["old_dead"]);
+    }
+
+    #[test]
+    fn iter_preserves_input_order() {
+        let v = view(vec![accepted("c"), accepted("a"), accepted("b")], &[]);
+        let order: Vec<String> = v.iter().map(|i| i.id.to_string()).collect();
+        assert_eq!(order, ["c", "a", "b"]);
+        assert!(v.get(&iid("nope")).is_none());
+    }
+}

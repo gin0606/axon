@@ -157,6 +157,12 @@ pub struct Store {
 }
 
 impl Store {
+    fn from_conn(conn: Connection) -> Result<Self> {
+        conn.execute_batch("PRAGMA foreign_keys = ON")?;
+        migrate(&conn)?;
+        Ok(Store { conn })
+    }
+
     pub fn init(prefix: &str) -> Result<PathBuf> {
         let path = db_path()?;
         if path.exists() {
@@ -178,10 +184,18 @@ impl Store {
         if !path.exists() {
             return Err(DbError::NotInitialized);
         }
-        let conn = Connection::open(&path)?;
-        conn.execute_batch("PRAGMA foreign_keys = ON")?;
-        migrate(&conn)?;
-        Ok(Store { conn })
+        Self::from_conn(Connection::open(&path)?)
+    }
+
+    /// テストが実在の `.axon/` を触らないようにする。
+    #[cfg(test)]
+    pub fn in_memory(prefix: &str) -> Result<Self> {
+        let store = Self::from_conn(Connection::open_in_memory()?)?;
+        store.conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('prefix', ?1)",
+            params![prefix],
+        )?;
+        Ok(store)
     }
 
     pub fn prefix(&self) -> Result<String> {
@@ -750,4 +764,432 @@ fn parse_ts(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
         .map(|d| d.with_timezone(&Utc))
         .unwrap_or_else(|_| Utc::now())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store() -> Store {
+        Store::in_memory("t").expect("in-memory DB を開ける")
+    }
+
+    fn ctx() -> Ctx {
+        Ctx {
+            actor: "tester".to_string(),
+            reason: Some("理由".to_string()),
+        }
+    }
+
+    fn claim(pid: i32) -> Claim {
+        Claim {
+            actor: "tester".to_string(),
+            session: "s".to_string(),
+            pid,
+            at: Utc::now(),
+        }
+    }
+
+    /// created_at を明示して作る。read_all が created_at 順に返すため、順序が要る検査で効く。
+    fn issue(id: &str, seq: i64) -> Issue {
+        let at = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+            + chrono::Duration::seconds(seq);
+        Issue {
+            id: IssueId::from_stored(id),
+            title: format!("issue {id}"),
+            description: None,
+            progress: Progress::NotStarted,
+            commitment: Commitment::Accepted,
+            condition: None,
+            group: None,
+            created_at: at,
+            updated_at: at,
+        }
+    }
+
+    fn group(id: &str) -> Group {
+        Group {
+            id: GroupId::from_stored(id),
+            slug: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            parent: None,
+        }
+    }
+
+    fn iid(id: &str) -> IssueId {
+        IssueId::from_stored(id)
+    }
+
+    #[test]
+    fn migrate_applies_every_version_and_is_idempotent() {
+        let s = store();
+        let version = |s: &Store| -> i64 {
+            s.conn
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(version(&s) as usize, MIGRATIONS.len());
+        migrate(&s.conn).unwrap();
+        assert_eq!(
+            version(&s) as usize,
+            MIGRATIONS.len(),
+            "流し直しても増えない"
+        );
+        assert_eq!(s.prefix().unwrap(), "t");
+    }
+
+    /// 型 → DB → 型 で往復しても値が変わらない。
+    #[test]
+    fn issue_round_trips_through_the_database() {
+        let s = store();
+        s.insert_group(&group("g")).unwrap();
+
+        let mut i = issue("t-1", 0);
+        i.description = Some("説明".to_string());
+        i.condition = Some(Condition::At("2026-03-01".parse().unwrap()));
+        i.group = Some(GroupId::from_stored("g"));
+        s.insert(&i).unwrap();
+
+        let back = s.get(&i.id).unwrap();
+        assert_eq!(back.title, i.title);
+        assert_eq!(back.description, i.description);
+        assert_eq!(back.condition, i.condition);
+        assert_eq!(back.group, i.group);
+        assert_eq!(back.commitment, i.commitment);
+        assert_eq!(back.progress, i.progress);
+        assert_eq!(back.created_at, i.created_at);
+    }
+
+    #[test]
+    fn claim_round_trips_with_its_issue() {
+        let mut s = store();
+        s.insert(&issue("t-1", 0)).unwrap();
+        let c = claim(4242);
+        s.apply(&iid("t-1"), Change::Claim(c.clone()), &ctx())
+            .unwrap();
+
+        let back = s.get(&iid("t-1")).unwrap();
+        let stored = back.progress.claim().expect("着手中なので claim がある");
+        assert_eq!(stored.actor, c.actor);
+        assert_eq!(stored.session, c.session);
+        assert_eq!(stored.pid, c.pid);
+    }
+
+    #[test]
+    fn get_reports_missing_issue() {
+        let s = store();
+        assert!(matches!(s.get(&iid("nope")), Err(DbError::NoSuchIssue(_))));
+    }
+
+    // ---- 進行の遷移 ----
+
+    #[test]
+    fn claim_only_from_not_started() {
+        let mut s = store();
+        s.insert(&issue("t-1", 0)).unwrap();
+        s.apply(&iid("t-1"), Change::Claim(claim(1)), &ctx())
+            .unwrap();
+        assert!(matches!(
+            s.get(&iid("t-1")).unwrap().progress,
+            Progress::InProgress(_)
+        ));
+
+        let err = s
+            .apply(&iid("t-1"), Change::Claim(claim(2)), &ctx())
+            .unwrap_err();
+        assert!(matches!(err, DbError::CannotClaim { .. }));
+    }
+
+    #[test]
+    fn claim_is_rejected_after_end() {
+        let mut s = store();
+        s.insert(&issue("t-1", 0)).unwrap();
+        s.apply(&iid("t-1"), Change::End, &ctx()).unwrap();
+        let err = s
+            .apply(&iid("t-1"), Change::Claim(claim(1)), &ctx())
+            .unwrap_err();
+        assert!(matches!(err, DbError::CannotClaim { .. }));
+    }
+
+    /// claim を消し忘れると、読み戻しで UnexpectedClaim になる。
+    #[test]
+    fn leaving_in_progress_clears_the_claim() {
+        for change in [Change::Release, Change::End] {
+            let mut s = store();
+            s.insert(&issue("t-1", 0)).unwrap();
+            s.apply(&iid("t-1"), Change::Claim(claim(1)), &ctx())
+                .unwrap();
+            s.apply(&iid("t-1"), change, &ctx()).unwrap();
+            assert!(s.get(&iid("t-1")).unwrap().progress.claim().is_none());
+        }
+    }
+
+    /// 「着手中 かつ 不採用」は、軸が独立していることから到達する。
+    #[test]
+    fn axes_do_not_move_each_other() {
+        let mut s = store();
+        s.insert(&issue("t-1", 0)).unwrap();
+        s.apply(&iid("t-1"), Change::Claim(claim(1)), &ctx())
+            .unwrap();
+        s.apply(&iid("t-1"), Change::Decide(Commitment::Rejected), &ctx())
+            .unwrap();
+
+        let after = s.get(&iid("t-1")).unwrap();
+        assert!(
+            matches!(after.progress, Progress::InProgress(_)),
+            "採否が進行を動かさない"
+        );
+        assert_eq!(after.commitment, Commitment::Rejected);
+
+        s.apply(&iid("t-1"), Change::End, &ctx()).unwrap();
+        assert_eq!(
+            s.get(&iid("t-1")).unwrap().commitment,
+            Commitment::Rejected,
+            "進行が採否を動かさない"
+        );
+    }
+
+    // ---- 履歴 ----
+
+    /// 履歴に残すのは判断 (採否・時期) だけ。
+    #[test]
+    fn only_decisions_are_logged() {
+        let mut s = store();
+        s.insert(&issue("t-1", 0)).unwrap();
+
+        s.apply(&iid("t-1"), Change::Claim(claim(1)), &ctx())
+            .unwrap();
+        s.apply(&iid("t-1"), Change::End, &ctx()).unwrap();
+        s.apply(
+            &iid("t-1"),
+            Change::SetTitle("新しい題".to_string()),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(s.events(&iid("t-1")).unwrap().is_empty());
+
+        s.apply(&iid("t-1"), Change::Decide(Commitment::Rejected), &ctx())
+            .unwrap();
+        s.apply(
+            &iid("t-1"),
+            Change::SetCondition(Some(Condition::At("2026-03-01".parse().unwrap()))),
+            &ctx(),
+        )
+        .unwrap();
+
+        let events = s.events(&iid("t-1")).unwrap();
+        let fields: Vec<&str> = events.iter().map(|e| e.field.as_str()).collect();
+        assert_eq!(fields, ["commitment", "condition"]);
+        assert_eq!(events[0].old_value.as_deref(), Some("accepted"));
+        assert_eq!(events[0].new_value.as_deref(), Some("rejected"));
+        assert_eq!(events[0].actor, "tester");
+        assert_eq!(events[0].reason.as_deref(), Some("理由"));
+        assert_eq!(events[1].old_value, None, "条件は付いていなかった");
+        assert_eq!(events[1].new_value.as_deref(), Some("2026-03-01"));
+    }
+
+    #[test]
+    fn summarize_flattens_and_truncates() {
+        assert_eq!(summarize("  短い\n本文  "), "短い 本文");
+        assert_eq!(summarize(&"あ".repeat(30)), "あ".repeat(30));
+        let long = summarize(&"あ".repeat(31));
+        assert_eq!(long.chars().count(), 31, "30 文字 + 省略記号");
+        assert!(long.ends_with('…'));
+    }
+
+    // ---- 参照の解決 ----
+
+    #[test]
+    fn resolve_id_needs_a_unique_match() {
+        let s = store();
+        s.insert(&issue("a-x1", 0)).unwrap();
+        s.insert(&issue("b-x1", 1)).unwrap();
+        s.insert(&issue("a-y2", 2)).unwrap();
+
+        assert_eq!(s.resolve_id("y2").unwrap(), iid("a-y2"));
+        assert_eq!(s.resolve_id("a-x1").unwrap(), iid("a-x1"));
+        assert!(matches!(
+            s.resolve_id("x1"),
+            Err(DbError::AmbiguousId { .. })
+        ));
+        assert!(matches!(s.resolve_id("zz"), Err(DbError::NoSuchIssue(_))));
+    }
+
+    #[test]
+    fn resolve_slug_reports_missing_group() {
+        let s = store();
+        s.insert_group(&group("g")).unwrap();
+        assert_eq!(s.resolve_slug("g").unwrap(), GroupId::from_stored("g"));
+        assert!(matches!(
+            s.resolve_slug("nope"),
+            Err(DbError::NoSuchGroup(_))
+        ));
+    }
+
+    // ---- 依存 ----
+
+    #[test]
+    fn deps_are_added_once_and_removable() {
+        let s = store();
+        s.insert(&issue("t-1", 0)).unwrap();
+        s.insert(&issue("t-2", 1)).unwrap();
+
+        s.add_dep(&iid("t-1"), &iid("t-2")).unwrap();
+        s.add_dep(&iid("t-1"), &iid("t-2")).unwrap();
+        assert_eq!(s.deps().unwrap(), [(iid("t-1"), iid("t-2"))], "重複しない");
+
+        s.remove_dep(&iid("t-1"), &iid("t-2")).unwrap();
+        assert!(s.deps().unwrap().is_empty());
+    }
+
+    #[test]
+    fn group_deps_are_added_once_and_removable() {
+        let s = store();
+        s.insert_group(&group("g1")).unwrap();
+        s.insert_group(&group("g0")).unwrap();
+
+        let (a, b) = (GroupId::from_stored("g1"), GroupId::from_stored("g0"));
+        s.add_group_dep(&a, &b).unwrap();
+        s.add_group_dep(&a, &b).unwrap();
+        assert_eq!(s.group_deps().unwrap(), [(a.clone(), b.clone())]);
+
+        s.remove_group_dep(&a, &b).unwrap();
+        assert!(s.group_deps().unwrap().is_empty());
+    }
+
+    #[test]
+    fn groups_round_trip() {
+        let s = store();
+        let mut child = group("child");
+        child.parent = Some(GroupId::from_stored("g"));
+        child.description = Some("説明".to_string());
+        s.insert_group(&group("g")).unwrap();
+        s.insert_group(&child).unwrap();
+
+        let stored = s.groups().unwrap();
+        let found = stored
+            .iter()
+            .find(|g| g.slug == "child")
+            .expect("child がある");
+        assert_eq!(found.parent, child.parent);
+        assert_eq!(found.description, child.description);
+    }
+
+    // ---- claim_next ----
+
+    #[test]
+    fn claim_next_takes_the_oldest_ready_issue() {
+        let mut s = store();
+        s.insert(&issue("t-old", 0)).unwrap();
+        s.insert(&issue("t-new", 1)).unwrap();
+
+        let first = s.claim_next(claim(1)).unwrap().expect("1 件取れる");
+        assert_eq!(first.id, iid("t-old"));
+        assert!(matches!(
+            s.get(&first.id).unwrap().progress,
+            Progress::InProgress(_)
+        ));
+
+        let second = s.claim_next(claim(2)).unwrap().expect("残りが取れる");
+        assert_eq!(second.id, iid("t-new"));
+        assert!(s.claim_next(claim(3)).unwrap().is_none());
+    }
+
+    #[test]
+    fn claim_next_skips_undecided_and_blocked() {
+        let mut s = store();
+        let mut undecided = issue("t-undecided", 0);
+        undecided.commitment = Commitment::Undecided;
+        s.insert(&undecided).unwrap();
+        s.insert(&issue("t-blocked", 1)).unwrap();
+        s.insert(&issue("t-blocker", 2)).unwrap();
+        s.add_dep(&iid("t-blocked"), &iid("t-blocker")).unwrap();
+
+        let picked = s.claim_next(claim(1)).unwrap().expect("blocker は取れる");
+        assert_eq!(picked.id, iid("t-blocker"));
+        assert!(
+            s.claim_next(claim(2)).unwrap().is_none(),
+            "blocker が着手中の間は blocked を取らない"
+        );
+
+        s.apply(&iid("t-blocker"), Change::End, &ctx()).unwrap();
+        let next = s.claim_next(claim(3)).unwrap().expect("解除されたら取れる");
+        assert_eq!(next.id, iid("t-blocked"));
+    }
+
+    #[test]
+    fn claim_next_returns_none_when_nothing_is_ready() {
+        let mut s = store();
+        assert!(s.claim_next(claim(1)).unwrap().is_none());
+    }
+
+    // ---- 文面とグループ ----
+
+    #[test]
+    fn description_and_group_are_updated_through_apply() {
+        let mut s = store();
+        s.insert_group(&group("g")).unwrap();
+        s.insert(&issue("t-1", 0)).unwrap();
+
+        s.apply(
+            &iid("t-1"),
+            Change::SetDescription(Some("申し送り".to_string())),
+            &ctx(),
+        )
+        .unwrap();
+        s.apply(
+            &iid("t-1"),
+            Change::SetGroup(Some(GroupId::from_stored("g"))),
+            &ctx(),
+        )
+        .unwrap();
+        let after = s.get(&iid("t-1")).unwrap();
+        assert_eq!(after.description.as_deref(), Some("申し送り"));
+        assert_eq!(after.group, Some(GroupId::from_stored("g")));
+
+        s.apply(&iid("t-1"), Change::SetDescription(None), &ctx())
+            .unwrap();
+        s.apply(&iid("t-1"), Change::SetGroup(None), &ctx())
+            .unwrap();
+        let cleared = s.get(&iid("t-1")).unwrap();
+        assert_eq!(cleared.description, None);
+        assert_eq!(cleared.group, None);
+
+        assert!(s.events(&iid("t-1")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn condition_after_issue_round_trips() {
+        let mut s = store();
+        s.insert(&issue("t-1", 0)).unwrap();
+        s.insert(&issue("t-2", 1)).unwrap();
+
+        let cond = Condition::AfterIssue(iid("t-2"));
+        s.apply(
+            &iid("t-1"),
+            Change::SetCondition(Some(cond.clone())),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(s.get(&iid("t-1")).unwrap().condition, Some(cond));
+
+        let events = s.events(&iid("t-1")).unwrap();
+        assert_eq!(events[0].new_value.as_deref(), Some("after t-2"));
+
+        s.apply(&iid("t-1"), Change::SetCondition(None), &ctx())
+            .unwrap();
+        assert_eq!(s.get(&iid("t-1")).unwrap().condition, None);
+    }
+
+    #[test]
+    fn all_returns_issues_in_creation_order() {
+        let s = store();
+        s.insert(&issue("t-2", 1)).unwrap();
+        s.insert(&issue("t-1", 0)).unwrap();
+        let ids: Vec<String> = s.all().unwrap().iter().map(|i| i.id.to_string()).collect();
+        assert_eq!(ids, ["t-1", "t-2"]);
+    }
 }
