@@ -274,10 +274,10 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             let id = store.resolve_slug(&slug)?;
             let g = view.group(&id).ok_or("グループが見つかりません")?;
             println!("{}  {}", g.slug, g.name);
-            if let Some(pid) = &g.parent {
-                if let Some(parent) = view.group(pid) {
-                    println!("親: {}", parent.slug);
-                }
+            if let Some(pid) = &g.parent
+                && let Some(parent) = view.group(pid)
+            {
+                println!("親: {}", parent.slug);
             }
             let p = view.group_progress(&id);
             match p.ratio() {

@@ -4,10 +4,10 @@ use std::env;
 
 /// 表示用のラベル。
 pub fn actor() -> String {
-    if let Ok(v) = env::var("AXON_ACTOR") {
-        if !v.is_empty() {
-            return v;
-        }
+    if let Ok(v) = env::var("AXON_ACTOR")
+        && !v.is_empty()
+    {
+        return v;
     }
     // サポート対象は簡潔な名前を出す。AI_AGENT の値は
     // "claude-code_2-1-251_agent" のように冗長なことがあるため、個別検出を先に見る。
@@ -18,10 +18,10 @@ pub fn actor() -> String {
         return "codex".to_string();
     }
     // サポート外のエージェントは自己申告をそのまま使う
-    if let Ok(v) = env::var("AI_AGENT") {
-        if !v.is_empty() {
-            return v;
-        }
+    if let Ok(v) = env::var("AI_AGENT")
+        && !v.is_empty()
+    {
+        return v;
     }
     let user = env::var("USER").unwrap_or_else(|_| "unknown".to_string());
     match env::current_dir()
@@ -36,10 +36,10 @@ pub fn actor() -> String {
 /// claim の一意性を保証する識別子。セッション ID が取れなければ場所と PID から作る。
 pub fn session_key() -> String {
     for key in ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID"] {
-        if let Ok(v) = env::var(key) {
-            if !v.is_empty() {
-                return v;
-            }
+        if let Ok(v) = env::var(key)
+            && !v.is_empty()
+        {
+            return v;
         }
     }
     let cwd = env::current_dir()

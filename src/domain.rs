@@ -27,6 +27,8 @@ pub struct Claim {
 }
 
 /// A: 進行。終端は「やり切った」ではなく「もう進めない」を意味する。
+// InProgress は軸の語彙そのもので、Progress を外した名前は意味が変わる。
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Progress {
     NotStarted,
