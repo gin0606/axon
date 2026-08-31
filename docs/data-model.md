@@ -1,0 +1,211 @@
+# データモデルと永続化
+
+`axes.md` で固めた状態モデルを、実際の保存形式に落とす。
+
+## 確定した前提
+
+| | 内容 |
+| --- | --- |
+| 用途 | **個人のタスク分解・管理**に絞る。プロダクト全体の ITS としては使わない (別ツールにする) |
+| git | **管理しない** (ignore) |
+| 保存形式 | **SQLite 単体**。git 用のエクスポートを持たない (二重持ちをしない) |
+| 配置 | リポジトリごとに 1 つ。全 worktree から同じ DB を共有する |
+| 同期 | 不要 (1 マシン・1 DB) |
+
+用途を絞った理由: 「個人のタスク分解」と「プロダクト全体の ITS」は要件が違う
+(共有の要否、PR からの参照、保存形式の制約)。混ぜると設計が引きずられる。
+これは `axes.md` で扱った「複数の概念を 1 つに畳む」問題が、ツールのスコープで再現したもの。
+
+二重持ちをやめたことで、br が払っていたコストが消える:
+エクスポートの肥大化、差分の churn、コンフリクト解決、worktree 間の状態分岐の追跡。
+
+## スキーマ案
+
+```sql
+CREATE TABLE groups (
+  id          TEXT PRIMARY KEY,
+  slug        TEXT NOT NULL UNIQUE,          -- CLI で打つ識別子 (例: auth, ledger)
+  name        TEXT NOT NULL,
+  description TEXT,
+  parent_id   TEXT REFERENCES groups(id),    -- 階層。NULL なら root
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE issues (
+  id          TEXT PRIMARY KEY,              -- <prefix>-<rand6> (例: myproj-a3f9k2)
+  title       TEXT NOT NULL,
+  description TEXT,
+  group_id    TEXT REFERENCES groups(id),    -- NULL 可 (どのグループにも属さない)
+
+  -- A: 進行
+  progress    TEXT NOT NULL CHECK (progress IN ('not_started','in_progress','ended')),
+  -- B: 採否
+  commitment  TEXT NOT NULL CHECK (commitment IN ('undecided','accepted','rejected')),
+
+  -- C: 再浮上条件 (直和型を kind + 値で表現)
+  cond_kind   TEXT CHECK (cond_kind IN ('date','after_issue','after_group')),
+  cond_date   TEXT,                          -- cond_kind='date' のとき
+  cond_ref    TEXT,                          -- cond_kind='after_*' のとき
+
+  -- 並行作業の claim (A=in_progress のときのみ非 NULL)
+  claimed_actor   TEXT,      -- 表示用: "claude-code" / "codex" / "gin0606@feature-auth"
+  claimed_session TEXT,      -- 一意性: セッション ID。無ければ自動生成
+  claimed_pid     INTEGER,   -- stale 検出のプロセス生存確認用
+  claimed_at      TEXT,
+
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+
+  -- claim は着手中のときだけ
+  CHECK (
+    (progress = 'in_progress' AND claimed_session IS NOT NULL) OR
+    (progress <> 'in_progress' AND claimed_session IS NULL)
+  ),
+
+  -- C の直和型としての整合性
+  CHECK (
+    (cond_kind IS NULL   AND cond_date IS NULL AND cond_ref IS NULL) OR
+    (cond_kind = 'date'  AND cond_date IS NOT NULL AND cond_ref IS NULL) OR
+    (cond_kind LIKE 'after_%' AND cond_ref IS NOT NULL AND cond_date IS NULL)
+  )
+);
+
+CREATE TABLE issue_deps (                    -- D: issue 間依存 (前提の 1 種類のみ)
+  issue_id      TEXT NOT NULL REFERENCES issues(id),
+  depends_on_id TEXT NOT NULL REFERENCES issues(id),
+  PRIMARY KEY (issue_id, depends_on_id),
+  CHECK (issue_id <> depends_on_id)
+);
+
+CREATE TABLE group_deps (                    -- グループ間依存
+  group_id      TEXT NOT NULL REFERENCES groups(id),
+  depends_on_id TEXT NOT NULL REFERENCES groups(id),
+  PRIMARY KEY (group_id, depends_on_id),
+  CHECK (group_id <> depends_on_id)
+);
+```
+
+導出値 (ready / blocked / orphaned / blockedReason / 進捗) はテーブルに持たず、
+クエリまたはアプリケーション層で計算する。**キャッシュテーブルを持たない**
+(br は blocked をキャッシュし、その整合性維持に苦労していた)。
+
+## 決着した論点
+
+### D-1 (決着): 履歴は最終的に持つ。初期実装からは落とす
+
+**持つ理由**: 主要な利用者がコーディングエージェントであるため。
+人間は自分の判断を覚えているが、エージェントはセッションをまたぐと何も覚えていない。
+「なぜこの issue が不採用になったか」を次のセッションが知る手段が要る。
+br も events テーブルに actor / agent_name / harness / model を記録しており、
+さらに運用規約で「status 変更には理由を残す」ことを求めていた
+(判定基準は「会話ログを持たない後日の自分・別セッションが復元できるか」)。
+運用でカバーせざるを得なかった、ということ。
+
+**初期実装から落とす条件**: **状態更新の経路を最初から 1 箇所に集約しておく**。
+更新経路が散らばっていると、後から履歴を足すときに記録漏れが出る。集約されていればログ出力を足すだけで済む。
+
+**記録する項目** (スキーマが歪まないよう今決めておく):
+
+| 項目 | 用途 |
+| --- | --- |
+| いつ | 時系列の復元 |
+| 何を (issue, フィールド) | 対象の特定 |
+| old → new | 変化の内容 |
+| 誰が (人間 / エージェント名) | 並行作業時の判別 |
+| **なぜ (理由テキスト)** | **本命。** これがあると B-2 (不採用の理由の構造化) が履歴で解決する |
+
+### D-2 (決着): ID は `<prefix>-<ランダム 6 文字>`
+
+`myproj-a3f9k2` の形式。連番にはしない。
+
+**連番にしない理由**: 識別子に意味を持たせないため。
+`#12` と `#15` があると、エージェントも人間も「12 のほうが先に作られたから先にやるべき」
+「番号が若いほうが基盤的なタスクだろう」と推測する。
+**F-1 で優先度を持たないと決めたのに、ID が暗黙の優先度として機能してしまう。**
+順序が要るなら順序として明示的に持つべきで、ID から漏れ出してはいけない。
+
+**桁数は 6**。文字種は Crockford Base32 (`0-9A-Z` から紛らわしい `I` `L` `O` `U` を除く)。
+
+| 桁数 | 空間 | 衝突確率 50% に達する件数 |
+| --- | --- | --- |
+| 4 | 約 105 万 | 約 1,300 件 |
+| **6** | **約 10 億** | **約 41,000 件** |
+| 8 | 約 1 兆 | 約 130 万件 |
+
+br は 4 文字だったが、誕生日問題を考えると個人の repo でも数千件で衝突リスクが出る。
+6 文字なら実質的に気にしなくてよい。
+
+**prefix は意味を持ってよい**。リポジトリ名なので「どのプロジェクトの issue か」という
+実際に意味のある情報。意味を持たせないのはランダム部分だけ。
+prefix は初期化時にリポジトリ名から決め、設定で変更可能とする。
+
+CLI では後半だけでの参照 (`a3f9k2`) も受け付ける。
+
+グループは slug (`@auth`) で参照する。こちらは人間が付ける名前なので意味を持ってよい。
+
+### D-3 (決着): issue が属するグループは 1 つだけ
+
+多重所属を許すとグループの進捗計算で同じ issue が複数回数えられ、
+`axes.md` §7 で決めた分母の定義が壊れる。階層があるので表現力は足りる。
+
+### D-4 (決着): 並行作業の競合は「取得と着手を atomic にする」ことで構造的に防ぐ
+
+Claude Code を 3 つ以上同時に起動して作業するため、競合は日常的に起きる。
+しかも自動で動いているので人間が気づきにくく、
+2 つのセッションが同じ issue を実装して両方が PR を出してから発覚する、という壊れ方をする。
+
+**事故の本体は TOCTOU**。「ready を見る」と「着手する」が別操作だと、その隙間で競合する。
+
+```
+セッション A: ready を見る → [#12, #15, #18]
+セッション B: ready を見る → [#12, #15, #18]   ← 同じものが見える
+セッション A: #12 を着手
+セッション B: #12 を着手                        ← 競合
+```
+
+→ **「次の作業をくれ」を 1 トランザクションにする**。ready から 1 件選んで着手済みにするまでを atomic に行う。
+　2 番目のセッションは #12 を見ることすらなく #15 を受け取るので、検出も解決も要らない。
+　br は `--claim` フラグを持っていたが「ready を見る」と「claim する」が別コマンドのままで、隙間が残っていた。
+
+claim は独立した状態にしない。「予約したが未着手」を作ると A との直交性の確認が要るが、
+実際には予約と着手はほぼ同時なので `A=着手中` + 「誰が」の記録で足りる。**軸は増えない。**
+
+### D-5 (決着): actor は既存の業界規約に乗る
+
+エージェント検出には規約が固まりつつある (`std-env` / `@vercel/detect-agent` が実装、Vitest が利用)。
+独自の環境変数を要求するより既存の規約に乗るほうが、設定なしで動き、配布時の説明も要らない。
+
+優先順位:
+
+```
+1. ITS_ACTOR           — 明示指定 (上書き手段として残す)
+2. AI_AGENT            — 業界規約。エージェントが自分で名乗る
+3. 個別の環境変数を検出  — 下表
+4. $USER@<worktree名>  — 人間が直接使う場合のフォールバック
+```
+
+**サポート対象は Claude Code と Codex のみ**とする (他は必要になってから足す)。
+
+| エージェント | 検出に使う変数 | session_key に使える変数 |
+| --- | --- | --- |
+| Claude Code | `CLAUDECODE` / `CLAUDE_CODE` | `CLAUDE_CODE_SESSION_ID` |
+| Codex | `CODEX_SANDBOX` / `CODEX_THREAD_ID` | `CODEX_THREAD_ID` |
+
+session_key はセッション ID が取れればそれを使い、取れなければ
+`worktree パス + PID + 起動時刻` から自動生成する。
+
+参考: 規約全体では cursor (`CURSOR_AGENT`)、gemini (`GEMINI_CLI`)、opencode (`OPENCODE`)、
+replit (`REPL_ID`)、goose (`GOOSE_PROVIDER`) 等も定義されている。
+
+### D-6 (決着): stale は検出のみ。自動解放しない
+
+```
+判定: claimed_at から N 時間経過 AND そのセッションのプロセスが存在しない
+```
+
+1 マシン前提なので PID の生存確認が使える。時間だけで判断すると長時間の作業を誤検出するため、
+プロセス生存確認と併せる。閾値 N は設定可能とする。
+
+自動解放しない理由: 実際には生きているセッションの claim を奪う危険がある。
+検出のみなら誤検出しても実害は警告が出るだけ。
