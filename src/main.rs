@@ -414,13 +414,17 @@ fn view_of(store: &Store) -> Result<View, Box<dyn std::error::Error>> {
 
 fn cmd_ready() -> Result<(), Box<dyn std::error::Error>> {
     let (_, view) = load()?;
-    let out = render_ready(&view);
-    if out.is_empty() {
-        println!("着手できるものはありません");
-        return Ok(());
-    }
-    print!("{out}");
+    print_rows(&render_ready(&view), "着手できるものはありません");
     Ok(())
+}
+
+/// 案内を標準出力に混ぜると `axon ready | fzf` でその 1 行が選択肢になる。
+fn print_rows(rows: &str, empty_note: &str) {
+    if rows.is_empty() {
+        eprintln!("{empty_note}");
+        return;
+    }
+    print!("{rows}");
 }
 
 fn render_ready(view: &View) -> String {
@@ -432,12 +436,7 @@ fn render_ready(view: &View) -> String {
 
 fn cmd_triage() -> Result<(), Box<dyn std::error::Error>> {
     let (_, view) = load()?;
-    let out = render_triage(&view);
-    if out.is_empty() {
-        println!("判断を待っているものはありません");
-        return Ok(());
-    }
-    print!("{out}");
+    print_rows(&render_triage(&view), "判断を待っているものはありません");
     Ok(())
 }
 
@@ -525,12 +524,7 @@ fn cmd_done(id: &str, reason: Option<String>) -> Result<(), Box<dyn std::error::
 
 fn cmd_list() -> Result<(), Box<dyn std::error::Error>> {
     let (_, view) = load()?;
-    let out = render_list(&view);
-    if out.is_empty() {
-        println!("issue はまだありません");
-        return Ok(());
-    }
-    print!("{out}");
+    print_rows(&render_list(&view), "issue はまだありません");
     Ok(())
 }
 
