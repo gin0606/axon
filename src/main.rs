@@ -414,29 +414,40 @@ fn view_of(store: &Store) -> Result<View, Box<dyn std::error::Error>> {
 
 fn cmd_ready() -> Result<(), Box<dyn std::error::Error>> {
     let (_, view) = load()?;
-    let ready = view.ready();
-    if ready.is_empty() {
+    let out = render_ready(&view);
+    if out.is_empty() {
         println!("着手できるものはありません");
         return Ok(());
     }
-    for i in ready {
-        println!("{}  {}", i.id, i.title);
-    }
+    print!("{out}");
     Ok(())
 }
 
+fn render_ready(view: &View) -> String {
+    view.ready()
+        .into_iter()
+        .map(|i| format!("{}  {}\n", i.id, i.title))
+        .collect()
+}
+
 fn cmd_triage() -> Result<(), Box<dyn std::error::Error>> {
-    use derived::TriageReason;
     let (_, view) = load()?;
-    let items = view.triage();
-    if items.is_empty() {
+    let out = render_triage(&view);
+    if out.is_empty() {
         println!("判断を待っているものはありません");
         return Ok(());
     }
-    for (issue, reason) in items {
+    print!("{out}");
+    Ok(())
+}
+
+fn render_triage(view: &View) -> String {
+    use derived::TriageReason;
+    let mut out = String::new();
+    for (issue, reason) in view.triage() {
         match reason {
             TriageReason::Undecided => {
-                println!("{}  未判断    {}", issue.id, issue.title);
+                out.push_str(&format!("{}  未判断    {}\n", issue.id, issue.title));
             }
             TriageReason::Orphaned => {
                 let lost: Vec<_> = view
@@ -445,16 +456,16 @@ fn cmd_triage() -> Result<(), Box<dyn std::error::Error>> {
                     .filter(|d| d.commitment == Commitment::Rejected)
                     .map(|d| d.id.to_string())
                     .collect();
-                println!(
-                    "{}  前提喪失  {} ← {} が不採用",
+                out.push_str(&format!(
+                    "{}  前提喪失  {} ← {} が不採用\n",
                     issue.id,
                     issue.title,
                     lost.join(", ")
-                );
+                ));
             }
         }
     }
-    Ok(())
+    out
 }
 
 fn cmd_next() -> Result<(), Box<dyn std::error::Error>> {
@@ -514,9 +525,18 @@ fn cmd_done(id: &str, reason: Option<String>) -> Result<(), Box<dyn std::error::
 
 fn cmd_list() -> Result<(), Box<dyn std::error::Error>> {
     let (_, view) = load()?;
-    let mut any = false;
+    let out = render_list(&view);
+    if out.is_empty() {
+        println!("issue はまだありません");
+        return Ok(());
+    }
+    print!("{out}");
+    Ok(())
+}
+
+fn render_list(view: &View) -> String {
+    let mut out = String::new();
     for i in view.iter() {
-        any = true;
         let mut marks = Vec::new();
         if view.is_orphaned(&i.id) {
             marks.push("前提喪失".to_string());
@@ -535,19 +555,16 @@ fn cmd_list() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             format!(" {}", marks.join(" "))
         };
-        println!(
-            "{}  [{}/{}]{}  {}",
+        out.push_str(&format!(
+            "{}  [{}/{}]{}  {}\n",
             i.id,
             i.progress.label(),
             i.commitment.label(),
             mark,
             i.title
-        );
+        ));
     }
-    if !any {
-        println!("issue はまだありません");
-    }
-    Ok(())
+    out
 }
 
 fn cmd_show(id: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -977,6 +994,27 @@ mod tests {
         render_show(view, view.get(&iid(id)).unwrap())
     }
 
+    fn undecided(id: &str) -> Issue {
+        issue(id, Progress::NotStarted, Commitment::Undecided)
+    }
+
+    fn waiting_until(id: &str, condition: Condition) -> Issue {
+        let mut i = accepted(id);
+        i.condition = Some(condition);
+        i
+    }
+
+    /// 一覧の各行から、空白区切りの 1 列目を取る。
+    ///
+    /// fzf 連携 (`axon ready | fzf --preview 'axon show {1}'`) は id をこの位置から取る。
+    /// list は状態次第で列 (待ち / 前提喪失 / 浮上日) が増減するので、id を後ろに置くと
+    /// 行ごとに位置がずれて preview が id を拾えなくなる。1 列目に固定しておく。
+    fn first_columns(out: &str) -> Vec<&str> {
+        out.lines()
+            .map(|l| l.split_whitespace().next().unwrap_or(""))
+            .collect()
+    }
+
     #[test]
     fn show_without_relations_is_state_only() {
         let v = view(vec![accepted("a")], &[], Vec::new());
@@ -1035,6 +1073,43 @@ mod tests {
             show(&v, "a").contains("グループ: cli  CLI"),
             "{}",
             show(&v, "a")
+        );
+    }
+
+    #[test]
+    fn ready_puts_id_in_the_first_column() {
+        let v = view(vec![accepted("a"), accepted("b")], &[], Vec::new());
+        assert_eq!(first_columns(&render_ready(&v)), ["a", "b"]);
+    }
+
+    #[test]
+    fn triage_puts_id_in_the_first_column() {
+        let v = view(
+            vec![undecided("a"), accepted("b"), rejected("c")],
+            &[("b", "c")],
+            Vec::new(),
+        );
+        assert_eq!(first_columns(&render_triage(&v)), ["a", "b"]);
+    }
+
+    #[test]
+    fn list_puts_id_in_the_first_column() {
+        let v = view(
+            vec![
+                accepted("a"),
+                accepted("blocked"),
+                accepted("orphaned"),
+                waiting_until("dated", Condition::At(NaiveDate::MAX)),
+                waiting_until("after", Condition::AfterIssue(iid("blocked"))),
+                accepted("dep"),
+                rejected("gone"),
+            ],
+            &[("blocked", "dep"), ("orphaned", "gone")],
+            Vec::new(),
+        );
+        assert_eq!(
+            first_columns(&render_list(&v)),
+            ["a", "blocked", "orphaned", "dated", "after", "dep", "gone"]
         );
     }
 
