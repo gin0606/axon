@@ -1,6 +1,7 @@
 [tools]
 rust = "1.98"
 lefthook = "2.1.12"
+"aqua:taiki-e/cargo-llvm-cov" = "0.9.0"
 
 [env]
 # axon 自身のドッグフーディング用。
