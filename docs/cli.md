@@ -23,6 +23,7 @@ axon start <id>            # 指定して着手する。既に claim されて�
 axon done <id>             # A=終了 にする
 axon list                  # 全 issue を状態つきで一覧
 axon show <id>             # 詳細
+axon log <id>              # 変更の履歴
 ```
 
 `plan` と `capture` を分けているのは、作成時に採否を必ず表明させるため。
@@ -32,9 +33,9 @@ B の軸を分けた意味が消える。
 ### 軸ごとの操作
 
 ```
-axon decide accept <id>      # B=採用
-axon decide reject <id>      # B=不採用
-axon decide undecide <id>    # B=未判断
+axon decide accept <id> [-r 理由]      # B=採用
+axon decide reject <id> [-r 理由]      # B=不採用
+axon decide undecide <id> [-r 理由]    # B=未判断
 
 axon when at <id> <date>     # C=日付。その日まで浮上しない
 axon when after <id> <ref>   # C=参照。その issue が終端に達するまで浮上しない
@@ -101,6 +102,9 @@ axon-b7c2m1  ドメイン型を定義する
 ```
 
 `done` が「着手可能になりました」を出すのは、エージェントが次の作業を知るため。
+
+状態を変える操作は履歴に残る。`-r/--reason` を付けると理由も一緒に記録され、
+`axon log` で後から辿れる。とくに不採用の理由は、後のセッションが判断を復元する手がかりになる。
 
 ## まだ無いもの
 

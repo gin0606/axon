@@ -5,7 +5,7 @@ mod domain;
 
 use chrono::{NaiveDate, Utc};
 use clap::{Parser, Subcommand};
-use db::{Change, Store};
+use db::{Change, Ctx, Store};
 use derived::View;
 use domain::*;
 
@@ -34,7 +34,14 @@ enum Command {
     /// 指定して着手する
     Start { id: String },
     /// 終了にする
-    Done { id: String },
+    Done {
+        id: String,
+        /// 履歴に残す理由
+        #[arg(short, long)]
+        reason: Option<String>,
+    },
+    /// 変更の履歴を見る
+    Log { id: String },
     /// 全 issue を見る
     List,
     /// 詳細を見る
@@ -98,11 +105,24 @@ enum GroupDepCmd {
 #[derive(Subcommand)]
 enum DecideCmd {
     /// やると決める
-    Accept { id: String },
+    Accept {
+        id: String,
+        #[arg(short, long)]
+        reason: Option<String>,
+    },
     /// やらないと決める
-    Reject { id: String },
+    Reject {
+        id: String,
+        /// なぜやらないのか。後から見て判断を復元できるように残す
+        #[arg(short, long)]
+        reason: Option<String>,
+    },
     /// 判断を取り消して未判断に戻す
-    Undecide { id: String },
+    Undecide {
+        id: String,
+        #[arg(short, long)]
+        reason: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -147,7 +167,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Ready => cmd_ready(),
         Command::Next => cmd_next(),
         Command::Start { id } => cmd_start(&id),
-        Command::Done { id } => cmd_done(&id),
+        Command::Done { id, reason } => cmd_done(&id, reason),
+        Command::Log { id } => cmd_log(&id),
         Command::List => cmd_list(),
         Command::Show { id } => cmd_show(&id),
         Command::Decide(c) => cmd_decide(c),
@@ -158,7 +179,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let store = Store::open()?;
+    let mut store = Store::open()?;
     match c {
         GroupCmd::New { slug, name, parent } => {
             let parent = match parent {
@@ -234,12 +255,12 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
         GroupCmd::Set { id, slug } => {
             let id = store.resolve_id(&id)?;
             let gid = store.resolve_slug(&slug)?;
-            store.apply(&id, Change::SetGroup(Some(gid)))?;
+            store.apply(&id, Change::SetGroup(Some(gid)), &ctx(None))?;
             println!("{id} を {slug} に入れました");
         }
         GroupCmd::Unset { id } => {
             let id = store.resolve_id(&id)?;
-            store.apply(&id, Change::SetGroup(None))?;
+            store.apply(&id, Change::SetGroup(None), &ctx(None))?;
             println!("{id} をグループから外しました");
         }
         GroupCmd::Reject { slug } => {
@@ -251,8 +272,9 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
                 .filter(|i| i.commitment != Commitment::Rejected)
                 .map(|i| i.id.clone())
                 .collect();
+            let c = ctx(Some(format!("{slug} ごと不採用にした")));
             for t in &targets {
-                store.apply(t, Change::Decide(Commitment::Rejected))?;
+                store.apply(t, Change::Decide(Commitment::Rejected), &c)?;
             }
             println!("{slug} の {} 件を不採用にしました", targets.len());
         }
@@ -350,7 +372,7 @@ fn cmd_next() -> Result<(), Box<dyn std::error::Error>> {
         pid: actor::pid(),
         at: Utc::now(),
     };
-    match store.claim_next(claim.clone())? {
+    match store.claim_next(claim.clone(), &ctx(None))? {
         Some(issue) => {
             println!("{} に着手しました ({})", issue.id, claim.actor);
             println!("{}", issue.title);
@@ -361,7 +383,7 @@ fn cmd_next() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_start(id: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let store = Store::open()?;
+    let mut store = Store::open()?;
     let id = store.resolve_id(id)?;
     let claim = Claim {
         actor: actor::actor(),
@@ -369,17 +391,21 @@ fn cmd_start(id: &str) -> Result<(), Box<dyn std::error::Error>> {
         pid: actor::pid(),
         at: Utc::now(),
     };
-    store.apply(&id, Change::Claim(claim.clone()))?;
+    store.apply(&id, Change::Claim(claim.clone()), &ctx(None))?;
     let issue = store.get(&id)?;
     println!("{} に着手しました ({})", id, claim.actor);
     println!("{}", issue.title);
     Ok(())
 }
 
-fn cmd_done(id: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let store = Store::open()?;
+fn ctx(reason: Option<String>) -> Ctx {
+    Ctx { actor: actor::actor(), reason }
+}
+
+fn cmd_done(id: &str, reason: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut store = Store::open()?;
     let id = store.resolve_id(id)?;
-    store.apply(&id, Change::End)?;
+    store.apply(&id, Change::End, &ctx(reason))?;
     println!("{id} を終了しました");
 
     let view = view_of(&store)?;
@@ -475,15 +501,15 @@ fn cmd_show(id: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_decide(c: DecideCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let store = Store::open()?;
-    let (raw, commitment) = match &c {
-        DecideCmd::Accept { id } => (id, Commitment::Accepted),
-        DecideCmd::Reject { id } => (id, Commitment::Rejected),
-        DecideCmd::Undecide { id } => (id, Commitment::Undecided),
+    let mut store = Store::open()?;
+    let (raw, commitment, reason) = match c {
+        DecideCmd::Accept { id, reason } => (id, Commitment::Accepted, reason),
+        DecideCmd::Reject { id, reason } => (id, Commitment::Rejected, reason),
+        DecideCmd::Undecide { id, reason } => (id, Commitment::Undecided, reason),
     };
-    let id = store.resolve_id(raw)?;
+    let id = store.resolve_id(&raw)?;
     let before = store.get(&id)?;
-    store.apply(&id, Change::Decide(commitment))?;
+    store.apply(&id, Change::Decide(commitment), &ctx(reason))?;
     println!("{id} を{}にしました", commitment.label());
 
     // 着手中のまま不採用にすると「作業は止まっているのに着手中」が残るため促す。
@@ -495,14 +521,14 @@ fn cmd_decide(c: DecideCmd) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_when(c: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let store = Store::open()?;
+    let mut store = Store::open()?;
     match c {
         WhenCmd::At { id, date } => {
             let id = store.resolve_id(&id)?;
             let date: NaiveDate = date
                 .parse()
                 .map_err(|_| format!("日付として読めません: {date} (YYYY-MM-DD)"))?;
-            store.apply(&id, Change::SetCondition(Some(Condition::At(date))))?;
+            store.apply(&id, Change::SetCondition(Some(Condition::At(date))), &ctx(None))?;
             println!("{id} は {date} まで浮上しません");
         }
         WhenCmd::After { id, reference } => {
@@ -511,12 +537,16 @@ fn cmd_when(c: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
             if id == target {
                 return Err("自分自身を条件にはできません".into());
             }
-            store.apply(&id, Change::SetCondition(Some(Condition::AfterIssue(target.clone()))))?;
+            store.apply(
+                &id,
+                Change::SetCondition(Some(Condition::AfterIssue(target.clone()))),
+                &ctx(None),
+            )?;
             println!("{id} は {target} が終わるまで浮上しません");
         }
         WhenCmd::Clear { id } => {
             let id = store.resolve_id(&id)?;
-            store.apply(&id, Change::SetCondition(None))?;
+            store.apply(&id, Change::SetCondition(None), &ctx(None))?;
             println!("{id} の条件を外しました");
         }
     }
@@ -540,6 +570,30 @@ fn cmd_dep(c: DepCmd) -> Result<(), Box<dyn std::error::Error>> {
             let needs = store.resolve_id(&needs)?;
             store.remove_dep(&id, &needs)?;
             println!("{id} の前提から {needs} を外しました");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_log(id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let store = Store::open()?;
+    let id = store.resolve_id(id)?;
+    let events = store.events(&id)?;
+    if events.is_empty() {
+        println!("履歴はありません");
+        return Ok(());
+    }
+    for e in events {
+        let change = match (&e.old_value, &e.new_value) {
+            (Some(o), Some(n)) => format!("{} {o} → {n}", e.field),
+            (None, Some(n)) => format!("{} → {n}", e.field),
+            (Some(o), None) => format!("{} {o} → なし", e.field),
+            (None, None) => e.field.clone(),
+        };
+        print!("{}  {}  {}", e.at.format("%Y-%m-%d %H:%M"), e.actor, change);
+        match e.reason {
+            Some(r) => println!("  ({r})"),
+            None => println!(),
         }
     }
     Ok(())

@@ -31,7 +31,7 @@ pub enum DbError {
 pub type Result<T> = std::result::Result<T, DbError>;
 
 /// スキーマの版。`user_version` に記録し、開くたびに不足分だけ流す。
-const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2];
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3];
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE meta (
@@ -99,6 +99,23 @@ CREATE TABLE group_deps (
 );
 
 ALTER TABLE issues ADD COLUMN group_id TEXT REFERENCES groups(id);
+"#;
+
+/// 履歴。エージェントはセッションをまたぐと何も覚えていないため、
+/// 「なぜこの状態になったか」を後から辿れるようにする。
+const SCHEMA_V3: &str = r#"
+CREATE TABLE events (
+  id        INTEGER PRIMARY KEY,
+  issue_id  TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  field     TEXT NOT NULL,
+  old_value TEXT,
+  new_value TEXT,
+  actor     TEXT NOT NULL,
+  reason    TEXT,
+  at        TEXT NOT NULL
+);
+
+CREATE INDEX idx_events_issue ON events (issue_id, at);
 "#;
 
 fn migrate(conn: &Connection) -> Result<()> {
@@ -293,12 +310,15 @@ impl Store {
         Ok(())
     }
 
-    /// 状態更新の唯一の経路。履歴を持たせるときは、ここにログ出力を挟む。
-    pub fn apply(&self, id: &IssueId, change: Change) -> Result<()> {
+    /// 状態更新の唯一の経路。更新と履歴の記録を同じトランザクションで行う。
+    pub fn apply(&mut self, id: &IssueId, change: Change, ctx: &Ctx) -> Result<()> {
+        let before = self.get(id)?;
+        let tx = self.conn.transaction()?;
         let now = Utc::now().to_rfc3339();
+        let (field, old, new) = describe(&before, &change);
         match change {
             Change::Claim(c) => {
-                let n = self.conn.execute(
+                let n = tx.execute(
                     "UPDATE issues
                         SET progress = 'in_progress',
                             claimed_actor = ?2, claimed_session = ?3,
@@ -307,16 +327,15 @@ impl Store {
                     params![id.as_str(), c.actor, c.session, c.pid, c.at.to_rfc3339(), now],
                 )?;
                 if n == 0 {
-                    let current = self.get(id)?;
-                    let reason = match current.progress.claim() {
+                    let reason = match before.progress.claim() {
                         Some(cl) => format!("{} が着手中", cl.actor),
-                        None => format!("状態が{}", current.progress.label()),
+                        None => format!("状態が{}", before.progress.label()),
                     };
                     return Err(DbError::CannotClaim { id: id.to_string(), reason });
                 }
             }
             Change::End => {
-                self.conn.execute(
+                tx.execute(
                     "UPDATE issues
                         SET progress = 'ended',
                             claimed_actor = NULL, claimed_session = NULL,
@@ -326,19 +345,19 @@ impl Store {
                 )?;
             }
             Change::Decide(c) => {
-                self.conn.execute(
+                tx.execute(
                     "UPDATE issues SET commitment = ?2, updated_at = ?3 WHERE id = ?1",
                     params![id.as_str(), c.as_db(), now],
                 )?;
             }
             Change::SetGroup(g) => {
-                self.conn.execute(
+                tx.execute(
                     "UPDATE issues SET group_id = ?2, updated_at = ?3 WHERE id = ?1",
                     params![id.as_str(), g.as_ref().map(|g| g.as_str().to_string()), now],
                 )?;
             }
             Change::SetCondition(cond) => {
-                self.conn.execute(
+                tx.execute(
                     "UPDATE issues SET cond_kind = ?2, cond_date = ?3, cond_ref = ?4, updated_at = ?5
                       WHERE id = ?1",
                     params![
@@ -351,11 +370,31 @@ impl Store {
                 )?;
             }
         }
+        log_event(&tx, id, field, old, new, ctx)?;
+        tx.commit()?;
         Ok(())
     }
 
+    pub fn events(&self, id: &IssueId) -> Result<Vec<Event>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT field, old_value, new_value, actor, reason, at
+             FROM events WHERE issue_id = ?1 ORDER BY at, id",
+        )?;
+        let rows = stmt.query_map(params![id.as_str()], |r| {
+            Ok(Event {
+                field: r.get(0)?,
+                old_value: r.get(1)?,
+                new_value: r.get(2)?,
+                actor: r.get(3)?,
+                reason: r.get(4)?,
+                at: parse_ts(&r.get::<_, String>(5)?),
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     /// ready から 1 件取って着手するまでを 1 トランザクションで行う。
-    pub fn claim_next(&mut self, claim: Claim) -> Result<Option<Issue>> {
+    pub fn claim_next(&mut self, claim: Claim, ctx: &Ctx) -> Result<Option<Issue>> {
         use rusqlite::TransactionBehavior;
         let tx = self
             .conn
@@ -383,10 +422,57 @@ impl Store {
                     claim.at.to_rfc3339()
                 ],
             )?;
+            log_event(
+                &tx,
+                &issue.id,
+                "progress",
+                Some("not_started".to_string()),
+                Some("in_progress".to_string()),
+                ctx,
+            )?;
         }
         tx.commit()?;
         Ok(picked)
     }
+}
+
+/// 誰がなぜその操作をしたか。履歴に残す。
+pub struct Ctx {
+    pub actor: String,
+    pub reason: Option<String>,
+}
+
+fn log_event(
+    conn: &Connection,
+    id: &IssueId,
+    field: &str,
+    old: Option<String>,
+    new: Option<String>,
+    ctx: &Ctx,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO events (issue_id, field, old_value, new_value, actor, reason, at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        params![
+            id.as_str(),
+            field,
+            old,
+            new,
+            ctx.actor,
+            ctx.reason,
+            Utc::now().to_rfc3339()
+        ],
+    )?;
+    Ok(())
+}
+
+pub struct Event {
+    pub field: String,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+    pub actor: String,
+    pub reason: Option<String>,
+    pub at: DateTime<Utc>,
 }
 
 /// 状態を変える操作。`Store::apply` 以外から状態を書き換えない。
@@ -450,6 +536,43 @@ fn read_deps(conn: &Connection) -> Result<Vec<(IssueId, IssueId)>> {
         ))
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+fn describe(before: &Issue, change: &Change) -> (&'static str, Option<String>, Option<String>) {
+    match change {
+        Change::Claim(_) => (
+            "progress",
+            Some(before.progress.as_db().to_string()),
+            Some("in_progress".to_string()),
+        ),
+        Change::End => (
+            "progress",
+            Some(before.progress.as_db().to_string()),
+            Some("ended".to_string()),
+        ),
+        Change::Decide(c) => (
+            "commitment",
+            Some(before.commitment.as_db().to_string()),
+            Some(c.as_db().to_string()),
+        ),
+        Change::SetCondition(c) => (
+            "condition",
+            before.condition.as_ref().map(describe_cond),
+            c.as_ref().map(describe_cond),
+        ),
+        Change::SetGroup(g) => (
+            "group",
+            before.group.as_ref().map(|g| g.as_str().to_string()),
+            g.as_ref().map(|g| g.as_str().to_string()),
+        ),
+    }
+}
+
+fn describe_cond(c: &Condition) -> String {
+    match c {
+        Condition::At(d) => d.to_string(),
+        Condition::AfterIssue(id) => format!("after {id}"),
+    }
 }
 
 fn cond_date(c: &Option<Condition>) -> Option<String> {
