@@ -388,6 +388,12 @@ impl Store {
                     params![id.as_str(), c.as_db(), now],
                 )?;
             }
+            Change::SetTitle(ref t) => {
+                tx.execute(
+                    "UPDATE issues SET title = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![id.as_str(), t, now],
+                )?;
+            }
             Change::SetDescription(ref d) => {
                 tx.execute(
                     "UPDATE issues SET description = ?2, updated_at = ?3 WHERE id = ?1",
@@ -520,6 +526,7 @@ pub enum Change {
     Release,
     End,
     Decide(Commitment),
+    SetTitle(String),
     SetDescription(Option<String>),
     SetCondition(Option<Condition>),
     SetGroup(Option<GroupId>),
@@ -583,7 +590,7 @@ fn read_deps(conn: &Connection) -> Result<Vec<(IssueId, IssueId)>> {
 }
 
 /// 判断として残すのは採否 (B) と時期 (C) だけ。
-/// 進行 (A) や本文の編集は、後から「なぜそう決めたか」を辿る材料にならない。
+/// 進行 (A) や文面の編集は、後から「なぜそう決めたか」を辿る材料にならない。
 /// いつ着手して終えたかは claim と updated_at で足りる。
 fn records_decision(change: &Change) -> bool {
     matches!(change, Change::Decide(_) | Change::SetCondition(_))
@@ -611,6 +618,7 @@ fn describe(before: &Issue, change: &Change) -> (&'static str, Option<String>, O
             Some(before.commitment.as_db().to_string()),
             Some(c.as_db().to_string()),
         ),
+        Change::SetTitle(t) => ("title", Some(before.title.clone()), Some(t.clone())),
         Change::SetDescription(d) => (
             "description",
             before.description.as_deref().map(summarize),

@@ -42,13 +42,16 @@ enum Command {
         #[arg(short, long)]
         reason: Option<String>,
     },
-    /// 説明を書く (指定が無ければ $EDITOR を開く)
-    Describe {
+    /// 表題と説明を書く (どちらの指定も無ければ説明を $EDITOR で開く)
+    Write {
         id: String,
-        /// 本文を直接渡す
+        /// 表題を付け直す
+        #[arg(long)]
+        title: Option<String>,
+        /// 説明を直接渡す
         #[arg(short = 'm', long)]
         message: Option<String>,
-        /// ファイルから読む (- で標準入力)
+        /// 説明をファイルから読む (- で標準入力)
         #[arg(short = 'F', long)]
         file: Option<String>,
     },
@@ -208,7 +211,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Next => cmd_next(),
         Command::Start { id } => cmd_start(&id),
         Command::Done { id, reason } => cmd_done(&id, reason),
-        Command::Describe { id, message, file } => cmd_describe(&id, message, file),
+        Command::Write {
+            id,
+            title,
+            message,
+            file,
+        } => cmd_write(&id, title, message, file),
         Command::Log { id } => cmd_log(&id),
         Command::Stale { hours } => cmd_stale(hours),
         Command::Release { id, reason } => cmd_release(&id, reason),
@@ -716,6 +724,26 @@ fn cmd_dep(c: DepCmd) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// $EDITOR で編集する。本文だけを出す。
+/// 説明用のヘッダを混ぜると、Markdown の見出しと区別できなくなるため置かない。
+fn edit_in_editor(current: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .map_err(|_| "$EDITOR が設定されていません。-m か -F を使ってください")?;
+
+    let path = std::env::temp_dir().join(format!("axon-{}.md", std::process::id()));
+    std::fs::write(&path, current.unwrap_or(""))?;
+
+    let status = std::process::Command::new(&editor).arg(&path).status()?;
+    if !status.success() {
+        std::fs::remove_file(&path).ok();
+        return Err(format!("{editor} が異常終了しました").into());
+    }
+    let body = std::fs::read_to_string(&path)?;
+    std::fs::remove_file(&path).ok();
+    Ok(body)
+}
+
 fn cmd_log(id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let store = Store::open()?;
     let id = store.resolve_id(id)?;
@@ -795,8 +823,9 @@ fn cmd_release(id: &str, reason: Option<String>) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-fn cmd_describe(
+fn cmd_write(
     id: &str,
+    title: Option<String>,
     message: Option<String>,
     file: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -806,50 +835,53 @@ fn cmd_describe(
     let id = store.resolve_id(id)?;
     let current = store.get(&id)?;
 
-    let text = match (message, file) {
-        (Some(m), None) => m,
+    // 書き込みの前に入力を出し切る。エディタの中断やファイル不在で
+    // 表題だけ書き換わった状態を残さないため。
+    let body = match (message, file) {
+        (Some(m), None) => Some(m),
         (None, Some(f)) if f == "-" => {
             let mut buf = String::new();
             std::io::stdin().read_to_string(&mut buf)?;
-            buf
+            Some(buf)
         }
-        (None, Some(f)) => std::fs::read_to_string(&f)?,
-        (None, None) => edit_in_editor(current.description.as_deref())?,
+        (None, Some(f)) => Some(std::fs::read_to_string(&f)?),
         (Some(_), Some(_)) => return Err("-m と -F は同時に使えません".into()),
+        (None, None) if title.is_some() => None,
+        (None, None) => Some(edit_in_editor(current.description.as_deref())?),
     };
 
-    let trimmed = text.trim();
-    let new = (!trimmed.is_empty()).then(|| trimmed.to_string());
-    if new == current.description {
-        println!("変更はありません");
-        return Ok(());
+    let mut written = Vec::new();
+
+    if let Some(t) = title {
+        let t = t.trim();
+        if t.is_empty() {
+            return Err("タイトルが空です".into());
+        }
+        if t != current.title {
+            store.apply(&id, Change::SetTitle(t.to_string()), &ctx(None))?;
+            written.push("表題を付け直しました");
+        }
     }
-    let removed = new.is_none();
-    store.apply(&id, Change::SetDescription(new), &ctx(None))?;
-    if removed {
-        println!("{id} の説明を消しました");
-    } else {
-        println!("{id} の説明を書きました");
+
+    if let Some(text) = body {
+        let trimmed = text.trim();
+        let new = (!trimmed.is_empty()).then(|| trimmed.to_string());
+        if new != current.description {
+            let removed = new.is_none();
+            store.apply(&id, Change::SetDescription(new), &ctx(None))?;
+            written.push(if removed {
+                "説明を消しました"
+            } else {
+                "説明を書きました"
+            });
+        }
+    }
+
+    if written.is_empty() {
+        println!("変更はありません");
+    }
+    for w in written {
+        println!("{id} の{w}");
     }
     Ok(())
-}
-
-/// $EDITOR で編集する。本文だけを出す。
-/// 説明用のヘッダを混ぜると、Markdown の見出しと区別できなくなるため置かない。
-fn edit_in_editor(current: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
-    let editor = std::env::var("EDITOR")
-        .or_else(|_| std::env::var("VISUAL"))
-        .map_err(|_| "$EDITOR が設定されていません。-m か -F を使ってください")?;
-
-    let path = std::env::temp_dir().join(format!("axon-{}.md", std::process::id()));
-    std::fs::write(&path, current.unwrap_or(""))?;
-
-    let status = std::process::Command::new(&editor).arg(&path).status()?;
-    if !status.success() {
-        std::fs::remove_file(&path).ok();
-        return Err(format!("{editor} が異常終了しました").into());
-    }
-    let body = std::fs::read_to_string(&path)?;
-    std::fs::remove_file(&path).ok();
-    Ok(body)
 }
