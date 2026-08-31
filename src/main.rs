@@ -447,7 +447,7 @@ fn cmd_next() -> Result<(), Box<dyn std::error::Error>> {
         pid: actor::pid(),
         at: Utc::now(),
     };
-    match store.claim_next(claim.clone(), &ctx(None))? {
+    match store.claim_next(claim.clone())? {
         Some(issue) => {
             println!("{} に着手しました ({})", issue.id, claim.actor);
             println!("{}", issue.title);

@@ -418,7 +418,7 @@ impl Store {
     }
 
     /// ready から 1 件取って着手するまでを 1 トランザクションで行う。
-    pub fn claim_next(&mut self, claim: Claim, ctx: &Ctx) -> Result<Option<Issue>> {
+    pub fn claim_next(&mut self, claim: Claim) -> Result<Option<Issue>> {
         use rusqlite::TransactionBehavior;
         let tx = self
             .conn
