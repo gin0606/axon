@@ -31,7 +31,7 @@ pub enum DbError {
 pub type Result<T> = std::result::Result<T, DbError>;
 
 /// スキーマの版。`user_version` に記録し、開くたびに不足分だけ流す。
-const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3];
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4];
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE meta (
@@ -101,8 +101,8 @@ CREATE TABLE group_deps (
 ALTER TABLE issues ADD COLUMN group_id TEXT REFERENCES groups(id);
 "#;
 
-/// 履歴。エージェントはセッションをまたぐと何も覚えていないため、
-/// 「なぜこの状態になったか」を後から辿れるようにする。
+/// 判断の記録。「なぜやるのか」「なぜやらないのか」「なぜ今やらないのか」を残す。
+/// 類似の問題を考えるときや、決定を再考するときに参照する。
 const SCHEMA_V3: &str = r#"
 CREATE TABLE events (
   id        INTEGER PRIMARY KEY,
@@ -116,6 +116,11 @@ CREATE TABLE events (
 );
 
 CREATE INDEX idx_events_issue ON events (issue_id, at);
+"#;
+
+/// 記録の対象を判断 (採否・時期) に絞ったため、それ以外の記録を落とす。
+const SCHEMA_V4: &str = r#"
+DELETE FROM events WHERE field NOT IN ('commitment', 'condition');
 "#;
 
 fn migrate(conn: &Connection) -> Result<()> {
@@ -316,6 +321,7 @@ impl Store {
         let tx = self.conn.transaction()?;
         let now = Utc::now().to_rfc3339();
         let (field, old, new) = describe(&before, &change);
+        let record = records_decision(&change);
         match change {
             Change::Claim(c) => {
                 let n = tx.execute(
@@ -386,7 +392,9 @@ impl Store {
                 )?;
             }
         }
-        log_event(&tx, id, field, old, new, ctx)?;
+        if record {
+            log_event(&tx, id, field, old, new, ctx)?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -437,14 +445,6 @@ impl Store {
                     claim.pid,
                     claim.at.to_rfc3339()
                 ],
-            )?;
-            log_event(
-                &tx,
-                &issue.id,
-                "progress",
-                Some("not_started".to_string()),
-                Some("in_progress".to_string()),
-                ctx,
             )?;
         }
         tx.commit()?;
@@ -555,6 +555,13 @@ fn read_deps(conn: &Connection) -> Result<Vec<(IssueId, IssueId)>> {
         ))
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+/// 判断として残すのは採否 (B) と時期 (C) だけ。
+/// 進行 (A) や本文の編集は、後から「なぜそう決めたか」を辿る材料にならない。
+/// いつ着手して終えたかは claim と updated_at で足りる。
+fn records_decision(change: &Change) -> bool {
+    matches!(change, Change::Decide(_) | Change::SetCondition(_))
 }
 
 fn describe(before: &Issue, change: &Change) -> (&'static str, Option<String>, Option<String>) {

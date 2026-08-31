@@ -150,11 +150,26 @@ enum DecideCmd {
 #[derive(Subcommand)]
 enum WhenCmd {
     /// 指定日まで浮上させない
-    At { id: String, date: String },
+    At {
+        id: String,
+        date: String,
+        /// なぜ今やらないのか
+        #[arg(short, long)]
+        reason: Option<String>,
+    },
     /// 指定した issue が終わるまで浮上させない
-    After { id: String, reference: String },
+    After {
+        id: String,
+        reference: String,
+        #[arg(short, long)]
+        reason: Option<String>,
+    },
     /// 条件を外して常に浮上させる
-    Clear { id: String },
+    Clear {
+        id: String,
+        #[arg(short, long)]
+        reason: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -580,15 +595,15 @@ fn cmd_decide(c: DecideCmd) -> Result<(), Box<dyn std::error::Error>> {
 fn cmd_when(c: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = Store::open()?;
     match c {
-        WhenCmd::At { id, date } => {
+        WhenCmd::At { id, date, reason } => {
             let id = store.resolve_id(&id)?;
             let date: NaiveDate = date
                 .parse()
                 .map_err(|_| format!("日付として読めません: {date} (YYYY-MM-DD)"))?;
-            store.apply(&id, Change::SetCondition(Some(Condition::At(date))), &ctx(None))?;
+            store.apply(&id, Change::SetCondition(Some(Condition::At(date))), &ctx(reason))?;
             println!("{id} は {date} まで浮上しません");
         }
-        WhenCmd::After { id, reference } => {
+        WhenCmd::After { id, reference, reason } => {
             let id = store.resolve_id(&id)?;
             let target = store.resolve_id(&reference)?;
             if id == target {
@@ -597,13 +612,13 @@ fn cmd_when(c: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
             store.apply(
                 &id,
                 Change::SetCondition(Some(Condition::AfterIssue(target.clone()))),
-                &ctx(None),
+                &ctx(reason),
             )?;
             println!("{id} は {target} が終わるまで浮上しません");
         }
-        WhenCmd::Clear { id } => {
+        WhenCmd::Clear { id, reason } => {
             let id = store.resolve_id(&id)?;
-            store.apply(&id, Change::SetCondition(None), &ctx(None))?;
+            store.apply(&id, Change::SetCondition(None), &ctx(reason))?;
             println!("{id} の条件を外しました");
         }
     }
@@ -641,19 +656,40 @@ fn cmd_log(id: &str) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     for e in events {
-        let change = match (&e.old_value, &e.new_value) {
-            (Some(o), Some(n)) => format!("{} {o} → {n}", e.field),
-            (None, Some(n)) => format!("{} → {n}", e.field),
-            (Some(o), None) => format!("{} {o} → なし", e.field),
-            (None, None) => e.field.clone(),
-        };
-        print!("{}  {}  {}", e.at.format("%Y-%m-%d %H:%M"), e.actor, change);
+        print!(
+            "{}  {}  {}",
+            e.at.format("%Y-%m-%d %H:%M"),
+            e.actor,
+            format_decision(&e)
+        );
         match e.reason {
             Some(r) => println!("  ({r})"),
             None => println!(),
         }
     }
     Ok(())
+}
+
+/// 判断を日本語の一行にする。DB には英語の値が入っているため、ここで読める形に直す。
+fn format_decision(e: &db::Event) -> String {
+    let label = |v: &Option<String>| -> String {
+        match v.as_deref() {
+            Some("undecided") => "未判断".to_string(),
+            Some("accepted") => "採用".to_string(),
+            Some("rejected") => "不採用".to_string(),
+            Some(other) => other.to_string(),
+            None => "なし".to_string(),
+        }
+    };
+    match e.field.as_str() {
+        "commitment" => format!("採否: {} → {}", label(&e.old_value), label(&e.new_value)),
+        "condition" => match (&e.old_value, &e.new_value) {
+            (_, None) => "時期: 条件を外した".to_string(),
+            (None, Some(n)) => format!("時期: {n} まで後回し"),
+            (Some(o), Some(n)) => format!("時期: {o} → {n} まで後回し"),
+        },
+        other => format!("{other}: {} → {}", label(&e.old_value), label(&e.new_value)),
+    }
 }
 
 fn cmd_stale(hours: i64) -> Result<(), Box<dyn std::error::Error>> {
