@@ -36,7 +36,7 @@ SQLite から読んだ TEXT を enum に変換する箇所を唯一の境界に�
 | issue の CRUD、A / B / C の変更 | 履歴 |
 | ready / blocked / orphaned の計算 | blockedReason の根本原因辿り |
 | issue 間依存 | 並行作業の stale 検出 |
-| グループと階層、グループ間依存 | C の外部コマンド条件 (C-5) |
+| グループと階層、グループ間依存 (実装済み) | C の外部コマンド条件 (C-5) |
 | 取得と着手を atomic に行う操作 | |
 | actor 検出 (Claude Code / Codex) | |
 

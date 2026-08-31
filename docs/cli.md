@@ -42,7 +42,20 @@ axon when clear <id>         # C=なし。常に浮上する
 
 axon dep add <id> --needs <id>   # 依存を張る
 axon dep rm  <id> --needs <id>   # 依存を外す
+
+axon group new <slug> [表示名] [--parent <slug>]
+axon group list
+axon group show <slug>
+axon group set <id> <slug>       # issue をグループに入れる
+axon group unset <id>
+axon group reject <slug>         # 機能群ごとやめる (子孫を一括で不採用)
+axon group dep add <slug> --needs <slug>
+axon group dep rm  <slug> --needs <slug>
 ```
+
+グループは状態を持たないので、進捗も完了も子から導出する。
+グループ間依存は**全子孫 issue が終端に達したら解除**され、不採用が混じっていても解除する。
+祖先グループの依存は子グループにも効く。
 
 `when after` と `dep add` は似て見えるが意味が違う (`axes.md` C-1 参照)。
 参照先が不採用になったとき、`when after` は条件が満たされて浮上し、
@@ -89,9 +102,7 @@ axon-b7c2m1  ドメイン型を定義する
 
 `done` が「着手可能になりました」を出すのは、エージェントが次の作業を知るため。
 
-## 最小スコープから外すもの
+## まだ無いもの
 
-- **グループ関連のコマンド** — 開発初期は規模が小さく、グループ無しで回る。
-　ただしグループ間依存は本命の要求なので、次の段階で入れる
 - **JSON 出力**
 - **`blockedReason` の根本原因辿り** — `show` では直接の依存先だけ表示する

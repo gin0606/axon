@@ -143,12 +143,15 @@ pub struct IssueId(String);
 const ID_ALPHABET: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
 const ID_LEN: usize = 6;
 
+fn random_suffix() -> String {
+    (0..ID_LEN)
+        .map(|_| ID_ALPHABET[rand::random_range(0..ID_ALPHABET.len())] as char)
+        .collect()
+}
+
 impl IssueId {
     pub fn generate(prefix: &str) -> Self {
-        let suffix: String = (0..ID_LEN)
-            .map(|_| ID_ALPHABET[rand::random_range(0..ID_ALPHABET.len())] as char)
-            .collect();
-        IssueId(format!("{prefix}-{suffix}"))
+        IssueId(format!("{prefix}-{}", random_suffix()))
     }
 
     /// DB に入っている値をそのまま型に載せる。
@@ -167,6 +170,40 @@ impl fmt::Display for IssueId {
     }
 }
 
+/// グループの内部識別子。人間は slug で参照するため、これは表に出さない。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct GroupId(String);
+
+impl GroupId {
+    pub fn generate() -> Self {
+        GroupId(format!("g-{}", random_suffix()))
+    }
+
+    pub fn from_stored(s: &str) -> Self {
+        GroupId(s.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for GroupId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// 機能群。状態を持たず、進捗も完了も子から導出する。
+#[derive(Debug, Clone)]
+pub struct Group {
+    pub id: GroupId,
+    pub slug: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub parent: Option<GroupId>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Issue {
     pub id: IssueId,
@@ -175,6 +212,7 @@ pub struct Issue {
     pub progress: Progress,
     pub commitment: Commitment,
     pub condition: Option<Condition>,
+    pub group: Option<GroupId>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

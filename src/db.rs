@@ -20,6 +20,8 @@ pub enum DbError {
     Parse(#[from] ParseError),
     #[error("{0} は存在しません")]
     NoSuchIssue(String),
+    #[error("グループ {0} は存在しません")]
+    NoSuchGroup(String),
     #[error("{id} は複数の issue に一致します: {candidates}")]
     AmbiguousId { id: String, candidates: String },
     #[error("{id} は着手できません ({reason})")]
@@ -28,7 +30,10 @@ pub enum DbError {
 
 pub type Result<T> = std::result::Result<T, DbError>;
 
-const SCHEMA: &str = r#"
+/// スキーマの版。`user_version` に記録し、開くたびに不足分だけ流す。
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2];
+
+const SCHEMA_V1: &str = r#"
 CREATE TABLE meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -73,6 +78,38 @@ CREATE TABLE issue_deps (
 );
 "#;
 
+/// グループ。状態を持たない容れ物で、進捗も完了も子から導出する。
+const SCHEMA_V2: &str = r#"
+CREATE TABLE groups (
+  id          TEXT PRIMARY KEY,
+  slug        TEXT NOT NULL UNIQUE,
+  name        TEXT NOT NULL,
+  description TEXT,
+  parent_id   TEXT REFERENCES groups(id),
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  CHECK (id <> parent_id)
+);
+
+CREATE TABLE group_deps (
+  group_id      TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  depends_on_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  PRIMARY KEY (group_id, depends_on_id),
+  CHECK (group_id <> depends_on_id)
+);
+
+ALTER TABLE issues ADD COLUMN group_id TEXT REFERENCES groups(id);
+"#;
+
+fn migrate(conn: &Connection) -> Result<()> {
+    let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    for (i, sql) in MIGRATIONS.iter().enumerate().skip(current as usize) {
+        conn.execute_batch(sql)?;
+        conn.execute_batch(&format!("PRAGMA user_version = {}", i + 1))?;
+    }
+    Ok(())
+}
+
 /// worktree から呼ばれても同じ DB を指すよう、git の共通ディレクトリを基準にする。
 fn repo_root() -> Result<PathBuf> {
     let out = Command::new("git")
@@ -103,7 +140,7 @@ impl Store {
         std::fs::create_dir_all(path.parent().expect("親ディレクトリがある"))
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let conn = Connection::open(&path)?;
-        conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         conn.execute("INSERT INTO meta (key, value) VALUES ('prefix', ?1)", params![prefix])?;
         Ok(path)
     }
@@ -114,7 +151,8 @@ impl Store {
             return Err(DbError::NotInitialized);
         }
         let conn = Connection::open(&path)?;
-        conn.execute("PRAGMA foreign_keys = ON", [])?;
+        conn.execute_batch("PRAGMA foreign_keys = ON")?;
+        migrate(&conn)?;
         Ok(Store { conn })
     }
 
@@ -130,8 +168,8 @@ impl Store {
             "INSERT INTO issues (id, title, description, progress, commitment,
                                  cond_kind, cond_date, cond_ref,
                                  claimed_actor, claimed_session, claimed_pid, claimed_at,
-                                 created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                                 created_at, updated_at, group_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             params![
                 issue.id.as_str(),
                 issue.title,
@@ -147,6 +185,7 @@ impl Store {
                 claim.map(|c| c.at.to_rfc3339()),
                 issue.created_at.to_rfc3339(),
                 issue.updated_at.to_rfc3339(),
+                issue.group.as_ref().map(|g| g.as_str().to_string()),
             ],
         )?;
         Ok(())
@@ -204,6 +243,56 @@ impl Store {
         Ok(())
     }
 
+    pub fn insert_group(&self, g: &Group) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO groups (id, slug, name, description, parent_id, created_at, updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?6)",
+            params![
+                g.id.as_str(),
+                g.slug,
+                g.name,
+                g.description,
+                g.parent.as_ref().map(|p| p.as_str().to_string()),
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn groups(&self) -> Result<Vec<Group>> {
+        read_groups(&self.conn)
+    }
+
+    pub fn group_deps(&self) -> Result<Vec<(GroupId, GroupId)>> {
+        read_group_deps(&self.conn)
+    }
+
+    pub fn resolve_slug(&self, slug: &str) -> Result<GroupId> {
+        let id: Option<String> = self
+            .conn
+            .query_row("SELECT id FROM groups WHERE slug = ?1", params![slug], |r| r.get(0))
+            .optional()?;
+        id.map(|s| GroupId::from_stored(&s))
+            .ok_or_else(|| DbError::NoSuchGroup(slug.to_string()))
+    }
+
+    pub fn add_group_dep(&self, group: &GroupId, depends_on: &GroupId) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO group_deps (group_id, depends_on_id) VALUES (?1, ?2)",
+            params![group.as_str(), depends_on.as_str()],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_group_dep(&self, group: &GroupId, depends_on: &GroupId) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM group_deps WHERE group_id = ?1 AND depends_on_id = ?2",
+            params![group.as_str(), depends_on.as_str()],
+        )?;
+        Ok(())
+    }
+
     /// 状態更新の唯一の経路。履歴を持たせるときは、ここにログ出力を挟む。
     pub fn apply(&self, id: &IssueId, change: Change) -> Result<()> {
         let now = Utc::now().to_rfc3339();
@@ -242,6 +331,12 @@ impl Store {
                     params![id.as_str(), c.as_db(), now],
                 )?;
             }
+            Change::SetGroup(g) => {
+                self.conn.execute(
+                    "UPDATE issues SET group_id = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![id.as_str(), g.as_ref().map(|g| g.as_str().to_string()), now],
+                )?;
+            }
             Change::SetCondition(cond) => {
                 self.conn.execute(
                     "UPDATE issues SET cond_kind = ?2, cond_date = ?3, cond_ref = ?4, updated_at = ?5
@@ -268,7 +363,9 @@ impl Store {
 
         let issues = read_all(&tx)?;
         let deps = read_deps(&tx)?;
-        let view = crate::derived::View::new(issues, deps);
+        let groups = read_groups(&tx)?;
+        let group_deps = read_group_deps(&tx)?;
+        let view = crate::derived::View::new(issues, deps, groups, group_deps);
         let picked = view.ready().first().map(|i| (*i).clone());
 
         if let Some(ref issue) = picked {
@@ -298,12 +395,13 @@ pub enum Change {
     End,
     Decide(Commitment),
     SetCondition(Option<Condition>),
+    SetGroup(Option<GroupId>),
 }
 
 const SELECT_ISSUE: &str = "SELECT id, title, description, progress, commitment,
                                    cond_kind, cond_date, cond_ref,
                                    claimed_actor, claimed_session, claimed_pid, claimed_at,
-                                   created_at, updated_at
+                                   created_at, updated_at, group_id
                             FROM issues";
 
 fn read_all(conn: &Connection) -> Result<Vec<Issue>> {
@@ -315,6 +413,32 @@ fn read_all(conn: &Connection) -> Result<Vec<Issue>> {
         out.push(row?.into_issue()?);
     }
     Ok(out)
+}
+
+fn read_groups(conn: &Connection) -> Result<Vec<Group>> {
+    let mut stmt = conn
+        .prepare("SELECT id, slug, name, description, parent_id FROM groups ORDER BY slug")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Group {
+            id: GroupId::from_stored(&r.get::<_, String>(0)?),
+            slug: r.get(1)?,
+            name: r.get(2)?,
+            description: r.get(3)?,
+            parent: r.get::<_, Option<String>>(4)?.as_deref().map(GroupId::from_stored),
+        })
+    })?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+fn read_group_deps(conn: &Connection) -> Result<Vec<(GroupId, GroupId)>> {
+    let mut stmt = conn.prepare("SELECT group_id, depends_on_id FROM group_deps")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            GroupId::from_stored(&r.get::<_, String>(0)?),
+            GroupId::from_stored(&r.get::<_, String>(1)?),
+        ))
+    })?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
 fn read_deps(conn: &Connection) -> Result<Vec<(IssueId, IssueId)>> {
@@ -358,6 +482,7 @@ struct RawIssue {
     claimed_at: Option<String>,
     created_at: String,
     updated_at: String,
+    group_id: Option<String>,
 }
 
 impl RawIssue {
@@ -377,6 +502,7 @@ impl RawIssue {
             claimed_at: r.get_unwrap(11),
             created_at: r.get_unwrap(12),
             updated_at: r.get_unwrap(13),
+            group_id: r.get_unwrap(14),
         }
     }
 
@@ -405,6 +531,7 @@ impl RawIssue {
             progress: Progress::from_db(&self.progress, claim)?,
             commitment: Commitment::from_db(&self.commitment)?,
             condition,
+            group: self.group_id.as_deref().map(GroupId::from_stored),
             created_at: parse_ts(&self.created_at),
             updated_at: parse_ts(&self.updated_at),
         })

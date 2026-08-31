@@ -48,6 +48,51 @@ enum Command {
     /// 依存 (これが無いと始められない) を張る
     #[command(subcommand)]
     Dep(DepCmd),
+    /// 機能群でまとめる
+    #[command(subcommand)]
+    Group(GroupCmd),
+}
+
+#[derive(Subcommand)]
+enum GroupCmd {
+    /// グループを作る
+    New {
+        slug: String,
+        /// 表示名 (省略時は slug と同じ)
+        name: Vec<String>,
+        /// 親グループの slug
+        #[arg(long)]
+        parent: Option<String>,
+    },
+    /// グループを一覧する
+    List,
+    /// グループの中身と進捗を見る
+    Show { slug: String },
+    /// issue をグループに入れる
+    Set { id: String, slug: String },
+    /// issue をグループから外す
+    Unset { id: String },
+    /// グループごとやらないことにする (子孫を一括で不採用にする)
+    Reject { slug: String },
+    /// グループ間の依存
+    #[command(subcommand)]
+    Dep(GroupDepCmd),
+}
+
+#[derive(Subcommand)]
+enum GroupDepCmd {
+    /// 依存を張る
+    Add {
+        slug: String,
+        #[arg(long)]
+        needs: String,
+    },
+    /// 依存を外す
+    Rm {
+        slug: String,
+        #[arg(long)]
+        needs: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -108,7 +153,128 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Decide(c) => cmd_decide(c),
         Command::When(c) => cmd_when(c),
         Command::Dep(c) => cmd_dep(c),
+        Command::Group(c) => cmd_group(c),
     }
+}
+
+fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let store = Store::open()?;
+    match c {
+        GroupCmd::New { slug, name, parent } => {
+            let parent = match parent {
+                Some(p) => Some(store.resolve_slug(&p)?),
+                None => None,
+            };
+            let display = if name.is_empty() { slug.clone() } else { name.join(" ") };
+            let group = Group {
+                id: GroupId::generate(),
+                slug: slug.clone(),
+                name: display.clone(),
+                description: None,
+                parent,
+            };
+            store.insert_group(&group)?;
+            println!("{slug}  {display}");
+        }
+        GroupCmd::List => {
+            let view = view_of(&store)?;
+            if view.groups().is_empty() {
+                println!("グループはまだありません");
+                return Ok(());
+            }
+            for g in view.groups() {
+                let p = view.group_progress(&g.id);
+                let waiting = view.group_waiting_on(&g.id);
+                let mut extra = Vec::new();
+                if p.undecided > 0 {
+                    extra.push(format!("未判断 {}", p.undecided));
+                }
+                if !waiting.is_empty() {
+                    let names: Vec<_> = waiting.iter().map(|w| w.slug.as_str()).collect();
+                    extra.push(format!("待ち: {}", names.join(", ")));
+                }
+                let suffix = if extra.is_empty() {
+                    String::new()
+                } else {
+                    format!("  ({})", extra.join(" / "))
+                };
+                println!("{}  {}/{}{}  {}", g.slug, p.done, p.total, suffix, g.name);
+            }
+        }
+        GroupCmd::Show { slug } => {
+            let view = view_of(&store)?;
+            let id = store.resolve_slug(&slug)?;
+            let g = view.group(&id).ok_or("グループが見つかりません")?;
+            println!("{}  {}", g.slug, g.name);
+            if let Some(pid) = &g.parent {
+                if let Some(parent) = view.group(pid) {
+                    println!("親: {}", parent.slug);
+                }
+            }
+            let p = view.group_progress(&id);
+            match p.ratio() {
+                Some(_) => println!("進捗: {}/{} (未判断 {} 件)", p.done, p.total, p.undecided),
+                None => println!("進捗: 採用したものがまだありません (未判断 {} 件)", p.undecided),
+            }
+            let waiting = view.group_waiting_on(&id);
+            for w in waiting {
+                println!("待ち: {} ({})", w.slug, w.name);
+            }
+            println!();
+            for i in view.issues_in(&id) {
+                println!(
+                    "  {}  [{}/{}]  {}",
+                    i.id,
+                    i.progress.label(),
+                    i.commitment.label(),
+                    i.title
+                );
+            }
+        }
+        GroupCmd::Set { id, slug } => {
+            let id = store.resolve_id(&id)?;
+            let gid = store.resolve_slug(&slug)?;
+            store.apply(&id, Change::SetGroup(Some(gid)))?;
+            println!("{id} を {slug} に入れました");
+        }
+        GroupCmd::Unset { id } => {
+            let id = store.resolve_id(&id)?;
+            store.apply(&id, Change::SetGroup(None))?;
+            println!("{id} をグループから外しました");
+        }
+        GroupCmd::Reject { slug } => {
+            let view = view_of(&store)?;
+            let id = store.resolve_slug(&slug)?;
+            let targets: Vec<_> = view
+                .issues_in(&id)
+                .into_iter()
+                .filter(|i| i.commitment != Commitment::Rejected)
+                .map(|i| i.id.clone())
+                .collect();
+            for t in &targets {
+                store.apply(t, Change::Decide(Commitment::Rejected))?;
+            }
+            println!("{slug} の {} 件を不採用にしました", targets.len());
+        }
+        GroupCmd::Dep(d) => match d {
+            GroupDepCmd::Add { slug, needs } => {
+                let a = store.resolve_slug(&slug)?;
+                let b = store.resolve_slug(&needs)?;
+                if a == b {
+                    return Err("自分自身には依存できません".into());
+                }
+                store.add_group_dep(&a, &b)?;
+                println!("{slug} は {needs} を前提にします");
+            }
+            GroupDepCmd::Rm { slug, needs } => {
+                let a = store.resolve_slug(&slug)?;
+                let b = store.resolve_slug(&needs)?;
+                store.remove_group_dep(&a, &b)?;
+                println!("{slug} の前提から {needs} を外しました");
+            }
+        },
+    }
+    Ok(())
 }
 
 fn cmd_init(prefix: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -139,6 +305,7 @@ fn cmd_create(title: Vec<String>, commitment: Commitment) -> Result<(), Box<dyn 
         progress: Progress::NotStarted,
         commitment,
         condition: None,
+        group: None,
         created_at: now,
         updated_at: now,
     };
@@ -149,8 +316,17 @@ fn cmd_create(title: Vec<String>, commitment: Commitment) -> Result<(), Box<dyn 
 
 fn load() -> Result<(Store, View), Box<dyn std::error::Error>> {
     let store = Store::open()?;
-    let view = View::new(store.all()?, store.deps()?);
+    let view = view_of(&store)?;
     Ok((store, view))
+}
+
+fn view_of(store: &Store) -> Result<View, Box<dyn std::error::Error>> {
+    Ok(View::new(
+        store.all()?,
+        store.deps()?,
+        store.groups()?,
+        store.group_deps()?,
+    ))
 }
 
 fn cmd_ready() -> Result<(), Box<dyn std::error::Error>> {
@@ -206,7 +382,7 @@ fn cmd_done(id: &str) -> Result<(), Box<dyn std::error::Error>> {
     store.apply(&id, Change::End)?;
     println!("{id} を終了しました");
 
-    let view = View::new(store.all()?, store.deps()?);
+    let view = view_of(&store)?;
     let unblocked = view.newly_ready_after(&id);
     for i in unblocked {
         println!("着手可能になりました: {}  {}", i.id, i.title);
