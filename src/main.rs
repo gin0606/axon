@@ -229,7 +229,11 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
                 Some(p) => Some(store.resolve_slug(&p)?),
                 None => None,
             };
-            let display = if name.is_empty() { slug.clone() } else { name.join(" ") };
+            let display = if name.is_empty() {
+                slug.clone()
+            } else {
+                name.join(" ")
+            };
             let group = Group {
                 id: GroupId::generate(),
                 slug: slug.clone(),
@@ -278,7 +282,10 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             let p = view.group_progress(&id);
             match p.ratio() {
                 Some(_) => println!("進捗: {}/{} (未判断 {} 件)", p.done, p.total, p.undecided),
-                None => println!("進捗: 採用したものがまだありません (未判断 {} 件)", p.undecided),
+                None => println!(
+                    "進捗: 採用したものがまだありません (未判断 {} 件)",
+                    p.undecided
+                ),
             }
             let waiting = view.group_waiting_on(&id);
             for w in waiting {
@@ -356,7 +363,10 @@ fn cmd_init(prefix: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn cmd_create(title: Vec<String>, commitment: Commitment) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_create(
+    title: Vec<String>,
+    commitment: Commitment,
+) -> Result<(), Box<dyn std::error::Error>> {
     let title = title.join(" ");
     if title.trim().is_empty() {
         return Err("タイトルが空です".into());
@@ -474,7 +484,10 @@ fn cmd_start(id: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn ctx(reason: Option<String>) -> Ctx {
-    Ctx { actor: actor::actor(), reason }
+    Ctx {
+        actor: actor::actor(),
+        reason,
+    }
 }
 
 fn cmd_done(id: &str, reason: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -582,11 +595,24 @@ fn cmd_show(id: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     for (g, blockers) in view.group_blocked_reason(issue) {
         println!();
-        println!("グループ {} が {} を待っています", 
-            issue.group.as_ref().and_then(|x| view.group(x)).map(|x| x.slug.as_str()).unwrap_or("?"),
-            g.slug);
+        println!(
+            "グループ {} が {} を待っています",
+            issue
+                .group
+                .as_ref()
+                .and_then(|x| view.group(x))
+                .map(|x| x.slug.as_str())
+                .unwrap_or("?"),
+            g.slug
+        );
         for b in blockers {
-            println!("  {}  [{}/{}]  {}", b.id, b.progress.label(), b.commitment.label(), b.title);
+            println!(
+                "  {}  [{}/{}]  {}",
+                b.id,
+                b.progress.label(),
+                b.commitment.label(),
+                b.title
+            );
         }
     }
     Ok(())
@@ -635,10 +661,18 @@ fn cmd_when(c: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
             let date: NaiveDate = date
                 .parse()
                 .map_err(|_| format!("日付として読めません: {date} (YYYY-MM-DD)"))?;
-            store.apply(&id, Change::SetCondition(Some(Condition::At(date))), &ctx(reason))?;
+            store.apply(
+                &id,
+                Change::SetCondition(Some(Condition::At(date))),
+                &ctx(reason),
+            )?;
             println!("{id} は {date} まで浮上しません");
         }
-        WhenCmd::After { id, reference, reason } => {
+        WhenCmd::After {
+            id,
+            reference,
+            reason,
+        } => {
             let id = store.resolve_id(&id)?;
             let target = store.resolve_id(&reference)?;
             if id == target {

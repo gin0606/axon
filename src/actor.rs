@@ -24,9 +24,10 @@ pub fn actor() -> String {
         }
     }
     let user = env::var("USER").unwrap_or_else(|_| "unknown".to_string());
-    match env::current_dir().ok().and_then(|p| {
-        p.file_name().map(|n| n.to_string_lossy().to_string())
-    }) {
+    match env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+    {
         Some(dir) => format!("{user}@{dir}"),
         None => user,
     }

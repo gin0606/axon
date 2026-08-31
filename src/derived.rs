@@ -21,7 +21,13 @@ impl View {
     ) -> Self {
         let order = issues.iter().map(|i| i.id.clone()).collect();
         let by_id = issues.into_iter().map(|i| (i.id.clone(), i)).collect();
-        View { by_id, order, deps, groups, group_deps }
+        View {
+            by_id,
+            order,
+            deps,
+            groups,
+            group_deps,
+        }
     }
 
     pub fn get(&self, id: &IssueId) -> Option<&Issue> {

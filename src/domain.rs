@@ -121,7 +121,11 @@ impl Condition {
         }
     }
 
-    pub fn from_db(kind: &str, date: Option<&str>, reference: Option<&str>) -> Result<Self, ParseError> {
+    pub fn from_db(
+        kind: &str,
+        date: Option<&str>,
+        reference: Option<&str>,
+    ) -> Result<Self, ParseError> {
         match (kind, date, reference) {
             ("date", Some(d), None) => d
                 .parse::<NaiveDate>()

@@ -142,7 +142,10 @@ fn repo_root() -> Result<PathBuf> {
         return Err(DbError::NotInRepo);
     }
     let git_dir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim().to_string());
-    git_dir.parent().map(Path::to_path_buf).ok_or(DbError::NotInRepo)
+    git_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or(DbError::NotInRepo)
 }
 
 fn db_path() -> Result<PathBuf> {
@@ -163,7 +166,10 @@ impl Store {
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let conn = Connection::open(&path)?;
         migrate(&conn)?;
-        conn.execute("INSERT INTO meta (key, value) VALUES ('prefix', ?1)", params![prefix])?;
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('prefix', ?1)",
+            params![prefix],
+        )?;
         Ok(path)
     }
 
@@ -181,7 +187,9 @@ impl Store {
     pub fn prefix(&self) -> Result<String> {
         Ok(self
             .conn
-            .query_row("SELECT value FROM meta WHERE key = 'prefix'", [], |r| r.get(0))?)
+            .query_row("SELECT value FROM meta WHERE key = 'prefix'", [], |r| {
+                r.get(0)
+            })?)
     }
 
     pub fn insert(&self, issue: &Issue) -> Result<()> {
@@ -293,7 +301,11 @@ impl Store {
     pub fn resolve_slug(&self, slug: &str) -> Result<GroupId> {
         let id: Option<String> = self
             .conn
-            .query_row("SELECT id FROM groups WHERE slug = ?1", params![slug], |r| r.get(0))
+            .query_row(
+                "SELECT id FROM groups WHERE slug = ?1",
+                params![slug],
+                |r| r.get(0),
+            )
             .optional()?;
         id.map(|s| GroupId::from_stored(&s))
             .ok_or_else(|| DbError::NoSuchGroup(slug.to_string()))
@@ -330,14 +342,24 @@ impl Store {
                             claimed_actor = ?2, claimed_session = ?3,
                             claimed_pid = ?4, claimed_at = ?5, updated_at = ?6
                       WHERE id = ?1 AND progress = 'not_started'",
-                    params![id.as_str(), c.actor, c.session, c.pid, c.at.to_rfc3339(), now],
+                    params![
+                        id.as_str(),
+                        c.actor,
+                        c.session,
+                        c.pid,
+                        c.at.to_rfc3339(),
+                        now
+                    ],
                 )?;
                 if n == 0 {
                     let reason = match before.progress.claim() {
                         Some(cl) => format!("{} が着手中", cl.actor),
                         None => format!("状態が{}", before.progress.label()),
                     };
-                    return Err(DbError::CannotClaim { id: id.to_string(), reason });
+                    return Err(DbError::CannotClaim {
+                        id: id.to_string(),
+                        reason,
+                    });
                 }
             }
             Change::Release => {
@@ -521,15 +543,18 @@ fn read_all(conn: &Connection) -> Result<Vec<Issue>> {
 }
 
 fn read_groups(conn: &Connection) -> Result<Vec<Group>> {
-    let mut stmt = conn
-        .prepare("SELECT id, slug, name, description, parent_id FROM groups ORDER BY slug")?;
+    let mut stmt =
+        conn.prepare("SELECT id, slug, name, description, parent_id FROM groups ORDER BY slug")?;
     let rows = stmt.query_map([], |r| {
         Ok(Group {
             id: GroupId::from_stored(&r.get::<_, String>(0)?),
             slug: r.get(1)?,
             name: r.get(2)?,
             description: r.get(3)?,
-            parent: r.get::<_, Option<String>>(4)?.as_deref().map(GroupId::from_stored),
+            parent: r
+                .get::<_, Option<String>>(4)?
+                .as_deref()
+                .map(GroupId::from_stored),
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -677,7 +702,12 @@ impl RawIssue {
     }
 
     fn into_issue(self) -> std::result::Result<Issue, ParseError> {
-        let claim = match (self.claimed_actor, self.claimed_session, self.claimed_pid, self.claimed_at) {
+        let claim = match (
+            self.claimed_actor,
+            self.claimed_session,
+            self.claimed_pid,
+            self.claimed_at,
+        ) {
             (Some(actor), Some(session), Some(pid), Some(at)) => Some(Claim {
                 actor,
                 session,
