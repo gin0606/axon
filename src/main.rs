@@ -42,7 +42,7 @@ enum Command {
         #[arg(short, long)]
         reason: Option<String>,
     },
-    /// 表題と説明を書く (どちらの指定も無ければ説明を $EDITOR で開く)
+    /// 表題と説明を書く
     Write {
         id: String,
         /// 表題を付け直す
@@ -724,26 +724,6 @@ fn cmd_dep(c: DepCmd) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// $EDITOR で編集する。本文だけを出す。
-/// 説明用のヘッダを混ぜると、Markdown の見出しと区別できなくなるため置かない。
-fn edit_in_editor(current: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
-    let editor = std::env::var("EDITOR")
-        .or_else(|_| std::env::var("VISUAL"))
-        .map_err(|_| "$EDITOR が設定されていません。-m か -F を使ってください")?;
-
-    let path = std::env::temp_dir().join(format!("axon-{}.md", std::process::id()));
-    std::fs::write(&path, current.unwrap_or(""))?;
-
-    let status = std::process::Command::new(&editor).arg(&path).status()?;
-    if !status.success() {
-        std::fs::remove_file(&path).ok();
-        return Err(format!("{editor} が異常終了しました").into());
-    }
-    let body = std::fs::read_to_string(&path)?;
-    std::fs::remove_file(&path).ok();
-    Ok(body)
-}
-
 fn cmd_log(id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let store = Store::open()?;
     let id = store.resolve_id(id)?;
@@ -835,7 +815,7 @@ fn cmd_write(
     let id = store.resolve_id(id)?;
     let current = store.get(&id)?;
 
-    // 書き込みの前に入力を出し切る。エディタの中断やファイル不在で
+    // 書き込みの前に入力を出し切る。ファイルが読めずに
     // 表題だけ書き換わった状態を残さないため。
     let body = match (message, file) {
         (Some(m), None) => Some(m),
@@ -846,9 +826,12 @@ fn cmd_write(
         }
         (None, Some(f)) => Some(std::fs::read_to_string(&f)?),
         (Some(_), Some(_)) => return Err("-m と -F は同時に使えません".into()),
-        (None, None) if title.is_some() => None,
-        (None, None) => Some(edit_in_editor(current.description.as_deref())?),
+        (None, None) => None,
     };
+
+    if title.is_none() && body.is_none() {
+        return Err("書く内容がありません。--title / -m / -F のいずれかを指定してください".into());
+    }
 
     let mut written = Vec::new();
 
