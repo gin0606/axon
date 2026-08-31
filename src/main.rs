@@ -29,6 +29,8 @@ enum Command {
     Capture { title: Vec<String> },
     /// 着手可能なものを見る
     Ready,
+    /// 人間の判断を待っているものを見る
+    Triage,
     /// 着手可能なものから 1 件取って着手する
     Next,
     /// 指定して着手する
@@ -202,6 +204,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Plan { title } => cmd_create(title, Commitment::Accepted),
         Command::Capture { title } => cmd_create(title, Commitment::Undecided),
         Command::Ready => cmd_ready(),
+        Command::Triage => cmd_triage(),
         Command::Next => cmd_next(),
         Command::Start { id } => cmd_start(&id),
         Command::Done { id, reason } => cmd_done(&id, reason),
@@ -400,6 +403,38 @@ fn cmd_ready() -> Result<(), Box<dyn std::error::Error>> {
     }
     for i in ready {
         println!("{}  {}", i.id, i.title);
+    }
+    Ok(())
+}
+
+fn cmd_triage() -> Result<(), Box<dyn std::error::Error>> {
+    use derived::TriageReason;
+    let (_, view) = load()?;
+    let items = view.triage();
+    if items.is_empty() {
+        println!("判断を待っているものはありません");
+        return Ok(());
+    }
+    for (issue, reason) in items {
+        match reason {
+            TriageReason::Undecided => {
+                println!("{}  未判断    {}", issue.id, issue.title);
+            }
+            TriageReason::Orphaned => {
+                let lost: Vec<_> = view
+                    .depends_on(&issue.id)
+                    .into_iter()
+                    .filter(|d| d.commitment == Commitment::Rejected)
+                    .map(|d| d.id.to_string())
+                    .collect();
+                println!(
+                    "{}  前提喪失  {} ← {} が不採用",
+                    issue.id,
+                    issue.title,
+                    lost.join(", ")
+                );
+            }
+        }
     }
     Ok(())
 }

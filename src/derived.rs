@@ -258,6 +258,21 @@ impl View {
         self.iter().filter(|i| self.is_ready(i)).collect()
     }
 
+    /// 人間の判断を待っているもの。機械には決められない。
+    pub fn triage(&self) -> Vec<(&Issue, TriageReason)> {
+        self.iter()
+            .filter_map(|i| {
+                if i.commitment == Commitment::Undecided {
+                    Some((i, TriageReason::Undecided))
+                } else if !i.is_terminal() && self.is_orphaned(&i.id) {
+                    Some((i, TriageReason::Orphaned))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// `id` が終端に達したことで新たに着手可能になるもの。`done` の後押しに使う。
     pub fn newly_ready_after(&self, id: &IssueId) -> Vec<&Issue> {
         self.dependents(id)
@@ -290,4 +305,12 @@ impl GroupProgress {
     pub fn ratio(&self) -> Option<f64> {
         (self.total > 0).then(|| self.done as f64 / self.total as f64)
     }
+}
+
+/// なぜ判断が要るのか。
+pub enum TriageReason {
+    /// やるかどうかを決めていない
+    Undecided,
+    /// 依存先が不採用になり、前提を失った
+    Orphaned,
 }
