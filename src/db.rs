@@ -360,6 +360,12 @@ impl Store {
                     params![id.as_str(), c.as_db(), now],
                 )?;
             }
+            Change::SetDescription(ref d) => {
+                tx.execute(
+                    "UPDATE issues SET description = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![id.as_str(), d, now],
+                )?;
+            }
             Change::SetGroup(g) => {
                 tx.execute(
                     "UPDATE issues SET group_id = ?2, updated_at = ?3 WHERE id = ?1",
@@ -492,6 +498,7 @@ pub enum Change {
     Release,
     End,
     Decide(Commitment),
+    SetDescription(Option<String>),
     SetCondition(Option<Condition>),
     SetGroup(Option<GroupId>),
 }
@@ -572,6 +579,11 @@ fn describe(before: &Issue, change: &Change) -> (&'static str, Option<String>, O
             Some(before.commitment.as_db().to_string()),
             Some(c.as_db().to_string()),
         ),
+        Change::SetDescription(d) => (
+            "description",
+            before.description.as_deref().map(summarize),
+            d.as_deref().map(summarize),
+        ),
         Change::SetCondition(c) => (
             "condition",
             before.condition.as_ref().map(describe_cond),
@@ -583,6 +595,17 @@ fn describe(before: &Issue, change: &Change) -> (&'static str, Option<String>, O
             g.as_ref().map(|g| g.as_str().to_string()),
         ),
     }
+}
+
+/// 本文をそのまま履歴に載せると読みにくいので、先頭だけ残す。
+fn summarize(text: &str) -> String {
+    let one_line = text.replace('\n', " ");
+    let trimmed = one_line.trim();
+    let mut out: String = trimmed.chars().take(30).collect();
+    if trimmed.chars().count() > 30 {
+        out.push('…');
+    }
+    out
 }
 
 fn describe_cond(c: &Condition) -> String {

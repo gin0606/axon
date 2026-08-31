@@ -40,6 +40,16 @@ enum Command {
         #[arg(short, long)]
         reason: Option<String>,
     },
+    /// 説明を書く (指定が無ければ $EDITOR を開く)
+    Describe {
+        id: String,
+        /// 本文を直接渡す
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+        /// ファイルから読む (- で標準入力)
+        #[arg(short = 'F', long)]
+        file: Option<String>,
+    },
     /// 変更の履歴を見る
     Log { id: String },
     /// 放置されたまま残っている着手を探す
@@ -180,6 +190,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Next => cmd_next(),
         Command::Start { id } => cmd_start(&id),
         Command::Done { id, reason } => cmd_done(&id, reason),
+        Command::Describe { id, message, file } => cmd_describe(&id, message, file),
         Command::Log { id } => cmd_log(&id),
         Command::Stale { hours } => cmd_stale(hours),
         Command::Release { id, reason } => cmd_release(&id, reason),
@@ -677,4 +688,63 @@ fn cmd_release(id: &str, reason: Option<String>) -> Result<(), Box<dyn std::erro
     store.apply(&id, Change::Release, &ctx(reason))?;
     println!("{id} の着手 ({who}) を取り消しました");
     Ok(())
+}
+
+fn cmd_describe(
+    id: &str,
+    message: Option<String>,
+    file: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Read;
+
+    let mut store = Store::open()?;
+    let id = store.resolve_id(id)?;
+    let current = store.get(&id)?;
+
+    let text = match (message, file) {
+        (Some(m), None) => m,
+        (None, Some(f)) if f == "-" => {
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf)?;
+            buf
+        }
+        (None, Some(f)) => std::fs::read_to_string(&f)?,
+        (None, None) => edit_in_editor(current.description.as_deref())?,
+        (Some(_), Some(_)) => return Err("-m と -F は同時に使えません".into()),
+    };
+
+    let trimmed = text.trim();
+    let new = (!trimmed.is_empty()).then(|| trimmed.to_string());
+    if new == current.description {
+        println!("変更はありません");
+        return Ok(());
+    }
+    let removed = new.is_none();
+    store.apply(&id, Change::SetDescription(new), &ctx(None))?;
+    if removed {
+        println!("{id} の説明を消しました");
+    } else {
+        println!("{id} の説明を書きました");
+    }
+    Ok(())
+}
+
+/// $EDITOR で編集する。本文だけを出す。
+/// 説明用のヘッダを混ぜると、Markdown の見出しと区別できなくなるため置かない。
+fn edit_in_editor(current: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .map_err(|_| "$EDITOR が設定されていません。-m か -F を使ってください")?;
+
+    let path = std::env::temp_dir().join(format!("axon-{}.md", std::process::id()));
+    std::fs::write(&path, current.unwrap_or(""))?;
+
+    let status = std::process::Command::new(&editor).arg(&path).status()?;
+    if !status.success() {
+        std::fs::remove_file(&path).ok();
+        return Err(format!("{editor} が異常終了しました").into());
+    }
+    let body = std::fs::read_to_string(&path)?;
+    std::fs::remove_file(&path).ok();
+    Ok(body)
 }
