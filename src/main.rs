@@ -485,8 +485,8 @@ fn cmd_show(id: &str) -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     if !waiting.is_empty() {
         println!();
-        for d in waiting {
-            println!("待ち: {}  {}", d.id, d.title);
+        for d in &waiting {
+            println!("待ち: {}  {}{}", d.id, d.title, blocker_note(&view, d));
         }
     }
     let lost: Vec<_> = view
@@ -497,7 +497,39 @@ fn cmd_show(id: &str) -> Result<(), Box<dyn std::error::Error>> {
     for d in lost {
         println!("前提喪失: {} が不採用になっています", d.id);
     }
+
+    // 直接の依存より奥に原因があるときだけ、遡った結果を出す
+    let causes = view.blocked_reason(&id);
+    let direct: Vec<_> = waiting.iter().map(|d| &d.id).collect();
+    for c in causes.iter().filter(|c| !direct.contains(&&c.id)) {
+        println!("原因: {}  {}{}", c.id, c.title, blocker_note(&view, c));
+    }
+
+    for (g, blockers) in view.group_blocked_reason(issue) {
+        println!();
+        println!("グループ {} が {} を待っています", 
+            issue.group.as_ref().and_then(|x| view.group(x)).map(|x| x.slug.as_str()).unwrap_or("?"),
+            g.slug);
+        for b in blockers {
+            println!("  {}  [{}/{}]  {}", b.id, b.progress.label(), b.commitment.label(), b.title);
+        }
+    }
     Ok(())
+}
+
+/// 止まっている理由のうち、状態表示だけでは読み取れないものを添える。
+fn blocker_note(view: &View, issue: &Issue) -> String {
+    if view.is_orphaned(&issue.id) {
+        " ← 前提喪失".to_string()
+    } else if !view.is_surfaced(issue) {
+        match &issue.condition {
+            Some(Condition::At(d)) => format!(" ← {d} まで浮上しない"),
+            Some(Condition::AfterIssue(r)) => format!(" ← {r} の後まで浮上しない"),
+            None => String::new(),
+        }
+    } else {
+        String::new()
+    }
 }
 
 fn cmd_decide(c: DecideCmd) -> Result<(), Box<dyn std::error::Error>> {

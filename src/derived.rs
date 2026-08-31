@@ -160,6 +160,66 @@ impl View {
             .collect()
     }
 
+    /// これ以上遡っても意味がない原因かどうか。
+    /// 前提を失っている・後送り中・未解決の依存を持たない、のいずれか。
+    fn is_root_cause(&self, issue: &Issue) -> bool {
+        self.is_orphaned(&issue.id)
+            || !self.is_surfaced(issue)
+            || self.depends_on(&issue.id).iter().all(|d| d.is_terminal())
+    }
+
+    /// issue 依存を遡って、実際に止めている issue を集める。
+    /// orphaned を推移させない代わりにこれが原因を説明する (docs/axes.md D-1 派生)。
+    pub fn blocked_reason(&self, id: &IssueId) -> Vec<&Issue> {
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        self.walk_causes(id, &mut seen, &mut out);
+        out
+    }
+
+    fn walk_causes<'a>(
+        &'a self,
+        id: &IssueId,
+        seen: &mut HashSet<IssueId>,
+        out: &mut Vec<&'a Issue>,
+    ) {
+        for d in self.depends_on(id) {
+            if d.is_terminal() || !seen.insert(d.id.clone()) {
+                continue;
+            }
+            if self.is_root_cause(d) {
+                out.push(d);
+            } else {
+                self.walk_causes(&d.id, seen, out);
+            }
+        }
+    }
+
+    /// グループ依存で止まっている場合の内訳。どのグループの何が残っているかを返す。
+    pub fn group_blocked_reason(&self, issue: &Issue) -> Vec<(&Group, Vec<&Issue>)> {
+        let Some(gid) = &issue.group else {
+            return Vec::new();
+        };
+        self.ancestors(gid)
+            .iter()
+            .flat_map(|a| {
+                self.group_deps
+                    .iter()
+                    .filter(move |(from, _)| from == a)
+                    .filter_map(|(_, to)| self.group(to))
+            })
+            .filter(|g| !self.group_satisfied(&g.id))
+            .map(|g| {
+                let blockers = self
+                    .issues_in(&g.id)
+                    .into_iter()
+                    .filter(|i| !i.is_terminal())
+                    .collect();
+                (g, blockers)
+            })
+            .collect()
+    }
+
     /// 進捗。分母は採用したものだけ (docs/axes.md §3)。
     pub fn group_progress(&self, g: &GroupId) -> GroupProgress {
         let issues = self.issues_in(g);
