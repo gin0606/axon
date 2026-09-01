@@ -1,3 +1,4 @@
 /target
+/_apalache-out/
 *.itf.json
 .axon/
