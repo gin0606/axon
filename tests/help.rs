@@ -1,35 +1,11 @@
-use std::fs;
-use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::process::{Output, Stdio};
 
-static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
+mod common;
+use common::TestDir;
 
-struct UninitializedDir(PathBuf);
-
-impl UninitializedDir {
-    fn new() -> Self {
-        let sequence = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
-        let path =
-            std::env::temp_dir().join(format!("axon-help-test-{}-{sequence}", std::process::id()));
-        fs::create_dir(&path).unwrap();
-        Self(path)
-    }
-}
-
-impl Drop for UninitializedDir {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
-    }
-}
-
-fn axon(args: &[&str]) -> (Output, UninitializedDir) {
-    let dir = UninitializedDir::new();
-    let output = Command::new(env!("CARGO_BIN_EXE_axon"))
-        .args(args)
-        .current_dir(&dir.0)
-        .output()
-        .unwrap();
+fn axon(args: &[&str]) -> (Output, TestDir) {
+    let dir = TestDir::new("help");
+    let output = dir.axon_command().args(args).output().unwrap();
     (output, dir)
 }
 
@@ -37,15 +13,14 @@ fn axon(args: &[&str]) -> (Output, UninitializedDir) {
 fn axon_with_closed_stdout(args: &[&str]) -> Output {
     use std::os::fd::{FromRawFd, OwnedFd};
 
-    let dir = UninitializedDir::new();
+    let dir = TestDir::new("help-pipe");
     let mut pipe = [0; 2];
     assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
     assert_eq!(unsafe { libc::close(pipe[0]) }, 0);
     let writer = unsafe { OwnedFd::from_raw_fd(pipe[1]) };
 
-    Command::new(env!("CARGO_BIN_EXE_axon"))
+    dir.axon_command()
         .args(args)
-        .current_dir(&dir.0)
         .stdout(Stdio::from(writer))
         .stderr(Stdio::piped())
         .output()
@@ -59,7 +34,7 @@ fn complete_help_succeeds_without_opening_a_database() {
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
     assert!(String::from_utf8_lossy(&output.stdout).starts_with("# CLI\n"));
-    assert!(!dir.0.join(".axon").exists());
+    assert!(!dir.path().join(".axon").exists());
 }
 
 #[test]
