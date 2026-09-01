@@ -18,26 +18,22 @@ axon 自体は、誰が着手対象や採否を決め、いつレビューする
 - エージェントは選択肢や推奨案を提示し、合意した状態変更を実行する
 - エージェントは、ユーザーとの合意なしに `axon decide` を実行しない
 
-採用済み issue の実装を依頼されたら、 `skills/axon-implement-issue/SKILL.md` の手順に従う。
-未判断 issue の相談を依頼されたら、 `skills/axon-triage-issue/SKILL.md` の手順に従う。
+未判断の新しい issue の登録を依頼されたら、`skills/axon-capture-issue/SKILL.md` の手順に従う。
+採用済みの新しい issue の登録を依頼されたら、`skills/axon-plan-issue/SKILL.md` の手順に従う。
+未判断または前提喪失 issue の相談を依頼されたら、`skills/axon-triage-issue/SKILL.md` の手順に従う。
+採用済み issue の実装を依頼されたら、`skills/axon-implement-issue/SKILL.md` の手順に従う。
 
-`ready` または `triage` の候補整理を依頼された場合は、優先候補、重複候補、判断材料を提案してよい。ただし、ユーザーの確認前に着手や採否の変更を行わない。
+`axon ready` または `axon triage` の候補整理を依頼された場合は、優先候補、重複候補、判断材料を提案してよい。ただし、ユーザーの確認前に着手や採否の変更を行わない。
 
 ## ドッグフーディング
 
-axon を使う中で、CLI の不足、不自然な往復、分かりにくい出力、手作業による補完、ドキュメントとの不一致を見つけたら、一般化できる問題を `axon capture` に記録する。
+axon を使う中で、CLI の不足、不自然な往復、分かりにくい出力、手作業による補完、ドキュメントとの不一致を見つけたら、一般化できる問題を `skills/axon-capture-issue/SKILL.md` の手順で記録する。
 
-- 解決策を早期に固定せず、まず観測した問題を書く
-- 目的、実際に必要だった操作、現在の回避策、期待する挙動を description に残す
-- 明らかな重複がないか既存 issue を確認する
-- 元の作業を不必要に中断せず、capture した改善へ勝手に着手しない
-- 一時的な不慣れや単純な入力ミスは capture しない
-
-作成時に description を渡せない間は、`capture` 後に返された ID に対して `axon write <id> -m <description>` を実行する。
+一時的な不慣れや単純な入力ミスは `axon capture` しない。元の作業を不必要に中断せず、記録した改善へ勝手に着手しない。
 
 ## 判断と申し送り
 
-判断を変えるときは必ず理由を残す (`decide` / `when` の `-r`)。
+判断を変えるときは必ず理由を残す (`axon decide` / `axon when` の `-r`)。
 「なぜやるのか」「なぜやらないのか」「なぜ今やらないのか」は、類似の問題を考えるときや決定を再考するときに効く情報で、`axon log <id>` で辿れる。
 
 作業を途中で止めるときは description に申し送りを書く。
