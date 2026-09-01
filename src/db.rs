@@ -2,7 +2,7 @@
 
 use crate::domain::*;
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -18,6 +18,8 @@ pub enum DbError {
     AlreadyInitialized(PathBuf),
     #[error("保存された値を読めません: {0}")]
     Parse(#[from] ParseError),
+    #[error("保存された進行イベント種別を読めません: {0}")]
+    InvalidProgressEvent(String),
     #[error("{0} は存在しません")]
     NoSuchIssue(String),
     #[error("グループ {0} は存在しません")]
@@ -26,12 +28,14 @@ pub enum DbError {
     AmbiguousId { id: String, candidates: String },
     #[error("{id} は着手できません ({reason})")]
     CannotClaim { id: String, reason: String },
+    #[error("{id} は{action}できません (着手中ではありません)")]
+    CannotProgress { id: String, action: &'static str },
 }
 
 pub type Result<T> = std::result::Result<T, DbError>;
 
 /// スキーマの版。`user_version` に記録し、開くたびに不足分だけ流す。
-const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4];
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5];
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE meta (
@@ -123,13 +127,37 @@ const SCHEMA_V4: &str = r#"
 DELETE FROM events WHERE field NOT IN ('commitment', 'condition');
 "#;
 
-fn migrate(conn: &Connection) -> Result<()> {
-    let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    for (i, sql) in MIGRATIONS.iter().enumerate().skip(current as usize) {
-        conn.execute_batch(sql)?;
-        conn.execute_batch(&format!("PRAGMA user_version = {}", i + 1))?;
+/// A (進行) の履歴。B/C の判断ログとは用途も表示先も違うため、別の表にする。
+const SCHEMA_V5: &str = r#"
+CREATE TABLE progress_events (
+  id        INTEGER PRIMARY KEY,
+  issue_id  TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  kind      TEXT NOT NULL CHECK (kind IN ('start','done','release')),
+  actor     TEXT NOT NULL,
+  reason    TEXT,
+  at        TEXT NOT NULL
+);
+
+CREATE INDEX idx_progress_events_issue ON progress_events (issue_id, at);
+"#;
+
+fn migrate(conn: &mut Connection) -> Result<()> {
+    migrate_with(conn, MIGRATIONS)
+}
+
+fn migrate_with(conn: &mut Connection, migrations: &[&str]) -> Result<()> {
+    loop {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: i64 = tx.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let Some(sql) = migrations.get(current as usize) else {
+            tx.commit()?;
+            return Ok(());
+        };
+        let version = current + 1;
+        tx.execute_batch(sql)?;
+        tx.pragma_update(None, "user_version", version)?;
+        tx.commit()?;
     }
-    Ok(())
 }
 
 /// worktree から呼ばれても同じ DB を指すよう、git の共通ディレクトリを基準にする。
@@ -156,10 +184,19 @@ pub struct Store {
     conn: Connection,
 }
 
+pub struct ShowSnapshot {
+    pub id: IssueId,
+    pub issues: Vec<Issue>,
+    pub deps: Vec<(IssueId, IssueId)>,
+    pub groups: Vec<Group>,
+    pub group_deps: Vec<(GroupId, GroupId)>,
+    pub progress_events: Vec<ProgressEvent>,
+}
+
 impl Store {
-    fn from_conn(conn: Connection) -> Result<Self> {
+    fn from_conn(mut conn: Connection) -> Result<Self> {
         conn.execute_batch("PRAGMA foreign_keys = ON")?;
-        migrate(&conn)?;
+        migrate(&mut conn)?;
         Ok(Store { conn })
     }
 
@@ -170,8 +207,8 @@ impl Store {
         }
         std::fs::create_dir_all(path.parent().expect("親ディレクトリがある"))
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        let conn = Connection::open(&path)?;
-        migrate(&conn)?;
+        let mut conn = Connection::open(&path)?;
+        migrate(&mut conn)?;
         conn.execute(
             "INSERT INTO meta (key, value) VALUES ('prefix', ?1)",
             params![prefix],
@@ -245,20 +282,7 @@ impl Store {
 
     /// 前方一致で 1 件に定まるときだけ解決する。曖昧なら候補を返して失敗する。
     pub fn resolve_id(&self, input: &str) -> Result<IssueId> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id FROM issues WHERE id = ?1 OR id LIKE '%-' || ?1")?;
-        let ids: Vec<String> = stmt
-            .query_map(params![input], |r| r.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        match ids.len() {
-            0 => Err(DbError::NoSuchIssue(input.to_string())),
-            1 => Ok(IssueId::from_stored(&ids[0])),
-            _ => Err(DbError::AmbiguousId {
-                id: input.to_string(),
-                candidates: ids.join(", "),
-            }),
-        }
+        resolve_issue_id(&self.conn, input)
     }
 
     pub fn get(&self, id: &IssueId) -> Result<Issue> {
@@ -345,7 +369,9 @@ impl Store {
     pub fn apply(&mut self, id: &IssueId, change: Change, ctx: &Ctx) -> Result<()> {
         let before = self.get(id)?;
         let tx = self.conn.transaction()?;
-        let now = Utc::now().to_rfc3339();
+        let now = Utc::now();
+        let progress_event = progress_event(&change, ctx, &now);
+        let now = now.to_rfc3339();
         let (field, old, new) = describe(&before, &change);
         let record = records_decision(&change);
         match change {
@@ -377,24 +403,36 @@ impl Store {
                 }
             }
             Change::Release => {
-                tx.execute(
+                let n = tx.execute(
                     "UPDATE issues
                         SET progress = 'not_started',
                             claimed_actor = NULL, claimed_session = NULL,
                             claimed_pid = NULL, claimed_at = NULL, updated_at = ?2
-                      WHERE id = ?1",
+                      WHERE id = ?1 AND progress = 'in_progress'",
                     params![id.as_str(), now],
                 )?;
+                if n == 0 {
+                    return Err(DbError::CannotProgress {
+                        id: id.to_string(),
+                        action: "解放",
+                    });
+                }
             }
             Change::End => {
-                tx.execute(
+                let n = tx.execute(
                     "UPDATE issues
                         SET progress = 'ended',
                             claimed_actor = NULL, claimed_session = NULL,
                             claimed_pid = NULL, claimed_at = NULL, updated_at = ?2
-                      WHERE id = ?1",
+                      WHERE id = ?1 AND progress = 'in_progress'",
                     params![id.as_str(), now],
                 )?;
+                if n == 0 {
+                    return Err(DbError::CannotProgress {
+                        id: id.to_string(),
+                        action: "終了",
+                    });
+                }
             }
             Change::Decide(c) => {
                 tx.execute(
@@ -437,6 +475,9 @@ impl Store {
         if record {
             log_event(&tx, id, field, old, new, ctx)?;
         }
+        if let Some(event) = progress_event {
+            log_progress_event(&tx, id, &event)?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -457,6 +498,18 @@ impl Store {
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    #[cfg(test)]
+    fn progress_events(&self, id: &IssueId) -> Result<Vec<ProgressEvent>> {
+        read_progress_events(&self.conn, id)
+    }
+
+    pub fn show_snapshot(&mut self, input: &str) -> Result<ShowSnapshot> {
+        let tx = self.conn.transaction()?;
+        let snapshot = read_show_snapshot(&tx, input)?;
+        tx.commit()?;
+        Ok(snapshot)
     }
 }
 
@@ -490,10 +543,58 @@ fn log_event(
     Ok(())
 }
 
+fn log_progress_event(conn: &Connection, id: &IssueId, event: &ProgressEvent) -> Result<()> {
+    conn.execute(
+        "INSERT INTO progress_events (issue_id, kind, actor, reason, at)
+         VALUES (?1,?2,?3,?4,?5)",
+        params![
+            id.as_str(),
+            event.kind.as_db(),
+            event.actor,
+            event.reason,
+            event.at.to_rfc3339()
+        ],
+    )?;
+    Ok(())
+}
+
 pub struct Event {
     pub field: String,
     pub old_value: Option<String>,
     pub new_value: Option<String>,
+    pub actor: String,
+    pub reason: Option<String>,
+    pub at: DateTime<Utc>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProgressEventKind {
+    Start,
+    Done,
+    Release,
+}
+
+impl ProgressEventKind {
+    fn as_db(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Done => "done",
+            Self::Release => "release",
+        }
+    }
+
+    fn from_db(value: &str) -> Result<Self> {
+        match value {
+            "start" => Ok(Self::Start),
+            "done" => Ok(Self::Done),
+            "release" => Ok(Self::Release),
+            other => Err(DbError::InvalidProgressEvent(other.to_string())),
+        }
+    }
+}
+
+pub struct ProgressEvent {
+    pub kind: ProgressEventKind,
     pub actor: String,
     pub reason: Option<String>,
     pub at: DateTime<Utc>,
@@ -512,11 +613,50 @@ pub enum Change {
     SetGroup(Option<GroupId>),
 }
 
+fn progress_event(change: &Change, ctx: &Ctx, now: &DateTime<Utc>) -> Option<ProgressEvent> {
+    match change {
+        Change::Claim(claim) => Some(ProgressEvent {
+            kind: ProgressEventKind::Start,
+            actor: claim.actor.clone(),
+            reason: None,
+            at: claim.at,
+        }),
+        Change::End => Some(ProgressEvent {
+            kind: ProgressEventKind::Done,
+            actor: ctx.actor.clone(),
+            reason: ctx.reason.clone(),
+            at: *now,
+        }),
+        Change::Release => Some(ProgressEvent {
+            kind: ProgressEventKind::Release,
+            actor: ctx.actor.clone(),
+            reason: ctx.reason.clone(),
+            at: *now,
+        }),
+        _ => None,
+    }
+}
+
 const SELECT_ISSUE: &str = "SELECT id, title, description, progress, commitment,
                                    cond_kind, cond_date, cond_ref,
                                    claimed_actor, claimed_session, claimed_pid, claimed_at,
                                    created_at, updated_at, group_id
                             FROM issues";
+
+fn resolve_issue_id(conn: &Connection, input: &str) -> Result<IssueId> {
+    let mut stmt = conn.prepare("SELECT id FROM issues WHERE id = ?1 OR id LIKE '%-' || ?1")?;
+    let ids: Vec<String> = stmt
+        .query_map(params![input], |r| r.get(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    match ids.len() {
+        0 => Err(DbError::NoSuchIssue(input.to_string())),
+        1 => Ok(IssueId::from_stored(&ids[0])),
+        _ => Err(DbError::AmbiguousId {
+            id: input.to_string(),
+            candidates: ids.join(", "),
+        }),
+    }
+}
 
 fn read_all(conn: &Connection) -> Result<Vec<Issue>> {
     let sql = format!("{SELECT_ISSUE} ORDER BY created_at");
@@ -569,9 +709,44 @@ fn read_deps(conn: &Connection) -> Result<Vec<(IssueId, IssueId)>> {
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
-/// 判断として残すのは採否 (B) と時期 (C) だけ。
-/// 進行 (A) や文面の編集は、後から「なぜそう決めたか」を辿る材料にならない。
-/// いつ着手して終えたかは claim と updated_at で足りる。
+fn read_progress_events(conn: &Connection, id: &IssueId) -> Result<Vec<ProgressEvent>> {
+    let mut stmt = conn.prepare(
+        "SELECT kind, actor, reason, at
+         FROM progress_events WHERE issue_id = ?1 ORDER BY id",
+    )?;
+    let rows = stmt.query_map(params![id.as_str()], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, String>(3)?,
+        ))
+    })?;
+    let mut events = Vec::new();
+    for row in rows {
+        let (kind, actor, reason, at) = row?;
+        events.push(ProgressEvent {
+            kind: ProgressEventKind::from_db(&kind)?,
+            actor,
+            reason,
+            at: parse_ts(&at),
+        });
+    }
+    Ok(events)
+}
+
+fn read_show_snapshot(conn: &Connection, input: &str) -> Result<ShowSnapshot> {
+    let id = resolve_issue_id(conn, input)?;
+    Ok(ShowSnapshot {
+        progress_events: read_progress_events(conn, &id)?,
+        issues: read_all(conn)?,
+        deps: read_deps(conn)?,
+        groups: read_groups(conn)?,
+        group_deps: read_group_deps(conn)?,
+        id,
+    })
+}
+
 fn records_decision(change: &Change) -> bool {
     matches!(change, Change::Decide(_) | Change::SetCondition(_))
 }
@@ -791,20 +966,134 @@ mod tests {
 
     #[test]
     fn migrate_applies_every_version_and_is_idempotent() {
-        let s = store();
+        let mut s = store();
         let version = |s: &Store| -> i64 {
             s.conn
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap()
         };
         assert_eq!(version(&s) as usize, MIGRATIONS.len());
-        migrate(&s.conn).unwrap();
+        migrate(&mut s.conn).unwrap();
         assert_eq!(
             version(&s) as usize,
             MIGRATIONS.len(),
             "流し直しても増えない"
         );
         assert_eq!(s.prefix().unwrap(), "t");
+    }
+
+    #[test]
+    fn failed_migration_rolls_back_schema_and_version_together() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let broken = "CREATE TABLE half_applied (id INTEGER); SELECT * FROM missing_table;";
+
+        assert!(migrate_with(&mut conn, &[broken]).is_err());
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        let table_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'half_applied'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 0);
+        assert_eq!(table_count, 0);
+
+        migrate_with(&mut conn, &["CREATE TABLE half_applied (id INTEGER);"]).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1, "中断後と同じmigrationを再実行できる");
+    }
+
+    #[test]
+    fn show_snapshot_keeps_state_and_history_at_one_point_in_time() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "axon-show-snapshot-{}-{nonce}.db",
+            std::process::id()
+        ));
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("PRAGMA journal_mode = WAL").unwrap();
+        let mut reader = Store::from_conn(conn).unwrap();
+        reader.insert(&issue("t-1", 0)).unwrap();
+        let mut writer = Store::from_conn(Connection::open(&path).unwrap()).unwrap();
+
+        let tx = reader.conn.transaction().unwrap();
+        assert_eq!(
+            read_all(&tx).unwrap().len(),
+            1,
+            "更新前のsnapshotを確定する"
+        );
+        writer
+            .apply(&iid("t-1"), Change::Claim(claim(1)), &ctx())
+            .unwrap();
+        let snapshot = read_show_snapshot(&tx, "t-1").unwrap();
+        let shown = snapshot
+            .issues
+            .iter()
+            .find(|issue| issue.id == snapshot.id)
+            .unwrap();
+        assert_eq!(shown.progress, Progress::NotStarted);
+        assert!(snapshot.progress_events.is_empty());
+        tx.commit().unwrap();
+
+        let fresh = reader.show_snapshot("t-1").unwrap();
+        let shown = fresh
+            .issues
+            .iter()
+            .find(|issue| issue.id == fresh.id)
+            .unwrap();
+        assert!(matches!(shown.progress, Progress::InProgress(_)));
+        assert_eq!(fresh.progress_events.len(), 1);
+
+        drop(reader);
+        drop(writer);
+        for candidate in [
+            path.clone(),
+            PathBuf::from(format!("{}-wal", path.display())),
+            PathBuf::from(format!("{}-shm", path.display())),
+        ] {
+            let _ = std::fs::remove_file(candidate);
+        }
+    }
+
+    #[test]
+    fn migration_adds_progress_history_without_recreating_deleted_events() {
+        let conn = Connection::open_in_memory().unwrap();
+        for (i, sql) in MIGRATIONS.iter().take(3).enumerate() {
+            conn.execute_batch(sql).unwrap();
+            conn.execute_batch(&format!("PRAGMA user_version = {}", i + 1))
+                .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO issues
+               (id, title, progress, commitment, created_at, updated_at)
+             VALUES ('t-1', '既存 issue', 'not_started', 'accepted', ?1, ?1)",
+            params![Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO events
+               (issue_id, field, old_value, new_value, actor, reason, at)
+             VALUES ('t-1', 'progress', 'not_started', 'in_progress', 'old', NULL, ?1)",
+            params![Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+
+        let mut s = Store::from_conn(conn).unwrap();
+        assert!(s.events(&iid("t-1")).unwrap().is_empty());
+        assert!(s.progress_events(&iid("t-1")).unwrap().is_empty());
+
+        s.apply(&iid("t-1"), Change::Claim(claim(1)), &ctx())
+            .unwrap();
+        assert_eq!(s.progress_events(&iid("t-1")).unwrap().len(), 1);
     }
 
     /// 型 → DB → 型 で往復しても値が変わらない。
@@ -873,11 +1162,82 @@ mod tests {
     fn claim_is_rejected_after_end() {
         let mut s = store();
         s.insert(&issue("t-1", 0)).unwrap();
+        s.apply(&iid("t-1"), Change::Claim(claim(1)), &ctx())
+            .unwrap();
         s.apply(&iid("t-1"), Change::End, &ctx()).unwrap();
         let err = s
-            .apply(&iid("t-1"), Change::Claim(claim(1)), &ctx())
+            .apply(&iid("t-1"), Change::Claim(claim(2)), &ctx())
             .unwrap_err();
         assert!(matches!(err, DbError::CannotClaim { .. }));
+    }
+
+    #[test]
+    fn end_only_from_in_progress_and_records_only_the_transition() {
+        let mut s = store();
+        s.insert(&issue("t-1", 0)).unwrap();
+
+        let err = s.apply(&iid("t-1"), Change::End, &ctx()).unwrap_err();
+        assert!(matches!(
+            err,
+            DbError::CannotProgress {
+                action: "終了", ..
+            }
+        ));
+        assert!(s.progress_events(&iid("t-1")).unwrap().is_empty());
+
+        s.apply(&iid("t-1"), Change::Claim(claim(1)), &ctx())
+            .unwrap();
+        s.apply(&iid("t-1"), Change::End, &ctx()).unwrap();
+        let err = s.apply(&iid("t-1"), Change::End, &ctx()).unwrap_err();
+        assert!(matches!(
+            err,
+            DbError::CannotProgress {
+                action: "終了", ..
+            }
+        ));
+        let kinds: Vec<_> = s
+            .progress_events(&iid("t-1"))
+            .unwrap()
+            .into_iter()
+            .map(|event| event.kind)
+            .collect();
+        assert_eq!(kinds, [ProgressEventKind::Start, ProgressEventKind::Done]);
+    }
+
+    #[test]
+    fn release_only_from_in_progress_and_records_only_the_transition() {
+        let mut s = store();
+        s.insert(&issue("t-1", 0)).unwrap();
+
+        let err = s.apply(&iid("t-1"), Change::Release, &ctx()).unwrap_err();
+        assert!(matches!(
+            err,
+            DbError::CannotProgress {
+                action: "解放", ..
+            }
+        ));
+        assert!(s.progress_events(&iid("t-1")).unwrap().is_empty());
+
+        s.apply(&iid("t-1"), Change::Claim(claim(1)), &ctx())
+            .unwrap();
+        s.apply(&iid("t-1"), Change::Release, &ctx()).unwrap();
+        let err = s.apply(&iid("t-1"), Change::Release, &ctx()).unwrap_err();
+        assert!(matches!(
+            err,
+            DbError::CannotProgress {
+                action: "解放", ..
+            }
+        ));
+        let kinds: Vec<_> = s
+            .progress_events(&iid("t-1"))
+            .unwrap()
+            .into_iter()
+            .map(|event| event.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [ProgressEventKind::Start, ProgressEventKind::Release]
+        );
     }
 
     /// claim を消し忘れると、読み戻しで UnexpectedClaim になる。
@@ -955,6 +1315,66 @@ mod tests {
         assert_eq!(events[0].reason.as_deref(), Some("理由"));
         assert_eq!(events[1].old_value, None, "条件は付いていなかった");
         assert_eq!(events[1].new_value.as_deref(), Some("2026-03-01"));
+    }
+
+    #[test]
+    fn progress_events_record_transitions_separately_from_decisions() {
+        let mut s = store();
+        s.insert(&issue("t-1", 0)).unwrap();
+
+        s.apply(&iid("t-1"), Change::Claim(claim(1)), &ctx())
+            .unwrap();
+        s.apply(&iid("t-1"), Change::Release, &ctx()).unwrap();
+        s.apply(&iid("t-1"), Change::Claim(claim(2)), &ctx())
+            .unwrap();
+        s.apply(&iid("t-1"), Change::End, &ctx()).unwrap();
+
+        let events = s.progress_events(&iid("t-1")).unwrap();
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].kind, ProgressEventKind::Start);
+        assert_eq!(events[0].actor, "tester");
+        assert_eq!(events[0].reason, None, "start は理由を受け取らない");
+        assert_eq!(events[1].kind, ProgressEventKind::Release);
+        assert_eq!(events[1].reason.as_deref(), Some("理由"));
+        assert_eq!(events[2].kind, ProgressEventKind::Start);
+        assert_eq!(events[3].kind, ProgressEventKind::Done);
+        assert_eq!(events[3].reason.as_deref(), Some("理由"));
+        assert!(s.events(&iid("t-1")).unwrap().is_empty());
+
+        s.apply(&iid("t-1"), Change::Decide(Commitment::Rejected), &ctx())
+            .unwrap();
+        assert_eq!(s.events(&iid("t-1")).unwrap().len(), 1);
+        assert_eq!(
+            s.progress_events(&iid("t-1")).unwrap().len(),
+            4,
+            "判断は進行履歴に混ぜない"
+        );
+    }
+
+    #[test]
+    fn progress_events_follow_transition_sequence_not_timestamps() {
+        let mut s = store();
+        s.insert(&issue("t-1", 0)).unwrap();
+
+        s.apply(&iid("t-1"), Change::Claim(claim(1)), &ctx())
+            .unwrap();
+        s.apply(&iid("t-1"), Change::Release, &ctx()).unwrap();
+        let mut later_start = claim(2);
+        later_start.at -= chrono::Duration::days(1);
+        s.apply(&iid("t-1"), Change::Claim(later_start), &ctx())
+            .unwrap();
+
+        let events = s.progress_events(&iid("t-1")).unwrap();
+        assert!(events[2].at < events[1].at, "後の遷移が古い時刻を持つ再現");
+        let kinds: Vec<_> = events.into_iter().map(|event| event.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                ProgressEventKind::Start,
+                ProgressEventKind::Release,
+                ProgressEventKind::Start
+            ]
+        );
     }
 
     #[test]

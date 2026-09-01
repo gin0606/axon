@@ -33,12 +33,12 @@ enum Command {
     Ready,
     /// 人間の判断を待っているものを見る
     Triage,
-    /// 指定して着手する
+    /// 指定して着手し、actor と時刻を進行履歴に残す
     Start { id: String },
-    /// 終了にする
+    /// 着手中の作業を終了し、作業結果を進行履歴に残す
     Done {
         id: String,
-        /// 履歴に残す理由
+        /// 進行履歴に残す作業結果
         #[arg(short, long)]
         reason: Option<String>,
     },
@@ -55,7 +55,7 @@ enum Command {
         #[arg(short = 'F', long)]
         file: Option<String>,
     },
-    /// 変更の履歴を見る
+    /// 採否と時期の判断ログを見る
     Log { id: String },
     /// 放置されたまま残っている着手を探す
     Stale {
@@ -63,15 +63,16 @@ enum Command {
         #[arg(long, default_value_t = 24)]
         hours: i64,
     },
-    /// 着手を取り消して未着手に戻す
+    /// 着手を解放し、理由・申し送りを進行履歴に残す
     Release {
         id: String,
+        /// 進行履歴に残す解放理由・申し送り
         #[arg(short, long)]
         reason: Option<String>,
     },
     /// 全 issue を見る
     List,
-    /// 詳細を見る
+    /// 詳細と進行履歴を見る
     Show { id: String },
     /// 採否 (やるかどうか) を決める
     #[command(subcommand)]
@@ -602,15 +603,23 @@ fn render_list(view: &View) -> String {
 }
 
 fn cmd_show(id: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let (store, view) = load()?;
-    let id = store.resolve_id(id)?;
+    let mut store = Store::open()?;
+    let db::ShowSnapshot {
+        id,
+        issues,
+        deps,
+        groups,
+        group_deps,
+        progress_events,
+    } = store.show_snapshot(id)?;
+    let view = View::new(issues, deps, groups, group_deps);
     let issue = view.get(&id).ok_or("issue が見つかりません")?;
-    print!("{}", render_show(&view, issue));
+    print!("{}", render_show(&view, issue, &progress_events));
     Ok(())
 }
 
 /// show の本文。該当が無い区分で空の見出しを出さないため、行の無いブロックは落とす。
-fn render_show(view: &View, issue: &Issue) -> String {
+fn render_show(view: &View, issue: &Issue, progress_events: &[db::ProgressEvent]) -> String {
     let mut blocks: Vec<Vec<String>> = Vec::new();
 
     let when = match &issue.condition {
@@ -647,6 +656,29 @@ fn render_show(view: &View, issue: &Issue) -> String {
     if let Some(d) = &issue.description {
         blocks.push(vec![d.clone()]);
     }
+
+    let mut progress = Vec::new();
+    if !progress_events.is_empty() {
+        progress.push("進行履歴:".to_string());
+        for event in progress_events {
+            let action = match event.kind {
+                db::ProgressEventKind::Start => "着手",
+                db::ProgressEventKind::Done => "終了",
+                db::ProgressEventKind::Release => "解放",
+            };
+            let reason = event
+                .reason
+                .as_ref()
+                .map(|reason| format!("  ({reason})"))
+                .unwrap_or_default();
+            progress.push(format!(
+                "  {}  {}  {action}{reason}",
+                event.at.format("%Y-%m-%d %H:%M"),
+                event.actor
+            ));
+        }
+    }
+    blocks.push(progress);
 
     let deps = view.depends_on(&issue.id);
     let waiting: Vec<&Issue> = deps.iter().copied().filter(|d| !d.is_terminal()).collect();
@@ -1045,7 +1077,7 @@ mod tests {
     }
 
     fn show(view: &View, id: &str) -> String {
-        render_show(view, view.get(&iid(id)).unwrap())
+        render_show(view, view.get(&iid(id)).unwrap(), &[])
     }
 
     fn undecided(id: &str) -> Issue {
@@ -1075,6 +1107,36 @@ mod tests {
         assert_eq!(
             show(&v, "a"),
             "a  a の作業\n進行: 未着手  採否: 採用  時期: 常に浮上\n"
+        );
+    }
+
+    #[test]
+    fn show_lists_typed_progress_history() {
+        let v = view(vec![done("a")], &[], Vec::new());
+        let at = chrono::DateTime::parse_from_rfc3339("2026-09-01T01:23:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let events = vec![
+            db::ProgressEvent {
+                kind: db::ProgressEventKind::Start,
+                actor: "codex".to_string(),
+                reason: None,
+                at,
+            },
+            db::ProgressEvent {
+                kind: db::ProgressEventKind::Done,
+                actor: "codex".to_string(),
+                reason: Some("テストまで完了".to_string()),
+                at,
+            },
+        ];
+
+        let out = render_show(&v, v.get(&iid("a")).unwrap(), &events);
+        assert!(
+            out.contains(
+                "進行履歴:\n  2026-09-01 01:23  codex  着手\n  2026-09-01 01:23  codex  終了  (テストまで完了)"
+            ),
+            "{out}"
         );
     }
 
