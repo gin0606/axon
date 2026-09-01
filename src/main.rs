@@ -4,10 +4,12 @@ mod derived;
 mod domain;
 
 use chrono::{NaiveDate, Utc};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use db::{Change, Ctx, Store};
 use derived::View;
 use domain::*;
+
+const CLI_GUIDE: &str = include_str!("../docs/cli.md");
 
 #[derive(Parser)]
 #[command(name = "axon", version, about = "軸を分けたローカル issue tracker")]
@@ -192,14 +194,73 @@ enum DepCmd {
 }
 
 fn main() {
-    if let Err(e) = run() {
+    let args: Vec<_> = std::env::args_os().collect();
+    if requests_complete_help(&args) {
+        if let Err(e) = write_complete_help() {
+            eprintln!("エラー: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if let Err(e) = run(args) {
         eprintln!("エラー: {e}");
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::parse();
+fn write_complete_help() -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut stdout = std::io::stdout().lock();
+    match stdout.write_all(render_complete_help().as_bytes()) {
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        result => result,
+    }
+}
+
+fn requests_complete_help(args: &[std::ffi::OsString]) -> bool {
+    match args.get(1).and_then(|arg| arg.to_str()) {
+        Some("--help") => true,
+        Some("help") => args.len() == 3 && args.get(2).and_then(|arg| arg.to_str()) == Some("all"),
+        _ => false,
+    }
+}
+
+fn render_complete_help() -> String {
+    let mut command = Cli::command().term_width(0);
+    command.build();
+
+    let mut out = String::new();
+    out.push_str(CLI_GUIDE.trim_end());
+    out.push_str("\n\n# コマンドリファレンス\n");
+    write_leaf_help(&mut out, &mut command, "axon");
+    out
+}
+
+fn write_leaf_help(out: &mut String, command: &mut clap::Command, path: &str) {
+    let has_generated_help = !command.is_disable_help_subcommand_set();
+    let has_visible_children = command
+        .get_subcommands()
+        .any(|child| !child.is_hide_set() && !(has_generated_help && child.get_name() == "help"));
+
+    if !has_visible_children {
+        out.push_str(&format!("\n## `{path}`\n\n"));
+        out.push_str(command.render_long_help().to_string().trim_end());
+        out.push('\n');
+        return;
+    }
+
+    for child in command.get_subcommands_mut() {
+        if child.is_hide_set() || (has_generated_help && child.get_name() == "help") {
+            continue;
+        }
+        write_leaf_help(out, child, &format!("{path} {}", child.get_name()));
+    }
+}
+
+fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse_from(args);
     match cli.command {
         Command::Init { prefix } => cmd_init(prefix),
         Command::Plan { title } => cmd_create(title, Commitment::Accepted),
@@ -913,6 +974,26 @@ fn cmd_write(
 mod tests {
     use super::*;
 
+    fn leaf_paths(command: &mut clap::Command, path: &str, out: &mut Vec<String>) {
+        let has_generated_help = !command.is_disable_help_subcommand_set();
+        let has_visible_children = command.get_subcommands().any(|child| {
+            !child.is_hide_set() && !(has_generated_help && child.get_name() == "help")
+        });
+
+        if !has_visible_children {
+            out.push(path.to_string());
+            return;
+        }
+
+        for child in command.get_subcommands_mut() {
+            if child.is_hide_set() || (has_generated_help && child.get_name() == "help") {
+                continue;
+            }
+            let child_path = format!("{path} {}", child.get_name());
+            leaf_paths(child, &child_path, out);
+        }
+    }
+
     fn iid(id: &str) -> IssueId {
         IssueId::from_stored(id)
     }
@@ -1096,5 +1177,45 @@ mod tests {
             "{}",
             show(&v, "a")
         );
+    }
+
+    #[test]
+    fn complete_help_embeds_the_cli_guide_verbatim() {
+        assert!(render_complete_help().starts_with(CLI_GUIDE.trim_end()));
+    }
+
+    #[test]
+    fn complete_help_contains_every_visible_leaf_once() {
+        let mut command = Cli::command();
+        command.build();
+        let mut paths = Vec::new();
+        leaf_paths(&mut command, "axon", &mut paths);
+
+        let help = render_complete_help();
+        for path in &paths {
+            let heading = format!("## `{path}`\n");
+            assert_eq!(help.matches(&heading).count(), 1, "{path}");
+        }
+        assert_eq!(help.matches("## `axon ").count(), paths.len());
+    }
+
+    #[test]
+    fn only_root_long_help_and_help_all_request_the_complete_reference() {
+        let args = |values: &[&str]| {
+            values
+                .iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>()
+        };
+
+        assert!(requests_complete_help(&args(&["axon", "--help"])));
+        assert!(requests_complete_help(&args(&["axon", "help", "all"])));
+        assert!(!requests_complete_help(&args(&["axon", "-h"])));
+        assert!(!requests_complete_help(&args(&[
+            "axon", "decide", "reject", "--help"
+        ])));
+        assert!(!requests_complete_help(&args(&[
+            "axon", "help", "decide", "reject"
+        ])));
     }
 }
