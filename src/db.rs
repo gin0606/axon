@@ -458,40 +458,6 @@ impl Store {
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
-
-    /// ready から 1 件取って着手するまでを 1 トランザクションで行う。
-    pub fn claim_next(&mut self, claim: Claim) -> Result<Option<Issue>> {
-        use rusqlite::TransactionBehavior;
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-
-        let issues = read_all(&tx)?;
-        let deps = read_deps(&tx)?;
-        let groups = read_groups(&tx)?;
-        let group_deps = read_group_deps(&tx)?;
-        let view = crate::derived::View::new(issues, deps, groups, group_deps);
-        let picked = view.ready().first().map(|i| (*i).clone());
-
-        if let Some(ref issue) = picked {
-            tx.execute(
-                "UPDATE issues
-                    SET progress = 'in_progress',
-                        claimed_actor = ?2, claimed_session = ?3,
-                        claimed_pid = ?4, claimed_at = ?5, updated_at = ?5
-                  WHERE id = ?1",
-                params![
-                    issue.id.as_str(),
-                    claim.actor,
-                    claim.session,
-                    claim.pid,
-                    claim.at.to_rfc3339()
-                ],
-            )?;
-        }
-        tx.commit()?;
-        Ok(picked)
-    }
 }
 
 /// 誰がなぜその操作をしたか。履歴に残す。
@@ -1076,54 +1042,6 @@ mod tests {
             .expect("child がある");
         assert_eq!(found.parent, child.parent);
         assert_eq!(found.description, child.description);
-    }
-
-    // ---- claim_next ----
-
-    #[test]
-    fn claim_next_takes_the_oldest_ready_issue() {
-        let mut s = store();
-        s.insert(&issue("t-old", 0)).unwrap();
-        s.insert(&issue("t-new", 1)).unwrap();
-
-        let first = s.claim_next(claim(1)).unwrap().expect("1 件取れる");
-        assert_eq!(first.id, iid("t-old"));
-        assert!(matches!(
-            s.get(&first.id).unwrap().progress,
-            Progress::InProgress(_)
-        ));
-
-        let second = s.claim_next(claim(2)).unwrap().expect("残りが取れる");
-        assert_eq!(second.id, iid("t-new"));
-        assert!(s.claim_next(claim(3)).unwrap().is_none());
-    }
-
-    #[test]
-    fn claim_next_skips_undecided_and_blocked() {
-        let mut s = store();
-        let mut undecided = issue("t-undecided", 0);
-        undecided.commitment = Commitment::Undecided;
-        s.insert(&undecided).unwrap();
-        s.insert(&issue("t-blocked", 1)).unwrap();
-        s.insert(&issue("t-blocker", 2)).unwrap();
-        s.add_dep(&iid("t-blocked"), &iid("t-blocker")).unwrap();
-
-        let picked = s.claim_next(claim(1)).unwrap().expect("blocker は取れる");
-        assert_eq!(picked.id, iid("t-blocker"));
-        assert!(
-            s.claim_next(claim(2)).unwrap().is_none(),
-            "blocker が着手中の間は blocked を取らない"
-        );
-
-        s.apply(&iid("t-blocker"), Change::End, &ctx()).unwrap();
-        let next = s.claim_next(claim(3)).unwrap().expect("解除されたら取れる");
-        assert_eq!(next.id, iid("t-blocked"));
-    }
-
-    #[test]
-    fn claim_next_returns_none_when_nothing_is_ready() {
-        let mut s = store();
-        assert!(s.claim_next(claim(1)).unwrap().is_none());
     }
 
     // ---- 文面とグループ ----

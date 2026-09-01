@@ -43,7 +43,7 @@ axon plan スキーマを起こす        # やると決めたものを登録す
 axon capture 命名を見直したい      # 判断は後回しにして投げ込む
 
 axon ready                      # 着手できるものを見る
-axon next                       # 1 件取って着手する (取得と着手が同時なので競合しない)
+axon start <id>                 # 指定したものに着手する
 axon done <id> -r "やったこと"    # 終了にする
 ```
 

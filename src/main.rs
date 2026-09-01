@@ -31,8 +31,6 @@ enum Command {
     Ready,
     /// 人間の判断を待っているものを見る
     Triage,
-    /// 着手可能なものから 1 件取って着手する
-    Next,
     /// 指定して着手する
     Start { id: String },
     /// 終了にする
@@ -208,7 +206,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Capture { title } => cmd_create(title, Commitment::Undecided),
         Command::Ready => cmd_ready(),
         Command::Triage => cmd_triage(),
-        Command::Next => cmd_next(),
         Command::Start { id } => cmd_start(&id),
         Command::Done { id, reason } => cmd_done(&id, reason),
         Command::Write {
@@ -465,24 +462,6 @@ fn render_triage(view: &View) -> String {
         }
     }
     out
-}
-
-fn cmd_next() -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = Store::open()?;
-    let claim = Claim {
-        actor: actor::actor(),
-        session: actor::session_key(),
-        pid: actor::pid(),
-        at: Utc::now(),
-    };
-    match store.claim_next(claim.clone())? {
-        Some(issue) => {
-            println!("{} に着手しました ({})", issue.id, claim.actor);
-            println!("{}", issue.title);
-        }
-        None => println!("着手できるものはありません"),
-    }
-    Ok(())
 }
 
 fn cmd_start(id: &str) -> Result<(), Box<dyn std::error::Error>> {
