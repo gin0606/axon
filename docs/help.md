@@ -70,6 +70,8 @@ If a session may have died while holding a claim, use `axon stale` to find stale
 - `done` and `release` operate on the current claim and reject issues in any other Progress state.
 - Rejecting a dependency makes dependents orphaned. axon reports this for human triage instead of guessing whether the dependency should be removed.
 - A resurface reference and a dependency have different meaning. If referenced issue X is rejected, `when after X` becomes surfaced because waiting is over; `dep add --needs X` becomes orphaned because X's result will not exist.
+- Issue dependencies and `AfterIssue` references form one issue-wait graph for cycle detection even though their meanings remain distinct. `dep add` and `when after` reject direct or indirect cycles. Group dependencies and the group-parent hierarchy are separate acyclic graphs; axon does not detect deadlocks spanning issue and group relationships.
+- Cycle checks and edge updates run in the same write transaction. Removing an edge remains allowed even when an existing database already contains a cycle.
 - Decision reasons and progress results are user-provided text. axon stores and displays them verbatim; do not put secrets in issue data or command arguments.
 
 ## Input, output, and exit status

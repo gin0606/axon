@@ -432,9 +432,6 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             GroupDepCmd::Add { slug, needs } => {
                 let a = store.resolve_slug(&slug)?;
                 let b = store.resolve_slug(&needs)?;
-                if a == b {
-                    return Err("a group cannot depend on itself".into());
-                }
                 store.add_group_dep(&a, &b)?;
                 println!("{slug} now depends on {needs}");
             }
@@ -471,7 +468,7 @@ fn cmd_create(
     if title.trim().is_empty() {
         return Err("title must not be empty".into());
     }
-    let store = Store::open()?;
+    let mut store = Store::open()?;
     let now = Utc::now();
     let issue = Issue {
         id: IssueId::generate(&store.prefix()?),
@@ -858,9 +855,6 @@ fn cmd_when(c: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let id = store.resolve_id(&id)?;
             let target = store.resolve_id(&reference)?;
-            if id == target {
-                return Err("an issue cannot use itself as a resurface condition".into());
-            }
             store.apply(
                 &id,
                 Change::SetResurfaceCondition(ResurfaceCondition::AfterIssue(target.clone())),
@@ -882,14 +876,11 @@ fn cmd_when(c: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_dep(c: DepCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let store = Store::open()?;
+    let mut store = Store::open()?;
     match c {
         DepCmd::Add { id, needs } => {
             let id = store.resolve_id(&id)?;
             let needs = store.resolve_id(&needs)?;
-            if id == needs {
-                return Err("an issue cannot depend on itself".into());
-            }
             store.add_dep(&id, &needs)?;
             println!("{id} now depends on {needs}");
         }

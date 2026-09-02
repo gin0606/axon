@@ -210,6 +210,38 @@ impl TestRepo {
             .unwrap()
     }
 
+    pub fn insert_issue_dep_unchecked(&self, issue: &str, depends_on: &str) {
+        self.connection()
+            .execute(
+                "INSERT INTO issue_deps (issue_id, depends_on_id) VALUES (?1, ?2)",
+                params![issue, depends_on],
+            )
+            .unwrap();
+    }
+
+    pub fn set_after_issue_unchecked(&self, issue: &str, reference: &str) {
+        self.connection()
+            .execute(
+                "UPDATE issues
+                    SET resurface_kind = 'after_issue', resurface_date = NULL, resurface_ref = ?2
+                  WHERE id = ?1",
+                params![issue, reference],
+            )
+            .unwrap();
+    }
+
+    pub fn insert_group_dep_unchecked(&self, group: &str, depends_on: &str) {
+        self.connection()
+            .execute(
+                "INSERT INTO group_deps (group_id, depends_on_id)
+                 SELECT source.id, target.id
+                   FROM groups source, groups target
+                  WHERE source.slug = ?1 AND target.slug = ?2",
+                params![group, depends_on],
+            )
+            .unwrap();
+    }
+
     fn connection(&self) -> Connection {
         Connection::open(self.root.join(".axon/axon.db")).unwrap()
     }

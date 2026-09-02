@@ -38,6 +38,7 @@ worktree への配置も工夫が要らなくなった。br はエクスポー�
 - **導出値をテーブルに持たない**。ready / blocked / orphaned / 進捗はすべて計算する。br は blocked をキャッシュし、その整合性維持のために parity 検査の仕組みまで抱えていた
 - **claim は `progress = 'in_progress'` のときだけ存在する**。CHECK 制約で縛り、読み出し時も `Progress::from_db` が食い違いを弾く
 - **C の直和型は CHECK 制約で整合性を保つ**。`resurface_kind` が取る値ごとに、どの列が埋まっているべきかを縛る
+- **待機関係は DAG に保つ**。issue 依存と `AfterIssue` は循環検査だけを統合し、グループ依存とグループ階層は別々に検査する。検査と追加は同じ write transaction で行い、既存の循環データの読み込みと辺の削除は許す
 - **スキーマは `user_version` で版を持つ**。開くたびに不足分だけ流す。各 migration の DDL と `user_version` 更新は同じトランザクションで確定し、中断後に安全に再実行できるようにする
 - 語彙を `commitment` / `condition` から `disposition` / `resurface_condition` へ変える migration は、issue の値と判断履歴の意味を引き継ぐ。title、description、reason など利用者の入力は書き換えない
 

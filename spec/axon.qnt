@@ -22,10 +22,46 @@ module axon {
   var disposition: Id -> Disposition
   var resurfaceCond: Id -> ResurfaceCondition
   var deps: Set[(Id, Id)]      // (y, x) = y は x に依存する
+  var groupDeps: Set[(Id, Id)] // (y, x) = group y は group x の完了を待つ
   var clock: int
 
   // ---- 導出値 ----
   def depsOf(y: Id): Set[Id] = ISSUES.filter(x => deps.contains((y, x)))
+
+  pure def directTargets(edges: Set[(Id, Id)], y: Id, nodes: Set[Id]): Set[Id] =
+    nodes.filter(x => edges.contains((y, x)))
+
+  // このモデルの node 数ぶん展開した到達集合。自分へ戻れば循環している。
+  pure def reach1(edges: Set[(Id, Id)], y: Id, nodes: Set[Id]): Set[Id] =
+    directTargets(edges, y, nodes)
+  pure def reach2(edges: Set[(Id, Id)], y: Id, nodes: Set[Id]): Set[Id] =
+    reach1(edges, y, nodes)
+      .union(reach1(edges, y, nodes).map(x => reach1(edges, x, nodes)).flatten())
+  pure def reach3(edges: Set[(Id, Id)], y: Id, nodes: Set[Id]): Set[Id] =
+    reach2(edges, y, nodes)
+      .union(reach2(edges, y, nodes).map(x => reach1(edges, x, nodes)).flatten())
+
+  pure def acyclic(edges: Set[(Id, Id)], nodes: Set[Id]): bool =
+    nodes.forall(y => not(reach3(edges, y, nodes).contains(y)))
+
+  def hasAfterIssue(i: Id): bool =
+    match resurfaceCond.get(i) {
+    | AfterIssue(_) => true
+    | _ => false
+    }
+
+  def afterIssueTarget(i: Id): Id =
+    match resurfaceCond.get(i) {
+    | AfterIssue(x) => x
+    | _ => i
+    }
+
+  // D と C は意味論と保存先が違うが、待機の循環検査だけは同じ graph で行う。
+  val issueWaitEdges: Set[(Id, Id)] = deps.union(
+    ISSUES.filter(i => hasAfterIssue(i)).map(i => (i, afterIssueTarget(i))))
+
+  def withoutResurfaceEdge(i: Id): Set[(Id, Id)] =
+    issueWaitEdges.exclude(Set((i, afterIssueTarget(i))))
 
   def isEnded(i: Id): bool = progress.get(i) == Ended
   def isRejected(i: Id): bool = disposition.get(i) == Rejected
@@ -59,6 +95,7 @@ module axon {
     disposition' = ISSUES.mapBy(_ => Undecided),
     resurfaceCond' = ISSUES.mapBy(_ => Always),
     deps' = Set(),
+    groupDeps' = Set(),
     clock' = 0,
   }
 
@@ -68,7 +105,8 @@ module axon {
     all {
       disposition.get(i) != c,
       disposition' = disposition.set(i, c),
-      progress' = progress, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
+      progress' = progress, resurfaceCond' = resurfaceCond, deps' = deps,
+      groupDeps' = groupDeps, clock' = clock,
     }
   }
 
@@ -77,7 +115,8 @@ module axon {
     all {
       ready(i),
       progress' = progress.set(i, InProgress),
-      disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
+      disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps,
+      groupDeps' = groupDeps, clock' = clock,
     }
   }
 
@@ -86,7 +125,8 @@ module axon {
     all {
       progress.get(i) == InProgress,
       progress' = progress.set(i, Ended),
-      disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
+      disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps,
+      groupDeps' = groupDeps, clock' = clock,
     }
   }
 
@@ -95,7 +135,8 @@ module axon {
     all {
       progress.get(i) == InProgress,
       progress' = progress.set(i, NotStarted),
-      disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
+      disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps,
+      groupDeps' = groupDeps, clock' = clock,
     }
   }
 
@@ -106,7 +147,8 @@ module axon {
     all {
       resurfaceCond.get(i) != target,
       resurfaceCond' = resurfaceCond.set(i, target),
-      progress' = progress, disposition' = disposition, deps' = deps, clock' = clock,
+      progress' = progress, disposition' = disposition, deps' = deps,
+      groupDeps' = groupDeps, clock' = clock,
     }
   }
 
@@ -115,11 +157,13 @@ module axon {
     nondet i = ISSUES.oneOf()
     nondet x = ISSUES.oneOf()
     val target = AfterIssue(x)
+    val candidate = withoutResurfaceEdge(i).union(Set((i, x)))
     all {
-      i != x,
+      acyclic(candidate, ISSUES),
       resurfaceCond.get(i) != target,
       resurfaceCond' = resurfaceCond.set(i, target),
-      progress' = progress, disposition' = disposition, deps' = deps, clock' = clock,
+      progress' = progress, disposition' = disposition, deps' = deps,
+      groupDeps' = groupDeps, clock' = clock,
     }
   }
 
@@ -128,19 +172,21 @@ module axon {
     all {
       resurfaceCond.get(i) != Always,
       resurfaceCond' = resurfaceCond.set(i, Always),
-      progress' = progress, disposition' = disposition, deps' = deps, clock' = clock,
+      progress' = progress, disposition' = disposition, deps' = deps,
+      groupDeps' = groupDeps, clock' = clock,
     }
   }
 
-  // 循環を避けるため x < y のみ許す
   action doAddDep = {
     nondet y = ISSUES.oneOf()
     nondet x = ISSUES.oneOf()
+    val candidate = issueWaitEdges.union(Set((y, x)))
     all {
-      x < y,
+      acyclic(candidate, ISSUES),
       not(deps.contains((y, x))),
       deps' = deps.union(Set((y, x))),
-      progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond, clock' = clock,
+      progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond,
+      groupDeps' = groupDeps, clock' = clock,
     }
   }
 
@@ -148,22 +194,47 @@ module axon {
     nondet y = ISSUES.oneOf()
     nondet x = ISSUES.oneOf()
     all {
-      x < y,
       deps.contains((y, x)),
       deps' = deps.exclude(Set((y, x))),
-      progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond, clock' = clock,
+      progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond,
+      groupDeps' = groupDeps, clock' = clock,
+    }
+  }
+
+  action doAddGroupDep = {
+    nondet y = GROUPS.oneOf()
+    nondet x = GROUPS.oneOf()
+    val candidate = groupDeps.union(Set((y, x)))
+    all {
+      acyclic(candidate, GROUPS),
+      not(groupDeps.contains((y, x))),
+      groupDeps' = candidate,
+      progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond,
+      deps' = deps, clock' = clock,
+    }
+  }
+
+  action doRemoveGroupDep = {
+    nondet y = GROUPS.oneOf()
+    nondet x = GROUPS.oneOf()
+    all {
+      groupDeps.contains((y, x)),
+      groupDeps' = groupDeps.exclude(Set((y, x))),
+      progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond,
+      deps' = deps, clock' = clock,
     }
   }
 
   action doTick = all {
     clock < CLOCK_MAX,
     clock' = clock + 1,
-    progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps,
+    progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond,
+    deps' = deps, groupDeps' = groupDeps,
   }
 
   action step = any {
     doDecide, doStart, doEnd, doRelease, doDeferDate, doDeferAfter, doClearCondition,
-    doAddDep, doRemoveDep, doTick,
+    doAddDep, doRemoveDep, doAddGroupDep, doRemoveGroupDep, doTick,
   }
 
   // ---- 検査したい性質 ----
@@ -192,6 +263,8 @@ module axon {
   // (d) ready と blocked / orphaned は排他 (定義の健全性確認)
   val invReadyExclusive =
     ISSUES.forall(i => ready(i) implies (not(blocked(i)) and not(orphaned(i))))
+
+  val invIssueWaitsAcyclic = acyclic(issueWaitEdges, ISSUES)
 
   // ---- D-1: 阻害の根本原因を辿る導出値 ----
   // 未終端 = 完了でも不採用でもない依存先
@@ -222,7 +295,8 @@ module axon {
   pure val NO_GROUP = -1
   pure val groupOf: Id -> Id = Map(0 -> 100, 1 -> 101, 2 -> 102)
   pure val parentOf: Id -> Id = Map(100 -> NO_GROUP, 101 -> NO_GROUP, 102 -> 101)
-  pure val groupDeps: Set[(Id, Id)] = Set((101, 100))   // (y, x) = y は x に依存
+  pure val parentEdges: Set[(Id, Id)] =
+    GROUPS.filter(g => parentOf.get(g) != NO_GROUP).map(g => (g, parentOf.get(g)))
 
   def issuesIn(g: Id): Set[Id] = ISSUES.filter(i => groupOf.get(i) == g)
   def subgroups(g: Id): Set[Id] = GROUPS.filter(h => parentOf.get(h) == g)
@@ -261,6 +335,10 @@ module axon {
   // 分子は分母の部分集合
   val invProgressSubset =
     GROUPS.forall(g => numer(g).subseteq(denom(g)))
+
+  val invGroupDepsAcyclic = acyclic(groupDeps, GROUPS)
+
+  val invGroupParentsAcyclic = acyclic(parentEdges, GROUPS)
 
   // グループ依存で塞がれているなら ready ではない (定義の健全性)
   val invGroupBlockedNotReady =

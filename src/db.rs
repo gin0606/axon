@@ -4,6 +4,9 @@ use crate::derived::View;
 use crate::domain::*;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt;
+use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -41,6 +44,8 @@ pub enum DbError {
         field: &'static str,
         current: String,
     },
+    #[error("cycle would be created: {path}")]
+    Cycle { path: String },
 }
 
 pub type Result<T> = std::result::Result<T, DbError>;
@@ -228,6 +233,88 @@ pub struct ShowSnapshot {
     pub progress_events: Vec<ProgressEvent>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RelationKind {
+    IssueDependency,
+    AfterIssue,
+    GroupDependency,
+    GroupParent,
+}
+
+impl fmt::Display for RelationKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::IssueDependency => "issue dependency",
+            Self::AfterIssue => "AfterIssue reference",
+            Self::GroupDependency => "group dependency",
+            Self::GroupParent => "group parent",
+        })
+    }
+}
+
+#[derive(Clone)]
+struct GraphEdge<I> {
+    from: I,
+    to: I,
+    kind: RelationKind,
+}
+
+fn reject_cycle<I, F>(
+    edges: &[GraphEdge<I>],
+    from: &I,
+    to: &I,
+    kind: RelationKind,
+    label: F,
+) -> Result<()>
+where
+    I: Clone + Eq + Hash + fmt::Display,
+    F: Fn(&I) -> String,
+{
+    let Some(path) = path_between(edges, to, from) else {
+        return Ok(());
+    };
+    let mut description = format!("{} -[{kind}]-> {}", label(from), label(to));
+    for edge in path {
+        description.push_str(&format!(" -[{}]-> {}", edge.kind, label(&edge.to)));
+    }
+    Err(DbError::Cycle { path: description })
+}
+
+fn path_between<I>(edges: &[GraphEdge<I>], start: &I, goal: &I) -> Option<Vec<GraphEdge<I>>>
+where
+    I: Clone + Eq + Hash,
+{
+    if start == goal {
+        return Some(Vec::new());
+    }
+
+    let mut queue = VecDeque::from([start.clone()]);
+    let mut seen = HashSet::from([start.clone()]);
+    let mut previous: HashMap<I, GraphEdge<I>> = HashMap::new();
+
+    while let Some(current) = queue.pop_front() {
+        for edge in edges.iter().filter(|edge| edge.from == current) {
+            if !seen.insert(edge.to.clone()) {
+                continue;
+            }
+            previous.insert(edge.to.clone(), edge.clone());
+            if &edge.to == goal {
+                let mut path = Vec::new();
+                let mut node = goal.clone();
+                while &node != start {
+                    let edge = previous.get(&node)?.clone();
+                    node = edge.from.clone();
+                    path.push(edge);
+                }
+                path.reverse();
+                return Some(path);
+            }
+            queue.push_back(edge.to.clone());
+        }
+    }
+    None
+}
+
 impl Store {
     fn from_conn(mut conn: Connection) -> Result<Self> {
         conn.execute_batch("PRAGMA foreign_keys = ON")?;
@@ -278,9 +365,21 @@ impl Store {
             })?)
     }
 
-    pub fn insert(&self, issue: &Issue) -> Result<()> {
+    pub fn insert(&mut self, issue: &Issue) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let ResurfaceCondition::AfterIssue(target) = &issue.resurface_condition {
+            reject_cycle(
+                &read_issue_wait_edges(&tx)?,
+                &issue.id,
+                target,
+                RelationKind::AfterIssue,
+                ToString::to_string,
+            )?;
+        }
         let claim = issue.progress.claim();
-        self.conn.execute(
+        tx.execute(
             "INSERT INTO issues (id, title, description, progress, disposition,
                                  resurface_kind, resurface_date, resurface_ref,
                                  claimed_actor, claimed_session, claimed_pid, claimed_at,
@@ -304,6 +403,7 @@ impl Store {
                 issue.group.as_ref().map(|g| g.as_str().to_string()),
             ],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -324,11 +424,33 @@ impl Store {
         read_issue(&self.conn, id)
     }
 
-    pub fn add_dep(&self, issue: &IssueId, depends_on: &IssueId) -> Result<()> {
-        self.conn.execute(
+    pub fn add_dep(&mut self, issue: &IssueId, depends_on: &IssueId) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists = tx.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM issue_deps WHERE issue_id = ?1 AND depends_on_id = ?2
+             )",
+            params![issue.as_str(), depends_on.as_str()],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if exists {
+            tx.commit()?;
+            return Ok(());
+        }
+        reject_cycle(
+            &read_issue_wait_edges(&tx)?,
+            issue,
+            depends_on,
+            RelationKind::IssueDependency,
+            ToString::to_string,
+        )?;
+        tx.execute(
             "INSERT OR IGNORE INTO issue_deps (issue_id, depends_on_id) VALUES (?1, ?2)",
             params![issue.as_str(), depends_on.as_str()],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -340,9 +462,26 @@ impl Store {
         Ok(())
     }
 
-    pub fn insert_group(&self, g: &Group) -> Result<()> {
+    pub fn insert_group(&mut self, g: &Group) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(parent) = &g.parent {
+            let mut labels = read_groups(&tx)?
+                .into_iter()
+                .map(|group| (group.id, group.slug))
+                .collect::<HashMap<_, _>>();
+            labels.insert(g.id.clone(), g.slug.clone());
+            reject_cycle(
+                &read_group_parent_edges(&tx)?,
+                &g.id,
+                parent,
+                RelationKind::GroupParent,
+                |id| labels.get(id).cloned().unwrap_or_else(|| id.to_string()),
+            )?;
+        }
         let now = Utc::now().to_rfc3339();
-        self.conn.execute(
+        tx.execute(
             "INSERT INTO groups (id, slug, name, description, parent_id, created_at, updated_at)
              VALUES (?1,?2,?3,?4,?5,?6,?6)",
             params![
@@ -354,6 +493,7 @@ impl Store {
                 now
             ],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -378,11 +518,37 @@ impl Store {
             .ok_or_else(|| DbError::NoSuchGroup(slug.to_string()))
     }
 
-    pub fn add_group_dep(&self, group: &GroupId, depends_on: &GroupId) -> Result<()> {
-        self.conn.execute(
+    pub fn add_group_dep(&mut self, group: &GroupId, depends_on: &GroupId) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists = tx.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM group_deps WHERE group_id = ?1 AND depends_on_id = ?2
+             )",
+            params![group.as_str(), depends_on.as_str()],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if exists {
+            tx.commit()?;
+            return Ok(());
+        }
+        let labels = read_groups(&tx)?
+            .into_iter()
+            .map(|group| (group.id, group.slug))
+            .collect::<HashMap<_, _>>();
+        reject_cycle(
+            &read_group_dependency_edges(&tx)?,
+            group,
+            depends_on,
+            RelationKind::GroupDependency,
+            |id| labels.get(id).cloned().unwrap_or_else(|| id.to_string()),
+        )?;
+        tx.execute(
             "INSERT OR IGNORE INTO group_deps (group_id, depends_on_id) VALUES (?1, ?2)",
             params![group.as_str(), depends_on.as_str()],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -513,6 +679,19 @@ impl Store {
                 )?;
             }
             Change::SetResurfaceCondition(resurface_condition) => {
+                if let ResurfaceCondition::AfterIssue(target) = &resurface_condition {
+                    let mut edges = read_issue_wait_edges(&tx)?;
+                    edges.retain(|edge| {
+                        edge.kind != RelationKind::AfterIssue || edge.from != before.id
+                    });
+                    reject_cycle(
+                        &edges,
+                        id,
+                        target,
+                        RelationKind::AfterIssue,
+                        ToString::to_string,
+                    )?;
+                }
                 tx.execute(
                     "UPDATE issues SET resurface_kind = ?2, resurface_date = ?3, resurface_ref = ?4, updated_at = ?5
                       WHERE id = ?1",
@@ -824,6 +1003,52 @@ fn read_deps(conn: &Connection) -> Result<Vec<(IssueId, IssueId)>> {
         ))
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+fn read_issue_wait_edges(conn: &Connection) -> Result<Vec<GraphEdge<IssueId>>> {
+    let mut edges = read_deps(conn)?
+        .into_iter()
+        .map(|(from, to)| GraphEdge {
+            from,
+            to,
+            kind: RelationKind::IssueDependency,
+        })
+        .collect::<Vec<_>>();
+    edges.extend(read_all(conn)?.into_iter().filter_map(|issue| {
+        let ResurfaceCondition::AfterIssue(to) = issue.resurface_condition else {
+            return None;
+        };
+        Some(GraphEdge {
+            from: issue.id,
+            to,
+            kind: RelationKind::AfterIssue,
+        })
+    }));
+    Ok(edges)
+}
+
+fn read_group_dependency_edges(conn: &Connection) -> Result<Vec<GraphEdge<GroupId>>> {
+    Ok(read_group_deps(conn)?
+        .into_iter()
+        .map(|(from, to)| GraphEdge {
+            from,
+            to,
+            kind: RelationKind::GroupDependency,
+        })
+        .collect())
+}
+
+fn read_group_parent_edges(conn: &Connection) -> Result<Vec<GraphEdge<GroupId>>> {
+    Ok(read_groups(conn)?
+        .into_iter()
+        .filter_map(|group| {
+            group.parent.map(|to| GraphEdge {
+                from: group.id,
+                to,
+                kind: RelationKind::GroupParent,
+            })
+        })
+        .collect())
 }
 
 fn read_progress_events(conn: &Connection, id: &IssueId) -> Result<Vec<ProgressEvent>> {
@@ -1285,7 +1510,7 @@ mod tests {
     /// 型 → DB → 型 で往復しても値が変わらない。
     #[test]
     fn issue_round_trips_through_the_database() {
-        let s = store();
+        let mut s = store();
         s.insert_group(&group("g")).unwrap();
 
         let mut i = issue("t-1", 0);
@@ -1613,7 +1838,7 @@ mod tests {
 
     #[test]
     fn resolve_id_needs_a_unique_match() {
-        let s = store();
+        let mut s = store();
         s.insert(&issue("a-x1", 0)).unwrap();
         s.insert(&issue("b-x1", 1)).unwrap();
         s.insert(&issue("a-y2", 2)).unwrap();
@@ -1629,7 +1854,7 @@ mod tests {
 
     #[test]
     fn resolve_slug_reports_missing_group() {
-        let s = store();
+        let mut s = store();
         s.insert_group(&group("g")).unwrap();
         assert_eq!(s.resolve_slug("g").unwrap(), GroupId::from_stored("g"));
         assert!(matches!(
@@ -1642,7 +1867,7 @@ mod tests {
 
     #[test]
     fn deps_are_added_once_and_removable() {
-        let s = store();
+        let mut s = store();
         s.insert(&issue("t-1", 0)).unwrap();
         s.insert(&issue("t-2", 1)).unwrap();
 
@@ -1655,8 +1880,108 @@ mod tests {
     }
 
     #[test]
+    fn issue_dependency_cycles_are_rejected_at_the_store_boundary() {
+        let mut s = store();
+        for (seq, id) in ["t-a", "t-b", "t-c"].into_iter().enumerate() {
+            s.insert(&issue(id, seq as i64)).unwrap();
+        }
+        s.add_dep(&iid("t-a"), &iid("t-b")).unwrap();
+        s.add_dep(&iid("t-b"), &iid("t-c")).unwrap();
+
+        let error = s.add_dep(&iid("t-c"), &iid("t-a")).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "cycle would be created: t-c -[issue dependency]-> t-a \
+             -[issue dependency]-> t-b -[issue dependency]-> t-c"
+        );
+        assert_eq!(s.deps().unwrap().len(), 2, "失敗した辺は保存しない");
+    }
+
+    #[test]
+    fn after_issue_cycles_leave_the_issue_history_and_timestamp_unchanged() {
+        let mut s = store();
+        for (seq, id) in ["t-a", "t-b", "t-c"].into_iter().enumerate() {
+            s.insert(&issue(id, seq as i64)).unwrap();
+        }
+        s.apply(
+            &iid("t-a"),
+            Change::SetResurfaceCondition(ResurfaceCondition::AfterIssue(iid("t-b"))),
+            &ctx(),
+        )
+        .unwrap();
+        s.apply(
+            &iid("t-b"),
+            Change::SetResurfaceCondition(ResurfaceCondition::AfterIssue(iid("t-c"))),
+            &ctx(),
+        )
+        .unwrap();
+        let before = s.get(&iid("t-c")).unwrap();
+
+        let error = s
+            .apply(
+                &iid("t-c"),
+                Change::SetResurfaceCondition(ResurfaceCondition::AfterIssue(iid("t-a"))),
+                &ctx(),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "cycle would be created: t-c -[AfterIssue reference]-> t-a \
+             -[AfterIssue reference]-> t-b -[AfterIssue reference]-> t-c"
+        );
+        let after = s.get(&iid("t-c")).unwrap();
+        assert_eq!(after.resurface_condition, ResurfaceCondition::Always);
+        assert_eq!(after.updated_at, before.updated_at);
+        assert!(s.events(&iid("t-c")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn inserting_an_issue_with_after_issue_cannot_close_a_cycle() {
+        let mut s = store();
+        let mut first = issue("t-a", 0);
+        first.resurface_condition = ResurfaceCondition::AfterIssue(iid("t-b"));
+        s.insert(&first).unwrap();
+        let mut second = issue("t-b", 1);
+        second.resurface_condition = ResurfaceCondition::AfterIssue(iid("t-a"));
+
+        let error = s.insert(&second).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "cycle would be created: t-b -[AfterIssue reference]-> t-a \
+             -[AfterIssue reference]-> t-b"
+        );
+        assert!(matches!(s.get(&iid("t-b")), Err(DbError::NoSuchIssue(_))));
+    }
+
+    #[test]
+    fn issue_wait_cycle_checks_cross_dependency_and_resurface_edges() {
+        let mut s = store();
+        for (seq, id) in ["t-a", "t-b", "t-c"].into_iter().enumerate() {
+            s.insert(&issue(id, seq as i64)).unwrap();
+        }
+        s.add_dep(&iid("t-a"), &iid("t-b")).unwrap();
+        s.apply(
+            &iid("t-b"),
+            Change::SetResurfaceCondition(ResurfaceCondition::AfterIssue(iid("t-c"))),
+            &ctx(),
+        )
+        .unwrap();
+
+        let error = s.add_dep(&iid("t-c"), &iid("t-a")).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "cycle would be created: t-c -[issue dependency]-> t-a \
+             -[issue dependency]-> t-b -[AfterIssue reference]-> t-c"
+        );
+    }
+
+    #[test]
     fn group_deps_are_added_once_and_removable() {
-        let s = store();
+        let mut s = store();
         s.insert_group(&group("g1")).unwrap();
         s.insert_group(&group("g0")).unwrap();
 
@@ -1670,8 +1995,64 @@ mod tests {
     }
 
     #[test]
+    fn group_dependency_cycles_are_rejected_at_the_store_boundary() {
+        let mut s = store();
+        for id in ["foundation", "platform", "delivery"] {
+            s.insert_group(&group(id)).unwrap();
+        }
+        let foundation = GroupId::from_stored("foundation");
+        let platform = GroupId::from_stored("platform");
+        let delivery = GroupId::from_stored("delivery");
+        s.add_group_dep(&foundation, &platform).unwrap();
+        s.add_group_dep(&platform, &delivery).unwrap();
+
+        let error = s.add_group_dep(&delivery, &foundation).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "cycle would be created: delivery -[group dependency]-> foundation \
+             -[group dependency]-> platform -[group dependency]-> delivery"
+        );
+        assert_eq!(s.group_deps().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn group_parent_cycles_are_rejected_at_the_store_boundary() {
+        let mut s = store();
+        let mut cyclic = group("loop");
+        cyclic.parent = Some(cyclic.id.clone());
+
+        let error = s.insert_group(&cyclic).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "cycle would be created: loop -[group parent]-> loop"
+        );
+        assert!(s.groups().unwrap().is_empty());
+    }
+
+    #[test]
+    fn existing_cycles_can_be_read_and_removed() {
+        let mut s = store();
+        s.insert(&issue("t-a", 0)).unwrap();
+        s.insert(&issue("t-b", 1)).unwrap();
+        s.conn
+            .execute_batch(
+                "INSERT INTO issue_deps VALUES ('t-a', 't-b');
+                 INSERT INTO issue_deps VALUES ('t-b', 't-a');",
+            )
+            .unwrap();
+
+        assert_eq!(s.deps().unwrap().len(), 2);
+        assert_eq!(read_issue_wait_edges(&s.conn).unwrap().len(), 2);
+        s.remove_dep(&iid("t-a"), &iid("t-b")).unwrap();
+        s.remove_dep(&iid("t-b"), &iid("t-a")).unwrap();
+        assert!(s.deps().unwrap().is_empty());
+    }
+
+    #[test]
     fn groups_round_trip() {
-        let s = store();
+        let mut s = store();
         let mut child = group("child");
         child.parent = Some(GroupId::from_stored("g"));
         child.description = Some("説明".to_string());
@@ -1754,7 +2135,7 @@ mod tests {
 
     #[test]
     fn all_returns_issues_in_creation_order() {
-        let s = store();
+        let mut s = store();
         s.insert(&issue("t-2", 1)).unwrap();
         s.insert(&issue("t-1", 0)).unwrap();
         let ids: Vec<String> = s.all().unwrap().iter().map(|i| i.id.to_string()).collect();

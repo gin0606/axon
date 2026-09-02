@@ -366,3 +366,104 @@ fn repeated_settings_succeed_without_duplicate_updates() {
     assert_eq!(repo.issue_snapshot(&already_rejected), already_before);
     assert_eq!(repo.issue_snapshot(&newly_rejected), newly_after);
 }
+
+#[test]
+fn cycle_forming_commands_fail_atomically_with_a_typed_path() {
+    let repo = TestRepo::new();
+    repo.init("test");
+
+    let dep_a = repo.plan("dependency a");
+    let dep_b = repo.plan("dependency b");
+    let dep_c = repo.plan("dependency c");
+    assert_success(&repo.axon(&["dep", "add", &dep_a, "--needs", &dep_b]));
+    assert_success(&repo.axon(&["dep", "add", &dep_b, "--needs", &dep_c]));
+    let before = repo.issue_snapshot(&dep_c);
+    let cycle = repo.axon(&["dep", "add", &dep_c, "--needs", &dep_a]);
+    assert_failure(&cycle);
+    assert!(cycle.stdout.is_empty());
+    assert_eq!(
+        stderr(&cycle),
+        format!(
+            "Error: cycle would be created: {dep_c} -[issue dependency]-> {dep_a} \
+             -[issue dependency]-> {dep_b} -[issue dependency]-> {dep_c}\n"
+        )
+    );
+    assert_eq!(repo.dep_count("issue_deps"), 2);
+    assert_eq!(repo.issue_snapshot(&dep_c), before);
+
+    let after_a = repo.plan("resurface a");
+    let after_b = repo.plan("resurface b");
+    let after_c = repo.plan("resurface c");
+    assert_success(&repo.axon(&["when", "after", &after_a, &after_b]));
+    assert_success(&repo.axon(&["when", "after", &after_b, &after_c]));
+    let before = repo.issue_snapshot(&after_c);
+    let cycle = repo.axon(&["when", "after", &after_c, &after_a]);
+    assert_failure(&cycle);
+    assert_eq!(
+        stderr(&cycle),
+        format!(
+            "Error: cycle would be created: {after_c} -[AfterIssue reference]-> {after_a} \
+             -[AfterIssue reference]-> {after_b} -[AfterIssue reference]-> {after_c}\n"
+        )
+    );
+    assert_eq!(repo.issue_snapshot(&after_c), before);
+
+    let mixed_a = repo.plan("mixed a");
+    let mixed_b = repo.plan("mixed b");
+    let mixed_c = repo.plan("mixed c");
+    assert_success(&repo.axon(&["dep", "add", &mixed_a, "--needs", &mixed_b]));
+    assert_success(&repo.axon(&["when", "after", &mixed_b, &mixed_c]));
+    let cycle = repo.axon(&["dep", "add", &mixed_c, "--needs", &mixed_a]);
+    assert_failure(&cycle);
+    assert_eq!(
+        stderr(&cycle),
+        format!(
+            "Error: cycle would be created: {mixed_c} -[issue dependency]-> {mixed_a} \
+             -[issue dependency]-> {mixed_b} -[AfterIssue reference]-> {mixed_c}\n"
+        )
+    );
+
+    for group in ["foundation", "platform", "delivery"] {
+        assert_success(&repo.axon(&["group", "new", group]));
+    }
+    assert_success(&repo.axon(&["group", "dep", "add", "foundation", "--needs", "platform"]));
+    assert_success(&repo.axon(&["group", "dep", "add", "platform", "--needs", "delivery"]));
+    let cycle = repo.axon(&["group", "dep", "add", "delivery", "--needs", "foundation"]);
+    assert_failure(&cycle);
+    assert_eq!(
+        stderr(&cycle),
+        "Error: cycle would be created: delivery -[group dependency]-> foundation \
+         -[group dependency]-> platform -[group dependency]-> delivery\n"
+    );
+    assert_eq!(repo.dep_count("group_deps"), 2);
+}
+
+#[test]
+fn existing_cycles_remain_observable_and_removable() {
+    let repo = TestRepo::new();
+    repo.init("test");
+
+    let issue_a = repo.plan("existing cycle a");
+    let issue_b = repo.plan("existing cycle b");
+    repo.insert_issue_dep_unchecked(&issue_a, &issue_b);
+    repo.insert_issue_dep_unchecked(&issue_b, &issue_a);
+    assert_success(&repo.axon(&["show", &issue_a]));
+    assert_success(&repo.axon(&["dep", "rm", &issue_a, "--needs", &issue_b]));
+    assert_success(&repo.axon(&["dep", "rm", &issue_b, "--needs", &issue_a]));
+
+    let mixed_a = repo.plan("existing mixed cycle a");
+    let mixed_b = repo.plan("existing mixed cycle b");
+    repo.insert_issue_dep_unchecked(&mixed_a, &mixed_b);
+    repo.set_after_issue_unchecked(&mixed_b, &mixed_a);
+    assert_success(&repo.axon(&["show", &mixed_a]));
+    assert_success(&repo.axon(&["when", "clear", &mixed_b]));
+    assert_success(&repo.axon(&["dep", "rm", &mixed_a, "--needs", &mixed_b]));
+
+    assert_success(&repo.axon(&["group", "new", "cycle-a"]));
+    assert_success(&repo.axon(&["group", "new", "cycle-b"]));
+    repo.insert_group_dep_unchecked("cycle-a", "cycle-b");
+    repo.insert_group_dep_unchecked("cycle-b", "cycle-a");
+    assert_success(&repo.axon(&["group", "list"]));
+    assert_success(&repo.axon(&["group", "dep", "rm", "cycle-a", "--needs", "cycle-b"]));
+    assert_success(&repo.axon(&["group", "dep", "rm", "cycle-b", "--needs", "cycle-a"]));
+}
