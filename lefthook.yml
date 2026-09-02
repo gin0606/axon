@@ -10,3 +10,18 @@ pre-commit:
     - name: test
       glob: "*.rs"
       run: mise exec -- cargo test
+
+post-checkout:
+  jobs:
+    - name: release-build
+      run: test "{3}" != "1" || mise exec -- cargo build --release
+
+post-merge:
+  jobs:
+    - name: release-build
+      run: mise exec -- cargo build --release
+
+post-rewrite:
+  jobs:
+    - name: release-build
+      run: test "{1}" != "rebase" || mise exec -- cargo build --release
