@@ -95,5 +95,5 @@ Issue IDs have the form `<prefix>-<random 6 characters>`. The prefix comes from 
 ## Help forms
 
 - `axon -h` prints the short command list.
-- `axon --help` and `axon help all` print this manual followed by generated reference help for every leaf command.
+- `axon help` and `axon --help` print this manual followed by generated reference help for every leaf command.
 - `axon help <command path>` and `axon <command path> --help` print help for one command path.

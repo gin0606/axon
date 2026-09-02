@@ -38,13 +38,13 @@ fn complete_help_succeeds_without_opening_a_database() {
 }
 
 #[test]
-fn help_all_is_identical_to_root_long_help() {
+fn bare_help_is_identical_to_root_long_help() {
     let (root, _) = axon(&["--help"]);
-    let (all, _) = axon(&["help", "all"]);
+    let (help, _) = axon(&["help"]);
 
-    assert_eq!(all.status.code(), Some(0));
-    assert!(all.stderr.is_empty());
-    assert_eq!(all.stdout, root.stdout);
+    assert_eq!(help.status.code(), Some(0));
+    assert!(help.stderr.is_empty());
+    assert_eq!(help.stdout, root.stdout);
 }
 
 #[test]
@@ -121,10 +121,36 @@ fn invalid_help_path_fails_on_stderr() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("error:"));
 }
 
+#[test]
+fn help_all_is_an_unknown_command_path() {
+    let (output, dir) = axon(&["help", "all"]);
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("error:"));
+    assert!(!dir.path().join(".axon").exists());
+}
+
+#[test]
+fn help_forms_do_not_open_a_database() {
+    for args in [
+        &["help"][..],
+        &["-h"][..],
+        &["help", "init"][..],
+        &["init", "--help"][..],
+    ] {
+        let (output, dir) = axon(args);
+
+        assert_eq!(output.status.code(), Some(0), "{args:?}");
+        assert!(output.stderr.is_empty(), "{args:?}");
+        assert!(!dir.path().join(".axon").exists(), "{args:?}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn complete_help_treats_closed_stdout_as_normal_termination() {
-    for args in [["--help"].as_slice(), ["help", "all"].as_slice()] {
+    for args in [["--help"].as_slice(), ["help"].as_slice()] {
         let output = axon_with_closed_stdout(args);
 
         assert_eq!(output.status.code(), Some(0));

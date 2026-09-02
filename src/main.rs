@@ -247,7 +247,7 @@ fn write_completion(shell: Shell) -> std::io::Result<()> {
 fn requests_complete_help(args: &[std::ffi::OsString]) -> bool {
     match args.get(1).and_then(|arg| arg.to_str()) {
         Some("--help") => true,
-        Some("help") => args.len() == 3 && args.get(2).and_then(|arg| arg.to_str()) == Some("all"),
+        Some("help") => args.len() == 2,
         _ => false,
     }
 }
@@ -1285,7 +1285,7 @@ mod tests {
     }
 
     #[test]
-    fn only_root_long_help_and_help_all_request_the_complete_reference() {
+    fn only_root_long_help_and_bare_help_request_the_complete_reference() {
         let args = |values: &[&str]| {
             values
                 .iter()
@@ -1294,8 +1294,9 @@ mod tests {
         };
 
         assert!(requests_complete_help(&args(&["axon", "--help"])));
-        assert!(requests_complete_help(&args(&["axon", "help", "all"])));
+        assert!(requests_complete_help(&args(&["axon", "help"])));
         assert!(!requests_complete_help(&args(&["axon", "-h"])));
+        assert!(!requests_complete_help(&args(&["axon", "help", "all"])));
         assert!(!requests_complete_help(&args(&[
             "axon", "decide", "reject", "--help"
         ])));
