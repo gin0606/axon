@@ -1,4 +1,5 @@
-// docs/axes.md で整理した状態モデルの検証用。
+// docs/axes.md で整理した、axon の思想的なコアとなる状態モデル。
+// CLI・永続化・再試行などの実装契約は Rust のテストか一時的なモデルで扱う。
 module axon {
   type Progress = NotStarted | InProgress | Done
   type Commitment = Undecided | Accepted | Rejected
@@ -10,7 +11,6 @@ module axon {
     | AfterIssue(int)
 
   type Id = int
-  type Operation = Init | Transition | Setting | ClockTick
 
   pure val ISSUES: Set[Id] = Set(0, 1, 2)
   pure val COMMITMENTS = Set(Undecided, Accepted, Rejected)
@@ -23,15 +23,6 @@ module axon {
   var resurfaceCond: Id -> Condition
   var deps: Set[(Id, Id)]      // (y, x) = y は x に依存する
   var clock: int
-
-  // コマンド契約を観測するための状態。updatedAt は実時刻ではなく更新回数を表す。
-  var updatedAt: Id -> int
-  var decisionEvents: Id -> int
-  var progressEvents: Id -> int
-  var settingValue: Id -> int
-  var lastOperation: Operation
-  var lastSucceeded: bool
-  var lastChanged: bool
 
   // ---- 導出値 ----
   def depsOf(y: Id): Set[Id] = ISSUES.filter(x => deps.contains((y, x)))
@@ -69,99 +60,54 @@ module axon {
     resurfaceCond' = ISSUES.mapBy(_ => Always),
     deps' = Set(),
     clock' = 0,
-    updatedAt' = ISSUES.mapBy(_ => 0),
-    decisionEvents' = ISSUES.mapBy(_ => 0),
-    progressEvents' = ISSUES.mapBy(_ => 0),
-    settingValue' = ISSUES.mapBy(_ => 0),
-    lastOperation' = Init,
-    lastSucceeded' = true,
-    lastChanged' = false,
-  }
-
-  action unchanged(operation: Operation, succeeded: bool): bool = all {
-    progress' = progress, commitment' = commitment, resurfaceCond' = resurfaceCond,
-    deps' = deps, clock' = clock, updatedAt' = updatedAt,
-    decisionEvents' = decisionEvents, progressEvents' = progressEvents,
-    settingValue' = settingValue, lastOperation' = operation,
-    lastSucceeded' = succeeded, lastChanged' = false,
   }
 
   action doDecide = {
     nondet i = ISSUES.oneOf()
     nondet c = COMMITMENTS.oneOf()
-    if (commitment.get(i) == c)
-      unchanged(Transition, false)
-    else
-      all {
-        commitment' = commitment.set(i, c),
-        updatedAt' = updatedAt.set(i, updatedAt.get(i) + 1),
-        decisionEvents' = decisionEvents.set(i, decisionEvents.get(i) + 1),
-        progress' = progress, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
-        progressEvents' = progressEvents, settingValue' = settingValue,
-        lastOperation' = Transition, lastSucceeded' = true, lastChanged' = true,
-      }
+    all {
+      commitment.get(i) != c,
+      commitment' = commitment.set(i, c),
+      progress' = progress, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
+    }
   }
 
   action doStart = {
     nondet i = ISSUES.oneOf()
-    if (ready(i))
-      all {
-        progress' = progress.set(i, InProgress),
-        updatedAt' = updatedAt.set(i, updatedAt.get(i) + 1),
-        progressEvents' = progressEvents.set(i, progressEvents.get(i) + 1),
-        commitment' = commitment, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
-        decisionEvents' = decisionEvents, settingValue' = settingValue,
-        lastOperation' = Transition, lastSucceeded' = true, lastChanged' = true,
-      }
-    else
-      unchanged(Transition, false)
+    all {
+      ready(i),
+      progress' = progress.set(i, InProgress),
+      commitment' = commitment, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
+    }
   }
 
   action doDone = {
     nondet i = ISSUES.oneOf()
-    if (progress.get(i) == InProgress)
-      all {
-        progress' = progress.set(i, Done),
-        updatedAt' = updatedAt.set(i, updatedAt.get(i) + 1),
-        progressEvents' = progressEvents.set(i, progressEvents.get(i) + 1),
-        commitment' = commitment, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
-        decisionEvents' = decisionEvents, settingValue' = settingValue,
-        lastOperation' = Transition, lastSucceeded' = true, lastChanged' = true,
-      }
-    else
-      unchanged(Transition, false)
+    all {
+      progress.get(i) == InProgress,
+      progress' = progress.set(i, Done),
+      commitment' = commitment, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
+    }
   }
 
   action doRelease = {
     nondet i = ISSUES.oneOf()
-    if (progress.get(i) == InProgress)
-      all {
-        progress' = progress.set(i, NotStarted),
-        updatedAt' = updatedAt.set(i, updatedAt.get(i) + 1),
-        progressEvents' = progressEvents.set(i, progressEvents.get(i) + 1),
-        commitment' = commitment, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
-        decisionEvents' = decisionEvents, settingValue' = settingValue,
-        lastOperation' = Transition, lastSucceeded' = true, lastChanged' = true,
-      }
-    else
-      unchanged(Transition, false)
+    all {
+      progress.get(i) == InProgress,
+      progress' = progress.set(i, NotStarted),
+      commitment' = commitment, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
+    }
   }
 
   action doDeferDate = {
     nondet i = ISSUES.oneOf()
     nondet d = Set(1, 2).oneOf()
     val target = AtDate(clock + d)
-    if (resurfaceCond.get(i) == target)
-      unchanged(Transition, false)
-    else
-      all {
-        resurfaceCond' = resurfaceCond.set(i, target),
-        updatedAt' = updatedAt.set(i, updatedAt.get(i) + 1),
-        decisionEvents' = decisionEvents.set(i, decisionEvents.get(i) + 1),
-        progress' = progress, commitment' = commitment, deps' = deps, clock' = clock,
-        progressEvents' = progressEvents, settingValue' = settingValue,
-        lastOperation' = Transition, lastSucceeded' = true, lastChanged' = true,
-      }
+    all {
+      resurfaceCond.get(i) != target,
+      resurfaceCond' = resurfaceCond.set(i, target),
+      progress' = progress, commitment' = commitment, deps' = deps, clock' = clock,
+    }
   }
 
   // C の参照条件。D (依存) とは意味が違うので、循環を避ける以外の制約は置かない
@@ -169,32 +115,21 @@ module axon {
     nondet i = ISSUES.oneOf()
     nondet x = ISSUES.oneOf()
     val target = AfterIssue(x)
-    if (i == x or resurfaceCond.get(i) == target)
-      unchanged(Transition, false)
-    else
-      all {
-        resurfaceCond' = resurfaceCond.set(i, target),
-        updatedAt' = updatedAt.set(i, updatedAt.get(i) + 1),
-        decisionEvents' = decisionEvents.set(i, decisionEvents.get(i) + 1),
-        progress' = progress, commitment' = commitment, deps' = deps, clock' = clock,
-        progressEvents' = progressEvents, settingValue' = settingValue,
-        lastOperation' = Transition, lastSucceeded' = true, lastChanged' = true,
-      }
+    all {
+      i != x,
+      resurfaceCond.get(i) != target,
+      resurfaceCond' = resurfaceCond.set(i, target),
+      progress' = progress, commitment' = commitment, deps' = deps, clock' = clock,
+    }
   }
 
   action doClearCondition = {
     nondet i = ISSUES.oneOf()
-    if (resurfaceCond.get(i) == Always)
-      unchanged(Transition, false)
-    else
-      all {
-        resurfaceCond' = resurfaceCond.set(i, Always),
-        updatedAt' = updatedAt.set(i, updatedAt.get(i) + 1),
-        decisionEvents' = decisionEvents.set(i, decisionEvents.get(i) + 1),
-        progress' = progress, commitment' = commitment, deps' = deps, clock' = clock,
-        progressEvents' = progressEvents, settingValue' = settingValue,
-        lastOperation' = Transition, lastSucceeded' = true, lastChanged' = true,
-      }
+    all {
+      resurfaceCond.get(i) != Always,
+      resurfaceCond' = resurfaceCond.set(i, Always),
+      progress' = progress, commitment' = commitment, deps' = deps, clock' = clock,
+    }
   }
 
   // 循環を避けるため x < y のみ許す
@@ -203,12 +138,9 @@ module axon {
     nondet x = ISSUES.oneOf()
     all {
       x < y,
+      not(deps.contains((y, x))),
       deps' = deps.union(Set((y, x))),
-      progress' = progress, commitment' = commitment, resurfaceCond' = resurfaceCond,
-      clock' = clock, updatedAt' = updatedAt, decisionEvents' = decisionEvents,
-      progressEvents' = progressEvents, settingValue' = settingValue,
-      lastOperation' = Setting, lastSucceeded' = true,
-      lastChanged' = not(deps.contains((y, x))),
+      progress' = progress, commitment' = commitment, resurfaceCond' = resurfaceCond, clock' = clock,
     }
   }
 
@@ -217,60 +149,21 @@ module axon {
     nondet x = ISSUES.oneOf()
     all {
       x < y,
+      deps.contains((y, x)),
       deps' = deps.exclude(Set((y, x))),
-      progress' = progress, commitment' = commitment, resurfaceCond' = resurfaceCond,
-      clock' = clock, updatedAt' = updatedAt, decisionEvents' = decisionEvents,
-      progressEvents' = progressEvents, settingValue' = settingValue,
-      lastOperation' = Setting, lastSucceeded' = true,
-      lastChanged' = deps.contains((y, x)),
-    }
-  }
-
-  // write / group set の代表。設定は同値でも成功し、updatedAt を進めない。
-  action doSetValue = {
-    nondet i = ISSUES.oneOf()
-    nondet target = Set(0, 1).oneOf()
-    val changed = settingValue.get(i) != target
-    all {
-      settingValue' = settingValue.set(i, target),
-      updatedAt' = if (changed) updatedAt.set(i, updatedAt.get(i) + 1) else updatedAt,
-      progress' = progress, commitment' = commitment, resurfaceCond' = resurfaceCond,
-      deps' = deps, clock' = clock, decisionEvents' = decisionEvents,
-      progressEvents' = progressEvents, lastOperation' = Setting,
-      lastSucceeded' = true, lastChanged' = changed,
-    }
-  }
-
-  // group reject は未達の子だけを不採用へ収束させ、再実行では履歴を増やさない。
-  action doGroupReject = {
-    val changed = ISSUES.exists(i => commitment.get(i) != Rejected)
-    all {
-      commitment' = ISSUES.mapBy(_ => Rejected),
-      updatedAt' = ISSUES.mapBy(i =>
-        if (commitment.get(i) == Rejected) updatedAt.get(i) else updatedAt.get(i) + 1),
-      decisionEvents' = ISSUES.mapBy(i =>
-        if (commitment.get(i) == Rejected)
-          decisionEvents.get(i)
-        else
-          decisionEvents.get(i) + 1),
-      progress' = progress, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
-      progressEvents' = progressEvents, settingValue' = settingValue,
-      lastOperation' = Setting, lastSucceeded' = true, lastChanged' = changed,
+      progress' = progress, commitment' = commitment, resurfaceCond' = resurfaceCond, clock' = clock,
     }
   }
 
   action doTick = all {
     clock < CLOCK_MAX,
     clock' = clock + 1,
-    progress' = progress, commitment' = commitment, resurfaceCond' = resurfaceCond,
-    deps' = deps, updatedAt' = updatedAt, decisionEvents' = decisionEvents,
-    progressEvents' = progressEvents, settingValue' = settingValue,
-    lastOperation' = ClockTick, lastSucceeded' = true, lastChanged' = true,
+    progress' = progress, commitment' = commitment, resurfaceCond' = resurfaceCond, deps' = deps,
   }
 
   action step = any {
     doDecide, doStart, doDone, doRelease, doDeferDate, doDeferAfter, doClearCondition,
-    doAddDep, doRemoveDep, doSetValue, doGroupReject, doTick,
+    doAddDep, doRemoveDep, doTick,
   }
 
   // ---- 検査したい性質 ----
@@ -299,17 +192,6 @@ module axon {
   // (d) ready と blocked / orphaned は排他 (定義の健全性確認)
   val invReadyExclusive =
     ISSUES.forall(i => ready(i) implies (not(blocked(i)) and not(orphaned(i))))
-
-  val invCommandOutcomeContract =
-    match lastOperation {
-    | Transition => lastSucceeded == lastChanged
-    | Setting => lastSucceeded
-    | ClockTick => lastSucceeded and lastChanged
-    | Init => lastSucceeded and not(lastChanged)
-    }
-
-  val invEventsHaveUpdate =
-    ISSUES.forall(i => decisionEvents.get(i) + progressEvents.get(i) <= updatedAt.get(i))
 
   // ---- D-1: 阻害の根本原因を辿る導出値 ----
   // 未終端 = 完了でも不採用でもない依存先
