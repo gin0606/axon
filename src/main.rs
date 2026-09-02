@@ -25,43 +25,67 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Initialize axon at the current management root
+    /// Initialize axon at the management root
+    ///
+    /// In Git, the management root contains the common Git directory, so all worktrees share one
+    /// database. Outside Git, the current directory becomes the management root. Later commands
+    /// outside Git search its ancestors for the nearest axon database; init refuses to create a
+    /// nested database below an existing non-Git management root.
     Init {
-        /// Issue ID prefix (defaults to the management root directory name)
+        /// Prefix for generated issue IDs; defaults to the management-root directory name
         prefix: Option<String>,
     },
     /// Generate a shell completion script
     Completion {
+        /// Shell whose completion script is written to standard output
         #[arg(value_enum)]
         shell: Shell,
     },
     /// Create an issue with Disposition Accepted
-    Plan { title: Vec<String> },
+    Plan {
+        /// One or more words joined with spaces to form the issue title
+        #[arg(required = true, value_name = "TITLE")]
+        title: Vec<String>,
+    },
     /// Create an issue with Disposition Undecided
-    Capture { title: Vec<String> },
+    Capture {
+        /// One or more words joined with spaces to form the issue title
+        #[arg(required = true, value_name = "TITLE")]
+        title: Vec<String>,
+    },
     /// List issues that can be started now
     Ready,
     /// List issues that need a human disposition decision
     Triage,
     /// Claim one ready issue and record the actor and time
-    Start { id: String },
+    Start {
+        /// Issue ID or unique six-character suffix to claim
+        id: String,
+    },
     /// End an InProgress issue and confirm that issue only
-    Done { id: String },
+    Done {
+        /// Issue ID or unique six-character suffix to end
+        id: String,
+    },
     /// Update an issue's title or description
     Write {
+        /// Issue ID or unique six-character suffix to update
         id: String,
-        /// Replace the title
+        /// Replacement title; quote it to include spaces
         #[arg(long)]
         title: Option<String>,
-        /// Read the description from this argument
+        /// Replacement description text; an empty value removes the description
         #[arg(short = 'm', long)]
         message: Option<String>,
-        /// Read the description from a file, or standard input with -
+        /// File containing the replacement description, or - for standard input
         #[arg(short = 'F', long)]
         file: Option<String>,
     },
     /// Show Disposition and resurface-condition decision history
-    Log { id: String },
+    Log {
+        /// Issue ID or unique six-character suffix whose decision history is shown
+        id: String,
+    },
     /// Find old claims whose owning process is no longer running
     Stale {
         /// Minimum claim age in hours
@@ -70,6 +94,7 @@ enum Command {
     },
     /// Release a claim and record an optional reason or handoff
     Release {
+        /// Issue ID or unique six-character suffix whose claim is released
         id: String,
         /// Release reason or handoff to record in progress history
         #[arg(short, long)]
@@ -78,7 +103,10 @@ enum Command {
     /// List every issue regardless of state
     List,
     /// Show issue details, relationships, and progress history
-    Show { id: String },
+    Show {
+        /// Issue ID or unique six-character suffix to show
+        id: String,
+    },
     /// Change an issue's Disposition
     #[command(subcommand)]
     Decide(DecideCmd),
@@ -97,25 +125,38 @@ enum Command {
 enum GroupCmd {
     /// Create a group
     New {
+        /// Slug for the new group
         slug: String,
-        /// Display name (defaults to the slug)
+        /// Words joined with spaces as the display name; defaults to the slug
         name: Vec<String>,
-        /// Parent group slug
+        /// Slug of the parent group
         #[arg(long)]
         parent: Option<String>,
     },
     /// List groups
     List,
     /// Show a group's issues and progress
-    Show { slug: String },
+    Show {
+        /// Slug of the group to show
+        slug: String,
+    },
     /// Put an issue in a group
-    Set { id: String, slug: String },
+    Set {
+        /// Issue ID or unique six-character suffix to put in the group
+        id: String,
+        /// Slug of the group that will contain the issue
+        slug: String,
+    },
     /// Remove an issue from its group
-    Unset { id: String },
+    Unset {
+        /// Issue ID or unique six-character suffix to remove from its group
+        id: String,
+    },
     /// Reject every descendant issue in a group
     Reject {
+        /// Slug of the group whose descendant issues are rejected
         slug: String,
-        /// Reason to record for issues that change to Rejected
+        /// Reason for each Disposition change, recorded in decision history
         #[arg(short, long)]
         reason: Option<String>,
     },
@@ -128,13 +169,17 @@ enum GroupCmd {
 enum GroupDepCmd {
     /// Add a dependency
     Add {
+        /// Slug of the group that will depend on another group
         slug: String,
+        /// Slug of the group whose result is required
         #[arg(long)]
         needs: String,
     },
     /// Remove a dependency
     Rm {
+        /// Slug of the group that currently depends on another group
         slug: String,
+        /// Slug of the group whose requirement is removed
         #[arg(long)]
         needs: String,
     },
@@ -144,20 +189,25 @@ enum GroupDepCmd {
 enum DecideCmd {
     /// Set Disposition to Accepted
     Accept {
+        /// Issue ID or unique six-character suffix whose Disposition is changed
         id: String,
+        /// Reason for the Disposition decision, recorded in decision history
         #[arg(short, long)]
         reason: Option<String>,
     },
     /// Set Disposition to Rejected
     Reject {
+        /// Issue ID or unique six-character suffix whose Disposition is changed
         id: String,
-        /// Reason for rejection, used to reconstruct the decision later
+        /// Reason for the Disposition decision, recorded in decision history
         #[arg(short, long)]
         reason: Option<String>,
     },
     /// Set Disposition back to Undecided
     Undecide {
+        /// Issue ID or unique six-character suffix whose Disposition is changed
         id: String,
+        /// Reason for the Disposition decision, recorded in decision history
         #[arg(short, long)]
         reason: Option<String>,
     },
@@ -167,22 +217,29 @@ enum DecideCmd {
 enum WhenCmd {
     /// Set an AtDate resurface condition
     At {
+        /// Issue ID or unique six-character suffix whose resurface condition is changed
         id: String,
+        /// Date when the issue resurfaces, in YYYY-MM-DD format
         date: String,
-        /// Reason for deferring attention
+        /// Reason for the resurface-condition decision, recorded in decision history
         #[arg(short, long)]
         reason: Option<String>,
     },
     /// Set an AfterIssue resurface condition
     After {
+        /// Issue ID or unique six-character suffix whose resurface condition is changed
         id: String,
+        /// Issue ID or unique six-character suffix whose terminal state resurfaces the issue
         reference: String,
+        /// Reason for the resurface-condition decision, recorded in decision history
         #[arg(short, long)]
         reason: Option<String>,
     },
     /// Set the resurface condition to Always
     Clear {
+        /// Issue ID or unique six-character suffix whose resurface condition is cleared
         id: String,
+        /// Reason for the resurface-condition decision, recorded in decision history
         #[arg(short, long)]
         reason: Option<String>,
     },
@@ -192,13 +249,17 @@ enum WhenCmd {
 enum DepCmd {
     /// Add a dependency
     Add {
+        /// Issue ID or unique six-character suffix of the dependent issue
         id: String,
+        /// Issue ID or unique six-character suffix of the required issue
         #[arg(long)]
         needs: String,
     },
     /// Remove a dependency
     Rm {
+        /// Issue ID or unique six-character suffix of the dependent issue
         id: String,
+        /// Issue ID or unique six-character suffix of the issue no longer required
         #[arg(long)]
         needs: String,
     },
@@ -1282,6 +1343,45 @@ mod tests {
             assert_eq!(help.matches(&heading).count(), 1, "{path}");
         }
         assert_eq!(help.matches("## `axon ").count(), paths.len());
+    }
+
+    #[test]
+    fn every_visible_leaf_argument_has_help() {
+        fn check(command: &mut clap::Command, path: &str) {
+            let has_generated_help = !command.is_disable_help_subcommand_set();
+            let has_visible_children = command.get_subcommands().any(|child| {
+                !child.is_hide_set() && !(has_generated_help && child.get_name() == "help")
+            });
+
+            if !has_visible_children {
+                for argument in command
+                    .get_arguments()
+                    .filter(|argument| !argument.is_hide_set())
+                {
+                    let help = argument
+                        .get_help()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    assert!(
+                        !help.trim().is_empty(),
+                        "{path}: argument {:?} has no help",
+                        argument.get_id()
+                    );
+                }
+                return;
+            }
+
+            for child in command.get_subcommands_mut() {
+                if child.is_hide_set() || (has_generated_help && child.get_name() == "help") {
+                    continue;
+                }
+                check(child, &format!("{path} {}", child.get_name()));
+            }
+        }
+
+        let mut command = Cli::command();
+        command.build();
+        check(&mut command, "axon");
     }
 
     #[test]

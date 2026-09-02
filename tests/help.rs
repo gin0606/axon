@@ -97,6 +97,83 @@ fn nested_help_path_matches_the_subcommand_help_flag() {
     assert_eq!(help_command.stdout, help_flag.stdout);
 }
 
+fn help_stdout(args: &[&str]) -> String {
+    let (output, _) = axon(args);
+    assert_eq!(output.status.code(), Some(0), "{args:?}");
+    assert!(output.stderr.is_empty(), "{args:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn representative_leaf_help_describes_input_contracts() {
+    let init = help_stdout(&["init", "--help"]);
+    assert!(init.contains("common Git directory"), "{init}");
+    assert!(
+        init.contains("current directory becomes the management root"),
+        "{init}"
+    );
+    assert!(
+        init.contains("refuses to create a nested database"),
+        "{init}"
+    );
+    assert!(init.contains("Prefix for generated issue IDs"), "{init}");
+
+    for command in ["plan", "capture"] {
+        let help = help_stdout(&[command, "--help"]);
+        assert!(
+            help.contains(&format!("Usage: axon {command} <TITLE>...")),
+            "{help}"
+        );
+        assert!(help.contains("form the issue title"), "{help}");
+    }
+
+    let when_at = help_stdout(&["when", "at", "--help"]);
+    assert!(when_at.contains("YYYY-MM-DD"), "{when_at}");
+
+    let when_after = help_stdout(&["when", "after", "--help"]);
+    assert!(
+        when_after.contains("terminal state resurfaces the issue"),
+        "{when_after}"
+    );
+
+    let dep_add = help_stdout(&["dep", "add", "--help"]);
+    assert!(dep_add.contains("of the dependent issue"), "{dep_add}");
+    assert!(dep_add.contains("of the required issue"), "{dep_add}");
+
+    let group_set = help_stdout(&["group", "set", "--help"]);
+    assert!(group_set.contains("to put in the group"), "{group_set}");
+    assert!(
+        group_set.contains("group that will contain the issue"),
+        "{group_set}"
+    );
+
+    for operation in ["accept", "reject", "undecide"] {
+        let help = help_stdout(&["decide", operation, "--help"]);
+        assert!(help.contains("whose Disposition is changed"), "{help}");
+        assert!(
+            help.contains("Reason for the Disposition decision"),
+            "{help}"
+        );
+    }
+}
+
+#[test]
+fn plan_and_capture_require_a_title_before_opening_a_database() {
+    for command in ["plan", "capture"] {
+        let (output, dir) = axon(&[command]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(!output.status.success(), "{command}");
+        assert!(output.stdout.is_empty(), "{command}");
+        assert!(
+            stderr.contains(&format!("Usage: axon {command} <TITLE>...")),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("not initialized"), "{stderr}");
+        assert!(!dir.path().join(".axon").exists(), "{command}");
+    }
+}
+
 #[test]
 fn reason_options_match_the_operation_contract() {
     let (done, _) = axon(&["done", "--help"]);
