@@ -28,6 +28,7 @@ axon completion zsh > _axon    # シェル補完スクリプトを生成
 | [docs/cli.md](docs/cli.md) | CLI の操作意味と設計意図を記録する日本語の開発者向け文書 |
 | [docs/help.md](docs/help.md) | `axon help` と `axon --help` に埋め込む英語の利用マニュアル |
 | [docs/axes.md](docs/axes.md) | 状態モデルの軸。**なぜこの設計なのか**の記録。決着した論点が 24 件 |
+| [docs/declaration-file.md](docs/declaration-file.md) | export / import が扱う strict YAML の形式契約 |
 | [docs/data-model.md](docs/data-model.md) | 永続化とスキーマ。SQLite 単体、git 管理外 |
 | [docs/dry-run.md](docs/dry-run.md) | 運用シナリオを通した検証 |
 | [docs/implementation.md](docs/implementation.md) | 実装方針と最小スコープ |
