@@ -1,11 +1,10 @@
 #![allow(dead_code)]
 
+use rusqlite::{Connection, params};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
-
-use rusqlite::{Connection, params};
 
 static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
 
@@ -30,10 +29,7 @@ impl TestDir {
                     return Self { path, git_config };
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => panic!(
-                    "failed to create test directory {}: {error}",
-                    path.display()
-                ),
+                Err(error) => panic!("failed to create {}: {error}", path.display()),
             }
         }
     }
@@ -61,20 +57,12 @@ impl TestDir {
             .unwrap();
         assert_success(&output);
     }
-
-    fn git_config(&self) -> &Path {
-        &self.git_config
-    }
 }
 
 impl Drop for TestDir {
     fn drop(&mut self) {
-        fs::remove_dir_all(&self.path).unwrap_or_else(|error| {
-            panic!(
-                "failed to remove test directory {}: {error}",
-                self.path.display()
-            )
-        });
+        fs::remove_dir_all(&self.path)
+            .unwrap_or_else(|error| panic!("failed to remove {}: {error}", self.path.display()));
     }
 }
 
@@ -84,41 +72,32 @@ pub struct TestRepo {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct IssueState {
-    title: String,
-    description: Option<String>,
-    progress: String,
-    disposition: String,
-    resurface_condition_kind: Option<String>,
-    resurface_condition_date: Option<String>,
-    resurface_condition_reference: Option<String>,
-    group_id: Option<String>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub struct IssueSnapshot {
-    state: IssueState,
-    updated_at: String,
-    decision_events: i64,
-    progress_events: i64,
+pub struct EntitySnapshot {
+    pub kind: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub progress: String,
+    pub disposition: String,
+    pub resurface_kind: Option<String>,
+    pub resurface_date: Option<String>,
+    pub resurface_ref: Option<String>,
+    pub parent: Option<String>,
+    pub updated_at: String,
+    pub decision_events: i64,
+    pub progress_events: i64,
 }
 
 impl TestRepo {
     pub fn new() -> Self {
         let dir = TestDir::new("cli");
-        let root = dir.path().join("repo");
+        let root = dir.path.join("repo");
         fs::create_dir(&root).unwrap();
-        let output = git_command(&root, dir.git_config())
-            .args(["init", "--quiet"])
-            .output()
-            .unwrap();
-        assert_success(&output);
+        dir.init_git(&root);
         Self { dir, root }
     }
 
     pub fn init(&self, prefix: &str) {
-        let output = self.axon(&["init", prefix]);
-        assert_success(&output);
+        assert_success(&self.axon(&["init", prefix]));
     }
 
     pub fn root(&self) -> &Path {
@@ -126,11 +105,19 @@ impl TestRepo {
     }
 
     pub fn plan(&self, title: &str) -> String {
-        self.create_issue("plan", title)
+        self.create(&["plan", title])
     }
 
     pub fn capture(&self, title: &str) -> String {
-        self.create_issue("capture", title)
+        self.create(&["capture", title])
+    }
+
+    pub fn group_plan(&self, title: &str) -> String {
+        self.create(&["group", "plan", title])
+    }
+
+    pub fn group_capture(&self, title: &str) -> String {
+        self.create(&["group", "capture", title])
     }
 
     pub fn axon(&self, args: &[&str]) -> Output {
@@ -138,14 +125,72 @@ impl TestRepo {
     }
 
     pub fn axon_in(&self, directory: &Path, args: &[&str]) -> Output {
-        axon_command(directory, self.dir.git_config())
+        axon_command(directory, &self.dir.git_config)
             .args(args)
             .output()
             .unwrap()
     }
 
+    pub fn snapshot(&self, id: &str) -> EntitySnapshot {
+        let connection = self.connection();
+        let mut snapshot = connection
+            .query_row(
+                "SELECT kind,title,description,progress,disposition,
+                 resurface_kind,resurface_date,resurface_ref,parent_id,updated_at
+                 FROM entities WHERE id=?1",
+                params![id],
+                |row| {
+                    Ok(EntitySnapshot {
+                        kind: row.get(0)?,
+                        title: row.get(1)?,
+                        description: row.get(2)?,
+                        progress: row.get(3)?,
+                        disposition: row.get(4)?,
+                        resurface_kind: row.get(5)?,
+                        resurface_date: row.get(6)?,
+                        resurface_ref: row.get(7)?,
+                        parent: row.get(8)?,
+                        updated_at: row.get(9)?,
+                        decision_events: 0,
+                        progress_events: 0,
+                    })
+                },
+            )
+            .unwrap();
+        snapshot.decision_events = connection
+            .query_row(
+                "SELECT COUNT(*) FROM entity_events WHERE entity_id=?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        snapshot.progress_events = connection
+            .query_row(
+                "SELECT COUNT(*) FROM entity_progress_events WHERE entity_id=?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        snapshot
+    }
+
+    pub fn dep_count(&self) -> i64 {
+        self.connection()
+            .query_row("SELECT COUNT(*) FROM entity_deps", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    pub fn insert_dep_unchecked(&self, source: &str, target: &str) {
+        self.connection()
+            .execute(
+                "INSERT INTO entity_deps VALUES (?1,?2)",
+                params![source, target],
+            )
+            .unwrap();
+    }
+
     pub fn add_worktree(&self) -> PathBuf {
-        let commit = git_command(&self.root, self.dir.git_config())
+        let commit = git_command(&self.root, &self.dir.git_config)
             .args([
                 "-c",
                 "user.name=Axon Tests",
@@ -158,14 +203,13 @@ impl TestRepo {
                 "--no-verify",
                 "--quiet",
                 "-m",
-                "test fixture",
+                "fixture",
             ])
             .output()
             .unwrap();
         assert_success(&commit);
-
-        let path = self.dir.path().join("worktree");
-        let output = git_command(&self.root, self.dir.git_config())
+        let path = self.dir.path.join("worktree");
+        let output = git_command(&self.root, &self.dir.git_config)
             .args(["worktree", "add", "--quiet", "--detach"])
             .arg(&path)
             .output()
@@ -174,124 +218,18 @@ impl TestRepo {
         path
     }
 
-    pub fn issue_snapshot(&self, id: &str) -> IssueSnapshot {
-        let conn = self.connection();
-        let (state, updated_at) = conn
-            .query_row(
-                "SELECT title, description, progress, disposition,
-                        resurface_kind, resurface_date, resurface_ref, group_id, updated_at
-                   FROM issues WHERE id = ?1",
-                params![id],
-                |row| {
-                    Ok((
-                        IssueState {
-                            title: row.get(0)?,
-                            description: row.get(1)?,
-                            progress: row.get(2)?,
-                            disposition: row.get(3)?,
-                            resurface_condition_kind: row.get(4)?,
-                            resurface_condition_date: row.get(5)?,
-                            resurface_condition_reference: row.get(6)?,
-                            group_id: row.get(7)?,
-                        },
-                        row.get(8)?,
-                    ))
-                },
-            )
-            .unwrap();
-        let decision_events = conn
-            .query_row(
-                "SELECT COUNT(*) FROM events WHERE issue_id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let progress_events = conn
-            .query_row(
-                "SELECT COUNT(*) FROM progress_events WHERE issue_id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        IssueSnapshot {
-            state,
-            updated_at,
-            decision_events,
-            progress_events,
-        }
-    }
-
-    pub fn dep_count(&self, table: &str) -> i64 {
-        assert!(matches!(table, "issue_deps" | "group_deps"));
-        self.connection()
-            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-                row.get(0)
-            })
-            .unwrap()
-    }
-
-    pub fn insert_issue_dep_unchecked(&self, issue: &str, depends_on: &str) {
-        self.connection()
-            .execute(
-                "INSERT INTO issue_deps (issue_id, depends_on_id) VALUES (?1, ?2)",
-                params![issue, depends_on],
-            )
-            .unwrap();
-    }
-
-    pub fn set_after_issue_unchecked(&self, issue: &str, reference: &str) {
-        self.connection()
-            .execute(
-                "UPDATE issues
-                    SET resurface_kind = 'after_issue', resurface_date = NULL, resurface_ref = ?2
-                  WHERE id = ?1",
-                params![issue, reference],
-            )
-            .unwrap();
-    }
-
-    pub fn insert_group_dep_unchecked(&self, group: &str, depends_on: &str) {
-        self.connection()
-            .execute(
-                "INSERT INTO group_deps (group_id, depends_on_id)
-                 SELECT source.id, target.id
-                   FROM groups source, groups target
-                  WHERE source.slug = ?1 AND target.slug = ?2",
-                params![group, depends_on],
-            )
-            .unwrap();
-    }
-
-    pub fn seed_legacy_claim(&self, id: &str, actor: &str, at: &str) {
-        let conn = self.connection();
-        conn.execute_batch(
-            "ALTER TABLE issues RENAME COLUMN claimed_worktree TO claimed_session;
-             ALTER TABLE issues ADD COLUMN claimed_pid INTEGER;
-             PRAGMA user_version = 6;",
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE issues
-                SET progress = 'in_progress', claimed_actor = ?2,
-                    claimed_session = 'legacy-session', claimed_pid = 4242, claimed_at = ?3
-              WHERE id = ?1",
-            params![id, actor, at],
-        )
-        .unwrap();
-    }
-
-    fn connection(&self) -> Connection {
-        Connection::open(self.root.join(".axon/axon.db")).unwrap()
-    }
-
-    fn create_issue(&self, command: &str, title: &str) -> String {
-        let output = self.axon(&[command, title]);
+    fn create(&self, args: &[&str]) -> String {
+        let output = self.axon(args);
         assert_success(&output);
         stdout(&output)
             .split_whitespace()
             .next()
-            .expect("create command should print an issue id")
+            .expect("create command prints an ID")
             .to_string()
+    }
+
+    fn connection(&self) -> Connection {
+        Connection::open(self.root.join(".axon/axon.db")).unwrap()
     }
 }
 
@@ -335,13 +273,13 @@ fn axon_command(directory: &Path, git_config: &Path) -> Command {
 
 fn git_command(directory: &Path, git_config: &Path) -> Command {
     let mut command = Command::new("git");
-    command.current_dir(directory);
-    isolate_git_environment(&mut command, git_config);
     command
+        .current_dir(directory)
         .env("GIT_AUTHOR_NAME", "Axon Tests")
         .env("GIT_AUTHOR_EMAIL", "axon-tests@example.invalid")
         .env("GIT_COMMITTER_NAME", "Axon Tests")
         .env("GIT_COMMITTER_EMAIL", "axon-tests@example.invalid");
+    isolate_git_environment(&mut command, git_config);
     command
 }
 

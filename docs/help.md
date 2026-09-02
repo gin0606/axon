@@ -1,99 +1,75 @@
 # axon CLI
 
-axon is a local-first issue tracker that keeps independent decisions on separate axes. Its primary use is coordinating coding agents and people inside one directory tree, whether or not Git manages it. It stores one SQLite database per management root and shares a Git repository's database across its worktrees.
+axon is a local-first tracker for issues and explicit plan groups. It stores one SQLite database per management root and shares a Git repository's database across all worktrees.
 
 ## State model
 
-Every issue has three independent axes and two kinds of relationship.
+An Entity is either an `Issue` or a `Group`. Both kinds have the same generated public ID, title, description, claim, and three independent axes.
 
-| Kind | Values and meaning |
+| Axis or relationship | Meaning |
 | --- | --- |
-| Progress | `NotStarted`, `InProgress`, or `Ended`. `Ended` means no more work will be performed; use Disposition to tell completion from abandonment. |
-| Disposition | `Undecided`, `Accepted`, or `Rejected`. This records whether the issue's work or result should be pursued. |
-| Resurface condition | `Always`, `AtDate`, or `AfterIssue`. This controls when the issue returns to attention without changing Progress or Disposition. |
-| Dependency | An issue requires another issue's result before it can start. |
-| Group | A hierarchy for related issues. Dependencies may also exist between groups. |
+| Progress | `NotStarted`, `InProgress`, or `Ended`. `Ended` means no more work will be performed. |
+| Disposition | `Undecided`, `Accepted`, or `Rejected`. This records whether the work or result should be pursued. |
+| Resurface condition | `Always`, `AtDate`, or `AfterEntity`. It controls when the Entity returns to attention without changing another axis. |
+| Dependency | Any Entity may require any other Entity's result. |
+| Containment | An Issue or Group may have one parent Group. The resulting structure is a tree. |
 
-`ready`, `blocked`, `orphaned`, `surfaced`, and `terminal` are derived when data is read; they are not stored states.
+`ready`, `blocked`, `orphaned`, `surfaced`, `terminal`, active scope, blocking causes, and Group summaries are derived when data is read. They are never stored.
 
-- An issue is `ready` when it is `NotStarted`, `Accepted`, surfaced, has no unresolved dependency, is not orphaned, and is not blocked by a group dependency.
-- An issue is `blocked` while a dependency is not terminal.
-- An issue is `orphaned` when a dependency is `Rejected`, so the required result will not be produced. axon does not change the dependent issue's Disposition automatically; a person must decide whether to remove the dependency or reject the dependent issue.
-- An issue is `surfaced` when its resurface condition is satisfied.
-- An issue is `terminal` when its Progress is `Ended` or its Disposition is `Rejected`.
+A root Entity is in active scope. A Group opens its descendants only while it is `InProgress`, `Accepted`, surfaced, and neither blocked nor orphaned. Starting a Group does not start its descendants. A Group can end only when every descendant is terminal; it can be released only when no descendant is `InProgress`.
 
-Read Progress and Disposition together. `Ended + Accepted` means the accepted work was completed, `Ended + Rejected` means work stopped without an accepted result, and `Ended + Undecided` means an investigation ended but its result still needs a decision. No command silently changes both axes.
+A dependency is satisfied only by an `Ended` non-Rejected target. A Rejected target makes the dependent orphaned. In contrast, an `AfterEntity` condition is satisfied by either `Ended` or `Rejected`, because waiting has ended even when no result will be produced.
 
 ## Basic workflow
 
-1. Run `axon init` once at the root of the work you want to manage. Inside Git, axon uses the repository's common root regardless of the current subdirectory.
-2. Use `axon plan <title>` for work already accepted, or `axon capture <title>` for an observation that still needs a decision.
-3. Use `axon ready` to find mechanically startable work. Choose an explicit ID, then run `axon start <id>` to claim only that issue.
-4. Use `axon write <id>` to update its title, description, work result, or handoff. When work will not continue, run `axon done <id>` to set Progress to `Ended`.
-5. Use `axon triage` to find `Undecided` or orphaned issues. Inspect them with `axon show` and `axon log`, then use `axon decide accept` or `axon decide reject` only after a person makes the decision.
+1. Run `axon init` once at the management root.
+2. Create accepted work with `axon plan <title>` or an accepted plan scope with `axon group plan <title>`. Use `capture` instead of `plan` when Disposition should begin as `Undecided`.
+3. Add an Entity to a plan with `axon group set <entity-id> <parent-group-id>`. Start the parent Group when its plan scope should become active.
+4. Use `axon ready` to find startable Entities and `axon start <id>` to claim one explicit target.
+5. Use `axon done <id>` when work ends. Finish all descendants before ending a Group.
+6. Use `axon triage` for the active frontier of Undecided and orphaned Entities. Use `axon list` to inspect inactive or otherwise hidden descendants.
 
-Use `axon claims` to inspect every active claim, including its actor, worktree, and start time. If work has stopped, release that claim explicitly with `axon release <id>`; axon does not infer stale claims from age or process state.
+Use `--parent <group-id>` on any creation command to create an Entity inside a Group atomically. Use `--kind issue|group` on list queries when only one kind is relevant.
 
 ## Choosing a query
 
-| Command | Use it to answer |
+| Command | Question answered |
 | --- | --- |
-| `axon ready` | Which issues can be started now? |
-| `axon triage` | Which issues require a human disposition decision? |
-| `axon claims` | Which issues are currently claimed, and by whom, where, and since when? |
-| `axon list` | What issues exist, including blocked, deferred, active, ended, and rejected ones? |
-| `axon show <id>` | What is this issue's current state, claim, progress history, dependencies, dependents, group, and blocking cause? |
+| `axon ready` | Which active Entities can start now? |
+| `axon triage` | Which active-frontier Entities need a human decision? |
+| `axon claims` | Which Entities are claimed, by whom, where, and since when? |
+| `axon stale` | The same complete claim facts, without inferring staleness from age or process state. |
+| `axon list` | Which Entities exist, including inactive, blocked, deferred, ended, and rejected ones? |
+| `axon show <id>` | What is this Entity's state, plan scope, relationships, claim, history, and derived status? |
 | `axon log <id>` | Why did its Disposition or resurface condition change? |
-
-`plan` creates `Accepted` work, while `capture` creates `Undecided` work. A captured issue therefore appears in `triage`, not `ready`. Use `list` when an issue appears in neither query.
 
 ## Commands that change data
 
-- `start` atomically checks that an issue is ready, sets Progress to `InProgress`, creates its claim with the actor, worktree, and start time, and records the progress event. It never selects an issue for you.
-- `done` accepts only `InProgress -> Ended`. It removes the claim and records the actor and time in progress history. On success, it prints only the target issue's end confirmation; run `axon ready` separately to query current candidates across all relationships and resurface conditions. It does not accept a reason; record work results in the issue description.
-- `release` accepts only `InProgress -> NotStarted`. It removes the claim and records the optional handoff or release reason in progress history.
-- `decide accept`, `decide reject`, and `decide undecide` change only Disposition and record the optional reason in the decision log.
-- `when at`, `when after`, and `when clear` change only the resurface condition and record the optional reason in the decision log.
-- `write` changes the title or description. `--message` and `--file` are mutually exclusive; `--file -` reads the description from standard input.
-- `dep add` and `dep rm` add or remove an issue dependency. A dependency means the other issue's result is required, not merely that it should happen first.
-- `group new`, `group set`, and `group unset` manage group membership. An issue belongs to at most one group.
-- `group dep add` and `group dep rm` manage dependencies between groups.
-- `group reject` converges every descendant issue to `Rejected`. Its optional reason is recorded for issues that actually change; already rejected issues remain unchanged and receive no decision event.
+- `start`, `done`, `release`, `decide`, and `when` are transitions. Repeating the current value fails without changing state, timestamps, or history.
+- `write`, `group set`, `group unset`, `dep add`, and `dep rm` are settings. Repeating an already satisfied request succeeds without changing timestamps or history.
+- `plan`, `capture`, `group plan`, and `group capture` are additions and create a new Entity each time.
+- `show`, `write`, `start`, `done`, `release`, `decide`, `when`, `dep`, and `log` resolve the target kind from the common ID namespace.
+- `dep add` and `dep rm` support Issue-to-Issue, Issue-to-Group, Group-to-Issue, and Group-to-Group dependencies.
+- `group set` moves either kind below a Group; `group unset` removes its parent.
 
-`write`, membership changes, dependency changes, and `group reject` are target-setting operations: repeating an already satisfied request succeeds without changing timestamps or adding history. `start`, `done`, `release`, `decide`, and `when` are transitions: an invalid transition or a request for the current value fails without changing state, history, or timestamps.
-
-Every `--reason` option is optional. Reasons belong to typed state changes rather than free-standing comments: `release` reasons appear in progress history from `show`, while `decide`, `when`, and `group reject` reasons appear in decision history from `log`. `start` and `done` do not accept reasons.
+An Ended Group cannot be moved, gain or lose descendants, or change its outgoing dependencies. A terminal descendant below an Ended Group cannot be made non-terminal. New follow-up work belongs outside that completed scope.
 
 ## Safety and concurrency
 
-- Query commands do not claim work or make decisions. `ready`, `triage`, and `claims` deliberately separate observation from mutation.
-- `start` checks readiness and acquires the claim in one transaction. Concurrent attempts to start the same issue cannot both succeed.
-- A claim identifies its actor, worktree, and start time. `claims` and `show` report these facts without guessing whether the work is still active.
-- `done` and `release` operate on the current claim and reject issues in any other Progress state.
-- Rejecting a dependency makes dependents orphaned. axon reports this for human triage instead of guessing whether the dependency should be removed.
-- A resurface reference and a dependency have different meaning. If referenced issue X is rejected, `when after X` becomes surfaced because waiting is over; `dep add --needs X` becomes orphaned because X's result will not exist.
-- Issue dependencies and `AfterIssue` references form one issue-wait graph for cycle detection even though their meanings remain distinct. `dep add` and `when after` reject direct or indirect cycles. Group dependencies and the group-parent hierarchy are separate acyclic graphs; axon does not detect deadlocks spanning issue and group relationships.
-- Cycle checks and edge updates run in the same write transaction. Removing an edge remains allowed even when an existing database already contains a cycle.
-- Decision and release reasons are user-provided text. axon stores and displays them verbatim; do not put secrets in issue data or command arguments.
+State transitions check their preconditions and write history in one transaction. `start` checks readiness while acquiring its claim. Group completion and release inspect descendants in that same transaction.
+
+Dependency, `AfterEntity`, and containment edges are projected into activation and completion wait graphs. Relation changes reject any cycle spanning those relationship types. Group-originated waits apply to the Group and all descendants. Edge-removing `dep rm`, `when clear`, `when at`, and `group unset` remain available to repair invalid legacy data.
+
+Claims record actor, worktree, and start time. axon does not decide that a claim is stale from its age or a process ID; inspect and release it explicitly.
 
 ## Input, output, and exit status
 
-Help, query results, details, and successful mutation confirmations go to standard output. Argument and operation errors go to standard error and return a non-zero status.
+Successful results and mutation confirmations go to standard output. Errors go to standard error and return a non-zero status. Empty `ready`, `triage`, `claims`, `stale`, and `list` queries keep standard output empty and write only a short note to standard error.
 
-When `ready`, `triage`, `claims`, or `list` has no rows, standard output stays empty so pipelines receive no false candidate. A short explanation is written to standard error and the command still succeeds. In issue-list output, the first whitespace-separated field is always the issue ID, so commands such as `axon ready | fzf --preview 'axon show {1}'` work predictably.
-
-Issue titles, descriptions, reasons, group names, and other user-provided text are displayed unchanged and may use any language. Fixed help, status labels, confirmations, warnings, and errors are in English. There is no localization mode.
+The first whitespace-separated field in every list row is the Entity ID. The second identifies its kind. User-provided titles, descriptions, and reasons are displayed unchanged.
 
 ## Storage, worktrees, and identifiers
 
-axon stores data in `.axon/axon.db` under a management root and does not track it with Git. Inside Git, the management root is the directory containing the common Git directory. `git rev-parse --git-common-dir` is used so all worktrees of the same repository share one database. Commands in a Git repository never fall back to an axon database outside that common root.
+axon stores `.axon/axon.db` at the management root. In Git, the management root is the parent of the common Git directory, so linked worktrees share the database. Outside Git, commands search ancestors for the nearest database.
 
-Outside Git, `axon init` makes the current directory the management root. Other commands search from the current directory toward its ancestors and use the nearest `.axon/axon.db`. Running `axon init` anywhere below an existing non-Git management root fails and reports that root instead of silently creating a nested database.
-
-Issue IDs have the form `<prefix>-<random 6 characters>`. The prefix comes from `axon init` or defaults to the management root directory name. Commands accept a full ID or its six-character suffix; an ambiguous suffix fails and lists its matches. Groups are addressed by their user-chosen slug.
-
-## Help forms
-
-- `axon -h` prints the short command list.
-- `axon help` and `axon --help` print this manual followed by generated reference help for every leaf command.
-- `axon help <command path>` and `axon <command path> --help` print help for one command path.
+Every Issue and Group ID uses `<prefix>-<random six characters>`. The prefix comes from `axon init`; kind is not encoded in the ID. A full ID or a unique suffix may be used wherever an Entity ID is accepted. Group slugs do not exist.

@@ -1,32 +1,44 @@
 ---
 name: axon-implement-issue
-description: ユーザーから指定された採用済みの axon issue について、着手可能性の確認、着手、申し送り、完了を axon に反映する。issue ID を渡されて実装または再開を依頼されたときに使う。未判断 issue の相談や自律的な仕事選びには使わない。
+description: ユーザーから指定された採用済みの axon Entity の着手・実装・計画進行、または Disposition を問わず既に InProgress の Entity の進行同期・引き渡し・打ち切り・完了を axon に反映する。Entity ID を渡されて実装、進行、再開、release、done を依頼されたときに使う。採否相談や自律的な仕事選びには使わない。
 ---
 
-# Axon issue の作業状態を同期する
+# Axon Entity の作業状態を同期する
 
-指定された 1 件の作業状況と axon 上の進行を一致させる。この skill は axon 外の作業内容や権限を追加しない。
+指定された 1 件の Entity の作業状況と axon 上の進行を一致させる。この skill は axon 外の作業内容や権限を追加しない。
 
 ## 着手
 
-1. `axon show <id>` で本文、採否、進行、依存、グループを確認する。
-2. 未着手なら `axon ready` に対象 ID があることを確認する。`axon start` 自体は ready か検査しないため、未着手・採用という表示だけで着手可能と判断しない。
+1. `axon show <id>` で kind、本文、採否、進行、依存、親 Group を確認する。
+2. `start` は同じ transaction で ready を検査して claim を取得する。候補選定には `axon ready`、失敗理由の追加調査には `axon show`、`axon ready`、`axon triage`、`axon list` を使う。
 3. `ready` でも、本文に実装前のユーザー判断や未完成の設計成果物が必要だと明記されているのに、依存として表現されていない場合は `axon start` しない。axon 上の記述と導出状態の不一致としてユーザーへ報告し、採否や依存を独断で変えない。通常の実装詳細が未記載であることだけでは止めない。
 4. 着手可能なら、作業を始める前に `axon start <id>` を実行する。
-5. 再開を依頼され、すでに着手中なら、claim を奪ったり `axon release` したりせず、既存の申し送りと着手者を確認する。安全に引き継げると判断できない場合はユーザーに確認する。
-6. 未判断、不採用、依存待ち、前提喪失、終了済み、または別の作業者が着手中なら、採否や依存を独断で変えず、ユーザーに状態を報告する。
-7. `axon start` が失敗したら、別の issue を選ばずユーザーに報告する。
+5. 再開を依頼され、すでに着手中なら、claim を奪ったり `axon release` したりせず、既存の申し送りと着手者を確認する。Group の claim は子孫を lock しない。安全に引き継げると判断できない場合はユーザーに確認する。
+6. 新しく start する対象が未判断、不採用、依存待ち、前提喪失、終了済み、または別の作業者が着手中なら、採否や依存を独断で変えず、ユーザーに状態を報告する。既に InProgress なら Disposition にかかわらず、安全な release / done と申し送りの確認を続ける。
+7. `axon start` が失敗したら、別の Entity を選ばずユーザーに報告する。
+
+## Group の進行
+
+Group は子孫を包含する計画範囲であり、Group の start は子孫を自動 start しない。start 後に `axon ready` と `axon triage` で新しく active になった frontier を確認し、依頼された範囲で子孫の判断や実装を進める。ユーザーが Group だけの start を依頼した場合は、子孫を自律的に選んで着手しない。
+
+Group を Rejected にしても自身の Progress / claim と子孫の保存状態は変わらない。配下は active scope 外になり、その Group を dependency target とする Entity は orphaned、`AfterEntity` で待つ Entity は surfaced になり得る。NotStarted の Rejected Group はそのまま terminal であり、claim 解消のために start、release、done を行わない。ただし祖先 Group の完了に非 terminal 子孫の整理が必要なら、その扱いを合意する。InProgress の場合、一時中断または引き渡しなら InProgress の子孫を担当者との合意なく解放せず、その数が 0 になってから Group を release する。恒久的な打ち切りなら、子孫を独断で変更せず、合意に従って全子孫を terminal にするか包含外へ移してから Group を done にし、`Ended × Rejected` にする。Group は子孫から自動終了しないため、計画全体と妨げがないことを `axon show <group-id>` で確認する。非 terminal な子孫が残る場合は done にせず、その ID と状態を報告する。
 
 この確認は axon に記録された本文と関係の整合だけを対象にする。現行コードや設計文書を再調査する外部の実装手順へ、この skill の責務を広げない。
 
 ## 申し送り
 
-作業を途中で止める場合は、再開に必要な現在地、残作業、検証状況を description に残し、`axon done <id>` を実行しない。`axon write` は description の全文置換なので、既存本文を `axon show` で読み、必要な情報と申し送りの両方を含む全文を渡す。
+作業を途中で止める場合は、再開に必要な現在地、残作業、検証状況を description に残し、恒久的な完了や打ち切りでなければ `axon done <id>` を実行しない。`axon write` は description の全文置換なので、既存本文を `axon show` で読み、必要な情報と申し送りの両方を含む全文を渡す。
+
+一時中断または引き渡しで claim を手放す合意がある場合は、申し送りを全文反映した後に `axon release <id> -r <reason>` を単独で実行する。Group は InProgress の子孫が 0 件であることを先に確認し、子孫を担当者との合意なく release しない。`axon show <id>` と `axon claims` で NotStarted と claim 解消を確認し、`axon list`、`axon ready`、`axon triage` で frontier の変化を確認する。
 
 ## 完了
 
-1. issue 本文の目的を達成し、残作業がなければ `axon done <id>` を実行する。
-2. `axon show <id>` で終了状態を確認する。
-3. ユーザーに issue の最終状態を報告する。
+1. `done` は「今後その Entity の作業を進めない」ことを表し、一時中断には使わない。Accepted Entity は本文の目的を達成して残作業がない場合、Rejected Entity は恒久的な打ち切りをユーザーが合意した場合に実行する。Undecided Entity は今後作業しないことをユーザーが明示した場合だけ実行する。Group はどの Disposition でも、加えて全子孫が terminal でなければならない。
+2. `done` 前に `axon list` の全 ID を列挙してそれぞれ `axon show <id>` を実行し、対象を参照する `Resurface condition: AfterEntity(...)` を探す。見つけた waiter とその祖先 Group を記録する。
+3. 条件を満たす InProgress Entity に `axon done <id>` を実行する。
+4. `axon show <id>` で終了状態を確認する。
+5. terminal にした Entity に親 Group がある場合は InProgress の祖先 Group を順に `axon show` し、現在 done できるかと残る非 terminal 子孫を確認する。祖先 Group の進行が依頼範囲に含まれない限り、自動で done にしない。
+6. `done` / `decide`、dependency の追加・削除、Resurface condition の変更、Group の activation gate を変える `start` / `release` を行った場合は、kind を問わず関連 Entity の `show` と `axon list`、`axon ready`、`axon triage` で dependent、手順 2 で見つけた `AfterEntity` waiter とその Group ancestry、Group 子孫、frontier への波及を確認する。
+7. ユーザーに Entity の最終状態、完了可能になった祖先 Group、関連 Entity と frontier への波及を報告する。
 
 未解決の完了条件が残る場合は `axon done <id>` を実行しない。

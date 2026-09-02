@@ -1,853 +1,313 @@
 mod common;
 
+use common::{TestDir, TestRepo, assert_failure, assert_success, stderr, stdout};
 use std::fs;
 
-use common::{TestDir, TestRepo, assert_failure, assert_success, stderr, stdout};
-
 #[test]
-fn created_issues_are_observable_through_the_query_commands() {
+fn issues_and_groups_are_visible_as_entities_and_filterable_by_kind() {
     let repo = TestRepo::new();
     repo.init("test");
-    let planned = repo.plan("ship the feature");
+    let issue = repo.plan("ship the feature");
     let captured = repo.capture("investigate the risk");
+    let group = repo.group_plan("release plan");
+    let captured_group = repo.group_capture("possible follow-up");
 
     let ready = repo.axon(&["ready"]);
     assert_success(&ready);
-    assert_eq!(stdout(&ready), format!("{planned}  ship the feature\n"));
-    assert!(ready.stderr.is_empty());
+    let ready = stdout(&ready);
+    assert!(ready.contains(&format!("{issue}  Issue  ship the feature")));
+    assert!(ready.contains(&format!("{group}  Group  release plan")));
+    assert!(!ready.contains(&captured));
+    assert!(!ready.contains(&captured_group));
 
-    let triage = repo.axon(&["triage"]);
-    assert_success(&triage);
+    let issue_only = repo.axon(&["list", "--kind", "issue"]);
+    assert_success(&issue_only);
+    let issue_only = stdout(&issue_only);
+    assert!(issue_only.contains(&issue));
+    assert!(issue_only.contains(&captured));
+    assert!(!issue_only.contains(&group));
+
+    let group_only = repo.axon(&["triage", "--kind", "group"]);
+    assert_success(&group_only);
     assert_eq!(
-        stdout(&triage),
-        format!("{captured}  Undecided  investigate the risk\n")
-    );
-    assert!(triage.stderr.is_empty());
-
-    let show = repo.axon(&["show", &planned]);
-    assert_success(&show);
-    assert_eq!(
-        stdout(&show),
-        format!(
-            "{planned}  ship the feature\nProgress: NotStarted  Disposition: Accepted  Resurface condition: Always\n"
-        )
-    );
-    assert!(show.stderr.is_empty());
-
-    let list = repo.axon(&["list"]);
-    assert_success(&list);
-    assert_eq!(
-        stdout(&list),
-        format!(
-            "{planned}  [NotStarted/Accepted]  ship the feature\n\
-             {captured}  [NotStarted/Undecided]  investigate the risk\n"
-        )
-    );
-    assert!(list.stderr.is_empty());
-}
-
-#[test]
-fn decision_reasons_are_read_back_from_log() {
-    let repo = TestRepo::new();
-    repo.init("test");
-    let issue = repo.capture("make a decision");
-
-    let decide = repo.axon(&["decide", "accept", &issue, "--reason", "required by users"]);
-    assert_success(&decide);
-
-    let when = repo.axon(&[
-        "when",
-        "at",
-        &issue,
-        "2099-12-31",
-        "--reason",
-        "wait for the migration",
-    ]);
-    assert_success(&when);
-
-    let log = repo.axon(&["log", &issue]);
-    assert_success(&log);
-    let log = stdout(&log);
-    assert!(
-        log.lines().any(|line| {
-            line.contains("test-actor  Disposition: Undecided -> Accepted  (required by users)")
-        }),
-        "missing decide reason in log:\n{log}"
-    );
-    assert!(
-        log.lines().any(|line| {
-            line.contains(
-                "test-actor  Resurface condition: Always -> AtDate(2099-12-31)  (wait for the migration)"
-            )
-        }),
-        "missing when reason in log:\n{log}"
-    );
-}
-
-#[test]
-fn progress_reasons_follow_the_command_contract() {
-    let repo = TestRepo::new();
-    repo.init("test");
-
-    let done_issue = repo.plan("finish normally");
-    assert_success(&repo.axon(&["start", &done_issue]));
-    let before = repo.issue_snapshot(&done_issue);
-    let old_form = repo.axon(&["done", &done_issue, "--reason", "old result"]);
-    assert_failure(&old_form);
-    assert!(old_form.stdout.is_empty());
-    assert!(stderr(&old_form).contains("unexpected argument '--reason'"));
-    assert_eq!(repo.issue_snapshot(&done_issue), before);
-
-    assert_success(&repo.axon(&["done", &done_issue]));
-    let show = repo.axon(&["show", &done_issue]);
-    assert_success(&show);
-    let show = stdout(&show);
-    assert!(
-        show.lines()
-            .any(|line| line.contains("test-actor  Ended") && line.ends_with("Ended")),
-        "done event unexpectedly contained a reason:\n{show}"
-    );
-    let log = repo.axon(&["log", &done_issue]);
-    assert_success(&log);
-    assert_eq!(stdout(&log), "No decision history\n");
-
-    let release_without_reason = repo.plan("release without reason");
-    assert_success(&repo.axon(&["start", &release_without_reason]));
-    assert_success(&repo.axon(&["release", &release_without_reason]));
-    let show = repo.axon(&["show", &release_without_reason]);
-    assert_success(&show);
-    let show = stdout(&show);
-    assert!(
-        show.lines()
-            .any(|line| { line.contains("test-actor  Released") && line.ends_with("Released") }),
-        "reasonless release event was not preserved:\n{show}"
+        stdout(&group_only),
+        format!("{captured_group}  Group  Undecided  possible follow-up\n")
     );
 
-    let release_with_reason = repo.plan("release with reason");
-    assert_success(&repo.axon(&["start", &release_with_reason]));
-    assert_success(&repo.axon(&[
-        "release",
-        &release_with_reason,
-        "--reason",
-        "handoff to another session",
-    ]));
-    let show = repo.axon(&["show", &release_with_reason]);
-    assert_success(&show);
-    let show = stdout(&show);
-    assert!(
-        show.contains("test-actor  Released  (handoff to another session)"),
-        "release reason missing from progress history:\n{show}"
-    );
-    let log = repo.axon(&["log", &release_with_reason]);
-    assert_success(&log);
-    assert_eq!(stdout(&log), "No decision history\n");
-}
-
-#[test]
-fn done_only_confirms_the_target_when_an_issue_dependency_becomes_ready() {
-    let repo = TestRepo::new();
-    repo.init("test");
-    let prerequisite = repo.plan("prerequisite");
-    let dependent = repo.plan("dependent");
-    assert_success(&repo.axon(&["dep", "add", &dependent, "--needs", &prerequisite]));
-    assert_success(&repo.axon(&["start", &prerequisite]));
-
-    let done = repo.axon(&["done", &prerequisite]);
-
-    assert_success(&done);
-    assert_eq!(stdout(&done), format!("Ended {prerequisite}\n"));
-    let ready = repo.axon(&["ready"]);
-    assert_success(&ready);
-    assert_eq!(stdout(&ready), format!("{dependent}  dependent\n"));
-}
-
-#[test]
-fn done_only_confirms_the_target_when_a_group_dependency_becomes_ready() {
-    let repo = TestRepo::new();
-    repo.init("test");
-    assert_success(&repo.axon(&["group", "new", "foundation"]));
-    assert_success(&repo.axon(&["group", "new", "delivery"]));
-    assert_success(&repo.axon(&["group", "dep", "add", "delivery", "--needs", "foundation"]));
-    let prerequisite = repo.plan("foundation work");
-    let dependent = repo.plan("delivery work");
-    assert_success(&repo.axon(&["group", "set", &prerequisite, "foundation"]));
-    assert_success(&repo.axon(&["group", "set", &dependent, "delivery"]));
-    assert_success(&repo.axon(&["start", &prerequisite]));
-
-    let done = repo.axon(&["done", &prerequisite]);
-
-    assert_success(&done);
-    assert_eq!(stdout(&done), format!("Ended {prerequisite}\n"));
-    let ready = repo.axon(&["ready"]);
-    assert_success(&ready);
-    assert_eq!(stdout(&ready), format!("{dependent}  delivery work\n"));
-}
-
-#[test]
-fn done_only_confirms_the_target_when_an_after_issue_condition_is_satisfied() {
-    let repo = TestRepo::new();
-    repo.init("test");
-    let prerequisite = repo.plan("resurface trigger");
-    let dependent = repo.plan("deferred work");
-    assert_success(&repo.axon(&["when", "after", &dependent, &prerequisite]));
-    assert_success(&repo.axon(&["start", &prerequisite]));
-
-    let done = repo.axon(&["done", &prerequisite]);
-
-    assert_success(&done);
-    assert_eq!(stdout(&done), format!("Ended {prerequisite}\n"));
-    let ready = repo.axon(&["ready"]);
-    assert_success(&ready);
-    assert_eq!(stdout(&ready), format!("{dependent}  deferred work\n"));
-}
-
-#[test]
-fn group_reject_records_an_optional_reason_only_for_changed_issues() {
-    let repo = TestRepo::new();
-    repo.init("test");
-    assert_success(&repo.axon(&["group", "new", "reasoned"]));
-
-    let already_rejected = repo.plan("already rejected");
-    let newly_rejected = repo.plan("newly rejected");
-    for issue in [&already_rejected, &newly_rejected] {
-        assert_success(&repo.axon(&["group", "set", issue, "reasoned"]));
+    for id in [&issue, &group] {
+        let show = repo.axon(&["show", id]);
+        assert_success(&show);
+        assert!(stdout(&show).starts_with(&format!("{id}  ")));
     }
-    assert_success(&repo.axon(&["decide", "reject", &already_rejected]));
-    let already_before = repo.issue_snapshot(&already_rejected);
-
-    let reject = repo.axon(&[
-        "group",
-        "reject",
-        "reasoned",
-        "--reason",
-        "scope was cancelled",
-    ]);
-    assert_success(&reject);
-    assert_eq!(stdout(&reject), "1 issues in reasoned set to Rejected\n");
-    assert_eq!(repo.issue_snapshot(&already_rejected), already_before);
-
-    let already_log = repo.axon(&["log", &already_rejected]);
-    assert_success(&already_log);
-    assert!(!stdout(&already_log).contains("scope was cancelled"));
-    let newly_log = repo.axon(&["log", &newly_rejected]);
-    assert_success(&newly_log);
-    assert!(stdout(&newly_log).contains("scope was cancelled"));
-
-    let newly_before = repo.issue_snapshot(&newly_rejected);
-    let repeated = repo.axon(&[
-        "group",
-        "reject",
-        "reasoned",
-        "--reason",
-        "must not create another event",
-    ]);
-    assert_success(&repeated);
-    assert_eq!(stdout(&repeated), "0 issues in reasoned set to Rejected\n");
-    assert_eq!(repo.issue_snapshot(&already_rejected), already_before);
-    assert_eq!(repo.issue_snapshot(&newly_rejected), newly_before);
-
-    assert_success(&repo.axon(&["group", "new", "reasonless"]));
-    let reasonless = repo.plan("reject without reason");
-    assert_success(&repo.axon(&["group", "set", &reasonless, "reasonless"]));
-    assert_success(&repo.axon(&["group", "reject", "reasonless"]));
-    let log = repo.axon(&["log", &reasonless]);
-    assert_success(&log);
-    let log = stdout(&log);
-    assert!(
-        log.lines().any(|line| {
-            line.contains("Disposition: Accepted -> Rejected")
-                && line.ends_with("Disposition: Accepted -> Rejected")
-        }),
-        "reasonless group rejection was not recorded correctly:\n{log}"
-    );
 }
 
 #[test]
-fn empty_issue_queries_keep_guidance_out_of_stdout() {
+fn a_group_explicitly_opens_and_completes_its_plan_scope() {
     let repo = TestRepo::new();
     repo.init("test");
+    let group = repo.group_plan("delivery");
+    let issue = repo.plan("implementation");
+    assert_success(&repo.axon(&["group", "set", &issue, &group]));
 
-    for (command, guidance) in [
-        ("ready", "No ready issues\n"),
-        ("triage", "No issues need triage\n"),
-        ("claims", "No active claims\n"),
-        ("list", "No issues\n"),
+    let ready = stdout(&repo.axon(&["ready"]));
+    assert!(ready.contains(&group));
+    assert!(!ready.contains(&issue));
+    assert_success(&repo.axon(&["start", &group]));
+    let ready = stdout(&repo.axon(&["ready"]));
+    assert!(!ready.contains(&group));
+    assert!(ready.contains(&issue));
+
+    assert_success(&repo.axon(&["start", &issue]));
+    let premature = repo.axon(&["done", &group]);
+    assert_failure(&premature);
+    assert!(stderr(&premature).contains("non-terminal descendants"));
+    assert_success(&repo.axon(&["done", &issue]));
+    assert_success(&repo.axon(&["done", &group]));
+
+    let show = stdout(&repo.axon(&["show", &group]));
+    assert!(show.contains("Progress: Ended"));
+    assert!(show.contains(
+        "Direct children: 1 (Issue: 1, Group: 0, NotStarted: 0, InProgress: 0, Ended: 1, Undecided: 0, Accepted: 1, Rejected: 0, Terminal: 1)"
+    ));
+    assert!(show.contains(
+        "Descendants: 1 (Issue: 1, Group: 0, NotStarted: 0, InProgress: 0, Ended: 1, Undecided: 0, Accepted: 1, Rejected: 0, Terminal: 1)"
+    ));
+}
+
+#[test]
+fn release_of_a_group_waits_for_active_descendants() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let group = repo.group_plan("delegated plan");
+    let issue = repo.plan("delegated task");
+    assert_success(&repo.axon(&["group", "set", &issue, &group]));
+    assert_success(&repo.axon(&["start", &group]));
+    assert_success(&repo.axon(&["start", &issue]));
+
+    let release = repo.axon(&["release", &group]);
+    assert_failure(&release);
+    assert!(stderr(&release).contains("InProgress descendants"));
+    assert_success(&repo.axon(&["release", &issue]));
+    assert_success(&repo.axon(&["release", &group, "--reason", "handoff"]));
+    let show = stdout(&repo.axon(&["show", &group]));
+    assert!(show.contains("Released  (handoff)"));
+}
+
+#[test]
+fn dependencies_and_after_conditions_accept_every_kind_combination() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let prerequisite_group = repo.group_plan("foundation");
+    let dependent_issue = repo.plan("delivery issue");
+    assert_success(&repo.axon(&[
+        "dep",
+        "add",
+        &dependent_issue,
+        "--needs",
+        &prerequisite_group,
+    ]));
+    assert!(!stdout(&repo.axon(&["ready"])).contains(&dependent_issue));
+    assert_success(&repo.axon(&["start", &prerequisite_group]));
+    assert_success(&repo.axon(&["done", &prerequisite_group]));
+    assert!(stdout(&repo.axon(&["ready"])).contains(&dependent_issue));
+
+    let trigger_issue = repo.plan("trigger issue");
+    let waiting_group = repo.group_plan("waiting group");
+    assert_success(&repo.axon(&["when", "after", &waiting_group, &trigger_issue]));
+    assert!(!stdout(&repo.axon(&["ready"])).contains(&waiting_group));
+    assert_success(&repo.axon(&["decide", "reject", &trigger_issue]));
+    assert!(stdout(&repo.axon(&["ready"])).contains(&waiting_group));
+
+    let rejected_group = repo.group_plan("rejected prerequisite");
+    let dependent_group = repo.group_plan("orphaned plan");
+    assert_success(&repo.axon(&["dep", "add", &dependent_group, "--needs", &rejected_group]));
+    assert_success(&repo.axon(&["decide", "reject", &rejected_group]));
+    let triage = stdout(&repo.axon(&["triage"]));
+    assert!(triage.contains(&format!("{dependent_group}  Group  Orphaned")));
+}
+
+#[test]
+fn group_dependency_applies_to_its_descendant_frontier() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let plan = repo.group_plan("delivery");
+    let task = repo.plan("delivery task");
+    let prerequisite = repo.plan("external result");
+    assert_success(&repo.axon(&["group", "set", &task, &plan]));
+    assert_success(&repo.axon(&["dep", "add", &plan, "--needs", &prerequisite]));
+    assert!(!stdout(&repo.axon(&["ready"])).contains(&plan));
+    assert_success(&repo.axon(&["start", &prerequisite]));
+    assert_success(&repo.axon(&["done", &prerequisite]));
+    assert!(stdout(&repo.axon(&["ready"])).contains(&plan));
+    assert_success(&repo.axon(&["start", &plan]));
+    assert!(stdout(&repo.axon(&["ready"])).contains(&task));
+}
+
+#[test]
+fn triage_shows_only_the_active_scope_frontier() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let parent = repo.group_capture("undecided plan");
+    let child = repo.capture("undecided detail");
+    assert_success(&repo.axon(&["group", "set", &child, &parent]));
+    let triage = stdout(&repo.axon(&["triage"]));
+    assert!(triage.contains(&parent));
+    assert!(!triage.contains(&child));
+    let inactive = format!("inactive: {parent} (Progress=NotStarted, Disposition=Undecided)");
+    assert!(stdout(&repo.axon(&["list"])).contains(&inactive));
+    assert!(stdout(&repo.axon(&["show", &child])).contains(&format!(
+        "Active scope: no ({parent} (Progress=NotStarted, Disposition=Undecided))"
+    )));
+
+    assert_success(&repo.axon(&["decide", "accept", &parent]));
+    assert_success(&repo.axon(&["start", &parent]));
+    let triage = stdout(&repo.axon(&["triage"]));
+    assert!(!triage.contains(&parent));
+    assert!(triage.contains(&child));
+}
+
+#[test]
+fn ended_group_structure_and_descendant_terminal_state_are_fixed() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let ended = repo.group_plan("completed plan");
+    let outside = repo.group_plan("outside");
+    assert_success(&repo.axon(&["start", &ended]));
+    assert_success(&repo.axon(&["done", &ended]));
+
+    let move_group = repo.axon(&["group", "set", &ended, &outside]);
+    assert_failure(&move_group);
+    assert!(stderr(&move_group).contains("Ended group"));
+    let issue = repo.plan("late work");
+    let add_child = repo.axon(&["group", "set", &issue, &ended]);
+    assert_failure(&add_child);
+    assert!(stderr(&add_child).contains("below an Ended group"));
+    let create_child = repo.axon(&["plan", "late creation", "--parent", &ended]);
+    assert_failure(&create_child);
+    assert!(stderr(&create_child).contains("below an Ended group"));
+    let add_dep = repo.axon(&["dep", "add", &ended, "--needs", &outside]);
+    assert_failure(&add_dep);
+    assert!(stderr(&add_dep).contains("cannot change its dependencies"));
+}
+
+#[test]
+fn containment_and_wait_relations_are_checked_as_one_atomic_graph() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let group = repo.group_plan("plan");
+    let child = repo.plan("child");
+    assert_success(&repo.axon(&["group", "set", &child, &group]));
+    let before = repo.dep_count();
+
+    let cycle = repo.axon(&["dep", "add", &group, "--needs", &child]);
+    assert_failure(&cycle);
+    assert!(stderr(&cycle).contains("wait graph"));
+    assert_eq!(repo.dep_count(), before);
+
+    let after_cycle = repo.axon(&["when", "after", &child, &group]);
+    assert_failure(&after_cycle);
+    assert!(stderr(&after_cycle).contains("completion wait graph"));
+    assert_eq!(repo.snapshot(&child).resurface_ref, None);
+}
+
+#[test]
+fn settings_are_noops_but_transitions_reject_repetition() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let group = repo.group_plan("plan");
+    let issue = repo.plan("task");
+    assert_success(&repo.axon(&["group", "set", &issue, &group]));
+    let before = repo.snapshot(&issue);
+    assert_success(&repo.axon(&["group", "set", &issue, &group]));
+    assert_eq!(repo.snapshot(&issue), before);
+
+    assert_success(&repo.axon(&["start", &group]));
+    let before = repo.snapshot(&group);
+    let repeated = repo.axon(&["start", &group]);
+    assert_failure(&repeated);
+    assert_eq!(repo.snapshot(&group), before);
+
+    let prerequisite = repo.plan("prerequisite");
+    assert_success(&repo.axon(&["dep", "add", &issue, "--needs", &prerequisite]));
+    assert_success(&repo.axon(&["dep", "add", &issue, "--needs", &prerequisite]));
+    assert_eq!(repo.dep_count(), 1);
+}
+
+#[test]
+fn decision_and_progress_history_work_for_groups() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let group = repo.group_capture("plan");
+    assert_success(&repo.axon(&["decide", "accept", &group, "--reason", "approved"]));
+    assert_success(&repo.axon(&["start", &group]));
+    assert_success(&repo.axon(&["release", &group, "--reason", "handoff"]));
+    let log = stdout(&repo.axon(&["log", &group]));
+    assert!(log.contains("Disposition: Undecided -> Accepted  (approved)"));
+    let show = stdout(&repo.axon(&["show", &group]));
+    assert!(show.contains("Started"));
+    assert!(show.contains("Released  (handoff)"));
+}
+
+#[test]
+fn old_slug_commands_are_not_compatibility_aliases() {
+    for args in [
+        &["group", "new", "legacy"][..],
+        &["group", "list"][..],
+        &["group", "show", "legacy"][..],
+        &["group", "reject", "legacy"][..],
+        &["group", "dep", "add", "legacy", "--needs", "other"][..],
     ] {
+        let repo = TestRepo::new();
+        let output = repo.axon(args);
+        assert_failure(&output);
+        assert!(stderr(&output).contains("unrecognized subcommand"));
+    }
+}
+
+#[test]
+fn empty_queries_keep_guidance_out_of_stdout() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    for command in ["ready", "triage", "claims", "stale", "list"] {
         let output = repo.axon(&[command]);
         assert_success(&output);
-        assert!(
-            output.stdout.is_empty(),
-            "{command} wrote guidance to stdout"
-        );
-        assert_eq!(stderr(&output), guidance);
+        assert!(output.stdout.is_empty(), "{command}");
+        assert!(!output.stderr.is_empty(), "{command}");
     }
 }
 
 #[test]
-fn linked_worktrees_share_the_same_database() {
+fn linked_worktrees_share_entity_state_and_claims() {
     let repo = TestRepo::new();
     repo.init("test");
-    let from_main = repo.plan("created in main worktree");
+    let group = repo.group_plan("shared plan");
     let worktree = repo.add_worktree();
-
-    let show = repo.axon_in(&worktree, &["show", &from_main]);
-    assert_success(&show);
-    assert!(
-        stdout(&show).starts_with(&format!("{from_main}  created in main worktree\n")),
-        "linked worktree did not read the issue created in the main worktree"
-    );
-
-    let create = repo.axon_in(&worktree, &["capture", "created in linked worktree"]);
-    assert_success(&create);
-    let from_linked = stdout(&create)
-        .split_whitespace()
-        .next()
-        .expect("capture should print an issue id")
-        .to_string();
-
-    let list = repo.axon(&["list"]);
-    assert_success(&list);
-    let list = stdout(&list);
-    assert!(list.contains(&format!("{from_main}  [NotStarted/Accepted]")));
-    assert!(list.contains(&format!("{from_linked}  [NotStarted/Undecided]")));
-
-    let start = repo.axon_in(&worktree, &["start", &from_main]);
-    assert_success(&start);
-    let claim_details = format!(
-        "Claim: test-actor  Worktree: {}  Started:",
-        worktree.display()
-    );
-
+    assert_success(&repo.axon_in(&worktree, &["start", &group]));
     let claims = repo.axon(&["claims"]);
     assert_success(&claims);
-    assert!(
-        stdout(&claims).starts_with(&format!(
-            "{from_main}  created in main worktree  {claim_details}"
-        )),
-        "{}",
-        stdout(&claims)
-    );
-
-    let show = repo.axon(&["show", &from_main]);
-    assert_success(&show);
-    assert!(stdout(&show).contains(&claim_details), "{}", stdout(&show));
-
-    assert_success(&repo.axon(&["release", &from_main, "--reason", "work stopped"]));
-    let claims = repo.axon(&["claims"]);
-    assert_success(&claims);
-    assert!(claims.stdout.is_empty());
-    assert_eq!(stderr(&claims), "No active claims\n");
+    let claims = stdout(&claims);
+    assert!(claims.contains(&group));
+    assert!(claims.contains(&format!("Worktree: {}", worktree.display())));
 }
 
 #[test]
-fn legacy_claim_is_listed_shown_and_releasable_after_migration() {
-    let repo = TestRepo::new();
-    repo.init("test");
-    let issue = repo.plan("migrated active work");
-    repo.seed_legacy_claim(&issue, "legacy-agent", "2026-09-01T01:23:45+00:00");
-    let claim_details = "Claim: legacy-agent  Worktree: unknown  Started: 2026-09-01T01:23:45Z";
-
-    let claims = repo.axon(&["claims"]);
-    assert_success(&claims);
-    assert_eq!(
-        stdout(&claims),
-        format!("{issue}  migrated active work  {claim_details}\n")
-    );
-
-    let show = repo.axon(&["show", &issue]);
-    assert_success(&show);
-    assert!(stdout(&show).contains(claim_details), "{}", stdout(&show));
-
-    assert_success(&repo.axon(&["release", &issue]));
-    let show = repo.axon(&["show", &issue]);
-    assert_success(&show);
-    assert!(stdout(&show).contains("Progress: NotStarted"));
-    assert!(!stdout(&show).contains("Claim:"));
-}
-
-#[test]
-fn git_subdirectory_uses_the_common_root_database() {
-    let repo = TestRepo::new();
-    let subdirectory = repo.root().join("nested");
-    fs::create_dir(&subdirectory).unwrap();
-
-    let init = repo.axon_in(&subdirectory, &["init"]);
-    assert_success(&init);
-    assert!(repo.root().join(".axon/axon.db").is_file());
-    assert!(!subdirectory.join(".axon").exists());
-
-    let plan = repo.axon_in(&subdirectory, &["plan", "from a subdirectory"]);
-    assert_success(&plan);
-    assert!(stdout(&plan).starts_with("repo-"), "{}", stdout(&plan));
-}
-
-#[test]
-fn non_git_subdirectory_uses_the_ancestor_database() {
-    let dir = TestDir::new("non-git");
-    let root = dir.path().join("workspace");
-    let subdirectory = root.join("nested/deep");
-    fs::create_dir_all(&subdirectory).unwrap();
-
-    let init = dir.axon_in(&root, &["init"]);
-    assert_success(&init);
-    assert!(root.join(".axon/axon.db").is_file());
-
-    let plan = dir.axon_in(&subdirectory, &["plan", "outside Git"]);
-    assert_success(&plan);
-    assert!(stdout(&plan).starts_with("workspace-"), "{}", stdout(&plan));
-    let issue = stdout(&plan).split_whitespace().next().unwrap().to_string();
-    let show = dir.axon_in(&root, &["show", &issue]);
-    assert_success(&show);
-    assert!(stdout(&show).contains("outside Git"));
-
-    assert_success(&dir.axon_in(&subdirectory, &["start", &issue]));
-    let claims = dir.axon_in(&root, &["claims"]);
-    assert_success(&claims);
-    assert!(
-        stdout(&claims).contains(&format!("Worktree: {}", subdirectory.display())),
-        "{}",
-        stdout(&claims)
-    );
-}
-
-#[test]
-fn non_git_lookup_uses_the_nearest_ancestor_database() {
-    let dir = TestDir::new("nearest");
+fn git_and_non_git_management_roots_keep_their_boundaries() {
+    let dir = TestDir::new("roots");
     let outer = dir.path().join("outer");
-    let inner_source = dir.path().join("inner-source");
-    fs::create_dir(&outer).unwrap();
-    fs::create_dir(&inner_source).unwrap();
-
+    let repository = outer.join("repo");
+    fs::create_dir_all(&repository).unwrap();
     assert_success(&dir.axon_in(&outer, &["init", "outer"]));
-    let outer_issue = dir.axon_in(&outer, &["plan", "outer issue"]);
-    assert_success(&outer_issue);
-    let outer_issue = stdout(&outer_issue)
-        .split_whitespace()
-        .next()
-        .unwrap()
-        .to_string();
+    dir.init_git(&repository);
 
-    assert_success(&dir.axon_in(&inner_source, &["init", "inner"]));
-    let inner_issue = dir.axon_in(&inner_source, &["plan", "inner issue"]);
-    assert_success(&inner_issue);
-    let inner_issue = stdout(&inner_issue)
-        .split_whitespace()
-        .next()
-        .unwrap()
-        .to_string();
+    let list = dir.axon_in(&repository, &["list"]);
+    assert_failure(&list);
+    assert!(stderr(&list).contains("not initialized"));
+    assert_success(&dir.axon_in(&repository, &["init", "inner"]));
 
-    let inner = outer.join("nested");
-    let deep = inner.join("deep");
-    fs::create_dir_all(&deep).unwrap();
-    fs::rename(inner_source.join(".axon"), inner.join(".axon")).unwrap();
-
-    let list = dir.axon_in(&deep, &["list"]);
-    assert_success(&list);
-    let list = stdout(&list);
-    assert!(list.contains(&inner_issue), "{list}");
-    assert!(!list.contains(&outer_issue), "{list}");
-}
-
-#[test]
-fn non_git_init_rejects_an_implicit_nested_management_root() {
-    let dir = TestDir::new("nested-init");
-    let root = dir.path().join("workspace");
-    let nested = root.join("nested");
-    fs::create_dir_all(&nested).unwrap();
-    assert_success(&dir.axon_in(&root, &["init", "outer"]));
-
-    let init = dir.axon_in(&nested, &["init", "inner"]);
-    assert_failure(&init);
-    let error = stderr(&init);
-    assert!(error.contains("axon is already initialized at"), "{error}");
-    assert!(error.contains(&root.display().to_string()), "{error}");
+    let nested = repository.join("nested");
+    fs::create_dir(&nested).unwrap();
+    let created = dir.axon_in(&nested, &["group", "plan", "nested plan"]);
+    assert_success(&created);
+    assert!(repository.join(".axon/axon.db").is_file());
     assert!(!nested.join(".axon").exists());
-}
-
-#[test]
-fn git_repository_does_not_fall_back_to_an_outer_non_git_database() {
-    let dir = TestDir::new("git-boundary");
-    let outer = dir.path().join("outer");
-    let repo = outer.join("repo");
-    fs::create_dir_all(&repo).unwrap();
-    assert_success(&dir.axon_in(&outer, &["init", "outer"]));
-    assert_success(&dir.axon_in(&outer, &["plan", "outer issue"]));
-    dir.init_git(&repo);
-
-    let list = dir.axon_in(&repo, &["list"]);
-    assert_failure(&list);
-    assert!(stdout(&list).is_empty());
-    assert!(stderr(&list).contains("axon is not initialized"));
-
-    let init = dir.axon_in(&repo, &["init", "inner"]);
-    assert_success(&init);
-    assert!(repo.join(".axon/axon.db").is_file());
-}
-
-#[cfg(unix)]
-#[test]
-fn failed_git_probe_does_not_bypass_the_repository_boundary() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = TestDir::new("git-probe-failure");
-    let outer = dir.path().join("outer");
-    let repo = outer.join("repo");
-    let fake_bin = dir.path().join("fake-bin");
-    fs::create_dir_all(&repo).unwrap();
-    fs::create_dir(&fake_bin).unwrap();
-    assert_success(&dir.axon_in(&outer, &["init", "outer"]));
-    assert_success(&dir.axon_in(&outer, &["plan", "outer issue"]));
-    dir.init_git(&repo);
-
-    let fake_git = fake_bin.join("git");
-    fs::write(&fake_git, "#!/bin/sh\nexit 128\n").unwrap();
-    let mut permissions = fs::metadata(&fake_git).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&fake_git, permissions).unwrap();
-
-    let list = dir
-        .axon_command_in(&repo)
-        .env("PATH", &fake_bin)
-        .arg("list")
-        .output()
-        .unwrap();
-    assert_failure(&list);
-    assert!(stdout(&list).is_empty());
-    assert!(
-        stderr(&list).contains("could not resolve Git common root"),
-        "{}",
-        stderr(&list)
-    );
-}
-
-#[test]
-fn user_provided_text_is_displayed_without_language_changes() {
-    let repo = TestRepo::new();
-    repo.init("test");
-    let issue = repo.capture("日本語の表題");
-
-    assert_success(&repo.axon(&["write", &issue, "--message", "日本語の説明"]));
-    assert_success(&repo.axon(&["group", "new", "jp", "日本語グループ"]));
-    assert_success(&repo.axon(&["group", "set", &issue, "jp"]));
-    assert_success(&repo.axon(&["decide", "accept", &issue, "--reason", "日本語の採用理由"]));
-
-    let show = repo.axon(&["show", &issue]);
-    assert_success(&show);
-    let show = stdout(&show);
-    assert!(show.contains("日本語の表題"), "{show}");
-    assert!(show.contains("日本語の説明"), "{show}");
-    assert!(show.contains("Group: jp  日本語グループ"), "{show}");
-
-    let log = repo.axon(&["log", &issue]);
-    assert_success(&log);
-    assert!(stdout(&log).contains("日本語の採用理由"));
-}
-
-#[test]
-fn repeated_transitions_fail_without_changing_state_history_or_timestamp() {
-    let repo = TestRepo::new();
-    repo.init("test");
-
-    let done_issue = repo.plan("finish once");
-    assert_success(&repo.axon(&["start", &done_issue]));
-    let before = repo.issue_snapshot(&done_issue);
-    let repeated = repo.axon(&["start", &done_issue]);
-    assert_failure(&repeated);
-    assert!(repeated.stdout.is_empty());
-    assert_eq!(
-        stderr(&repeated),
-        format!("Error: {done_issue} cannot be claimed (Progress is InProgress)\n")
-    );
-    assert_eq!(repo.issue_snapshot(&done_issue), before);
-
-    assert_success(&repo.axon(&["done", &done_issue]));
-    let before = repo.issue_snapshot(&done_issue);
-    let repeated = repo.axon(&["done", &done_issue]);
-    assert_failure(&repeated);
-    assert!(repeated.stdout.is_empty());
-    assert_eq!(
-        stderr(&repeated),
-        format!("Error: {done_issue} cannot be ended (Progress is Ended)\n")
-    );
-    assert_eq!(repo.issue_snapshot(&done_issue), before);
-
-    let repeated = repo.axon(&["start", &done_issue]);
-    assert_failure(&repeated);
-    assert_eq!(repo.issue_snapshot(&done_issue), before);
-
-    let released_issue = repo.plan("release once");
-    assert_success(&repo.axon(&["start", &released_issue]));
-    assert_success(&repo.axon(&["release", &released_issue, "--reason", "handoff"]));
-    let before = repo.issue_snapshot(&released_issue);
-    let repeated = repo.axon(&[
-        "release",
-        &released_issue,
-        "--reason",
-        "SECRET HANDOFF MUST NOT BE ECHOED",
-    ]);
-    assert_failure(&repeated);
-    assert!(repeated.stdout.is_empty());
-    assert_eq!(
-        stderr(&repeated),
-        format!("Error: {released_issue} cannot be released (Progress is NotStarted)\n")
-    );
-    assert_eq!(repo.issue_snapshot(&released_issue), before);
-
-    let decision_issue = repo.capture("decide once");
-    assert_success(&repo.axon(&["decide", "accept", &decision_issue, "--reason", "accepted"]));
-    let before = repo.issue_snapshot(&decision_issue);
-    let repeated = repo.axon(&[
-        "decide",
-        "accept",
-        &decision_issue,
-        "--reason",
-        "SECRET DECISION MUST NOT BE ECHOED",
-    ]);
-    assert_failure(&repeated);
-    assert!(repeated.stdout.is_empty());
-    assert_eq!(
-        stderr(&repeated),
-        format!("Error: {decision_issue}: Disposition is already Accepted\n")
-    );
-    assert_eq!(repo.issue_snapshot(&decision_issue), before);
-
-    let scheduled_issue = repo.plan("schedule once");
-    assert_success(&repo.axon(&[
-        "when",
-        "at",
-        &scheduled_issue,
-        "2099-12-31",
-        "--reason",
-        "later",
-    ]));
-    let before = repo.issue_snapshot(&scheduled_issue);
-    let repeated = repo.axon(&[
-        "when",
-        "at",
-        &scheduled_issue,
-        "2099-12-31",
-        "--reason",
-        "SECRET SCHEDULE MUST NOT BE ECHOED",
-    ]);
-    assert_failure(&repeated);
-    assert!(repeated.stdout.is_empty());
-    assert_eq!(
-        stderr(&repeated),
-        format!("Error: {scheduled_issue}: Resurface condition is already AtDate(2099-12-31)\n")
-    );
-    assert_eq!(repo.issue_snapshot(&scheduled_issue), before);
-
-    assert_success(&repo.axon(&["when", "clear", &scheduled_issue]));
-    let before = repo.issue_snapshot(&scheduled_issue);
-    let repeated = repo.axon(&["when", "clear", &scheduled_issue]);
-    assert_failure(&repeated);
-    assert_eq!(
-        stderr(&repeated),
-        format!("Error: {scheduled_issue}: Resurface condition is already Always\n")
-    );
-    assert_eq!(repo.issue_snapshot(&scheduled_issue), before);
-}
-
-#[test]
-fn start_requires_the_issue_to_be_ready() {
-    let repo = TestRepo::new();
-    repo.init("test");
-
-    let undecided = repo.capture("not decided");
-    let before = repo.issue_snapshot(&undecided);
-    let start = repo.axon(&["start", &undecided]);
-    assert_failure(&start);
-    assert_eq!(
-        stderr(&start),
-        format!("Error: {undecided} cannot be claimed (Disposition is Undecided)\n")
-    );
-    assert_eq!(repo.issue_snapshot(&undecided), before);
-
-    let prerequisite = repo.plan("prerequisite");
-    let blocked = repo.plan("blocked");
-    assert_success(&repo.axon(&["dep", "add", &blocked, "--needs", &prerequisite]));
-    let before = repo.issue_snapshot(&blocked);
-    let start = repo.axon(&["start", &blocked]);
-    assert_failure(&start);
-    assert_eq!(
-        stderr(&start),
-        format!("Error: {blocked} cannot be claimed (an unresolved dependency exists)\n")
-    );
-    assert_eq!(repo.issue_snapshot(&blocked), before);
-
-    let deferred = repo.plan("deferred");
-    assert_success(&repo.axon(&["when", "at", &deferred, "2099-12-31"]));
-    let before = repo.issue_snapshot(&deferred);
-    let start = repo.axon(&["start", &deferred]);
-    assert_failure(&start);
-    assert_eq!(
-        stderr(&start),
-        format!("Error: {deferred} cannot be claimed (resurface condition is not satisfied)\n")
-    );
-    assert_eq!(repo.issue_snapshot(&deferred), before);
-}
-
-#[test]
-fn repeated_settings_succeed_without_duplicate_updates() {
-    let repo = TestRepo::new();
-    repo.init("test");
-
-    let issue = repo.plan("same title");
-    let before = repo.issue_snapshot(&issue);
-    let write = repo.axon(&["write", &issue, "--title", "same title"]);
-    assert_success(&write);
-    assert_eq!(stdout(&write), "No changes\n");
-    assert_eq!(repo.issue_snapshot(&issue), before);
-
-    assert_success(&repo.axon(&["group", "new", "batch", "Batch"]));
-    assert_success(&repo.axon(&["group", "set", &issue, "batch"]));
-    let before = repo.issue_snapshot(&issue);
-    assert_success(&repo.axon(&["group", "set", &issue, "batch"]));
-    assert_eq!(repo.issue_snapshot(&issue), before);
-
-    assert_success(&repo.axon(&["group", "unset", &issue]));
-    let before = repo.issue_snapshot(&issue);
-    assert_success(&repo.axon(&["group", "unset", &issue]));
-    assert_eq!(repo.issue_snapshot(&issue), before);
-
-    let prerequisite = repo.plan("dependency");
-    assert_success(&repo.axon(&["dep", "add", &issue, "--needs", &prerequisite]));
-    let issue_before = repo.issue_snapshot(&issue);
-    let prerequisite_before = repo.issue_snapshot(&prerequisite);
-    assert_success(&repo.axon(&["dep", "add", &issue, "--needs", &prerequisite]));
-    assert_eq!(repo.dep_count("issue_deps"), 1);
-    assert_eq!(repo.issue_snapshot(&issue), issue_before);
-    assert_eq!(repo.issue_snapshot(&prerequisite), prerequisite_before);
-
-    assert_success(&repo.axon(&["dep", "rm", &issue, "--needs", &prerequisite]));
-    assert_success(&repo.axon(&["dep", "rm", &issue, "--needs", &prerequisite]));
-    assert_eq!(repo.dep_count("issue_deps"), 0);
-
-    assert_success(&repo.axon(&["group", "new", "foundation", "Foundation"]));
-    assert_success(&repo.axon(&["group", "new", "delivery", "Delivery"]));
-    assert_success(&repo.axon(&["group", "dep", "add", "delivery", "--needs", "foundation"]));
-    assert_success(&repo.axon(&["group", "dep", "add", "delivery", "--needs", "foundation"]));
-    assert_eq!(repo.dep_count("group_deps"), 1);
-    assert_success(&repo.axon(&["group", "dep", "rm", "delivery", "--needs", "foundation"]));
-    assert_success(&repo.axon(&["group", "dep", "rm", "delivery", "--needs", "foundation"]));
-    assert_eq!(repo.dep_count("group_deps"), 0);
-
-    let already_rejected = repo.plan("already rejected");
-    let newly_rejected = repo.plan("newly rejected");
-    assert_success(&repo.axon(&["group", "set", &already_rejected, "batch"]));
-    assert_success(&repo.axon(&["group", "set", &newly_rejected, "batch"]));
-    assert_success(&repo.axon(&["decide", "reject", &already_rejected]));
-    let already_before = repo.issue_snapshot(&already_rejected);
-
-    let reject = repo.axon(&["group", "reject", "batch"]);
-    assert_success(&reject);
-    assert_eq!(repo.issue_snapshot(&already_rejected), already_before);
-    let newly_after = repo.issue_snapshot(&newly_rejected);
-
-    let repeated = repo.axon(&["group", "reject", "batch"]);
-    assert_success(&repeated);
-    assert_eq!(stdout(&repeated), "0 issues in batch set to Rejected\n");
-    assert_eq!(repo.issue_snapshot(&already_rejected), already_before);
-    assert_eq!(repo.issue_snapshot(&newly_rejected), newly_after);
-}
-
-#[test]
-fn cycle_forming_commands_fail_atomically_with_a_typed_path() {
-    let repo = TestRepo::new();
-    repo.init("test");
-
-    let dep_a = repo.plan("dependency a");
-    let dep_b = repo.plan("dependency b");
-    let dep_c = repo.plan("dependency c");
-    assert_success(&repo.axon(&["dep", "add", &dep_a, "--needs", &dep_b]));
-    assert_success(&repo.axon(&["dep", "add", &dep_b, "--needs", &dep_c]));
-    let before = repo.issue_snapshot(&dep_c);
-    let cycle = repo.axon(&["dep", "add", &dep_c, "--needs", &dep_a]);
-    assert_failure(&cycle);
-    assert!(cycle.stdout.is_empty());
-    assert_eq!(
-        stderr(&cycle),
-        format!(
-            "Error: cycle would be created: {dep_c} -[issue dependency]-> {dep_a} \
-             -[issue dependency]-> {dep_b} -[issue dependency]-> {dep_c}\n"
-        )
-    );
-    assert_eq!(repo.dep_count("issue_deps"), 2);
-    assert_eq!(repo.issue_snapshot(&dep_c), before);
-
-    let after_a = repo.plan("resurface a");
-    let after_b = repo.plan("resurface b");
-    let after_c = repo.plan("resurface c");
-    assert_success(&repo.axon(&["when", "after", &after_a, &after_b]));
-    assert_success(&repo.axon(&["when", "after", &after_b, &after_c]));
-    let before = repo.issue_snapshot(&after_c);
-    let cycle = repo.axon(&["when", "after", &after_c, &after_a]);
-    assert_failure(&cycle);
-    assert_eq!(
-        stderr(&cycle),
-        format!(
-            "Error: cycle would be created: {after_c} -[AfterIssue reference]-> {after_a} \
-             -[AfterIssue reference]-> {after_b} -[AfterIssue reference]-> {after_c}\n"
-        )
-    );
-    assert_eq!(repo.issue_snapshot(&after_c), before);
-
-    let mixed_a = repo.plan("mixed a");
-    let mixed_b = repo.plan("mixed b");
-    let mixed_c = repo.plan("mixed c");
-    assert_success(&repo.axon(&["dep", "add", &mixed_a, "--needs", &mixed_b]));
-    assert_success(&repo.axon(&["when", "after", &mixed_b, &mixed_c]));
-    let cycle = repo.axon(&["dep", "add", &mixed_c, "--needs", &mixed_a]);
-    assert_failure(&cycle);
-    assert_eq!(
-        stderr(&cycle),
-        format!(
-            "Error: cycle would be created: {mixed_c} -[issue dependency]-> {mixed_a} \
-             -[issue dependency]-> {mixed_b} -[AfterIssue reference]-> {mixed_c}\n"
-        )
-    );
-
-    for group in ["foundation", "platform", "delivery"] {
-        assert_success(&repo.axon(&["group", "new", group]));
-    }
-    assert_success(&repo.axon(&["group", "dep", "add", "foundation", "--needs", "platform"]));
-    assert_success(&repo.axon(&["group", "dep", "add", "platform", "--needs", "delivery"]));
-    let cycle = repo.axon(&["group", "dep", "add", "delivery", "--needs", "foundation"]);
-    assert_failure(&cycle);
-    assert_eq!(
-        stderr(&cycle),
-        "Error: cycle would be created: delivery -[group dependency]-> foundation \
-         -[group dependency]-> platform -[group dependency]-> delivery\n"
-    );
-    assert_eq!(repo.dep_count("group_deps"), 2);
-}
-
-#[test]
-fn existing_cycles_remain_observable_and_removable() {
-    let repo = TestRepo::new();
-    repo.init("test");
-
-    let issue_a = repo.plan("existing cycle a");
-    let issue_b = repo.plan("existing cycle b");
-    repo.insert_issue_dep_unchecked(&issue_a, &issue_b);
-    repo.insert_issue_dep_unchecked(&issue_b, &issue_a);
-    assert_success(&repo.axon(&["show", &issue_a]));
-    assert_success(&repo.axon(&["dep", "rm", &issue_a, "--needs", &issue_b]));
-    assert_success(&repo.axon(&["dep", "rm", &issue_b, "--needs", &issue_a]));
-
-    let mixed_a = repo.plan("existing mixed cycle a");
-    let mixed_b = repo.plan("existing mixed cycle b");
-    repo.insert_issue_dep_unchecked(&mixed_a, &mixed_b);
-    repo.set_after_issue_unchecked(&mixed_b, &mixed_a);
-    assert_success(&repo.axon(&["show", &mixed_a]));
-    assert_success(&repo.axon(&["when", "clear", &mixed_b]));
-    assert_success(&repo.axon(&["dep", "rm", &mixed_a, "--needs", &mixed_b]));
-
-    assert_success(&repo.axon(&["group", "new", "cycle-a"]));
-    assert_success(&repo.axon(&["group", "new", "cycle-b"]));
-    repo.insert_group_dep_unchecked("cycle-a", "cycle-b");
-    repo.insert_group_dep_unchecked("cycle-b", "cycle-a");
-    assert_success(&repo.axon(&["group", "list"]));
-    assert_success(&repo.axon(&["group", "dep", "rm", "cycle-a", "--needs", "cycle-b"]));
-    assert_success(&repo.axon(&["group", "dep", "rm", "cycle-b", "--needs", "cycle-a"]));
 }

@@ -31,12 +31,10 @@ Git リポジトリ内では common root を管理境界として常に優先す
 | テーブル | 役割 |
 | --- | --- |
 | `meta` | ID の接頭辞などの設定 |
-| `issues` | A / B / C と claim。B は `disposition`、C は `resurface_kind` + 値の列で直和型を表す |
-| `issue_deps` | issue 間の依存 (前提の 1 種類のみ) |
-| `groups` | 機能群。`parent_id` で階層を持つ |
-| `group_deps` | グループ間の依存 |
-| `events` | B (`disposition`) / C (`resurface_condition`) の判断ログ |
-| `progress_events` | A (進行) の状態遷移に結び付いた進行履歴 |
+| `entities` | kind、文面、A / B / C、parent group、claim。Issue / Group の共有状態を持つ |
+| `entity_deps` | Entity 間の依存。両端は kind の全組み合わせを許す |
+| `entity_events` | B (`disposition`) / C (`resurface_condition`) の Entity 単位の判断ログ |
+| `entity_progress_events` | A (進行) の Entity 単位の状態遷移履歴 |
 
 設計上の要点:
 
@@ -44,9 +42,9 @@ Git リポジトリ内では common root を管理境界として常に優先す
 - **claim は `progress = 'in_progress'` のときだけ存在する**。CHECK 制約で縛り、読み出し時も `Progress::from_db` が食い違いを弾く
 - **claim は actor / worktree / at を持つ**。worktree は新しい `start` では必ず保存し、移行前から存在する claim だけは `unknown` として保持する
 - **C の直和型は CHECK 制約で整合性を保つ**。`resurface_kind` が取る値ごとに、どの列が埋まっているべきかを縛る
-- **待機関係は DAG に保つ**。issue 依存と `AfterIssue` は循環検査だけを統合し、グループ依存とグループ階層は別々に検査する。検査と追加は同じ write transaction で行い、既存の循環データの読み込みと辺の削除は許す
+- **待機関係は DAG に保つ**。dependency、`AfterEntity`、包含を activation / completion の 2 つの wait graph に射影し、両方を同じ write transaction で検査する。group を待機元にした辺は全子孫へ展開する
 - **スキーマは `user_version` で版を持つ**。開くたびに不足分だけ流す。各 migration の DDL と `user_version` 更新は同じトランザクションで確定し、中断後に安全に再実行できるようにする
-- 語彙を `commitment` / `condition` から `disposition` / `resurface_condition` へ変える migration は、issue の値と判断履歴の意味を引き継ぐ。title、description、reason など利用者の入力は書き換えない
+- schema v8 は既存 issue を同じ ID の `kind=issue` Entity へ移し、判断履歴・進行履歴・claim・dependency を保持する。旧 group は開発用 DB に存在しないことを前提に救済しない
 
 ## 決着した論点
 
@@ -96,11 +94,11 @@ br は 4 文字だったが、誕生日問題を考えると個人の repo で�
 
 CLI では後半だけでの参照 (`a3f9k2`) も受け付ける。
 
-グループは slug (`@auth`) で参照する。こちらは人間が付ける名前なので意味を持ってよい。
+Issue と Group は同じ ID namespace を使い、kind を ID に埋め込まない。Group の slug identity は持たない。
 
-### D-3 (決着): issue が属するグループは 1 つだけ
+### D-3 (決着・差し替え): Entity の親 group は 1 つだけ
 
-多重所属を許すとグループの進捗計算で同じ issue が複数回数えられ、`axes.md` §6 で決めた分母の定義が壊れる。階層があるので表現力は足りる。
+Issue / Group は最大 1 つの親 Group を持つ。多重所属による活性・採否の矛盾を避け、包含を tree に保つ。共有成果物は dependency、横断分類は query や将来の tag で扱う。
 
 ### D-4 (決着): 並行作業の重複着手は `start` の条件付き更新で防ぐ
 
@@ -142,7 +140,7 @@ actor は一覧と調査の手掛かりであり、排他制御や `release` の
 
 ### D-6 (決着): claim はすべて一覧し、解放は人が判断する
 
-`axon claims` は経過時間にかかわらず、現在 claim を持つすべての InProgress issue を返す。正常な作業が約 2 日続くことがあり、stale とみなせる時間閾値には実用上の根拠がないため、`stale`、`--hours`、PID によるプロセス生存判定は持たない。
+`axon claims` と `axon stale` は経過時間にかかわらず、現在 claim を持つすべての InProgress Entity を返す。正常な作業が約 2 日続くことがあり、stale とみなせる時間閾値には実用上の根拠がないため、`stale` も保存済み claim の一覧に留め、`--hours` や PID によるプロセス生存判定は持たない。
 
 `start` を実行した axon CLI 自身の PID はコマンド終了と同時に死ぬため、作業セッションの生存判定には使えない。エージェントの session ID も axon 内に照合・再開経路がなく、排他制御や表示に寄与しないため保存しない。
 

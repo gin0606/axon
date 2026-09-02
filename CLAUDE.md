@@ -12,16 +12,16 @@ axon 自体は、誰が着手対象や採否を決め、いつレビューする
 
 ## このリポジトリでの役割
 
-- ユーザーが `axon ready` から着手対象を選び、issue ID をエージェントに渡す
-- エージェントは指定された issue を実装し、作業が完了した時点で `axon done` にする。ユーザーによる成果物の確認はその後に行う
+- ユーザーが `axon ready` から着手対象を選び、Entity ID をエージェントに渡す
+- エージェントは指定された Issue を実装するか Group の計画を進め、完了条件を満たした時点で対象を `axon done` にする。ユーザーによる成果物の確認はその後に行う
 - ユーザーが `axon triage` から相談対象を選び、採用・不採用を最終判断する
 - エージェントは選択肢や推奨案を提示し、合意した状態変更を実行する
 - エージェントは、ユーザーとの合意なしに `axon decide` を実行しない
 
-未判断の新しい issue の登録を依頼されたら、`skills/axon-capture-issue/SKILL.md` の手順に従う。
-採用済みの新しい issue の登録を依頼されたら、`skills/axon-plan-issue/SKILL.md` の手順に従う。
-未判断または前提喪失 issue の相談を依頼されたら、`skills/axon-triage-issue/SKILL.md` の手順に従う。
-採用済み issue の実装を依頼されたら、`skills/axon-implement-issue/SKILL.md` の手順に従う。
+未判断の新しい Issue または Group の登録を依頼されたら、`skills/axon-capture-issue/SKILL.md` の手順に従う。
+採用済みの新しい Issue または Group の登録を依頼されたら、`skills/axon-plan-issue/SKILL.md` の手順に従う。
+既存 Entity の採否相談または判断見直しを依頼されたら、未判断、前提喪失、Accepted からの不採用化、Rejected / Ended の再検討を含めて `skills/axon-triage-issue/SKILL.md` の手順に従う。
+採用済み Entity の実装・計画進行、または Disposition を問わず InProgress Entity の進行同期・引き渡し・打ち切り・完了を依頼されたら、`skills/axon-implement-issue/SKILL.md` の手順に従う。
 
 `axon ready` または `axon triage` の候補整理を依頼された場合は、優先候補、重複候補、判断材料を提案してよい。ただし、ユーザーの確認前に着手や採否の変更を行わない。
 
@@ -53,19 +53,21 @@ mise exec -- cargo build
 `docs/axes.md` が「なぜこの設計なのか」の記録で、決着した論点に番号が振ってある。
 実装で迷ったらここを見る。
 
-状態モデルは `spec/axon.qnt` に Quint で書いてあり、性質を検査できる。
+基礎状態モデルは `spec/axon.qnt`、Entity と Group の拡張モデルは `spec/group_plan.qnt` に Quint で書いてあり、性質を検査できる。
 
 ```sh
 quint typecheck spec/axon.qnt
+quint typecheck spec/group_plan.qnt
 quint run spec/axon.qnt --invariant=<名前>
+quint run spec/group_plan.qnt --invariant=<名前>
 ```
 
-モデルに関わる変更をするときは、**先に docs と spec を更新して検査を通してから実装する**。
+モデルに関わる変更をするときは、**先に docs と該当する spec を更新して検査を通してから実装する**。Progress、Disposition、Resurface condition、dependency、terminal など共有 A / B / C / D の意味や満足条件を変える場合は両 spec を更新・検査する。cross-kind 展開、Group 起点の作用範囲、activation / completion wait graph、包含との相互作用、active scope、Group の完了・release を変える場合は `spec/group_plan.qnt` を更新・検査する。
 この順序で進めたことで、議論だけでは見落としていた考慮漏れが実際に見つかっている。
 
 ## 実装の規範
 
 - **状態更新は `Store::apply` を通す。** 判断履歴の記録判定もそこにあるため、別経路で書き換えると記録が漏れる
 - **導出値をテーブルに持たない。** ready / blocked / orphaned / 進捗は計算する
-- **DB から読んだ値は型に変換する境界を 1 箇所に保つ** (`RawIssue::into_issue`)。そこを通れば内部では型を信頼できる
+- **DB から読んだ値は型に変換する境界を 1 箇所に保つ** (`RawEntity::into_entity`)。そこを通れば内部では型を信頼できる
 - **軸を混ぜない。** 1 つのコマンドが進行と採否の両方を変えない。セットで打つべき場面は、警告を出して利用者に促す

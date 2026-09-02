@@ -1,6 +1,6 @@
 # axon
 
-ローカルで動く個人用 issue tracker。進行、採否、時期を別の軸として扱い、コーディングエージェントが安全に操作できる簡潔なテキスト CLI を提供する。
+ローカルで動く個人用 issue tracker。issue と明示的な計画 group を共通 Entity として扱い、進行、採否、時期を別の軸に保つ。
 
 ## 使う
 
@@ -19,7 +19,7 @@ axon completion zsh > _axon    # シェル補完スクリプトを生成
 
 ## reason と履歴
 
-`-r` / `--reason` はすべて任意。状態から意図を復元できない操作だけが受け取る。`release` の理由は `show` の進行履歴に、`decide` / `when` / `group reject` の理由は `log` の判断履歴に保存される。`start` と `done` は reason を受け取らず、作業結果や申し送りは issue の description に残す。
+`-r` / `--reason` はすべて任意。状態から意図を復元できない操作だけが受け取る。`release` の理由は `show` の進行履歴に、`decide` / `when` の理由は `log` の判断履歴に保存される。`start` と `done` は reason を受け取らず、作業結果や申し送りは Entity の description に残す。
 
 ## ドキュメント
 

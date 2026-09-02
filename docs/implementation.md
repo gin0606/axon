@@ -4,7 +4,7 @@
 
 **要件**: 状態遷移の規約を型で表現し、規約違反 (実装ミス) をコンパイル時に検出できること。
 
-この要件で **Go は落ちる**。直和型がないため C の条件 (`Always | AtDate | AfterIssue | AfterGroup`) を型で表現できず、interface と型スイッチで代用しても網羅性チェックが効かない。条件を 1 つ足したときの対応漏れをコンパイラが検出できない。
+この要件で **Go は落ちる**。直和型がないため C の条件 (`Always | AtDate | AfterEntity`) を型で表現できず、interface と型スイッチで代用しても網羅性チェックが効かない。条件を 1 つ足したときの対応漏れをコンパイラが検出できない。
 
 TypeScript は判別可能な union と `never` を使った exhaustive check で近いことはできるが、実行時の保証がなく、branded type も型注釈を外せば通る。
 
@@ -14,7 +14,7 @@ Rust を選んだ理由:
 | --- | --- |
 | A / B / C が取りうる値の限定 | `enum` |
 | 条件を足したときの対応漏れ検出 | `match` の網羅性検査 |
-| IssueId と GroupId を取り違えない | newtype |
+| Issue / Group 共通 ID と文字列を取り違えない | `EntityId` newtype |
 | claim は着手中のときだけ | 遷移関数の引数型で制約 |
 | DB から読んだ値が想定外なら落とす | `TryFrom` による境界での検査 |
 
