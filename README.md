@@ -9,9 +9,12 @@ cargo build --release
 axon init
 axon --help                     # 操作契約と全コマンドのリファレンス
 axon -h                         # 短いコマンド一覧
+axon completion zsh > _axon    # シェル補完スクリプトを生成
 ```
 
 個別コマンドの Usage は `axon help <command path>` で確認できる。操作の意味と出力契約の正は [docs/cli.md](docs/cli.md) であり、同じ内容が `axon --help` に埋め込まれている。
+
+`completion` は `bash`、`elvish`、`fish`、`powershell`、`zsh` を受け付ける。生成したスクリプトは各シェルの補完ディレクトリに置くか、そのシェルの方法で読み込む。
 
 ## ドキュメント
 

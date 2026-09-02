@@ -89,3 +89,36 @@ fn complete_help_treats_closed_stdout_as_normal_termination() {
         assert!(output.stderr.is_empty());
     }
 }
+
+#[test]
+fn completion_scripts_are_generated_without_opening_a_database() {
+    for shell in ["bash", "elvish", "fish", "powershell", "zsh"] {
+        let (output, dir) = axon(&["completion", shell]);
+
+        assert_eq!(output.status.code(), Some(0), "{shell}");
+        assert!(output.stderr.is_empty(), "{shell}");
+        assert!(!output.stdout.is_empty(), "{shell}");
+        assert!(!dir.path().join(".axon").exists(), "{shell}");
+    }
+}
+
+#[test]
+fn completion_rejects_unsupported_shells() {
+    let (output, _) = axon(&["completion", "nushell"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    for shell in ["bash", "elvish", "fish", "powershell", "zsh"] {
+        assert!(stderr.contains(shell), "missing {shell}:\n{stderr}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn completion_treats_closed_stdout_as_normal_termination() {
+    let output = axon_with_closed_stdout(&["completion", "bash"]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+}

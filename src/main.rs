@@ -5,6 +5,7 @@ mod domain;
 
 use chrono::{NaiveDate, Utc};
 use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::aot::{Shell, generate};
 use db::{ApplyOutcome, Change, Ctx, Store};
 use derived::View;
 use domain::*;
@@ -24,6 +25,11 @@ enum Command {
     Init {
         /// issue ID の接頭辞 (省略時はリポジトリのディレクトリ名)
         prefix: Option<String>,
+    },
+    /// シェル補完スクリプトを生成する
+    Completion {
+        #[arg(value_enum)]
+        shell: Shell,
     },
     /// やると決めたものを登録する (採否=採用)
     Plan { title: Vec<String> },
@@ -220,6 +226,20 @@ fn write_complete_help() -> std::io::Result<()> {
     }
 }
 
+fn write_completion(shell: Shell) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut command = Cli::command();
+    let mut completion = Vec::new();
+    generate(shell, &mut command, "axon", &mut completion);
+
+    let mut stdout = std::io::stdout().lock();
+    match stdout.write_all(&completion) {
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        result => result,
+    }
+}
+
 fn requests_complete_help(args: &[std::ffi::OsString]) -> bool {
     match args.get(1).and_then(|arg| arg.to_str()) {
         Some("--help") => true,
@@ -264,6 +284,10 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
     let cli = Cli::parse_from(args);
     match cli.command {
         Command::Init { prefix } => cmd_init(prefix),
+        Command::Completion { shell } => {
+            write_completion(shell)?;
+            Ok(())
+        }
         Command::Plan { title } => cmd_create(title, Commitment::Accepted),
         Command::Capture { title } => cmd_create(title, Commitment::Undecided),
         Command::Ready => cmd_ready(),

@@ -53,7 +53,7 @@ issue は独立した 3 軸と 2 種類の関係を持つ。
 
 ### 読み取りと状態変更
 
-読み取りだけを行うのは `ready`、`triage`、`list`、`show`、`log`、`stale`、`group list`、`group show` と help/version である。それ以外は DB の初期化、issue やグループの作成、またはいずれかの軸・関係・文面を変更する。
+読み取りだけを行うのは `ready`、`triage`、`list`、`show`、`log`、`stale`、`group list`、`group show`、`completion` と help/version である。それ以外は DB の初期化、issue やグループの作成、またはいずれかの軸・関係・文面を変更する。
 
 候補の読み取りと変更は分けてある。`ready` は着手せず、`triage` は採否を変えず、`stale` は claim を解放しない。変更コマンドには対象 ID または slug を明示する。
 
@@ -63,7 +63,7 @@ issue は独立した 3 軸と 2 種類の関係を持つ。
 
 ### 出力と終了コード
 
-- help、検索結果、詳細、状態変更の確認は **stdout** に出す。help は DB を開かず、成功時は終了コード 0 になる
+- help、補完スクリプト、検索結果、詳細、状態変更の確認は **stdout** に出す。help と `completion` は DB を開かず、成功時は終了コード 0 になる
 - 引数や操作のエラーは **stderr** に出し、非 0 で終了する
 - `ready` / `triage` / `list` に行がない場合は、パイプに案内文を混ぜないため stdout を空にし、案内だけを stderr に出して終了コード 0 にする
 - issue を行単位で返す一覧 (`ready` / `triage` / `list`) は、空白区切りの第 1 列を常に ID にする。`axon ready | fzf --preview 'axon show {1}'` のように扱える
@@ -85,6 +85,12 @@ issue ID は `<prefix>-<ランダム 6 文字>` の形式で、prefix は `axon 
 **目的**: リポジトリで axon を使い始める。issue ID の接頭辞を決める。
 
 **設計**: 接頭辞は既定でリポジトリのディレクトリ名。ID を `<接頭辞>-<ランダム 6 文字>` にするのは、番号から順序を推測させないため (`data-model.md` D-2)。
+
+### completion
+
+**目的**: シェル上でサブコマンド、オプション、静的に定まる値を発見しながら入力できるようにする。
+
+**設計**: `completion <shell>` は Clap のコマンド定義から Bash / Elvish / Fish / PowerShell / Zsh 用の補完スクリプトを標準出力へ生成する。CLI と補完の定義を二重管理せず、DB 由来の issue ID や group slug は動的補完しない。
 
 ### plan / capture
 
