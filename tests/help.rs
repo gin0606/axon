@@ -33,7 +33,7 @@ fn complete_help_succeeds_without_opening_a_database() {
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
-    assert!(String::from_utf8_lossy(&output.stdout).starts_with("# CLI\n"));
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("# axon CLI\n"));
     assert!(!dir.path().join(".axon").exists());
 }
 
@@ -56,8 +56,35 @@ fn short_help_stays_short() {
     assert!(output.stderr.is_empty());
     assert!(stdout.contains("Usage: axon <COMMAND>"));
     assert!(stdout.contains("Commands:"));
-    assert!(!stdout.contains("# CLI"));
-    assert!(!stdout.contains("# コマンドリファレンス"));
+    assert!(!stdout.contains("# axon CLI"));
+    assert!(!stdout.contains("# Command reference"));
+}
+
+#[test]
+fn complete_help_is_an_english_self_contained_manual() {
+    let (output, _) = axon(&["--help"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    for required in [
+        "## State model",
+        "Progress",
+        "Disposition",
+        "Resurface condition",
+        "## Basic workflow",
+        "## Choosing a query",
+        "## Safety and concurrency",
+        "## Input, output, and exit status",
+        "# Command reference",
+    ] {
+        assert!(stdout.contains(required), "missing {required:?} from help");
+    }
+    assert!(
+        !stdout.chars().any(|c| matches!(
+            c,
+            '\u{3040}'..='\u{30ff}' | '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}'
+        )),
+        "complete help contains Japanese text"
+    );
 }
 
 #[test]

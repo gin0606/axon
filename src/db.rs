@@ -11,31 +11,31 @@ use std::process::Command;
 pub enum DbError {
     #[error("SQLite: {0}")]
     Sqlite(#[from] rusqlite::Error),
-    #[error("git リポジトリの中ではありません")]
+    #[error("not inside a Git repository")]
     NotInRepo,
-    #[error("axon が初期化されていません。`axon init` を実行してください")]
+    #[error("axon is not initialized; run `axon init`")]
     NotInitialized,
-    #[error("すでに初期化されています: {0}")]
+    #[error("axon is already initialized at {0}")]
     AlreadyInitialized(PathBuf),
-    #[error("保存された値を読めません: {0}")]
+    #[error("could not read a stored value: {0}")]
     Parse(#[from] ParseError),
-    #[error("保存された進行イベント種別を読めません: {0}")]
+    #[error("invalid stored progress event kind: {0}")]
     InvalidProgressEvent(String),
-    #[error("{0} は存在しません")]
+    #[error("issue {0} does not exist")]
     NoSuchIssue(String),
-    #[error("グループ {0} は存在しません")]
+    #[error("group {0} does not exist")]
     NoSuchGroup(String),
-    #[error("{id} は複数の issue に一致します: {candidates}")]
+    #[error("{id} matches multiple issues: {candidates}")]
     AmbiguousId { id: String, candidates: String },
-    #[error("{id} は着手できません ({fact})")]
+    #[error("{id} cannot be claimed ({fact})")]
     CannotClaim { id: String, fact: String },
-    #[error("{id} は{action}できません (進行は{progress}です)")]
+    #[error("{id} cannot be {action} (Progress is {progress})")]
     CannotProgress {
         id: String,
         action: &'static str,
         progress: &'static str,
     },
-    #[error("{id} の{field}はすでに{current}です")]
+    #[error("{id}: {field} is already {current}")]
     Unchanged {
         id: String,
         field: &'static str,
@@ -46,7 +46,9 @@ pub enum DbError {
 pub type Result<T> = std::result::Result<T, DbError>;
 
 /// スキーマの版。`user_version` に記録し、開くたびに不足分だけ流す。
-const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5];
+const MIGRATIONS: &[&str] = &[
+    SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6,
+];
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE meta (
@@ -79,9 +81,9 @@ CREATE TABLE issues (
     (progress <> 'in_progress' AND claimed_session IS NULL)
   ),
   CHECK (
-    (cond_kind IS NULL         AND cond_date IS NULL     AND cond_ref IS NULL) OR
-    (cond_kind =  'date'       AND cond_date IS NOT NULL AND cond_ref IS NULL) OR
-    (cond_kind =  'after_issue' AND cond_ref IS NOT NULL AND cond_date IS NULL)
+    (cond_kind IS NULL          AND cond_date IS NULL     AND cond_ref IS NULL) OR
+    (cond_kind =  'date'        AND cond_date IS NOT NULL AND cond_ref IS NULL) OR
+    (cond_kind =  'after_issue' AND cond_ref IS NOT NULL  AND cond_date IS NULL)
   )
 );
 
@@ -152,6 +154,28 @@ CREATE TABLE progress_events (
 CREATE INDEX idx_progress_events_issue ON progress_events (issue_id, at);
 "#;
 
+/// 確定語彙に合わせる。履歴の意味と利用者の入力は保ったまま、名称と値の表現を変える。
+const SCHEMA_V6: &str = r#"
+ALTER TABLE issues RENAME COLUMN commitment TO disposition;
+ALTER TABLE issues RENAME COLUMN cond_kind TO resurface_kind;
+ALTER TABLE issues RENAME COLUMN cond_date TO resurface_date;
+ALTER TABLE issues RENAME COLUMN cond_ref TO resurface_ref;
+UPDATE events SET field = 'disposition' WHERE field = 'commitment';
+UPDATE events
+SET old_value = CASE
+      WHEN old_value LIKE 'after %' THEN 'AfterIssue(' || substr(old_value, 7) || ')'
+      ELSE 'AtDate(' || old_value || ')'
+    END
+WHERE field = 'condition' AND old_value IS NOT NULL;
+UPDATE events
+SET new_value = CASE
+      WHEN new_value LIKE 'after %' THEN 'AfterIssue(' || substr(new_value, 7) || ')'
+      ELSE 'AtDate(' || new_value || ')'
+    END
+WHERE field = 'condition' AND new_value IS NOT NULL;
+UPDATE events SET field = 'resurface_condition' WHERE field = 'condition';
+"#;
+
 fn migrate(conn: &mut Connection) -> Result<()> {
     migrate_with(conn, MIGRATIONS)
 }
@@ -216,7 +240,7 @@ impl Store {
         if path.exists() {
             return Err(DbError::AlreadyInitialized(path));
         }
-        std::fs::create_dir_all(path.parent().expect("親ディレクトリがある"))
+        std::fs::create_dir_all(path.parent().expect("database path has a parent directory"))
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let mut conn = Connection::open(&path)?;
         migrate(&mut conn)?;
@@ -257,8 +281,8 @@ impl Store {
     pub fn insert(&self, issue: &Issue) -> Result<()> {
         let claim = issue.progress.claim();
         self.conn.execute(
-            "INSERT INTO issues (id, title, description, progress, commitment,
-                                 cond_kind, cond_date, cond_ref,
+            "INSERT INTO issues (id, title, description, progress, disposition,
+                                 resurface_kind, resurface_date, resurface_ref,
                                  claimed_actor, claimed_session, claimed_pid, claimed_at,
                                  created_at, updated_at, group_id)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
@@ -267,10 +291,10 @@ impl Store {
                 issue.title,
                 issue.description,
                 issue.progress.as_db(),
-                issue.commitment.as_db(),
-                issue.condition.as_ref().map(|c| c.kind_db()),
-                cond_date(&issue.condition),
-                cond_ref(&issue.condition),
+                issue.disposition.as_db(),
+                issue.resurface_condition.kind_db(),
+                resurface_date(&issue.resurface_condition),
+                resurface_ref(&issue.resurface_condition),
                 claim.map(|c| c.actor.clone()),
                 claim.map(|c| c.session.clone()),
                 claim.map(|c| c.pid),
@@ -426,7 +450,7 @@ impl Store {
                 if n == 0 {
                     return Err(DbError::CannotClaim {
                         id: id.to_string(),
-                        fact: format!("進行は{}です", before.progress.label()),
+                        fact: format!("Progress is {}", before.progress.label()),
                     });
                 }
             }
@@ -442,7 +466,7 @@ impl Store {
                 if n == 0 {
                     return Err(DbError::CannotProgress {
                         id: id.to_string(),
-                        action: "解放",
+                        action: "released",
                         progress: before.progress.label(),
                     });
                 }
@@ -459,14 +483,14 @@ impl Store {
                 if n == 0 {
                     return Err(DbError::CannotProgress {
                         id: id.to_string(),
-                        action: "終了",
+                        action: "ended",
                         progress: before.progress.label(),
                     });
                 }
             }
-            Change::Decide(c) | Change::ConvergeCommitment(c) => {
+            Change::Decide(c) | Change::ConvergeDisposition(c) => {
                 tx.execute(
-                    "UPDATE issues SET commitment = ?2, updated_at = ?3 WHERE id = ?1",
+                    "UPDATE issues SET disposition = ?2, updated_at = ?3 WHERE id = ?1",
                     params![id.as_str(), c.as_db(), now],
                 )?;
             }
@@ -488,15 +512,15 @@ impl Store {
                     params![id.as_str(), g.as_ref().map(|g| g.as_str().to_string()), now],
                 )?;
             }
-            Change::SetCondition(cond) => {
+            Change::SetResurfaceCondition(resurface_condition) => {
                 tx.execute(
-                    "UPDATE issues SET cond_kind = ?2, cond_date = ?3, cond_ref = ?4, updated_at = ?5
+                    "UPDATE issues SET resurface_kind = ?2, resurface_date = ?3, resurface_ref = ?4, updated_at = ?5
                       WHERE id = ?1",
                     params![
                         id.as_str(),
-                        cond.as_ref().map(|c| c.kind_db()),
-                        cond_date(&cond),
-                        cond_ref(&cond),
+                        resurface_condition.kind_db(),
+                        resurface_date(&resurface_condition),
+                        resurface_ref(&resurface_condition),
                         now
                     ],
                 )?;
@@ -636,12 +660,12 @@ pub enum Change {
     /// 着手を取り消して未着手に戻す。放置された claim を人手で解放するために使う。
     Release,
     End,
-    Decide(Commitment),
+    Decide(Disposition),
     /// バッチ設定で採否を目標値へ収束させる。同値は成功 no-op。
-    ConvergeCommitment(Commitment),
+    ConvergeDisposition(Disposition),
     SetTitle(String),
     SetDescription(Option<String>),
-    SetCondition(Option<Condition>),
+    SetResurfaceCondition(ResurfaceCondition),
     SetGroup(Option<GroupId>),
 }
 
@@ -675,8 +699,8 @@ fn progress_event(change: &Change, ctx: &Ctx, now: &DateTime<Utc>) -> Option<Pro
     }
 }
 
-const SELECT_ISSUE: &str = "SELECT id, title, description, progress, commitment,
-                                   cond_kind, cond_date, cond_ref,
+const SELECT_ISSUE: &str = "SELECT id, title, description, progress, disposition,
+                                   resurface_kind, resurface_date, resurface_ref,
                                    claimed_actor, claimed_session, claimed_pid, claimed_at,
                                    created_at, updated_at, group_id
                             FROM issues";
@@ -693,24 +717,24 @@ fn read_issue(conn: &Connection, id: &IssueId) -> Result<Issue> {
 
 fn unchanged_transition(issue: &Issue, change: &Change) -> Option<(&'static str, String)> {
     match change {
-        Change::Decide(commitment) if issue.commitment == *commitment => {
-            Some(("採否", issue.commitment.label().to_string()))
+        Change::Decide(disposition) if issue.disposition == *disposition => {
+            Some(("Disposition", issue.disposition.label().to_string()))
         }
-        Change::SetCondition(condition) if &issue.condition == condition => Some((
-            "時期",
-            issue
-                .condition
-                .as_ref()
-                .map(describe_cond)
-                .unwrap_or_else(|| "常に浮上".to_string()),
-        )),
+        Change::SetResurfaceCondition(resurface_condition)
+            if &issue.resurface_condition == resurface_condition =>
+        {
+            Some((
+                "Resurface condition",
+                describe_resurface_condition(&issue.resurface_condition),
+            ))
+        }
         _ => None,
     }
 }
 
 fn unchanged_setting(issue: &Issue, change: &Change) -> bool {
     match change {
-        Change::ConvergeCommitment(commitment) => issue.commitment == *commitment,
+        Change::ConvergeDisposition(disposition) => issue.disposition == *disposition,
         Change::SetTitle(title) => issue.title == title.as_str(),
         Change::SetDescription(description) => &issue.description == description,
         Change::SetGroup(group) => issue.group.as_ref() == group.as_ref(),
@@ -720,19 +744,19 @@ fn unchanged_setting(issue: &Issue, change: &Change) -> bool {
 
 fn not_ready_fact(view: &View, issue: &Issue) -> String {
     if !matches!(issue.progress, Progress::NotStarted) {
-        format!("進行は{}です", issue.progress.label())
-    } else if issue.commitment != Commitment::Accepted {
-        format!("採否は{}です", issue.commitment.label())
+        format!("Progress is {}", issue.progress.label())
+    } else if issue.disposition != Disposition::Accepted {
+        format!("Disposition is {}", issue.disposition.label())
     } else if !view.is_surfaced(issue) {
-        "時期の条件を満たしていません".to_string()
+        "resurface condition is not satisfied".to_string()
     } else if view.is_orphaned(&issue.id) {
-        "前提を失っています".to_string()
+        "a dependency is Rejected".to_string()
     } else if view.is_blocked(&issue.id) {
-        "未終了の前提があります".to_string()
+        "an unresolved dependency exists".to_string()
     } else if view.is_group_blocked(issue) {
-        "未終了のグループ依存があります".to_string()
+        "an unresolved group dependency exists".to_string()
     } else {
-        "ready ではありません".to_string()
+        "issue is not ready".to_string()
     }
 }
 
@@ -843,7 +867,7 @@ fn read_show_snapshot(conn: &Connection, input: &str) -> Result<ShowSnapshot> {
 fn records_decision(change: &Change) -> bool {
     matches!(
         change,
-        Change::Decide(_) | Change::ConvergeCommitment(_) | Change::SetCondition(_)
+        Change::Decide(_) | Change::ConvergeDisposition(_) | Change::SetResurfaceCondition(_)
     )
 }
 
@@ -864,9 +888,9 @@ fn describe(before: &Issue, change: &Change) -> (&'static str, Option<String>, O
             Some(before.progress.as_db().to_string()),
             Some("ended".to_string()),
         ),
-        Change::Decide(c) | Change::ConvergeCommitment(c) => (
-            "commitment",
-            Some(before.commitment.as_db().to_string()),
+        Change::Decide(c) | Change::ConvergeDisposition(c) => (
+            "disposition",
+            Some(before.disposition.as_db().to_string()),
             Some(c.as_db().to_string()),
         ),
         Change::SetTitle(t) => ("title", Some(before.title.clone()), Some(t.clone())),
@@ -875,10 +899,10 @@ fn describe(before: &Issue, change: &Change) -> (&'static str, Option<String>, O
             before.description.as_deref().map(summarize),
             d.as_deref().map(summarize),
         ),
-        Change::SetCondition(c) => (
-            "condition",
-            before.condition.as_ref().map(describe_cond),
-            c.as_ref().map(describe_cond),
+        Change::SetResurfaceCondition(c) => (
+            "resurface_condition",
+            resurface_condition_event_value(&before.resurface_condition),
+            resurface_condition_event_value(c),
         ),
         Change::SetGroup(g) => (
             "group",
@@ -899,23 +923,31 @@ fn summarize(text: &str) -> String {
     out
 }
 
-fn describe_cond(c: &Condition) -> String {
+fn describe_resurface_condition(c: &ResurfaceCondition) -> String {
     match c {
-        Condition::At(d) => d.to_string(),
-        Condition::AfterIssue(id) => format!("after {id}"),
+        ResurfaceCondition::Always => "Always".to_string(),
+        ResurfaceCondition::AtDate(d) => format!("AtDate({d})"),
+        ResurfaceCondition::AfterIssue(id) => format!("AfterIssue({id})"),
     }
 }
 
-fn cond_date(c: &Option<Condition>) -> Option<String> {
+fn resurface_condition_event_value(c: &ResurfaceCondition) -> Option<String> {
     match c {
-        Some(Condition::At(d)) => Some(d.to_string()),
+        ResurfaceCondition::Always => None,
+        _ => Some(describe_resurface_condition(c)),
+    }
+}
+
+fn resurface_date(c: &ResurfaceCondition) -> Option<String> {
+    match c {
+        ResurfaceCondition::AtDate(d) => Some(d.to_string()),
         _ => None,
     }
 }
 
-fn cond_ref(c: &Option<Condition>) -> Option<String> {
+fn resurface_ref(c: &ResurfaceCondition) -> Option<String> {
     match c {
-        Some(Condition::AfterIssue(id)) => Some(id.as_str().to_string()),
+        ResurfaceCondition::AfterIssue(id) => Some(id.as_str().to_string()),
         _ => None,
     }
 }
@@ -926,10 +958,10 @@ struct RawIssue {
     title: String,
     description: Option<String>,
     progress: String,
-    commitment: String,
-    cond_kind: Option<String>,
-    cond_date: Option<String>,
-    cond_ref: Option<String>,
+    disposition: String,
+    resurface_kind: Option<String>,
+    resurface_date: Option<String>,
+    resurface_ref: Option<String>,
     claimed_actor: Option<String>,
     claimed_session: Option<String>,
     claimed_pid: Option<i32>,
@@ -946,10 +978,10 @@ impl RawIssue {
             title: r.get_unwrap(1),
             description: r.get_unwrap(2),
             progress: r.get_unwrap(3),
-            commitment: r.get_unwrap(4),
-            cond_kind: r.get_unwrap(5),
-            cond_date: r.get_unwrap(6),
-            cond_ref: r.get_unwrap(7),
+            disposition: r.get_unwrap(4),
+            resurface_kind: r.get_unwrap(5),
+            resurface_date: r.get_unwrap(6),
+            resurface_ref: r.get_unwrap(7),
             claimed_actor: r.get_unwrap(8),
             claimed_session: r.get_unwrap(9),
             claimed_pid: r.get_unwrap(10),
@@ -975,21 +1007,18 @@ impl RawIssue {
             }),
             _ => None,
         };
-        let condition = match self.cond_kind {
-            Some(kind) => Some(Condition::from_db(
-                &kind,
-                self.cond_date.as_deref(),
-                self.cond_ref.as_deref(),
-            )?),
-            None => None,
-        };
+        let resurface_condition = ResurfaceCondition::from_db(
+            self.resurface_kind.as_deref(),
+            self.resurface_date.as_deref(),
+            self.resurface_ref.as_deref(),
+        )?;
         Ok(Issue {
             id: IssueId::from_stored(&self.id),
             title: self.title,
             description: self.description,
             progress: Progress::from_db(&self.progress, claim)?,
-            commitment: Commitment::from_db(&self.commitment)?,
-            condition,
+            disposition: Disposition::from_db(&self.disposition)?,
+            resurface_condition,
             group: self.group_id.as_deref().map(GroupId::from_stored),
             created_at: parse_ts(&self.created_at),
             updated_at: parse_ts(&self.updated_at),
@@ -1038,8 +1067,8 @@ mod tests {
             title: format!("issue {id}"),
             description: None,
             progress: Progress::NotStarted,
-            commitment: Commitment::Accepted,
-            condition: None,
+            disposition: Disposition::Accepted,
+            resurface_condition: ResurfaceCondition::Always,
             group: None,
             created_at: at,
             updated_at: at,
@@ -1192,6 +1221,67 @@ mod tests {
         assert_eq!(s.progress_events(&iid("t-1")).unwrap().len(), 1);
     }
 
+    #[test]
+    fn disposition_migration_preserves_issues_and_decision_history() {
+        let conn = Connection::open_in_memory().unwrap();
+        for (i, sql) in MIGRATIONS.iter().take(5).enumerate() {
+            conn.execute_batch(sql).unwrap();
+            conn.execute_batch(&format!("PRAGMA user_version = {}", i + 1))
+                .unwrap();
+        }
+        let at = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO issues
+               (id, title, description, progress, commitment, cond_kind, cond_date,
+                created_at, updated_at)
+             VALUES ('t-1', '既存 issue', '日本語の説明', 'not_started', 'accepted',
+                     'date', '2099-12-31', ?1, ?1)",
+            params![at],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO events
+               (issue_id, field, old_value, new_value, actor, reason, at)
+             VALUES ('t-1', 'condition', NULL, '2099-12-31', 'old', '後回しする理由', ?1)",
+            params![at],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO events
+               (issue_id, field, old_value, new_value, actor, reason, at)
+             VALUES ('t-1', 'commitment', 'undecided', 'accepted', 'old', '採用理由', ?1)",
+            params![at],
+        )
+        .unwrap();
+
+        let s = Store::from_conn(conn).unwrap();
+        let issue = s.get(&iid("t-1")).unwrap();
+        assert_eq!(issue.title, "既存 issue");
+        assert_eq!(issue.description.as_deref(), Some("日本語の説明"));
+        assert_eq!(issue.disposition, Disposition::Accepted);
+        assert_eq!(
+            issue.resurface_condition,
+            ResurfaceCondition::AtDate("2099-12-31".parse().unwrap())
+        );
+
+        let events = s.events(&iid("t-1")).unwrap();
+        assert_eq!(events.len(), 2);
+        let disposition = events
+            .iter()
+            .find(|event| event.field == "disposition")
+            .unwrap();
+        assert_eq!(disposition.old_value.as_deref(), Some("undecided"));
+        assert_eq!(disposition.new_value.as_deref(), Some("accepted"));
+        assert_eq!(disposition.reason.as_deref(), Some("採用理由"));
+        let resurface = events
+            .iter()
+            .find(|event| event.field == "resurface_condition")
+            .unwrap();
+        assert_eq!(resurface.old_value, None);
+        assert_eq!(resurface.new_value.as_deref(), Some("AtDate(2099-12-31)"));
+        assert_eq!(resurface.reason.as_deref(), Some("後回しする理由"));
+    }
+
     /// 型 → DB → 型 で往復しても値が変わらない。
     #[test]
     fn issue_round_trips_through_the_database() {
@@ -1200,16 +1290,16 @@ mod tests {
 
         let mut i = issue("t-1", 0);
         i.description = Some("説明".to_string());
-        i.condition = Some(Condition::At("2026-03-01".parse().unwrap()));
+        i.resurface_condition = ResurfaceCondition::AtDate("2026-03-01".parse().unwrap());
         i.group = Some(GroupId::from_stored("g"));
         s.insert(&i).unwrap();
 
         let back = s.get(&i.id).unwrap();
         assert_eq!(back.title, i.title);
         assert_eq!(back.description, i.description);
-        assert_eq!(back.condition, i.condition);
+        assert_eq!(back.resurface_condition, i.resurface_condition);
         assert_eq!(back.group, i.group);
-        assert_eq!(back.commitment, i.commitment);
+        assert_eq!(back.disposition, i.disposition);
         assert_eq!(back.progress, i.progress);
         assert_eq!(back.created_at, i.created_at);
     }
@@ -1276,7 +1366,8 @@ mod tests {
         assert!(matches!(
             err,
             DbError::CannotProgress {
-                action: "終了", ..
+                action: "ended",
+                ..
             }
         ));
         assert!(s.progress_events(&iid("t-1")).unwrap().is_empty());
@@ -1288,7 +1379,8 @@ mod tests {
         assert!(matches!(
             err,
             DbError::CannotProgress {
-                action: "終了", ..
+                action: "ended",
+                ..
             }
         ));
         let kinds: Vec<_> = s
@@ -1309,7 +1401,8 @@ mod tests {
         assert!(matches!(
             err,
             DbError::CannotProgress {
-                action: "解放", ..
+                action: "released",
+                ..
             }
         ));
         assert!(s.progress_events(&iid("t-1")).unwrap().is_empty());
@@ -1321,7 +1414,8 @@ mod tests {
         assert!(matches!(
             err,
             DbError::CannotProgress {
-                action: "解放", ..
+                action: "released",
+                ..
             }
         ));
         let kinds: Vec<_> = s
@@ -1356,7 +1450,7 @@ mod tests {
         s.insert(&issue("t-1", 0)).unwrap();
         s.apply(&iid("t-1"), Change::Claim(claim(1)), &ctx())
             .unwrap();
-        s.apply(&iid("t-1"), Change::Decide(Commitment::Rejected), &ctx())
+        s.apply(&iid("t-1"), Change::Decide(Disposition::Rejected), &ctx())
             .unwrap();
 
         let after = s.get(&iid("t-1")).unwrap();
@@ -1364,25 +1458,25 @@ mod tests {
             matches!(after.progress, Progress::InProgress(_)),
             "採否が進行を動かさない"
         );
-        assert_eq!(after.commitment, Commitment::Rejected);
+        assert_eq!(after.disposition, Disposition::Rejected);
 
         s.apply(&iid("t-1"), Change::End, &ctx()).unwrap();
         assert_eq!(
-            s.get(&iid("t-1")).unwrap().commitment,
-            Commitment::Rejected,
+            s.get(&iid("t-1")).unwrap().disposition,
+            Disposition::Rejected,
             "進行が採否を動かさない"
         );
     }
 
     #[test]
-    fn convergent_commitment_skips_a_target_changed_after_batch_selection() {
+    fn convergent_disposition_skips_a_target_changed_after_batch_selection() {
         let mut s = store();
         s.insert(&issue("t-1", 0)).unwrap();
 
         assert_eq!(
             s.apply(
                 &iid("t-1"),
-                Change::ConvergeCommitment(Commitment::Rejected),
+                Change::ConvergeDisposition(Disposition::Rejected),
                 &ctx(),
             )
             .unwrap(),
@@ -1394,7 +1488,7 @@ mod tests {
         assert_eq!(
             s.apply(
                 &iid("t-1"),
-                Change::ConvergeCommitment(Commitment::Rejected),
+                Change::ConvergeDisposition(Disposition::Rejected),
                 &ctx(),
             )
             .unwrap(),
@@ -1424,24 +1518,26 @@ mod tests {
         .unwrap();
         assert!(s.events(&iid("t-1")).unwrap().is_empty());
 
-        s.apply(&iid("t-1"), Change::Decide(Commitment::Rejected), &ctx())
+        s.apply(&iid("t-1"), Change::Decide(Disposition::Rejected), &ctx())
             .unwrap();
         s.apply(
             &iid("t-1"),
-            Change::SetCondition(Some(Condition::At("2026-03-01".parse().unwrap()))),
+            Change::SetResurfaceCondition(ResurfaceCondition::AtDate(
+                "2026-03-01".parse().unwrap(),
+            )),
             &ctx(),
         )
         .unwrap();
 
         let events = s.events(&iid("t-1")).unwrap();
         let fields: Vec<&str> = events.iter().map(|e| e.field.as_str()).collect();
-        assert_eq!(fields, ["commitment", "condition"]);
+        assert_eq!(fields, ["disposition", "resurface_condition"]);
         assert_eq!(events[0].old_value.as_deref(), Some("accepted"));
         assert_eq!(events[0].new_value.as_deref(), Some("rejected"));
         assert_eq!(events[0].actor, "tester");
         assert_eq!(events[0].reason.as_deref(), Some("理由"));
         assert_eq!(events[1].old_value, None, "条件は付いていなかった");
-        assert_eq!(events[1].new_value.as_deref(), Some("2026-03-01"));
+        assert_eq!(events[1].new_value.as_deref(), Some("AtDate(2026-03-01)"));
     }
 
     #[test]
@@ -1468,7 +1564,7 @@ mod tests {
         assert_eq!(events[3].reason.as_deref(), Some("理由"));
         assert!(s.events(&iid("t-1")).unwrap().is_empty());
 
-        s.apply(&iid("t-1"), Change::Decide(Commitment::Rejected), &ctx())
+        s.apply(&iid("t-1"), Change::Decide(Disposition::Rejected), &ctx())
             .unwrap();
         assert_eq!(s.events(&iid("t-1")).unwrap().len(), 1);
         assert_eq!(
@@ -1632,21 +1728,28 @@ mod tests {
         s.insert(&issue("t-1", 0)).unwrap();
         s.insert(&issue("t-2", 1)).unwrap();
 
-        let cond = Condition::AfterIssue(iid("t-2"));
+        let cond = ResurfaceCondition::AfterIssue(iid("t-2"));
         s.apply(
             &iid("t-1"),
-            Change::SetCondition(Some(cond.clone())),
+            Change::SetResurfaceCondition(cond.clone()),
             &ctx(),
         )
         .unwrap();
-        assert_eq!(s.get(&iid("t-1")).unwrap().condition, Some(cond));
+        assert_eq!(s.get(&iid("t-1")).unwrap().resurface_condition, cond);
 
         let events = s.events(&iid("t-1")).unwrap();
-        assert_eq!(events[0].new_value.as_deref(), Some("after t-2"));
+        assert_eq!(events[0].new_value.as_deref(), Some("AfterIssue(t-2)"));
 
-        s.apply(&iid("t-1"), Change::SetCondition(None), &ctx())
-            .unwrap();
-        assert_eq!(s.get(&iid("t-1")).unwrap().condition, None);
+        s.apply(
+            &iid("t-1"),
+            Change::SetResurfaceCondition(ResurfaceCondition::Always),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(
+            s.get(&iid("t-1")).unwrap().resurface_condition,
+            ResurfaceCondition::Always
+        );
     }
 
     #[test]

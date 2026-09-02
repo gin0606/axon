@@ -10,10 +10,14 @@ use db::{ApplyOutcome, Change, Ctx, Store};
 use derived::View;
 use domain::*;
 
-const CLI_GUIDE: &str = include_str!("../docs/cli.md");
+const CLI_GUIDE: &str = include_str!("../docs/help.md");
 
 #[derive(Parser)]
-#[command(name = "axon", version, about = "軸を分けたローカル issue tracker")]
+#[command(
+    name = "axon",
+    version,
+    about = "A local issue tracker with independent state axes"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -21,114 +25,114 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// この リポジトリで axon を使い始める
+    /// Initialize axon in this repository
     Init {
-        /// issue ID の接頭辞 (省略時はリポジトリのディレクトリ名)
+        /// Issue ID prefix (defaults to the repository directory name)
         prefix: Option<String>,
     },
-    /// シェル補完スクリプトを生成する
+    /// Generate a shell completion script
     Completion {
         #[arg(value_enum)]
         shell: Shell,
     },
-    /// やると決めたものを登録する (採否=採用)
+    /// Create an issue with Disposition Accepted
     Plan { title: Vec<String> },
-    /// 判断は後回しにして投げ込む (採否=未判断)
+    /// Create an issue with Disposition Undecided
     Capture { title: Vec<String> },
-    /// 着手可能なものを見る
+    /// List issues that can be started now
     Ready,
-    /// 人間の判断を待っているものを見る
+    /// List issues that need a human disposition decision
     Triage,
-    /// 指定して着手し、actor と時刻を進行履歴に残す
+    /// Claim one ready issue and record the actor and time
     Start { id: String },
-    /// 着手中の作業を終了し、作業結果を進行履歴に残す
+    /// End an InProgress issue and record its result
     Done {
         id: String,
-        /// 進行履歴に残す作業結果
+        /// Result to record in progress history
         #[arg(short, long)]
         reason: Option<String>,
     },
-    /// 表題と説明を書く
+    /// Update an issue's title or description
     Write {
         id: String,
-        /// 表題を付け直す
+        /// Replace the title
         #[arg(long)]
         title: Option<String>,
-        /// 説明を直接渡す
+        /// Read the description from this argument
         #[arg(short = 'm', long)]
         message: Option<String>,
-        /// 説明をファイルから読む (- で標準入力)
+        /// Read the description from a file, or standard input with -
         #[arg(short = 'F', long)]
         file: Option<String>,
     },
-    /// 採否と時期の判断ログを見る
+    /// Show Disposition and resurface-condition decision history
     Log { id: String },
-    /// 放置されたまま残っている着手を探す
+    /// Find old claims whose owning process is no longer running
     Stale {
-        /// これより長く動きがないものを対象にする
+        /// Minimum claim age in hours
         #[arg(long, default_value_t = 24)]
         hours: i64,
     },
-    /// 着手を解放し、理由・申し送りを進行履歴に残す
+    /// Release a claim and record an optional reason or handoff
     Release {
         id: String,
-        /// 進行履歴に残す解放理由・申し送り
+        /// Release reason or handoff to record in progress history
         #[arg(short, long)]
         reason: Option<String>,
     },
-    /// 全 issue を見る
+    /// List every issue regardless of state
     List,
-    /// 詳細と進行履歴を見る
+    /// Show issue details, relationships, and progress history
     Show { id: String },
-    /// 採否 (やるかどうか) を決める
+    /// Change an issue's Disposition
     #[command(subcommand)]
     Decide(DecideCmd),
-    /// 時期 (いつ再び意識に上げるか) を決める
+    /// Change an issue's resurface condition
     #[command(subcommand)]
     When(WhenCmd),
-    /// 依存 (これが無いと始められない) を張る
+    /// Manage issue dependencies
     #[command(subcommand)]
     Dep(DepCmd),
-    /// 機能群でまとめる
+    /// Manage groups and group dependencies
     #[command(subcommand)]
     Group(GroupCmd),
 }
 
 #[derive(Subcommand)]
 enum GroupCmd {
-    /// グループを作る
+    /// Create a group
     New {
         slug: String,
-        /// 表示名 (省略時は slug と同じ)
+        /// Display name (defaults to the slug)
         name: Vec<String>,
-        /// 親グループの slug
+        /// Parent group slug
         #[arg(long)]
         parent: Option<String>,
     },
-    /// グループを一覧する
+    /// List groups
     List,
-    /// グループの中身と進捗を見る
+    /// Show a group's issues and progress
     Show { slug: String },
-    /// issue をグループに入れる
+    /// Put an issue in a group
     Set { id: String, slug: String },
-    /// issue をグループから外す
+    /// Remove an issue from its group
     Unset { id: String },
-    /// グループごとやらないことにする (子孫を一括で不採用にする)
+    /// Reject every descendant issue in a group
     Reject { slug: String },
-    /// グループ間の依存
+    /// Manage group dependencies
     #[command(subcommand)]
     Dep(GroupDepCmd),
 }
 
 #[derive(Subcommand)]
 enum GroupDepCmd {
-    /// 依存を張る
+    /// Add a dependency
     Add {
         slug: String,
         #[arg(long)]
         needs: String,
     },
-    /// 依存を外す
+    /// Remove a dependency
     Rm {
         slug: String,
         #[arg(long)]
@@ -138,20 +142,20 @@ enum GroupDepCmd {
 
 #[derive(Subcommand)]
 enum DecideCmd {
-    /// やると決める
+    /// Set Disposition to Accepted
     Accept {
         id: String,
         #[arg(short, long)]
         reason: Option<String>,
     },
-    /// やらないと決める
+    /// Set Disposition to Rejected
     Reject {
         id: String,
-        /// なぜやらないのか。後から見て判断を復元できるように残す
+        /// Reason for rejection, used to reconstruct the decision later
         #[arg(short, long)]
         reason: Option<String>,
     },
-    /// 判断を取り消して未判断に戻す
+    /// Set Disposition back to Undecided
     Undecide {
         id: String,
         #[arg(short, long)]
@@ -161,22 +165,22 @@ enum DecideCmd {
 
 #[derive(Subcommand)]
 enum WhenCmd {
-    /// 指定日まで浮上させない
+    /// Set an AtDate resurface condition
     At {
         id: String,
         date: String,
-        /// なぜ今やらないのか
+        /// Reason for deferring attention
         #[arg(short, long)]
         reason: Option<String>,
     },
-    /// 指定した issue が終わるまで浮上させない
+    /// Set an AfterIssue resurface condition
     After {
         id: String,
         reference: String,
         #[arg(short, long)]
         reason: Option<String>,
     },
-    /// 条件を外して常に浮上させる
+    /// Set the resurface condition to Always
     Clear {
         id: String,
         #[arg(short, long)]
@@ -186,13 +190,13 @@ enum WhenCmd {
 
 #[derive(Subcommand)]
 enum DepCmd {
-    /// 依存を張る
+    /// Add a dependency
     Add {
         id: String,
         #[arg(long)]
         needs: String,
     },
-    /// 依存を外す
+    /// Remove a dependency
     Rm {
         id: String,
         #[arg(long)]
@@ -204,14 +208,14 @@ fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     if requests_complete_help(&args) {
         if let Err(e) = write_complete_help() {
-            eprintln!("エラー: {e}");
+            eprintln!("Error: {e}");
             std::process::exit(1);
         }
         return;
     }
 
     if let Err(e) = run(args) {
-        eprintln!("エラー: {e}");
+        eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }
@@ -254,7 +258,7 @@ fn render_complete_help() -> String {
 
     let mut out = String::new();
     out.push_str(CLI_GUIDE.trim_end());
-    out.push_str("\n\n# コマンドリファレンス\n");
+    out.push_str("\n\n# Command reference\n");
     write_leaf_help(&mut out, &mut command, "axon");
     out
 }
@@ -288,8 +292,8 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
             write_completion(shell)?;
             Ok(())
         }
-        Command::Plan { title } => cmd_create(title, Commitment::Accepted),
-        Command::Capture { title } => cmd_create(title, Commitment::Undecided),
+        Command::Plan { title } => cmd_create(title, Disposition::Accepted),
+        Command::Capture { title } => cmd_create(title, Disposition::Undecided),
         Command::Ready => cmd_ready(),
         Command::Triage => cmd_triage(),
         Command::Start { id } => cmd_start(&id),
@@ -338,7 +342,7 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
         GroupCmd::List => {
             let view = view_of(&store)?;
             if view.groups().is_empty() {
-                println!("グループはまだありません");
+                println!("No groups");
                 return Ok(());
             }
             for g in view.groups() {
@@ -346,11 +350,11 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
                 let waiting = view.group_waiting_on(&g.id);
                 let mut extra = Vec::new();
                 if p.undecided > 0 {
-                    extra.push(format!("未判断 {}", p.undecided));
+                    extra.push(format!("Undecided: {}", p.undecided));
                 }
                 if !waiting.is_empty() {
                     let names: Vec<_> = waiting.iter().map(|w| w.slug.as_str()).collect();
-                    extra.push(format!("待ち: {}", names.join(", ")));
+                    extra.push(format!("Waiting on: {}", names.join(", ")));
                 }
                 let suffix = if extra.is_empty() {
                     String::new()
@@ -363,24 +367,24 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
         GroupCmd::Show { slug } => {
             let view = view_of(&store)?;
             let id = store.resolve_slug(&slug)?;
-            let g = view.group(&id).ok_or("グループが見つかりません")?;
+            let g = view.group(&id).ok_or("group not found")?;
             println!("{}  {}", g.slug, g.name);
             if let Some(pid) = &g.parent
                 && let Some(parent) = view.group(pid)
             {
-                println!("親: {}", parent.slug);
+                println!("Parent: {}", parent.slug);
             }
             let p = view.group_progress(&id);
             match p.ratio() {
-                Some(_) => println!("進捗: {}/{} (未判断 {} 件)", p.done, p.total, p.undecided),
-                None => println!(
-                    "進捗: 採用したものがまだありません (未判断 {} 件)",
-                    p.undecided
+                Some(_) => println!(
+                    "Progress: {}/{} (Undecided: {})",
+                    p.done, p.total, p.undecided
                 ),
+                None => println!("Progress: no Accepted issues (Undecided: {})", p.undecided),
             }
             let waiting = view.group_waiting_on(&id);
             for w in waiting {
-                println!("待ち: {} ({})", w.slug, w.name);
+                println!("Waiting on: {} ({})", w.slug, w.name);
             }
             println!();
             for i in view.issues_in(&id) {
@@ -388,7 +392,7 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
                     "  {}  [{}/{}]  {}",
                     i.id,
                     i.progress.label(),
-                    i.commitment.label(),
+                    i.disposition.label(),
                     i.title
                 );
             }
@@ -397,12 +401,12 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             let id = store.resolve_id(&id)?;
             let gid = store.resolve_slug(&slug)?;
             store.apply(&id, Change::SetGroup(Some(gid)), &ctx(None))?;
-            println!("{id} を {slug} に入れました");
+            println!("{id} added to group {slug}");
         }
         GroupCmd::Unset { id } => {
             let id = store.resolve_id(&id)?;
             store.apply(&id, Change::SetGroup(None), &ctx(None))?;
-            println!("{id} をグループから外しました");
+            println!("{id} removed from its group");
         }
         GroupCmd::Reject { slug } => {
             let view = view_of(&store)?;
@@ -410,35 +414,35 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             let targets: Vec<_> = view
                 .issues_in(&id)
                 .into_iter()
-                .filter(|i| i.commitment != Commitment::Rejected)
+                .filter(|i| i.disposition != Disposition::Rejected)
                 .map(|i| i.id.clone())
                 .collect();
-            let c = ctx(Some(format!("{slug} ごと不採用にした")));
+            let c = ctx(Some(format!("Rejected through group {slug}")));
             let mut changed = 0;
             for t in &targets {
-                if store.apply(t, Change::ConvergeCommitment(Commitment::Rejected), &c)?
+                if store.apply(t, Change::ConvergeDisposition(Disposition::Rejected), &c)?
                     == ApplyOutcome::Changed
                 {
                     changed += 1;
                 }
             }
-            println!("{slug} の {changed} 件を不採用にしました");
+            println!("{changed} issues in {slug} set to Rejected");
         }
         GroupCmd::Dep(d) => match d {
             GroupDepCmd::Add { slug, needs } => {
                 let a = store.resolve_slug(&slug)?;
                 let b = store.resolve_slug(&needs)?;
                 if a == b {
-                    return Err("自分自身には依存できません".into());
+                    return Err("a group cannot depend on itself".into());
                 }
                 store.add_group_dep(&a, &b)?;
-                println!("{slug} は {needs} を前提にします");
+                println!("{slug} now depends on {needs}");
             }
             GroupDepCmd::Rm { slug, needs } => {
                 let a = store.resolve_slug(&slug)?;
                 let b = store.resolve_slug(&needs)?;
                 store.remove_group_dep(&a, &b)?;
-                println!("{slug} の前提から {needs} を外しました");
+                println!("{slug} no longer depends on {needs}");
             }
         },
     }
@@ -454,18 +458,18 @@ fn cmd_init(prefix: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_else(|| "axon".to_string()),
     };
     let path = Store::init(&prefix)?;
-    println!("初期化しました: {}", path.display());
-    println!("issue ID は {prefix}-xxxxxx の形式になります");
+    println!("Initialized axon at {}", path.display());
+    println!("Issue IDs will use the form {prefix}-xxxxxx");
     Ok(())
 }
 
 fn cmd_create(
     title: Vec<String>,
-    commitment: Commitment,
+    disposition: Disposition,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let title = title.join(" ");
     if title.trim().is_empty() {
-        return Err("タイトルが空です".into());
+        return Err("title must not be empty".into());
     }
     let store = Store::open()?;
     let now = Utc::now();
@@ -474,14 +478,14 @@ fn cmd_create(
         title,
         description: None,
         progress: Progress::NotStarted,
-        commitment,
-        condition: None,
+        disposition,
+        resurface_condition: ResurfaceCondition::Always,
         group: None,
         created_at: now,
         updated_at: now,
     };
     store.insert(&issue)?;
-    println!("{}  {}  [{}]", issue.id, issue.title, commitment.label());
+    println!("{}  {}  [{}]", issue.id, issue.title, disposition.label());
     Ok(())
 }
 
@@ -502,7 +506,7 @@ fn view_of(store: &Store) -> Result<View, Box<dyn std::error::Error>> {
 
 fn cmd_ready() -> Result<(), Box<dyn std::error::Error>> {
     let (_, view) = load()?;
-    print_rows(&render_ready(&view), "着手できるものはありません");
+    print_rows(&render_ready(&view), "No ready issues");
     Ok(())
 }
 
@@ -524,7 +528,7 @@ fn render_ready(view: &View) -> String {
 
 fn cmd_triage() -> Result<(), Box<dyn std::error::Error>> {
     let (_, view) = load()?;
-    print_rows(&render_triage(&view), "判断を待っているものはありません");
+    print_rows(&render_triage(&view), "No issues need triage");
     Ok(())
 }
 
@@ -534,17 +538,17 @@ fn render_triage(view: &View) -> String {
     for (issue, reason) in view.triage() {
         match reason {
             TriageReason::Undecided => {
-                out.push_str(&format!("{}  未判断    {}\n", issue.id, issue.title));
+                out.push_str(&format!("{}  Undecided  {}\n", issue.id, issue.title));
             }
             TriageReason::Orphaned => {
                 let lost: Vec<_> = view
                     .depends_on(&issue.id)
                     .into_iter()
-                    .filter(|d| d.commitment == Commitment::Rejected)
+                    .filter(|d| d.disposition == Disposition::Rejected)
                     .map(|d| d.id.to_string())
                     .collect();
                 out.push_str(&format!(
-                    "{}  前提喪失  {} ← {} が不採用\n",
+                    "{}  Orphaned   {} <- {} is Rejected\n",
                     issue.id,
                     issue.title,
                     lost.join(", ")
@@ -566,7 +570,7 @@ fn cmd_start(id: &str) -> Result<(), Box<dyn std::error::Error>> {
     };
     store.apply(&id, Change::Claim(claim.clone()), &ctx(None))?;
     let issue = store.get(&id)?;
-    println!("{} に着手しました ({})", id, claim.actor);
+    println!("Started {id} ({})", claim.actor);
     println!("{}", issue.title);
     Ok(())
 }
@@ -582,19 +586,19 @@ fn cmd_done(id: &str, reason: Option<String>) -> Result<(), Box<dyn std::error::
     let mut store = Store::open()?;
     let id = store.resolve_id(id)?;
     store.apply(&id, Change::End, &ctx(reason))?;
-    println!("{id} を終了しました");
+    println!("Ended {id}");
 
     let view = view_of(&store)?;
     let unblocked = view.newly_ready_after(&id);
     for i in unblocked {
-        println!("着手可能になりました: {}  {}", i.id, i.title);
+        println!("Now ready: {}  {}", i.id, i.title);
     }
     Ok(())
 }
 
 fn cmd_list() -> Result<(), Box<dyn std::error::Error>> {
     let (_, view) = load()?;
-    print_rows(&render_list(&view), "issue はまだありません");
+    print_rows(&render_list(&view), "No issues");
     Ok(())
 }
 
@@ -603,15 +607,15 @@ fn render_list(view: &View) -> String {
     for i in view.iter() {
         let mut marks = Vec::new();
         if view.is_orphaned(&i.id) {
-            marks.push("前提喪失".to_string());
+            marks.push("orphaned".to_string());
         } else if view.is_blocked(&i.id) {
-            marks.push("待ち".to_string());
+            marks.push("blocked".to_string());
         }
         if !view.is_surfaced(i) {
-            marks.push(match &i.condition {
-                Some(Condition::At(d)) => d.to_string(),
-                Some(Condition::AfterIssue(r)) => format!("{r} の後"),
-                None => String::new(),
+            marks.push(match &i.resurface_condition {
+                ResurfaceCondition::AtDate(d) => format!("AtDate({d})"),
+                ResurfaceCondition::AfterIssue(r) => format!("AfterIssue({r})"),
+                ResurfaceCondition::Always => String::new(),
             });
         }
         let mark = if marks.is_empty() {
@@ -623,7 +627,7 @@ fn render_list(view: &View) -> String {
             "{}  [{}/{}]{}  {}\n",
             i.id,
             i.progress.label(),
-            i.commitment.label(),
+            i.disposition.label(),
             mark,
             i.title
         ));
@@ -642,7 +646,7 @@ fn cmd_show(id: &str) -> Result<(), Box<dyn std::error::Error>> {
         progress_events,
     } = store.show_snapshot(id)?;
     let view = View::new(issues, deps, groups, group_deps);
-    let issue = view.get(&id).ok_or("issue が見つかりません")?;
+    let issue = view.get(&id).ok_or("issue not found")?;
     print!("{}", render_show(&view, issue, &progress_events));
     Ok(())
 }
@@ -651,31 +655,31 @@ fn cmd_show(id: &str) -> Result<(), Box<dyn std::error::Error>> {
 fn render_show(view: &View, issue: &Issue, progress_events: &[db::ProgressEvent]) -> String {
     let mut blocks: Vec<Vec<String>> = Vec::new();
 
-    let when = match &issue.condition {
-        None => "常に浮上".to_string(),
-        Some(Condition::At(d)) => format!("{d} 以降"),
-        Some(Condition::AfterIssue(r)) => format!("{r} が終わった後"),
+    let when = match &issue.resurface_condition {
+        ResurfaceCondition::Always => "Always".to_string(),
+        ResurfaceCondition::AtDate(d) => format!("AtDate({d})"),
+        ResurfaceCondition::AfterIssue(r) => format!("AfterIssue({r})"),
     };
     let mut head = vec![
         format!("{}  {}", issue.id, issue.title),
         format!(
-            "進行: {}  採否: {}  時期: {}",
+            "Progress: {}  Disposition: {}  Resurface condition: {}",
             issue.progress.label(),
-            issue.commitment.label(),
+            issue.disposition.label(),
             when
         ),
     ];
     let group = issue.group.as_ref().and_then(|g| view.group(g));
     if let Some(g) = group {
         head.push(if g.name == g.slug {
-            format!("グループ: {}", g.slug)
+            format!("Group: {}", g.slug)
         } else {
-            format!("グループ: {}  {}", g.slug, g.name)
+            format!("Group: {}  {}", g.slug, g.name)
         });
     }
     if let Some(c) = issue.progress.claim() {
         head.push(format!(
-            "着手: {} ({})",
+            "Claim: {} ({})",
             c.actor,
             c.at.format("%Y-%m-%d %H:%M")
         ));
@@ -688,12 +692,12 @@ fn render_show(view: &View, issue: &Issue, progress_events: &[db::ProgressEvent]
 
     let mut progress = Vec::new();
     if !progress_events.is_empty() {
-        progress.push("進行履歴:".to_string());
+        progress.push("Progress history:".to_string());
         for event in progress_events {
             let action = match event.kind {
-                db::ProgressEventKind::Start => "着手",
-                db::ProgressEventKind::Done => "終了",
-                db::ProgressEventKind::Release => "解放",
+                db::ProgressEventKind::Start => "Started",
+                db::ProgressEventKind::Done => "Ended",
+                db::ProgressEventKind::Release => "Released",
             };
             let reason = event
                 .reason
@@ -714,7 +718,7 @@ fn render_show(view: &View, issue: &Issue, progress_events: &[db::ProgressEvent]
     let mut relations = Vec::new();
     for d in &waiting {
         relations.push(format!(
-            "待ち: {}  {}{}",
+            "Dependency: {}  {}{}",
             d.id,
             d.title,
             blocker_note(view, d)
@@ -722,23 +726,26 @@ fn render_show(view: &View, issue: &Issue, progress_events: &[db::ProgressEvent]
     }
     for d in deps
         .iter()
-        .filter(|d| d.is_terminal() && d.commitment != Commitment::Rejected)
+        .filter(|d| d.is_terminal() && d.disposition != Disposition::Rejected)
     {
-        relations.push(format!("済み: {}  {}", d.id, d.title));
+        relations.push(format!("Satisfied dependency: {}  {}", d.id, d.title));
     }
-    for d in deps.iter().filter(|d| d.commitment == Commitment::Rejected) {
-        relations.push(format!("前提喪失: {} が不採用になっています", d.id));
+    for d in deps
+        .iter()
+        .filter(|d| d.disposition == Disposition::Rejected)
+    {
+        relations.push(format!("Orphaned: {} is Rejected", d.id));
     }
 
     // 直接の依存より奥に原因があるときだけ、遡った結果を出す
     let direct: Vec<&IssueId> = waiting.iter().map(|d| &d.id).collect();
     for c in view
-        .blocked_reason(&issue.id)
+        .blocking_causes(&issue.id)
         .iter()
         .filter(|c| !direct.contains(&&c.id))
     {
         relations.push(format!(
-            "原因: {}  {}{}",
+            "Root cause: {}  {}{}",
             c.id,
             c.title,
             blocker_note(view, c)
@@ -746,13 +753,18 @@ fn render_show(view: &View, issue: &Issue, progress_events: &[db::ProgressEvent]
     }
 
     for d in view.dependents(&issue.id) {
-        relations.push(format!("後続: {}  {}{}", d.id, d.title, dependent_note(d)));
+        relations.push(format!(
+            "Dependent: {}  {}{}",
+            d.id,
+            d.title,
+            dependent_note(d)
+        ));
     }
     blocks.push(relations);
 
-    for (g, blockers) in view.group_blocked_reason(issue) {
+    for (g, blockers) in view.group_blocking_causes(issue) {
         let mut block = vec![format!(
-            "グループ {} が {} を待っています",
+            "Group {} depends on {}",
             group.map(|x| x.slug.as_str()).unwrap_or("?"),
             g.slug
         )];
@@ -761,7 +773,7 @@ fn render_show(view: &View, issue: &Issue, progress_events: &[db::ProgressEvent]
                 "  {}  [{}/{}]  {}",
                 b.id,
                 b.progress.label(),
-                b.commitment.label(),
+                b.disposition.label(),
                 b.title
             ));
         }
@@ -779,10 +791,10 @@ fn render_show(view: &View, issue: &Issue, progress_events: &[db::ProgressEvent]
 
 /// 後続がすでに終端なら、これを終わらせても動き出さないことを添える。
 fn dependent_note(issue: &Issue) -> &'static str {
-    if issue.commitment == Commitment::Rejected {
-        " ← 不採用"
+    if issue.disposition == Disposition::Rejected {
+        " <- Rejected"
     } else if matches!(issue.progress, Progress::Ended) {
-        " ← 終了済み"
+        " <- Ended"
     } else {
         ""
     }
@@ -791,12 +803,14 @@ fn dependent_note(issue: &Issue) -> &'static str {
 /// 止まっている理由のうち、状態表示だけでは読み取れないものを添える。
 fn blocker_note(view: &View, issue: &Issue) -> String {
     if view.is_orphaned(&issue.id) {
-        " ← 前提喪失".to_string()
+        " <- orphaned".to_string()
     } else if !view.is_surfaced(issue) {
-        match &issue.condition {
-            Some(Condition::At(d)) => format!(" ← {d} まで浮上しない"),
-            Some(Condition::AfterIssue(r)) => format!(" ← {r} の後まで浮上しない"),
-            None => String::new(),
+        match &issue.resurface_condition {
+            ResurfaceCondition::AtDate(d) => format!(" <- not surfaced until {d}"),
+            ResurfaceCondition::AfterIssue(r) => {
+                format!(" <- not surfaced until {r} is terminal")
+            }
+            ResurfaceCondition::Always => String::new(),
         }
     } else {
         String::new()
@@ -805,19 +819,19 @@ fn blocker_note(view: &View, issue: &Issue) -> String {
 
 fn cmd_decide(c: DecideCmd) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = Store::open()?;
-    let (raw, commitment, reason) = match c {
-        DecideCmd::Accept { id, reason } => (id, Commitment::Accepted, reason),
-        DecideCmd::Reject { id, reason } => (id, Commitment::Rejected, reason),
-        DecideCmd::Undecide { id, reason } => (id, Commitment::Undecided, reason),
+    let (raw, disposition, reason) = match c {
+        DecideCmd::Accept { id, reason } => (id, Disposition::Accepted, reason),
+        DecideCmd::Reject { id, reason } => (id, Disposition::Rejected, reason),
+        DecideCmd::Undecide { id, reason } => (id, Disposition::Undecided, reason),
     };
     let id = store.resolve_id(&raw)?;
-    store.apply(&id, Change::Decide(commitment), &ctx(reason))?;
-    println!("{id} を{}にしました", commitment.label());
+    store.apply(&id, Change::Decide(disposition), &ctx(reason))?;
+    println!("{id} Disposition set to {}", disposition.label());
 
     // 着手中のまま不採用にすると「作業は止まっているのに着手中」が残るため促す。
     // 進行と採否は別の軸なので、こちらでは終了させない。
-    if commitment == Commitment::Rejected && store.get(&id)?.progress.claim().is_some() {
-        println!("着手中のままです。作業を止めるなら `axon done {id}` も実行してください");
+    if disposition == Disposition::Rejected && store.get(&id)?.progress.claim().is_some() {
+        println!("The issue remains InProgress; if work has stopped, also run `axon done {id}`");
     }
     Ok(())
 }
@@ -829,13 +843,13 @@ fn cmd_when(c: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
             let id = store.resolve_id(&id)?;
             let date: NaiveDate = date
                 .parse()
-                .map_err(|_| format!("日付として読めません: {date} (YYYY-MM-DD)"))?;
+                .map_err(|_| format!("invalid date: {date} (expected YYYY-MM-DD)"))?;
             store.apply(
                 &id,
-                Change::SetCondition(Some(Condition::At(date))),
+                Change::SetResurfaceCondition(ResurfaceCondition::AtDate(date)),
                 &ctx(reason),
             )?;
-            println!("{id} は {date} まで浮上しません");
+            println!("{id} resurface condition set to AtDate({date})");
         }
         WhenCmd::After {
             id,
@@ -845,19 +859,23 @@ fn cmd_when(c: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
             let id = store.resolve_id(&id)?;
             let target = store.resolve_id(&reference)?;
             if id == target {
-                return Err("自分自身を条件にはできません".into());
+                return Err("an issue cannot use itself as a resurface condition".into());
             }
             store.apply(
                 &id,
-                Change::SetCondition(Some(Condition::AfterIssue(target.clone()))),
+                Change::SetResurfaceCondition(ResurfaceCondition::AfterIssue(target.clone())),
                 &ctx(reason),
             )?;
-            println!("{id} は {target} が終わるまで浮上しません");
+            println!("{id} resurface condition set to AfterIssue({target})");
         }
         WhenCmd::Clear { id, reason } => {
             let id = store.resolve_id(&id)?;
-            store.apply(&id, Change::SetCondition(None), &ctx(reason))?;
-            println!("{id} の条件を外しました");
+            store.apply(
+                &id,
+                Change::SetResurfaceCondition(ResurfaceCondition::Always),
+                &ctx(reason),
+            )?;
+            println!("{id} resurface condition set to Always");
         }
     }
     Ok(())
@@ -870,16 +888,16 @@ fn cmd_dep(c: DepCmd) -> Result<(), Box<dyn std::error::Error>> {
             let id = store.resolve_id(&id)?;
             let needs = store.resolve_id(&needs)?;
             if id == needs {
-                return Err("自分自身には依存できません".into());
+                return Err("an issue cannot depend on itself".into());
             }
             store.add_dep(&id, &needs)?;
-            println!("{id} は {needs} を前提にします");
+            println!("{id} now depends on {needs}");
         }
         DepCmd::Rm { id, needs } => {
             let id = store.resolve_id(&id)?;
             let needs = store.resolve_id(&needs)?;
             store.remove_dep(&id, &needs)?;
-            println!("{id} の前提から {needs} を外しました");
+            println!("{id} no longer depends on {needs}");
         }
     }
     Ok(())
@@ -890,7 +908,7 @@ fn cmd_log(id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let id = store.resolve_id(id)?;
     let events = store.events(&id)?;
     if events.is_empty() {
-        println!("履歴はありません");
+        println!("No decision history");
         return Ok(());
     }
     for e in events {
@@ -908,25 +926,33 @@ fn cmd_log(id: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// 判断を日本語の一行にする。DB には英語の値が入っているため、ここで読める形に直す。
+/// DB values are stable lowercase tokens; output uses the public glossary.
 fn format_decision(e: &db::Event) -> String {
     let label = |v: &Option<String>| -> String {
         match v.as_deref() {
-            Some("undecided") => "未判断".to_string(),
-            Some("accepted") => "採用".to_string(),
-            Some("rejected") => "不採用".to_string(),
+            Some("undecided") => "Undecided".to_string(),
+            Some("accepted") => "Accepted".to_string(),
+            Some("rejected") => "Rejected".to_string(),
             Some(other) => other.to_string(),
-            None => "なし".to_string(),
+            None => "Always".to_string(),
         }
     };
     match e.field.as_str() {
-        "commitment" => format!("採否: {} → {}", label(&e.old_value), label(&e.new_value)),
-        "condition" => match (&e.old_value, &e.new_value) {
-            (_, None) => "時期: 条件を外した".to_string(),
-            (None, Some(n)) => format!("時期: {n} まで後回し"),
-            (Some(o), Some(n)) => format!("時期: {o} → {n} まで後回し"),
-        },
-        other => format!("{other}: {} → {}", label(&e.old_value), label(&e.new_value)),
+        "disposition" => format!(
+            "Disposition: {} -> {}",
+            label(&e.old_value),
+            label(&e.new_value)
+        ),
+        "resurface_condition" => format!(
+            "Resurface condition: {} -> {}",
+            label(&e.old_value),
+            label(&e.new_value)
+        ),
+        other => format!(
+            "{other}: {} -> {}",
+            label(&e.old_value),
+            label(&e.new_value)
+        ),
     }
 }
 
@@ -934,7 +960,7 @@ fn cmd_stale(hours: i64) -> Result<(), Box<dyn std::error::Error>> {
     let (_, view) = load()?;
     let stale = view.stale_claims(hours);
     if stale.is_empty() {
-        println!("放置された着手はありません");
+        println!("No stale claims");
         return Ok(());
     }
     for (issue, claim) in stale {
@@ -943,10 +969,10 @@ fn cmd_stale(hours: i64) -> Result<(), Box<dyn std::error::Error>> {
             .num_hours();
         println!("{}  {}", issue.id, issue.title);
         println!(
-            "  {} が {} 時間前に着手 (プロセス {} は終了しています)",
+            "  claimed by {} {} hours ago (process {} is no longer running)",
             claim.actor, elapsed, claim.pid
         );
-        println!("  解放するなら: axon release {}", issue.id);
+        println!("  To release: axon release {}", issue.id);
     }
     Ok(())
 }
@@ -955,7 +981,7 @@ fn cmd_release(id: &str, reason: Option<String>) -> Result<(), Box<dyn std::erro
     let mut store = Store::open()?;
     let id = store.resolve_id(id)?;
     store.apply(&id, Change::Release, &ctx(reason))?;
-    println!("{id} の着手を取り消しました");
+    println!("Released {id}");
     Ok(())
 }
 
@@ -981,12 +1007,12 @@ fn cmd_write(
             Some(buf)
         }
         (None, Some(f)) => Some(std::fs::read_to_string(&f)?),
-        (Some(_), Some(_)) => return Err("-m と -F は同時に使えません".into()),
+        (Some(_), Some(_)) => return Err("-m and -F cannot be used together".into()),
         (None, None) => None,
     };
 
     if title.is_none() && body.is_none() {
-        return Err("書く内容がありません。--title / -m / -F のいずれかを指定してください".into());
+        return Err("nothing to write; provide --title, -m, or -F".into());
     }
 
     let mut written = Vec::new();
@@ -994,11 +1020,11 @@ fn cmd_write(
     if let Some(t) = title {
         let t = t.trim();
         if t.is_empty() {
-            return Err("タイトルが空です".into());
+            return Err("title must not be empty".into());
         }
         if t != current.title {
             store.apply(&id, Change::SetTitle(t.to_string()), &ctx(None))?;
-            written.push("表題を付け直しました");
+            written.push("title updated");
         }
     }
 
@@ -1009,18 +1035,18 @@ fn cmd_write(
             let removed = new.is_none();
             store.apply(&id, Change::SetDescription(new), &ctx(None))?;
             written.push(if removed {
-                "説明を消しました"
+                "description removed"
             } else {
-                "説明を書きました"
+                "description updated"
             });
         }
     }
 
     if written.is_empty() {
-        println!("変更はありません");
+        println!("No changes");
     }
     for w in written {
-        println!("{id} の{w}");
+        println!("{id}: {w}");
     }
     Ok(())
 }
@@ -1053,15 +1079,15 @@ mod tests {
         IssueId::from_stored(id)
     }
 
-    fn issue(id: &str, progress: Progress, commitment: Commitment) -> Issue {
+    fn issue(id: &str, progress: Progress, disposition: Disposition) -> Issue {
         let now = Utc::now();
         Issue {
             id: iid(id),
             title: format!("{id} の作業"),
             description: None,
             progress,
-            commitment,
-            condition: None,
+            disposition,
+            resurface_condition: ResurfaceCondition::Always,
             group: None,
             created_at: now,
             updated_at: now,
@@ -1069,15 +1095,15 @@ mod tests {
     }
 
     fn accepted(id: &str) -> Issue {
-        issue(id, Progress::NotStarted, Commitment::Accepted)
+        issue(id, Progress::NotStarted, Disposition::Accepted)
     }
 
     fn done(id: &str) -> Issue {
-        issue(id, Progress::Ended, Commitment::Accepted)
+        issue(id, Progress::Ended, Disposition::Accepted)
     }
 
     fn rejected(id: &str) -> Issue {
-        issue(id, Progress::NotStarted, Commitment::Rejected)
+        issue(id, Progress::NotStarted, Disposition::Rejected)
     }
 
     fn group(slug: &str, name: &str) -> Group {
@@ -1104,12 +1130,12 @@ mod tests {
     }
 
     fn undecided(id: &str) -> Issue {
-        issue(id, Progress::NotStarted, Commitment::Undecided)
+        issue(id, Progress::NotStarted, Disposition::Undecided)
     }
 
-    fn waiting_until(id: &str, condition: Condition) -> Issue {
+    fn waiting_until(id: &str, resurface_condition: ResurfaceCondition) -> Issue {
         let mut i = accepted(id);
-        i.condition = Some(condition);
+        i.resurface_condition = resurface_condition;
         i
     }
 
@@ -1129,7 +1155,7 @@ mod tests {
         let v = view(vec![accepted("a")], &[], Vec::new());
         assert_eq!(
             show(&v, "a"),
-            "a  a の作業\n進行: 未着手  採否: 採用  時期: 常に浮上\n"
+            "a  a の作業\nProgress: NotStarted  Disposition: Accepted  Resurface condition: Always\n"
         );
     }
 
@@ -1157,7 +1183,7 @@ mod tests {
         let out = render_show(&v, v.get(&iid("a")).unwrap(), &events);
         assert!(
             out.contains(
-                "進行履歴:\n  2026-09-01 01:23  codex  着手\n  2026-09-01 01:23  codex  終了  (テストまで完了)"
+                "Progress history:\n  2026-09-01 01:23  codex  Started\n  2026-09-01 01:23  codex  Ended  (テストまで完了)"
             ),
             "{out}"
         );
@@ -1171,8 +1197,8 @@ mod tests {
             Vec::new(),
         );
         let out = show(&v, "a");
-        assert!(out.contains("待ち: c  c の作業"), "{out}");
-        assert!(out.contains("済み: b  b の作業"), "{out}");
+        assert!(out.contains("Dependency: c  c の作業"), "{out}");
+        assert!(out.contains("Satisfied dependency: b  b の作業"), "{out}");
     }
 
     #[test]
@@ -1180,14 +1206,14 @@ mod tests {
         let v = view(
             vec![
                 accepted("a"),
-                issue("b", Progress::Ended, Commitment::Rejected),
+                issue("b", Progress::Ended, Disposition::Rejected),
             ],
             &[("a", "b")],
             Vec::new(),
         );
         let out = show(&v, "a");
-        assert!(out.contains("前提喪失: b が不採用になっています"), "{out}");
-        assert!(!out.contains("済み:"), "{out}");
+        assert!(out.contains("Orphaned: b is Rejected"), "{out}");
+        assert!(!out.contains("Satisfied dependency:"), "{out}");
     }
 
     #[test]
@@ -1198,9 +1224,9 @@ mod tests {
             Vec::new(),
         );
         let out = show(&v, "a");
-        assert!(out.contains("後続: b  b の作業\n"), "{out}");
-        assert!(out.contains("後続: c  c の作業 ← 終了済み"), "{out}");
-        assert!(out.contains("後続: d  d の作業 ← 不採用"), "{out}");
+        assert!(out.contains("Dependent: b  b の作業\n"), "{out}");
+        assert!(out.contains("Dependent: c  c の作業 <- Ended"), "{out}");
+        assert!(out.contains("Dependent: d  d の作業 <- Rejected"), "{out}");
     }
 
     #[test]
@@ -1209,7 +1235,7 @@ mod tests {
         i.group = Some(GroupId::from_stored("cli"));
         let v = view(vec![i], &[], vec![group("cli", "CLI")]);
         assert!(
-            show(&v, "a").contains("グループ: cli  CLI"),
+            show(&v, "a").contains("Group: cli  CLI"),
             "{}",
             show(&v, "a")
         );
@@ -1238,8 +1264,8 @@ mod tests {
                 accepted("a"),
                 accepted("blocked"),
                 accepted("orphaned"),
-                waiting_until("dated", Condition::At(NaiveDate::MAX)),
-                waiting_until("after", Condition::AfterIssue(iid("blocked"))),
+                waiting_until("dated", ResurfaceCondition::AtDate(NaiveDate::MAX)),
+                waiting_until("after", ResurfaceCondition::AfterIssue(iid("blocked"))),
                 accepted("dep"),
                 rejected("gone"),
             ],
@@ -1257,11 +1283,7 @@ mod tests {
         let mut i = accepted("a");
         i.group = Some(GroupId::from_stored("cli"));
         let v = view(vec![i], &[], vec![group("cli", "cli")]);
-        assert!(
-            show(&v, "a").contains("グループ: cli\n"),
-            "{}",
-            show(&v, "a")
-        );
+        assert!(show(&v, "a").contains("Group: cli\n"), "{}", show(&v, "a"));
     }
 
     #[test]

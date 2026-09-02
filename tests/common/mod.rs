@@ -72,10 +72,10 @@ struct IssueState {
     title: String,
     description: Option<String>,
     progress: String,
-    commitment: String,
-    condition_kind: Option<String>,
-    condition_date: Option<String>,
-    condition_reference: Option<String>,
+    disposition: String,
+    resurface_condition_kind: Option<String>,
+    resurface_condition_date: Option<String>,
+    resurface_condition_reference: Option<String>,
     group_id: Option<String>,
 }
 
@@ -158,8 +158,8 @@ impl TestRepo {
         let conn = self.connection();
         let (state, updated_at) = conn
             .query_row(
-                "SELECT title, description, progress, commitment,
-                        cond_kind, cond_date, cond_ref, group_id, updated_at
+                "SELECT title, description, progress, disposition,
+                        resurface_kind, resurface_date, resurface_ref, group_id, updated_at
                    FROM issues WHERE id = ?1",
                 params![id],
                 |row| {
@@ -168,10 +168,10 @@ impl TestRepo {
                             title: row.get(0)?,
                             description: row.get(1)?,
                             progress: row.get(2)?,
-                            commitment: row.get(3)?,
-                            condition_kind: row.get(4)?,
-                            condition_date: row.get(5)?,
-                            condition_reference: row.get(6)?,
+                            disposition: row.get(3)?,
+                            resurface_condition_kind: row.get(4)?,
+                            resurface_condition_date: row.get(5)?,
+                            resurface_condition_reference: row.get(6)?,
                             group_id: row.get(7)?,
                         },
                         row.get(8)?,

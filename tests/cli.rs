@@ -18,7 +18,7 @@ fn created_issues_are_observable_through_the_query_commands() {
     assert_success(&triage);
     assert_eq!(
         stdout(&triage),
-        format!("{captured}  未判断    investigate the risk\n")
+        format!("{captured}  Undecided  investigate the risk\n")
     );
     assert!(triage.stderr.is_empty());
 
@@ -26,7 +26,9 @@ fn created_issues_are_observable_through_the_query_commands() {
     assert_success(&show);
     assert_eq!(
         stdout(&show),
-        format!("{planned}  ship the feature\n進行: 未着手  採否: 採用  時期: 常に浮上\n")
+        format!(
+            "{planned}  ship the feature\nProgress: NotStarted  Disposition: Accepted  Resurface condition: Always\n"
+        )
     );
     assert!(show.stderr.is_empty());
 
@@ -35,8 +37,8 @@ fn created_issues_are_observable_through_the_query_commands() {
     assert_eq!(
         stdout(&list),
         format!(
-            "{planned}  [未着手/採用]  ship the feature\n\
-             {captured}  [未着手/未判断]  investigate the risk\n"
+            "{planned}  [NotStarted/Accepted]  ship the feature\n\
+             {captured}  [NotStarted/Undecided]  investigate the risk\n"
         )
     );
     assert!(list.stderr.is_empty());
@@ -66,13 +68,15 @@ fn decision_reasons_are_read_back_from_log() {
     let log = stdout(&log);
     assert!(
         log.lines().any(|line| {
-            line.contains("test-actor  採否: 未判断 → 採用  (required by users)")
+            line.contains("test-actor  Disposition: Undecided -> Accepted  (required by users)")
         }),
         "missing decide reason in log:\n{log}"
     );
     assert!(
         log.lines().any(|line| {
-            line.contains("test-actor  時期: 2099-12-31 まで後回し  (wait for the migration)")
+            line.contains(
+                "test-actor  Resurface condition: Always -> AtDate(2099-12-31)  (wait for the migration)"
+            )
         }),
         "missing when reason in log:\n{log}"
     );
@@ -84,9 +88,9 @@ fn empty_issue_queries_keep_guidance_out_of_stdout() {
     repo.init("test");
 
     for (command, guidance) in [
-        ("ready", "着手できるものはありません\n"),
-        ("triage", "判断を待っているものはありません\n"),
-        ("list", "issue はまだありません\n"),
+        ("ready", "No ready issues\n"),
+        ("triage", "No issues need triage\n"),
+        ("list", "No issues\n"),
     ] {
         let output = repo.axon(&[command]);
         assert_success(&output);
@@ -123,8 +127,31 @@ fn linked_worktrees_share_the_same_database() {
     let list = repo.axon(&["list"]);
     assert_success(&list);
     let list = stdout(&list);
-    assert!(list.contains(&format!("{from_main}  [未着手/採用]")));
-    assert!(list.contains(&format!("{from_linked}  [未着手/未判断]")));
+    assert!(list.contains(&format!("{from_main}  [NotStarted/Accepted]")));
+    assert!(list.contains(&format!("{from_linked}  [NotStarted/Undecided]")));
+}
+
+#[test]
+fn user_provided_text_is_displayed_without_language_changes() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let issue = repo.capture("日本語の表題");
+
+    assert_success(&repo.axon(&["write", &issue, "--message", "日本語の説明"]));
+    assert_success(&repo.axon(&["group", "new", "jp", "日本語グループ"]));
+    assert_success(&repo.axon(&["group", "set", &issue, "jp"]));
+    assert_success(&repo.axon(&["decide", "accept", &issue, "--reason", "日本語の採用理由"]));
+
+    let show = repo.axon(&["show", &issue]);
+    assert_success(&show);
+    let show = stdout(&show);
+    assert!(show.contains("日本語の表題"), "{show}");
+    assert!(show.contains("日本語の説明"), "{show}");
+    assert!(show.contains("Group: jp  日本語グループ"), "{show}");
+
+    let log = repo.axon(&["log", &issue]);
+    assert_success(&log);
+    assert!(stdout(&log).contains("日本語の採用理由"));
 }
 
 #[test]
@@ -140,7 +167,7 @@ fn repeated_transitions_fail_without_changing_state_history_or_timestamp() {
     assert!(repeated.stdout.is_empty());
     assert_eq!(
         stderr(&repeated),
-        format!("エラー: {done_issue} は着手できません (進行は着手中です)\n")
+        format!("Error: {done_issue} cannot be claimed (Progress is InProgress)\n")
     );
     assert_eq!(repo.issue_snapshot(&done_issue), before);
 
@@ -156,7 +183,7 @@ fn repeated_transitions_fail_without_changing_state_history_or_timestamp() {
     assert!(repeated.stdout.is_empty());
     assert_eq!(
         stderr(&repeated),
-        format!("エラー: {done_issue} は終了できません (進行は終了です)\n")
+        format!("Error: {done_issue} cannot be ended (Progress is Ended)\n")
     );
     assert_eq!(repo.issue_snapshot(&done_issue), before);
 
@@ -178,7 +205,7 @@ fn repeated_transitions_fail_without_changing_state_history_or_timestamp() {
     assert!(repeated.stdout.is_empty());
     assert_eq!(
         stderr(&repeated),
-        format!("エラー: {released_issue} は解放できません (進行は未着手です)\n")
+        format!("Error: {released_issue} cannot be released (Progress is NotStarted)\n")
     );
     assert_eq!(repo.issue_snapshot(&released_issue), before);
 
@@ -196,7 +223,7 @@ fn repeated_transitions_fail_without_changing_state_history_or_timestamp() {
     assert!(repeated.stdout.is_empty());
     assert_eq!(
         stderr(&repeated),
-        format!("エラー: {decision_issue} の採否はすでに採用です\n")
+        format!("Error: {decision_issue}: Disposition is already Accepted\n")
     );
     assert_eq!(repo.issue_snapshot(&decision_issue), before);
 
@@ -222,7 +249,7 @@ fn repeated_transitions_fail_without_changing_state_history_or_timestamp() {
     assert!(repeated.stdout.is_empty());
     assert_eq!(
         stderr(&repeated),
-        format!("エラー: {scheduled_issue} の時期はすでに2099-12-31です\n")
+        format!("Error: {scheduled_issue}: Resurface condition is already AtDate(2099-12-31)\n")
     );
     assert_eq!(repo.issue_snapshot(&scheduled_issue), before);
 
@@ -232,7 +259,7 @@ fn repeated_transitions_fail_without_changing_state_history_or_timestamp() {
     assert_failure(&repeated);
     assert_eq!(
         stderr(&repeated),
-        format!("エラー: {scheduled_issue} の時期はすでに常に浮上です\n")
+        format!("Error: {scheduled_issue}: Resurface condition is already Always\n")
     );
     assert_eq!(repo.issue_snapshot(&scheduled_issue), before);
 }
@@ -248,7 +275,7 @@ fn start_requires_the_issue_to_be_ready() {
     assert_failure(&start);
     assert_eq!(
         stderr(&start),
-        format!("エラー: {undecided} は着手できません (採否は未判断です)\n")
+        format!("Error: {undecided} cannot be claimed (Disposition is Undecided)\n")
     );
     assert_eq!(repo.issue_snapshot(&undecided), before);
 
@@ -260,7 +287,7 @@ fn start_requires_the_issue_to_be_ready() {
     assert_failure(&start);
     assert_eq!(
         stderr(&start),
-        format!("エラー: {blocked} は着手できません (未終了の前提があります)\n")
+        format!("Error: {blocked} cannot be claimed (an unresolved dependency exists)\n")
     );
     assert_eq!(repo.issue_snapshot(&blocked), before);
 
@@ -271,7 +298,7 @@ fn start_requires_the_issue_to_be_ready() {
     assert_failure(&start);
     assert_eq!(
         stderr(&start),
-        format!("エラー: {deferred} は着手できません (時期の条件を満たしていません)\n")
+        format!("Error: {deferred} cannot be claimed (resurface condition is not satisfied)\n")
     );
     assert_eq!(repo.issue_snapshot(&deferred), before);
 }
@@ -285,7 +312,7 @@ fn repeated_settings_succeed_without_duplicate_updates() {
     let before = repo.issue_snapshot(&issue);
     let write = repo.axon(&["write", &issue, "--title", "same title"]);
     assert_success(&write);
-    assert_eq!(stdout(&write), "変更はありません\n");
+    assert_eq!(stdout(&write), "No changes\n");
     assert_eq!(repo.issue_snapshot(&issue), before);
 
     assert_success(&repo.axon(&["group", "new", "batch", "Batch"]));
@@ -335,7 +362,7 @@ fn repeated_settings_succeed_without_duplicate_updates() {
 
     let repeated = repo.axon(&["group", "reject", "batch"]);
     assert_success(&repeated);
-    assert_eq!(stdout(&repeated), "batch の 0 件を不採用にしました\n");
+    assert_eq!(stdout(&repeated), "0 issues in batch set to Rejected\n");
     assert_eq!(repo.issue_snapshot(&already_rejected), already_before);
     assert_eq!(repo.issue_snapshot(&newly_rejected), newly_after);
 }

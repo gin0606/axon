@@ -1,11 +1,11 @@
 // docs/axes.md で整理した、axon の思想的なコアとなる状態モデル。
 // CLI・永続化・再試行などの実装契約は Rust のテストか一時的なモデルで扱う。
 module axon {
-  type Progress = NotStarted | InProgress | Done
-  type Commitment = Undecided | Accepted | Rejected
+  type Progress = NotStarted | InProgress | Ended
+  type Disposition = Undecided | Accepted | Rejected
 
   // C-1 (差し替え後): 再浮上条件は直和型。将来 3 種類目 (外部コマンド) を足せる形にしておく
-  type Condition =
+  type ResurfaceCondition =
     | Always
     | AtDate(int)
     | AfterIssue(int)
@@ -13,28 +13,28 @@ module axon {
   type Id = int
 
   pure val ISSUES: Set[Id] = Set(0, 1, 2)
-  pure val COMMITMENTS = Set(Undecided, Accepted, Rejected)
+  pure val DISPOSITIONS = Set(Undecided, Accepted, Rejected)
   pure val NEVER = -1          // resurfaceAt = null (常に浮上)
   pure val CLOCK_MAX = 3
 
   // ---- 保存される状態 ----
   var progress: Id -> Progress
-  var commitment: Id -> Commitment
-  var resurfaceCond: Id -> Condition
+  var disposition: Id -> Disposition
+  var resurfaceCond: Id -> ResurfaceCondition
   var deps: Set[(Id, Id)]      // (y, x) = y は x に依存する
   var clock: int
 
   // ---- 導出値 ----
   def depsOf(y: Id): Set[Id] = ISSUES.filter(x => deps.contains((y, x)))
 
-  def isDone(i: Id): bool = progress.get(i) == Done
-  def isRejected(i: Id): bool = commitment.get(i) == Rejected
+  def isEnded(i: Id): bool = progress.get(i) == Ended
+  def isRejected(i: Id): bool = disposition.get(i) == Rejected
 
   def surfaced(i: Id): bool =
     match resurfaceCond.get(i) {
     | Always => true
     | AtDate(d) => d <= clock
-    | AfterIssue(x) => isDone(x) or isRejected(x)
+    | AfterIssue(x) => isEnded(x) or isRejected(x)
     }
 
   // D-1: 依存先が不採用 => 前提喪失
@@ -42,11 +42,11 @@ module axon {
 
   // 依存先に未終端 (完了でも不採用でもない) のものがある
   def blocked(y: Id): bool =
-    depsOf(y).exists(x => not(isDone(x)) and not(isRejected(x)))
+    depsOf(y).exists(x => not(isEnded(x)) and not(isRejected(x)))
 
   def ready(i: Id): bool = and {
     progress.get(i) == NotStarted,
-    commitment.get(i) == Accepted,
+    disposition.get(i) == Accepted,
     surfaced(i),
     not(blocked(i)),
     not(orphaned(i)),
@@ -56,7 +56,7 @@ module axon {
   // ---- 遷移 ----
   action init = all {
     progress' = ISSUES.mapBy(_ => NotStarted),
-    commitment' = ISSUES.mapBy(_ => Undecided),
+    disposition' = ISSUES.mapBy(_ => Undecided),
     resurfaceCond' = ISSUES.mapBy(_ => Always),
     deps' = Set(),
     clock' = 0,
@@ -64,10 +64,10 @@ module axon {
 
   action doDecide = {
     nondet i = ISSUES.oneOf()
-    nondet c = COMMITMENTS.oneOf()
+    nondet c = DISPOSITIONS.oneOf()
     all {
-      commitment.get(i) != c,
-      commitment' = commitment.set(i, c),
+      disposition.get(i) != c,
+      disposition' = disposition.set(i, c),
       progress' = progress, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
     }
   }
@@ -77,16 +77,16 @@ module axon {
     all {
       ready(i),
       progress' = progress.set(i, InProgress),
-      commitment' = commitment, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
+      disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
     }
   }
 
-  action doDone = {
+  action doEnd = {
     nondet i = ISSUES.oneOf()
     all {
       progress.get(i) == InProgress,
-      progress' = progress.set(i, Done),
-      commitment' = commitment, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
+      progress' = progress.set(i, Ended),
+      disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
     }
   }
 
@@ -95,7 +95,7 @@ module axon {
     all {
       progress.get(i) == InProgress,
       progress' = progress.set(i, NotStarted),
-      commitment' = commitment, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
+      disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps, clock' = clock,
     }
   }
 
@@ -106,7 +106,7 @@ module axon {
     all {
       resurfaceCond.get(i) != target,
       resurfaceCond' = resurfaceCond.set(i, target),
-      progress' = progress, commitment' = commitment, deps' = deps, clock' = clock,
+      progress' = progress, disposition' = disposition, deps' = deps, clock' = clock,
     }
   }
 
@@ -119,7 +119,7 @@ module axon {
       i != x,
       resurfaceCond.get(i) != target,
       resurfaceCond' = resurfaceCond.set(i, target),
-      progress' = progress, commitment' = commitment, deps' = deps, clock' = clock,
+      progress' = progress, disposition' = disposition, deps' = deps, clock' = clock,
     }
   }
 
@@ -128,7 +128,7 @@ module axon {
     all {
       resurfaceCond.get(i) != Always,
       resurfaceCond' = resurfaceCond.set(i, Always),
-      progress' = progress, commitment' = commitment, deps' = deps, clock' = clock,
+      progress' = progress, disposition' = disposition, deps' = deps, clock' = clock,
     }
   }
 
@@ -140,7 +140,7 @@ module axon {
       x < y,
       not(deps.contains((y, x))),
       deps' = deps.union(Set((y, x))),
-      progress' = progress, commitment' = commitment, resurfaceCond' = resurfaceCond, clock' = clock,
+      progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond, clock' = clock,
     }
   }
 
@@ -151,27 +151,27 @@ module axon {
       x < y,
       deps.contains((y, x)),
       deps' = deps.exclude(Set((y, x))),
-      progress' = progress, commitment' = commitment, resurfaceCond' = resurfaceCond, clock' = clock,
+      progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond, clock' = clock,
     }
   }
 
   action doTick = all {
     clock < CLOCK_MAX,
     clock' = clock + 1,
-    progress' = progress, commitment' = commitment, resurfaceCond' = resurfaceCond, deps' = deps,
+    progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps,
   }
 
   action step = any {
-    doDecide, doStart, doDone, doRelease, doDeferDate, doDeferAfter, doClearCondition,
+    doDecide, doStart, doEnd, doRelease, doDeferDate, doDeferAfter, doClearCondition,
     doAddDep, doRemoveDep, doTick,
   }
 
   // ---- 検査したい性質 ----
 
   // (a) 「完了 かつ 不採用」の依存先を持つ issue は解放されない
-  val invRejectedDoneStillBlocks =
+  val invRejectedEndedStillBlocks =
     ISSUES.forall(y =>
-      depsOf(y).exists(x => isDone(x) and isRejected(x)) implies not(ready(y)))
+      depsOf(y).exists(x => isEnded(x) and isRejected(x)) implies not(ready(y)))
 
   // (b) 完了しえない依存先を持つのに orphaned と扱われない issue がいないか。
   //     Y -> X -> Z で Z が不採用のとき、X は orphaned だが Y は「ただの blocked」に見える。
@@ -183,8 +183,8 @@ module axon {
       (blocked(y) and depsOf(y).exists(x => cannotComplete(x))) implies orphaned(y))
 
   // (c) 到達可能性の観察。破れたら「その組み合わせは起こりうる」ということ。
-  val invNoDoneUndecided =
-    ISSUES.forall(i => not(isDone(i) and commitment.get(i) == Undecided))
+  val invNoEndedUndecided =
+    ISSUES.forall(i => not(isEnded(i) and disposition.get(i) == Undecided))
 
   val invNoInProgressRejected =
     ISSUES.forall(i => not(progress.get(i) == InProgress and isRejected(i)))
@@ -196,7 +196,7 @@ module axon {
   // ---- D-1: 阻害の根本原因を辿る導出値 ----
   // 未終端 = 完了でも不採用でもない依存先
   def unresolved(y: Id): Set[Id] =
-    depsOf(y).filter(x => not(isDone(x)) and not(isRejected(x)))
+    depsOf(y).filter(x => not(isEnded(x)) and not(isRejected(x)))
 
   // それ以上遡っても意味がない原因: 前提喪失 / 後送り中 / 依存先を持たない
   def isRootCause(x: Id): bool =
@@ -214,7 +214,7 @@ module axon {
 
   // 原因として挙がるのは、実際に未終端のものだけであること
   val invCauseIsUnresolved =
-    ISSUES.forall(y => cause3(y).forall(x => not(isDone(x)) and not(isRejected(x))))
+    ISSUES.forall(y => cause3(y).forall(x => not(isEnded(x)) and not(isRejected(x))))
 
   // ---- §7 グループ ----
   // 構造は固定。G100 が共通基盤にあたる形を模している
@@ -232,7 +232,7 @@ module axon {
   def desc2(g: Id): Set[Id] = desc1(g).union(subgroups(g).map(h => desc1(h)).flatten())
   def desc3(g: Id): Set[Id] = desc2(g).union(subgroups(g).map(h => desc2(h)).flatten())
 
-  def terminal(i: Id): bool = isDone(i) or isRejected(i)
+  def terminal(i: Id): bool = isEnded(i) or isRejected(i)
 
   // G-3: 全子孫 issue が終端に達したら解除。orphaned は考えない
   def groupSatisfied(g: Id): bool = desc3(g).forall(i => terminal(i))
@@ -252,9 +252,9 @@ module axon {
       GROUPS.exists(x => groupDeps.contains((g, x)) and not(groupSatisfied(x))))
 
   // 進捗: 分母は B=採用 の子孫のみ
-  def denom(g: Id): Set[Id] = desc3(g).filter(i => commitment.get(i) == Accepted)
-  def numer(g: Id): Set[Id] = denom(g).filter(i => isDone(i))
-  def acceptedAllDone(g: Id): bool = denom(g) == numer(g)
+  def denom(g: Id): Set[Id] = desc3(g).filter(i => disposition.get(i) == Accepted)
+  def numer(g: Id): Set[Id] = denom(g).filter(i => isEnded(i))
+  def acceptedAllEnded(g: Id): bool = denom(g) == numer(g)
 
   // ---- グループに関する検査 ----
 
@@ -276,9 +276,9 @@ module axon {
   // 進捗が 100% ならグループ依存は解除されているか
   // (分母は B=採用 のみ。未判断が残っていると terminal でないため解除されない)
   val invFullProgressReleases =
-    GROUPS.forall(g => acceptedAllDone(g) implies groupSatisfied(g))
+    GROUPS.forall(g => acceptedAllEnded(g) implies groupSatisfied(g))
 
-  // グループ依存で塞がれた issue の原因を blockedReason で説明できるか
+  // グループ依存で塞がれた issue の blocking cause を説明できるか
   val invGroupBlockedHasCause =
     ISSUES.forall(i => groupBlocked(i) implies cause3(i) != Set())
 
@@ -306,11 +306,11 @@ module axon {
   def progressDefined(g: Id): bool = denom(g) != Set()
 
   val invFullProgressReleasesGuarded =
-    GROUPS.forall(g => (progressDefined(g) and acceptedAllDone(g)) implies groupSatisfied(g))
+    GROUPS.forall(g => (progressDefined(g) and acceptedAllEnded(g)) implies groupSatisfied(g))
 
   // 逆方向: グループが完了しているなら、採用分の進捗は必ず 100%
   val invGroupCompleteImpliesFullProgress =
-    GROUPS.forall(g => groupSatisfied(g) implies acceptedAllDone(g))
+    GROUPS.forall(g => groupSatisfied(g) implies acceptedAllEnded(g))
 
   // ---- C-1 差し替えの検査 ----
   // C の参照条件は、参照先が不採用でも満たされる (D と違い orphaned にならない)

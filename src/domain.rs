@@ -5,15 +5,15 @@ use std::fmt;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
-    #[error("不正な進行状態: {0}")]
+    #[error("invalid Progress value: {0}")]
     Progress(String),
-    #[error("不正な採否: {0}")]
-    Commitment(String),
-    #[error("不正な再浮上条件: {0}")]
-    Condition(String),
-    #[error("着手中の issue に claim がない")]
+    #[error("invalid Disposition value: {0}")]
+    Disposition(String),
+    #[error("invalid resurface condition: {0}")]
+    ResurfaceCondition(String),
+    #[error("an InProgress issue has no claim")]
     MissingClaim,
-    #[error("着手していない issue に claim がある")]
+    #[error("an issue that is not InProgress has a claim")]
     UnexpectedClaim,
 }
 
@@ -47,9 +47,9 @@ impl Progress {
 
     pub fn label(&self) -> &'static str {
         match self {
-            Progress::NotStarted => "未着手",
-            Progress::InProgress(_) => "着手中",
-            Progress::Ended => "終了",
+            Progress::NotStarted => "NotStarted",
+            Progress::InProgress(_) => "InProgress",
+            Progress::Ended => "Ended",
         }
     }
 
@@ -75,67 +75,72 @@ impl Progress {
 
 /// B: 採否。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Commitment {
+pub enum Disposition {
     Undecided,
     Accepted,
     Rejected,
 }
 
-impl Commitment {
+impl Disposition {
     pub fn as_db(&self) -> &'static str {
         match self {
-            Commitment::Undecided => "undecided",
-            Commitment::Accepted => "accepted",
-            Commitment::Rejected => "rejected",
+            Disposition::Undecided => "undecided",
+            Disposition::Accepted => "accepted",
+            Disposition::Rejected => "rejected",
         }
     }
 
     pub fn label(&self) -> &'static str {
         match self {
-            Commitment::Undecided => "未判断",
-            Commitment::Accepted => "採用",
-            Commitment::Rejected => "不採用",
+            Disposition::Undecided => "Undecided",
+            Disposition::Accepted => "Accepted",
+            Disposition::Rejected => "Rejected",
         }
     }
 
     pub fn from_db(s: &str) -> Result<Self, ParseError> {
         match s {
-            "undecided" => Ok(Commitment::Undecided),
-            "accepted" => Ok(Commitment::Accepted),
-            "rejected" => Ok(Commitment::Rejected),
-            other => Err(ParseError::Commitment(other.to_string())),
+            "undecided" => Ok(Disposition::Undecided),
+            "accepted" => Ok(Disposition::Accepted),
+            "rejected" => Ok(Disposition::Rejected),
+            other => Err(ParseError::Disposition(other.to_string())),
         }
     }
 }
 
 /// C: 時期。いつ再び意識に上げるかの条件で、状態ではない。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Condition {
-    At(NaiveDate),
+pub enum ResurfaceCondition {
+    Always,
+    AtDate(NaiveDate),
     AfterIssue(IssueId),
 }
 
-impl Condition {
-    pub fn kind_db(&self) -> &'static str {
+impl ResurfaceCondition {
+    pub fn kind_db(&self) -> Option<&'static str> {
         match self {
-            Condition::At(_) => "date",
-            Condition::AfterIssue(_) => "after_issue",
+            ResurfaceCondition::Always => None,
+            ResurfaceCondition::AtDate(_) => Some("date"),
+            ResurfaceCondition::AfterIssue(_) => Some("after_issue"),
         }
     }
 
     pub fn from_db(
-        kind: &str,
+        kind: Option<&str>,
         date: Option<&str>,
         reference: Option<&str>,
     ) -> Result<Self, ParseError> {
         match (kind, date, reference) {
-            ("date", Some(d), None) => d
+            (None, None, None) => Ok(ResurfaceCondition::Always),
+            (Some("date"), Some(d), None) => d
                 .parse::<NaiveDate>()
-                .map(Condition::At)
-                .map_err(|_| ParseError::Condition(format!("日付として読めない: {d}"))),
-            ("after_issue", None, Some(r)) => Ok(Condition::AfterIssue(IssueId::from_stored(r))),
-            _ => Err(ParseError::Condition(format!(
-                "kind={kind} date={date:?} ref={reference:?}"
+                .map(ResurfaceCondition::AtDate)
+                .map_err(|_| ParseError::ResurfaceCondition(format!("invalid date: {d}"))),
+            (Some("after_issue"), None, Some(r)) => {
+                Ok(ResurfaceCondition::AfterIssue(IssueId::from_stored(r)))
+            }
+            _ => Err(ParseError::ResurfaceCondition(format!(
+                "kind={kind:?} date={date:?} ref={reference:?}"
             ))),
         }
     }
@@ -216,8 +221,8 @@ pub struct Issue {
     pub title: String,
     pub description: Option<String>,
     pub progress: Progress,
-    pub commitment: Commitment,
-    pub condition: Option<Condition>,
+    pub disposition: Disposition,
+    pub resurface_condition: ResurfaceCondition,
     pub group: Option<GroupId>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -226,7 +231,7 @@ pub struct Issue {
 impl Issue {
     /// 終端 = これ以上成果物が増えない。依存の解除判定に使う。
     pub fn is_terminal(&self) -> bool {
-        matches!(self.progress, Progress::Ended) || self.commitment == Commitment::Rejected
+        matches!(self.progress, Progress::Ended) || self.disposition == Disposition::Rejected
     }
 }
 
@@ -243,15 +248,15 @@ mod tests {
         }
     }
 
-    fn issue(progress: Progress, commitment: Commitment) -> Issue {
+    fn issue(progress: Progress, disposition: Disposition) -> Issue {
         let now = Utc::now();
         Issue {
             id: IssueId::from_stored("t-1"),
             title: "t".to_string(),
             description: None,
             progress,
-            commitment,
-            condition: None,
+            disposition,
+            resurface_condition: ResurfaceCondition::Always,
             group: None,
             created_at: now,
             updated_at: now,
@@ -303,35 +308,47 @@ mod tests {
     }
 
     #[test]
-    fn commitment_round_trips_and_rejects_unknown() {
+    fn disposition_round_trips_and_rejects_unknown() {
         for c in [
-            Commitment::Undecided,
-            Commitment::Accepted,
-            Commitment::Rejected,
+            Disposition::Undecided,
+            Disposition::Accepted,
+            Disposition::Rejected,
         ] {
-            assert_eq!(Commitment::from_db(c.as_db()).unwrap(), c);
+            assert_eq!(Disposition::from_db(c.as_db()).unwrap(), c);
         }
         assert!(matches!(
-            Commitment::from_db("bogus"),
-            Err(ParseError::Commitment(_))
+            Disposition::from_db("bogus"),
+            Err(ParseError::Disposition(_))
         ));
     }
 
     #[test]
     fn condition_from_db_needs_columns_matching_its_kind() {
-        let date = Condition::from_db("date", Some("2026-01-31"), None).unwrap();
-        assert_eq!(date, Condition::At("2026-01-31".parse().unwrap()));
-        assert_eq!(date.kind_db(), "date");
+        let always = ResurfaceCondition::from_db(None, None, None).unwrap();
+        assert_eq!(always, ResurfaceCondition::Always);
+        assert_eq!(always.kind_db(), None);
 
-        let after = Condition::from_db("after_issue", None, Some("t-1")).unwrap();
-        assert_eq!(after, Condition::AfterIssue(IssueId::from_stored("t-1")));
-        assert_eq!(after.kind_db(), "after_issue");
+        let date = ResurfaceCondition::from_db(Some("date"), Some("2026-01-31"), None).unwrap();
+        assert_eq!(
+            date,
+            ResurfaceCondition::AtDate("2026-01-31".parse().unwrap())
+        );
+        assert_eq!(date.kind_db(), Some("date"));
 
-        assert!(Condition::from_db("date", None, Some("t-1")).is_err());
-        assert!(Condition::from_db("date", None, None).is_err());
-        assert!(Condition::from_db("after_issue", Some("2026-01-31"), None).is_err());
-        assert!(Condition::from_db("date", Some("not-a-date"), None).is_err());
-        assert!(Condition::from_db("bogus", None, None).is_err());
+        let after = ResurfaceCondition::from_db(Some("after_issue"), None, Some("t-1")).unwrap();
+        assert_eq!(
+            after,
+            ResurfaceCondition::AfterIssue(IssueId::from_stored("t-1"))
+        );
+        assert_eq!(after.kind_db(), Some("after_issue"));
+
+        assert!(ResurfaceCondition::from_db(Some("date"), None, Some("t-1")).is_err());
+        assert!(ResurfaceCondition::from_db(Some("date"), None, None).is_err());
+        assert!(
+            ResurfaceCondition::from_db(Some("after_issue"), Some("2026-01-31"), None).is_err()
+        );
+        assert!(ResurfaceCondition::from_db(Some("date"), Some("not-a-date"), None).is_err());
+        assert!(ResurfaceCondition::from_db(Some("bogus"), None, None).is_err());
     }
 
     #[test]
@@ -352,11 +369,11 @@ mod tests {
 
     #[test]
     fn terminal_covers_both_axes() {
-        assert!(issue(Progress::Ended, Commitment::Accepted).is_terminal());
-        assert!(issue(Progress::NotStarted, Commitment::Rejected).is_terminal());
-        assert!(issue(Progress::Ended, Commitment::Rejected).is_terminal());
-        assert!(!issue(Progress::NotStarted, Commitment::Accepted).is_terminal());
-        assert!(!issue(Progress::NotStarted, Commitment::Undecided).is_terminal());
-        assert!(!issue(Progress::InProgress(claim()), Commitment::Accepted).is_terminal());
+        assert!(issue(Progress::Ended, Disposition::Accepted).is_terminal());
+        assert!(issue(Progress::NotStarted, Disposition::Rejected).is_terminal());
+        assert!(issue(Progress::Ended, Disposition::Rejected).is_terminal());
+        assert!(!issue(Progress::NotStarted, Disposition::Accepted).is_terminal());
+        assert!(!issue(Progress::NotStarted, Disposition::Undecided).is_terminal());
+        assert!(!issue(Progress::InProgress(claim()), Disposition::Accepted).is_terminal());
     }
 }

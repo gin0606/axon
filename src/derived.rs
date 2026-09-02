@@ -58,10 +58,10 @@ impl View {
 
     /// C の条件を満たして浮上しているか。条件が無ければ常に浮上している。
     pub fn is_surfaced(&self, issue: &Issue) -> bool {
-        match &issue.condition {
-            None => true,
-            Some(Condition::At(date)) => *date <= Utc::now().date_naive(),
-            Some(Condition::AfterIssue(id)) => {
+        match &issue.resurface_condition {
+            ResurfaceCondition::Always => true,
+            ResurfaceCondition::AtDate(date) => *date <= Utc::now().date_naive(),
+            ResurfaceCondition::AfterIssue(id) => {
                 // 参照先が消えていたら待つ理由も無い
                 self.by_id.get(id).map(|i| i.is_terminal()).unwrap_or(true)
             }
@@ -77,12 +77,12 @@ impl View {
     pub fn is_orphaned(&self, id: &IssueId) -> bool {
         self.depends_on(id)
             .iter()
-            .any(|d| d.commitment == Commitment::Rejected)
+            .any(|d| d.disposition == Disposition::Rejected)
     }
 
     pub fn is_ready(&self, issue: &Issue) -> bool {
         matches!(issue.progress, Progress::NotStarted)
-            && issue.commitment == Commitment::Accepted
+            && issue.disposition == Disposition::Accepted
             && self.is_surfaced(issue)
             && !self.is_blocked(&issue.id)
             && !self.is_orphaned(&issue.id)
@@ -176,7 +176,7 @@ impl View {
 
     /// issue 依存を遡って、実際に止めている issue を集める。
     /// orphaned を推移させない代わりにこれが原因を説明する (docs/axes.md D-1 派生)。
-    pub fn blocked_reason(&self, id: &IssueId) -> Vec<&Issue> {
+    pub fn blocking_causes(&self, id: &IssueId) -> Vec<&Issue> {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         self.walk_causes(id, &mut seen, &mut out);
@@ -202,7 +202,7 @@ impl View {
     }
 
     /// グループ依存で止まっている場合の内訳。どのグループの何が残っているかを返す。
-    pub fn group_blocked_reason(&self, issue: &Issue) -> Vec<(&Group, Vec<&Issue>)> {
+    pub fn group_blocking_causes(&self, issue: &Issue) -> Vec<(&Group, Vec<&Issue>)> {
         let Some(gid) = &issue.group else {
             return Vec::new();
         };
@@ -245,7 +245,7 @@ impl View {
         let issues = self.issues_in(g);
         let accepted: Vec<_> = issues
             .iter()
-            .filter(|i| i.commitment == Commitment::Accepted)
+            .filter(|i| i.disposition == Disposition::Accepted)
             .collect();
         GroupProgress {
             done: accepted
@@ -255,7 +255,7 @@ impl View {
             total: accepted.len(),
             undecided: issues
                 .iter()
-                .filter(|i| i.commitment == Commitment::Undecided)
+                .filter(|i| i.disposition == Disposition::Undecided)
                 .count(),
         }
     }
@@ -268,7 +268,7 @@ impl View {
     pub fn triage(&self) -> Vec<(&Issue, TriageReason)> {
         self.iter()
             .filter_map(|i| {
-                if i.commitment == Commitment::Undecided {
+                if i.disposition == Disposition::Undecided {
                     Some((i, TriageReason::Undecided))
                 } else if !i.is_terminal() && self.is_orphaned(&i.id) {
                     Some((i, TriageReason::Orphaned))
@@ -324,15 +324,15 @@ mod tests {
         GroupId::from_stored(id)
     }
 
-    fn issue(id: &str, progress: Progress, commitment: Commitment) -> Issue {
+    fn issue(id: &str, progress: Progress, disposition: Disposition) -> Issue {
         let now = Utc::now();
         Issue {
             id: iid(id),
             title: id.to_string(),
             description: None,
             progress,
-            commitment,
-            condition: None,
+            disposition,
+            resurface_condition: ResurfaceCondition::Always,
             group: None,
             created_at: now,
             updated_at: now,
@@ -340,24 +340,24 @@ mod tests {
     }
 
     fn accepted(id: &str) -> Issue {
-        issue(id, Progress::NotStarted, Commitment::Accepted)
+        issue(id, Progress::NotStarted, Disposition::Accepted)
     }
 
     fn undecided(id: &str) -> Issue {
-        issue(id, Progress::NotStarted, Commitment::Undecided)
+        issue(id, Progress::NotStarted, Disposition::Undecided)
     }
 
     fn rejected(id: &str) -> Issue {
-        issue(id, Progress::NotStarted, Commitment::Rejected)
+        issue(id, Progress::NotStarted, Disposition::Rejected)
     }
 
     fn done(id: &str) -> Issue {
-        issue(id, Progress::Ended, Commitment::Accepted)
+        issue(id, Progress::Ended, Disposition::Accepted)
     }
 
     /// 「完了 かつ 不採用」。
     fn done_rejected(id: &str) -> Issue {
-        issue(id, Progress::Ended, Commitment::Rejected)
+        issue(id, Progress::Ended, Disposition::Rejected)
     }
 
     /// pid 0 は `process_alive` が常に死んでいると判定するため、OS に依存せず stale を作れる。
@@ -371,7 +371,7 @@ mod tests {
     }
 
     fn in_progress(id: &str, c: Claim) -> Issue {
-        issue(id, Progress::InProgress(c), Commitment::Accepted)
+        issue(id, Progress::InProgress(c), Disposition::Accepted)
     }
 
     fn in_group(mut i: Issue, g: &str) -> Issue {
@@ -379,8 +379,8 @@ mod tests {
         i
     }
 
-    fn with_cond(mut i: Issue, c: Condition) -> Issue {
-        i.condition = Some(c);
+    fn with_cond(mut i: Issue, c: ResurfaceCondition) -> Issue {
+        i.resurface_condition = c;
         i
     }
 
@@ -483,7 +483,7 @@ mod tests {
             !v.is_orphaned(&iid("y")),
             "orphaned は直接の依存先だけを見る"
         );
-        assert_eq!(ids(&v.blocked_reason(&iid("y"))), ["x"]);
+        assert_eq!(ids(&v.blocking_causes(&iid("y"))), ["x"]);
     }
 
     /// spec: invBlockedHasCause / invCauseIsUnresolved
@@ -493,7 +493,7 @@ mod tests {
             vec![accepted("y"), accepted("x"), accepted("w"), done("d")],
             &[("y", "x"), ("y", "d"), ("x", "w")],
         );
-        let cause = v.blocked_reason(&iid("y"));
+        let cause = v.blocking_causes(&iid("y"));
         assert!(v.is_blocked(&iid("y")));
         assert!(!cause.is_empty(), "blocked なら原因が 1 つ以上ある");
         assert!(
@@ -509,12 +509,12 @@ mod tests {
         let v = view(
             vec![
                 accepted("y"),
-                with_cond(accepted("x"), Condition::At(future)),
+                with_cond(accepted("x"), ResurfaceCondition::AtDate(future)),
                 accepted("w"),
             ],
             &[("y", "x"), ("x", "w")],
         );
-        assert_eq!(ids(&v.blocked_reason(&iid("y"))), ["x"]);
+        assert_eq!(ids(&v.blocking_causes(&iid("y"))), ["x"]);
     }
 
     #[test]
@@ -524,7 +524,7 @@ mod tests {
             &[("a", "b"), ("b", "a")],
         );
         assert!(v.is_blocked(&iid("a")));
-        assert!(v.blocked_reason(&iid("a")).is_empty());
+        assert!(v.blocking_causes(&iid("a")).is_empty());
     }
 
     // ---- C: 浮上条件 ----
@@ -534,9 +534,15 @@ mod tests {
         let today = Utc::now().date_naive();
         let v = view(
             vec![
-                with_cond(accepted("past"), Condition::At(today - Duration::days(1))),
-                with_cond(accepted("today"), Condition::At(today)),
-                with_cond(accepted("future"), Condition::At(today + Duration::days(1))),
+                with_cond(
+                    accepted("past"),
+                    ResurfaceCondition::AtDate(today - Duration::days(1)),
+                ),
+                with_cond(accepted("today"), ResurfaceCondition::AtDate(today)),
+                with_cond(
+                    accepted("future"),
+                    ResurfaceCondition::AtDate(today + Duration::days(1)),
+                ),
             ],
             &[],
         );
@@ -545,10 +551,10 @@ mod tests {
 
     /// spec: invCondRefSatisfiedByRejection — C の参照先が不採用でも浮上する。
     #[test]
-    fn inv_cond_ref_satisfied_by_rejection() {
+    fn inv_resurface_ref_satisfied_by_rejection() {
         let v = view(
             vec![
-                with_cond(accepted("y"), Condition::AfterIssue(iid("x"))),
+                with_cond(accepted("y"), ResurfaceCondition::AfterIssue(iid("x"))),
                 rejected("x"),
             ],
             &[],
@@ -562,7 +568,7 @@ mod tests {
     fn inv_cond_and_dep_differ() {
         let by_cond = view(
             vec![
-                with_cond(accepted("y"), Condition::AfterIssue(iid("x"))),
+                with_cond(accepted("y"), ResurfaceCondition::AfterIssue(iid("x"))),
                 rejected("x"),
             ],
             &[],
@@ -579,7 +585,10 @@ mod tests {
     #[test]
     fn condition_ref_to_missing_issue_surfaces() {
         let v = view(
-            vec![with_cond(accepted("y"), Condition::AfterIssue(iid("gone")))],
+            vec![with_cond(
+                accepted("y"),
+                ResurfaceCondition::AfterIssue(iid("gone")),
+            )],
             &[],
         );
         assert!(v.is_surfaced(v.get(&iid("y")).unwrap()));
@@ -589,7 +598,7 @@ mod tests {
     fn condition_ref_waits_for_unterminated_issue() {
         let v = view(
             vec![
-                with_cond(accepted("y"), Condition::AfterIssue(iid("x"))),
+                with_cond(accepted("y"), ResurfaceCondition::AfterIssue(iid("x"))),
                 accepted("x"),
             ],
             &[],
@@ -745,7 +754,7 @@ mod tests {
             &[("g1", "g0")],
         );
         let a = v.get(&iid("a")).unwrap();
-        let reason = v.group_blocked_reason(a);
+        let reason = v.group_blocking_causes(a);
         assert_eq!(reason.len(), 1);
         let (g, blockers) = &reason[0];
         assert_eq!(g.slug, "g0");
@@ -805,7 +814,7 @@ mod tests {
         );
         let a = v.get(&iid("a")).unwrap();
         assert!(!v.is_group_blocked(a));
-        assert!(v.group_blocked_reason(a).is_empty());
+        assert!(v.group_blocking_causes(a).is_empty());
     }
 
     #[test]

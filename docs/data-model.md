@@ -26,19 +26,20 @@ worktree への配置も工夫が要らなくなった。br はエクスポー�
 | テーブル | 役割 |
 | --- | --- |
 | `meta` | ID の接頭辞などの設定 |
-| `issues` | A / B / C と claim。C は `cond_kind` + 値の列で直和型を表す |
+| `issues` | A / B / C と claim。B は `disposition`、C は `resurface_kind` + 値の列で直和型を表す |
 | `issue_deps` | issue 間の依存 (前提の 1 種類のみ) |
 | `groups` | 機能群。`parent_id` で階層を持つ |
 | `group_deps` | グループ間の依存 |
-| `events` | B (採否) / C (時期) の判断ログ |
+| `events` | B (`disposition`) / C (`resurface_condition`) の判断ログ |
 | `progress_events` | A (進行) の状態遷移に結び付いた進行履歴 |
 
 設計上の要点:
 
 - **導出値をテーブルに持たない**。ready / blocked / orphaned / 進捗はすべて計算する。br は blocked をキャッシュし、その整合性維持のために parity 検査の仕組みまで抱えていた
 - **claim は `progress = 'in_progress'` のときだけ存在する**。CHECK 制約で縛り、読み出し時も `Progress::from_db` が食い違いを弾く
-- **C の直和型は CHECK 制約で整合性を保つ**。`cond_kind` が取る値ごとに、どの列が埋まっているべきかを縛る
+- **C の直和型は CHECK 制約で整合性を保つ**。`resurface_kind` が取る値ごとに、どの列が埋まっているべきかを縛る
 - **スキーマは `user_version` で版を持つ**。開くたびに不足分だけ流す。各 migration の DDL と `user_version` 更新は同じトランザクションで確定し、中断後に安全に再実行できるようにする
+- 語彙を `commitment` / `condition` から `disposition` / `resurface_condition` へ変える migration は、issue の値と判断履歴の意味を引き継ぐ。title、description、reason など利用者の入力は書き換えない
 
 ## 決着した論点
 
