@@ -50,7 +50,7 @@ If a session may have died while holding a claim, use `axon stale` to find stale
 ## Commands that change data
 
 - `start` atomically checks that an issue is ready, sets Progress to `InProgress`, creates its claim, and records the actor and time. It never selects an issue for you.
-- `done` accepts only `InProgress -> Ended`. It removes the claim and records the actor and time in progress history. It does not accept a reason; record work results in the issue description.
+- `done` accepts only `InProgress -> Ended`. It removes the claim and records the actor and time in progress history. On success, it prints only the target issue's end confirmation; run `axon ready` separately to query current candidates across all relationships and resurface conditions. It does not accept a reason; record work results in the issue description.
 - `release` accepts only `InProgress -> NotStarted`. It removes the claim and records the optional handoff or release reason in progress history.
 - `decide accept`, `decide reject`, and `decide undecide` change only Disposition and record the optional reason in the decision log.
 - `when at`, `when after`, and `when clear` change only the resurface condition and record the optional reason in the decision log.

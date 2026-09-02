@@ -45,7 +45,7 @@ enum Command {
     Triage,
     /// Claim one ready issue and record the actor and time
     Start { id: String },
-    /// End an InProgress issue
+    /// End an InProgress issue and confirm that issue only
     Done { id: String },
     /// Update an issue's title or description
     Write {
@@ -584,12 +584,6 @@ fn cmd_done(id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let id = store.resolve_id(id)?;
     store.apply(&id, Change::End, &ctx(None))?;
     println!("Ended {id}");
-
-    let view = view_of(&store)?;
-    let unblocked = view.newly_ready_after(&id);
-    for i in unblocked {
-        println!("Now ready: {}  {}", i.id, i.title);
-    }
     Ok(())
 }
 

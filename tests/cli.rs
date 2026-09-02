@@ -142,6 +142,64 @@ fn progress_reasons_follow_the_command_contract() {
 }
 
 #[test]
+fn done_only_confirms_the_target_when_an_issue_dependency_becomes_ready() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let prerequisite = repo.plan("prerequisite");
+    let dependent = repo.plan("dependent");
+    assert_success(&repo.axon(&["dep", "add", &dependent, "--needs", &prerequisite]));
+    assert_success(&repo.axon(&["start", &prerequisite]));
+
+    let done = repo.axon(&["done", &prerequisite]);
+
+    assert_success(&done);
+    assert_eq!(stdout(&done), format!("Ended {prerequisite}\n"));
+    let ready = repo.axon(&["ready"]);
+    assert_success(&ready);
+    assert_eq!(stdout(&ready), format!("{dependent}  dependent\n"));
+}
+
+#[test]
+fn done_only_confirms_the_target_when_a_group_dependency_becomes_ready() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    assert_success(&repo.axon(&["group", "new", "foundation"]));
+    assert_success(&repo.axon(&["group", "new", "delivery"]));
+    assert_success(&repo.axon(&["group", "dep", "add", "delivery", "--needs", "foundation"]));
+    let prerequisite = repo.plan("foundation work");
+    let dependent = repo.plan("delivery work");
+    assert_success(&repo.axon(&["group", "set", &prerequisite, "foundation"]));
+    assert_success(&repo.axon(&["group", "set", &dependent, "delivery"]));
+    assert_success(&repo.axon(&["start", &prerequisite]));
+
+    let done = repo.axon(&["done", &prerequisite]);
+
+    assert_success(&done);
+    assert_eq!(stdout(&done), format!("Ended {prerequisite}\n"));
+    let ready = repo.axon(&["ready"]);
+    assert_success(&ready);
+    assert_eq!(stdout(&ready), format!("{dependent}  delivery work\n"));
+}
+
+#[test]
+fn done_only_confirms_the_target_when_an_after_issue_condition_is_satisfied() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let prerequisite = repo.plan("resurface trigger");
+    let dependent = repo.plan("deferred work");
+    assert_success(&repo.axon(&["when", "after", &dependent, &prerequisite]));
+    assert_success(&repo.axon(&["start", &prerequisite]));
+
+    let done = repo.axon(&["done", &prerequisite]);
+
+    assert_success(&done);
+    assert_eq!(stdout(&done), format!("Ended {prerequisite}\n"));
+    let ready = repo.axon(&["ready"]);
+    assert_success(&ready);
+    assert_eq!(stdout(&ready), format!("{dependent}  deferred work\n"));
+}
+
+#[test]
 fn group_reject_records_an_optional_reason_only_for_changed_issues() {
     let repo = TestRepo::new();
     repo.init("test");

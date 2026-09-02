@@ -278,14 +278,6 @@ impl View {
             })
             .collect()
     }
-
-    /// `id` が終端に達したことで新たに着手可能になるもの。`done` の後押しに使う。
-    pub fn newly_ready_after(&self, id: &IssueId) -> Vec<&Issue> {
-        self.dependents(id)
-            .into_iter()
-            .filter(|i| self.is_ready(i))
-            .collect()
-    }
 }
 
 /// 進捗は「採用したもののうち、どれだけ終わったか」。
@@ -863,36 +855,6 @@ mod tests {
     fn triage_skips_terminal_orphans() {
         let v = view(vec![done("y"), rejected("x")], &[("y", "x")]);
         assert!(v.triage().is_empty());
-    }
-
-    #[test]
-    fn newly_ready_after_lists_only_fully_unblocked() {
-        let v = view(
-            vec![
-                done("x"),
-                accepted("a"),
-                accepted("b"),
-                accepted("other"),
-                undecided("u"),
-            ],
-            &[("a", "x"), ("b", "x"), ("b", "other"), ("u", "x")],
-        );
-        assert_eq!(ids(&v.newly_ready_after(&iid("x"))), ["a"]);
-    }
-
-    #[test]
-    fn newly_ready_after_excludes_group_blocked_dependents() {
-        let v = view_with_groups(
-            vec![
-                done("x"),
-                in_group(accepted("target"), "delivery"),
-                in_group(accepted("foundation-work"), "foundation"),
-            ],
-            &[("target", "x")],
-            vec![group("foundation", None), group("delivery", None)],
-            &[("delivery", "foundation")],
-        );
-        assert!(v.newly_ready_after(&iid("x")).is_empty());
     }
 
     #[test]
