@@ -3,3 +3,5 @@
 /_apalache-out/
 *.itf.json
 .axon/
+!/.gw/
+!/.gw/**

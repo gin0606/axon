@@ -1,0 +1,33 @@
+#!/bin/sh
+# gw hook: post-add (cwd: 新しい worktree)
+# 環境変数: GW_REPO_ROOT / GW_WORKTREE_PATH / GW_BRANCH
+set -eu
+
+# git 管理外のローカル設定を main repo から引き継ぐ。mise.local.toml は
+# main repo の target/release を PATH に通す。
+for f in mise.local.toml CLAUDE.local.md .claude/settings.local.json; do
+  src="$GW_REPO_ROOT/$f"
+  dst="$GW_WORKTREE_PATH/$f"
+  if [ ! -f "$src" ] || [ -e "$dst" ]; then
+    continue
+  fi
+  mkdir -p "$(dirname "$dst")"
+  cp "$src" "$dst"
+done
+
+# worktree であることを Claude に伝える
+if [ ! -e "$GW_WORKTREE_PATH/CLAUDE.local.md" ] \
+  || ! grep -q '^## Worktree$' "$GW_WORKTREE_PATH/CLAUDE.local.md"; then
+  {
+    printf '\n## Worktree\n\n'
+    printf 'git worktree 上で作業している。作業対象は `%s`。\n' "$GW_WORKTREE_PATH"
+  } >> "$GW_WORKTREE_PATH/CLAUDE.local.md"
+fi
+
+if command -v mise >/dev/null 2>&1; then
+  mise trust
+  mise install
+  # hook は非対話 sh で動くので mise activate の shell hook が効かない。ここで PATH を
+  # 通さないと、以降のコマンドが worktree の tool 定義ではなく外側シェルの PATH を使う
+  eval "$(mise env -s bash)"
+fi

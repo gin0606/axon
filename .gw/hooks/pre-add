@@ -1,0 +1,13 @@
+#!/bin/sh
+# gw hook: pre-add (cwd: repo root、worktree は未作成)
+# 環境変数: GW_REPO_ROOT / GW_WORKTREE_PATH / GW_BRANCH
+set -eu
+
+# 新規ブランチの起点になる origin/<default> とローカルの
+# default branch を同期する
+default_branch="$(git rev-parse --abbrev-ref origin/HEAD | sed 's|^origin/||')"
+git pull --rebase origin "$default_branch"
+
+# worktree から共有 DB を操作する canonical binary を、同期後の main から作る
+mise exec -- cargo build --release
+git push origin "$default_branch"

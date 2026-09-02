@@ -1,0 +1,30 @@
+#!/bin/sh
+# gw hook: post-remove (cwd: repo root、worktree は削除済み)
+# 環境変数: GW_REPO_ROOT / GW_WORKTREE_PATH / GW_BRANCH
+set -eu
+
+git fetch --prune origin
+
+default_branch="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
+if [ -z "$default_branch" ]; then
+  echo "post-remove: origin/HEAD が未設定のため default branch の更新をスキップする (git remote set-head origin --auto)" >&2
+  exit 0
+fi
+
+# 次に作る worktree の起点になるので、main repo 側の default branch を最新にしておく
+if [ "$(git symbolic-ref --short HEAD 2>/dev/null || true)" = "$default_branch" ]; then
+  git merge --ff-only "origin/$default_branch" \
+    || echo "post-remove: $default_branch を ff-only 更新できなかった (ローカル commit が乗っている)" >&2
+else
+  git fetch origin "$default_branch:$default_branch" \
+    || echo "post-remove: $default_branch の更新に失敗した" >&2
+fi
+
+# gw rm はブランチを消さない
+if [ -n "${GW_BRANCH:-}" ] && git show-ref --verify --quiet "refs/heads/$GW_BRANCH"; then
+  if git merge-base --is-ancestor "$GW_BRANCH" "origin/$default_branch"; then
+    git branch -D "$GW_BRANCH"
+  else
+    echo "post-remove: $GW_BRANCH は origin/$default_branch に未取り込みなので残す" >&2
+  fi
+fi
