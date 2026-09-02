@@ -31,9 +31,10 @@ axon completion zsh > _axon    # シェル補完スクリプトを生成
 | [docs/data-model.md](docs/data-model.md) | 永続化とスキーマ。SQLite 単体、git 管理外 |
 | [docs/dry-run.md](docs/dry-run.md) | 運用シナリオを通した検証 |
 | [docs/implementation.md](docs/implementation.md) | 実装方針と最小スコープ |
-| [spec/axon.qnt](spec/axon.qnt) | Quint による形式仕様。状態機械として書き、17 個の性質を検査している |
+| [spec/axon.qnt](spec/axon.qnt) | Quint による形式仕様。A / B / C / D の思想的コアだけを状態機械として検査する |
+| [spec/group_plan.qnt](spec/group_plan.qnt) | 明示的な計画 group の拡張仕様。Entity、包含、状態遷移、導出値をコアと分けて検査する |
 
-設計の議論では、Quint によるモデル検査で考慮漏れが 2 件見つかっている (`orphaned` が推移しない問題、`blocking cause` がグループ依存を辿らない問題)。どちらも議論だけでは見落としていた。
+設計の議論では、Quint のシミュレーションで考慮漏れが 3 件見つかっている (`orphaned` が推移しない問題、`blocking cause` がグループ依存を辿らない問題、Ended group 自身を親変更できる問題)。いずれも議論だけでは見落としていた。
 
 ## 名前
 

@@ -22,7 +22,6 @@ module axon {
   var disposition: Id -> Disposition
   var resurfaceCond: Id -> ResurfaceCondition
   var deps: Set[(Id, Id)]      // (y, x) = y は x に依存する
-  var groupDeps: Set[(Id, Id)] // (y, x) = group y は group x の完了を待つ
   var clock: int
 
   // ---- 導出値 ----
@@ -86,7 +85,6 @@ module axon {
     surfaced(i),
     not(blocked(i)),
     not(orphaned(i)),
-    not(groupBlocked(i)),
   }
 
   // ---- 遷移 ----
@@ -95,7 +93,6 @@ module axon {
     disposition' = ISSUES.mapBy(_ => Undecided),
     resurfaceCond' = ISSUES.mapBy(_ => Always),
     deps' = Set(),
-    groupDeps' = Set(),
     clock' = 0,
   }
 
@@ -106,7 +103,7 @@ module axon {
       disposition.get(i) != c,
       disposition' = disposition.set(i, c),
       progress' = progress, resurfaceCond' = resurfaceCond, deps' = deps,
-      groupDeps' = groupDeps, clock' = clock,
+      clock' = clock,
     }
   }
 
@@ -116,7 +113,7 @@ module axon {
       ready(i),
       progress' = progress.set(i, InProgress),
       disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps,
-      groupDeps' = groupDeps, clock' = clock,
+      clock' = clock,
     }
   }
 
@@ -126,7 +123,7 @@ module axon {
       progress.get(i) == InProgress,
       progress' = progress.set(i, Ended),
       disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps,
-      groupDeps' = groupDeps, clock' = clock,
+      clock' = clock,
     }
   }
 
@@ -136,7 +133,7 @@ module axon {
       progress.get(i) == InProgress,
       progress' = progress.set(i, NotStarted),
       disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps,
-      groupDeps' = groupDeps, clock' = clock,
+      clock' = clock,
     }
   }
 
@@ -148,7 +145,7 @@ module axon {
       resurfaceCond.get(i) != target,
       resurfaceCond' = resurfaceCond.set(i, target),
       progress' = progress, disposition' = disposition, deps' = deps,
-      groupDeps' = groupDeps, clock' = clock,
+      clock' = clock,
     }
   }
 
@@ -163,7 +160,7 @@ module axon {
       resurfaceCond.get(i) != target,
       resurfaceCond' = resurfaceCond.set(i, target),
       progress' = progress, disposition' = disposition, deps' = deps,
-      groupDeps' = groupDeps, clock' = clock,
+      clock' = clock,
     }
   }
 
@@ -173,7 +170,7 @@ module axon {
       resurfaceCond.get(i) != Always,
       resurfaceCond' = resurfaceCond.set(i, Always),
       progress' = progress, disposition' = disposition, deps' = deps,
-      groupDeps' = groupDeps, clock' = clock,
+      clock' = clock,
     }
   }
 
@@ -186,7 +183,7 @@ module axon {
       not(deps.contains((y, x))),
       deps' = deps.union(Set((y, x))),
       progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond,
-      groupDeps' = groupDeps, clock' = clock,
+      clock' = clock,
     }
   }
 
@@ -197,31 +194,7 @@ module axon {
       deps.contains((y, x)),
       deps' = deps.exclude(Set((y, x))),
       progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond,
-      groupDeps' = groupDeps, clock' = clock,
-    }
-  }
-
-  action doAddGroupDep = {
-    nondet y = GROUPS.oneOf()
-    nondet x = GROUPS.oneOf()
-    val candidate = groupDeps.union(Set((y, x)))
-    all {
-      acyclic(candidate, GROUPS),
-      not(groupDeps.contains((y, x))),
-      groupDeps' = candidate,
-      progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond,
-      deps' = deps, clock' = clock,
-    }
-  }
-
-  action doRemoveGroupDep = {
-    nondet y = GROUPS.oneOf()
-    nondet x = GROUPS.oneOf()
-    all {
-      groupDeps.contains((y, x)),
-      groupDeps' = groupDeps.exclude(Set((y, x))),
-      progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond,
-      deps' = deps, clock' = clock,
+      clock' = clock,
     }
   }
 
@@ -229,12 +202,12 @@ module axon {
     clock < CLOCK_MAX,
     clock' = clock + 1,
     progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond,
-    deps' = deps, groupDeps' = groupDeps,
+    deps' = deps,
   }
 
   action step = any {
     doDecide, doStart, doEnd, doRelease, doDeferDate, doDeferAfter, doClearCondition,
-    doAddDep, doRemoveDep, doAddGroupDep, doRemoveGroupDep, doTick,
+    doAddDep, doRemoveDep, doTick,
   }
 
   // ---- 検査したい性質 ----
@@ -288,107 +261,6 @@ module axon {
   // 原因として挙がるのは、実際に未終端のものだけであること
   val invCauseIsUnresolved =
     ISSUES.forall(y => cause3(y).forall(x => not(isEnded(x)) and not(isRejected(x))))
-
-  // ---- §7 グループ ----
-  // 構造は固定。G100 が共通基盤にあたる形を模している
-  pure val GROUPS: Set[Id] = Set(100, 101, 102)
-  pure val NO_GROUP = -1
-  pure val groupOf: Id -> Id = Map(0 -> 100, 1 -> 101, 2 -> 102)
-  pure val parentOf: Id -> Id = Map(100 -> NO_GROUP, 101 -> NO_GROUP, 102 -> 101)
-  pure val parentEdges: Set[(Id, Id)] =
-    GROUPS.filter(g => parentOf.get(g) != NO_GROUP).map(g => (g, parentOf.get(g)))
-
-  def issuesIn(g: Id): Set[Id] = ISSUES.filter(i => groupOf.get(i) == g)
-  def subgroups(g: Id): Set[Id] = GROUPS.filter(h => parentOf.get(h) == g)
-
-  // 子孫 issue (深さ 3 まで展開)
-  def desc1(g: Id): Set[Id] = issuesIn(g)
-  def desc2(g: Id): Set[Id] = desc1(g).union(subgroups(g).map(h => desc1(h)).flatten())
-  def desc3(g: Id): Set[Id] = desc2(g).union(subgroups(g).map(h => desc2(h)).flatten())
-
-  def terminal(i: Id): bool = isEnded(i) or isRejected(i)
-
-  // G-3: 全子孫 issue が終端に達したら解除。orphaned は考えない
-  def groupSatisfied(g: Id): bool = desc3(g).forall(i => terminal(i))
-
-  // 所属グループとその祖先 (深さ 3 まで)
-  def chain1(g: Id): Set[Id] = Set(g)
-  def chain2(g: Id): Set[Id] =
-    chain1(g).union(if (parentOf.get(g) == NO_GROUP) Set() else Set(parentOf.get(g)))
-  def chain3(g: Id): Set[Id] =
-    chain2(g).union(chain2(g).filter(h => parentOf.get(h) != NO_GROUP).map(h => parentOf.get(h)))
-
-  def groupChainOf(i: Id): Set[Id] = chain3(groupOf.get(i))
-
-  // 祖先も含めたグループ依存で塞がれているか
-  def groupBlocked(i: Id): bool =
-    groupChainOf(i).exists(g =>
-      GROUPS.exists(x => groupDeps.contains((g, x)) and not(groupSatisfied(x))))
-
-  // 進捗: 分母は B=採用 の子孫のみ
-  def denom(g: Id): Set[Id] = desc3(g).filter(i => disposition.get(i) == Accepted)
-  def numer(g: Id): Set[Id] = denom(g).filter(i => isEnded(i))
-  def acceptedAllEnded(g: Id): bool = denom(g) == numer(g)
-
-  // ---- グループに関する検査 ----
-
-  // 分子は分母の部分集合
-  val invProgressSubset =
-    GROUPS.forall(g => numer(g).subseteq(denom(g)))
-
-  val invGroupDepsAcyclic = acyclic(groupDeps, GROUPS)
-
-  val invGroupParentsAcyclic = acyclic(parentEdges, GROUPS)
-
-  // グループ依存で塞がれているなら ready ではない (定義の健全性)
-  val invGroupBlockedNotReady =
-    ISSUES.forall(i => groupBlocked(i) implies not(ready(i)))
-
-  // G-3: 依存先グループに不採用が混じっていても解除されうる
-  //      (不採用があると必ず未解決、にはならないこと)
-  val invRejectedDoesNotPinGroup =
-    GROUPS.forall(g =>
-      (desc3(g).exists(i => isRejected(i)) and desc3(g).forall(i => terminal(i)))
-        implies groupSatisfied(g))
-
-  // 進捗が 100% ならグループ依存は解除されているか
-  // (分母は B=採用 のみ。未判断が残っていると terminal でないため解除されない)
-  val invFullProgressReleases =
-    GROUPS.forall(g => acceptedAllEnded(g) implies groupSatisfied(g))
-
-  // グループ依存で塞がれた issue の blocking cause を説明できるか
-  val invGroupBlockedHasCause =
-    ISSUES.forall(i => groupBlocked(i) implies cause3(i) != Set())
-
-  // グループ依存による阻害の原因: 依存先グループの未終端な子孫 issue
-  def groupCauses(i: Id): Set[Id] =
-    groupChainOf(i)
-      .map(g => GROUPS.filter(x => groupDeps.contains((g, x)) and not(groupSatisfied(x))))
-      .flatten()
-      .map(x => desc3(x).filter(j => not(terminal(j))))
-      .flatten()
-
-  // issue 間依存とグループ間依存の両方を辿った根本原因
-  def causeAll(i: Id): Set[Id] = cause3(i).union(groupCauses(i))
-
-  // 阻害されているなら、issue 依存でもグループ依存でも原因が特定できること
-  val invAnyBlockedHasCause =
-    ISSUES.forall(i => (blocked(i) or groupBlocked(i)) implies causeAll(i) != Set())
-
-  // 原因として挙がるのは実際に未終端のものだけ
-  val invCauseAllUnresolved =
-    ISSUES.forall(i => causeAll(i).forall(x => not(terminal(x))))
-
-  // 進捗率が定義できるのは分母が空でないときだけ。
-  // 分母が空 (採用が 1 件もない) のグループを 100% と呼んではいけない。
-  def progressDefined(g: Id): bool = denom(g) != Set()
-
-  val invFullProgressReleasesGuarded =
-    GROUPS.forall(g => (progressDefined(g) and acceptedAllEnded(g)) implies groupSatisfied(g))
-
-  // 逆方向: グループが完了しているなら、採用分の進捗は必ず 100%
-  val invGroupCompleteImpliesFullProgress =
-    GROUPS.forall(g => groupSatisfied(g) implies acceptedAllEnded(g))
 
   // ---- C-1 差し替えの検査 ----
   // C の参照条件は、参照先が不採用でも満たされる (D と違い orphaned にならない)
