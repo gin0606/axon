@@ -42,6 +42,7 @@ Git リポジトリ内では common root を管理境界として常に優先す
 
 - **導出値をテーブルに持たない**。ready / blocked / orphaned / 進捗はすべて計算する。br は blocked をキャッシュし、その整合性維持のために parity 検査の仕組みまで抱えていた
 - **claim は `progress = 'in_progress'` のときだけ存在する**。CHECK 制約で縛り、読み出し時も `Progress::from_db` が食い違いを弾く
+- **claim は actor / worktree / at を持つ**。worktree は新しい `start` では必ず保存し、移行前から存在する claim だけは `unknown` として保持する
 - **C の直和型は CHECK 制約で整合性を保つ**。`resurface_kind` が取る値ごとに、どの列が埋まっているべきかを縛る
 - **待機関係は DAG に保つ**。issue 依存と `AfterIssue` は循環検査だけを統合し、グループ依存とグループ階層は別々に検査する。検査と追加は同じ write transaction で行い、既存の循環データの読み込みと辺の削除は許す
 - **スキーマは `user_version` で版を持つ**。開くたびに不足分だけ流す。各 migration の DDL と `user_version` 更新は同じトランザクションで確定し、中断後に安全に再実行できるようにする
@@ -130,24 +131,22 @@ claim は独立した状態にしない。「予約したが未着手」を作�
 
 **サポート対象は Claude Code と Codex のみ**とする (他は必要になってから足す)。
 
-| エージェント | 検出に使う変数 | session_key に使える変数 |
-| --- | --- | --- |
-| Claude Code | `CLAUDECODE` / `CLAUDE_CODE` | `CLAUDE_CODE_SESSION_ID` |
-| Codex | `CODEX_SANDBOX` / `CODEX_THREAD_ID` | `CODEX_THREAD_ID` |
+| エージェント | 検出に使う変数 |
+| --- | --- |
+| Claude Code | `CLAUDECODE` / `CLAUDE_CODE` |
+| Codex | `CODEX_SANDBOX` / `CODEX_THREAD_ID` |
 
-session_key はセッション ID が取れればそれを使い、取れなければ `worktree パス + PID + 起動時刻` から自動生成する。
+actor は一覧と調査の手掛かりであり、排他制御や `release` の事前条件には使わない。claim には actor に加えて、`git rev-parse --show-toplevel` で取得した worktree と `start` の時刻を保存する。Git 外では作業場所を失わないためカレントディレクトリを保存する。
 
 参考: 規約全体では cursor (`CURSOR_AGENT`)、gemini (`GEMINI_CLI`)、opencode (`OPENCODE`)、replit (`REPL_ID`)、goose (`GOOSE_PROVIDER`) 等も定義されている。
 
-### D-6 (決着): stale は検出のみ。自動解放しない
+### D-6 (決着): claim はすべて一覧し、解放は人が判断する
 
-```
-判定: claimed_at から N 時間経過 AND そのセッションのプロセスが存在しない
-```
+`axon claims` は経過時間にかかわらず、現在 claim を持つすべての InProgress issue を返す。正常な作業が約 2 日続くことがあり、stale とみなせる時間閾値には実用上の根拠がないため、`stale`、`--hours`、PID によるプロセス生存判定は持たない。
 
-1 マシン前提なので PID の生存確認が使える。時間だけで判断すると長時間の作業を誤検出するため、プロセス生存確認と併せる。閾値 N は設定可能とする。
+`start` を実行した axon CLI 自身の PID はコマンド終了と同時に死ぬため、作業セッションの生存判定には使えない。エージェントの session ID も axon 内に照合・再開経路がなく、排他制御や表示に寄与しないため保存しない。
 
-自動解放しない理由: 実際には生きているセッションの claim を奪う危険がある。検出のみなら誤検出しても実害は警告が出るだけ。
+claim の解放は、`claims` または `show` で actor / worktree / at を確認した人が `release` で明示的に行う。axon はエージェントのセッションログを検索・解釈せず、actor を外部調査の手掛かりとして表示するだけに留める。
 
 ### D-7 (決着): 進行履歴は判断ログと分ける
 

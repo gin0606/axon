@@ -54,7 +54,7 @@ pub type Result<T> = std::result::Result<T, DbError>;
 
 /// スキーマの版。`user_version` に記録し、開くたびに不足分だけ流す。
 const MIGRATIONS: &[&str] = &[
-    SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6,
+    SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7,
 ];
 
 const SCHEMA_V1: &str = r#"
@@ -181,6 +181,13 @@ SET new_value = CASE
     END
 WHERE field = 'condition' AND new_value IS NOT NULL;
 UPDATE events SET field = 'resurface_condition' WHERE field = 'condition';
+"#;
+
+/// claim を調査に使える情報へ絞る。既存 claim は場所を復元できないため unknown とする。
+const SCHEMA_V7: &str = r#"
+ALTER TABLE issues RENAME COLUMN claimed_session TO claimed_worktree;
+UPDATE issues SET claimed_worktree = 'unknown' WHERE progress = 'in_progress';
+ALTER TABLE issues DROP COLUMN claimed_pid;
 "#;
 
 fn migrate(conn: &mut Connection) -> Result<()> {
@@ -439,9 +446,9 @@ impl Store {
         tx.execute(
             "INSERT INTO issues (id, title, description, progress, disposition,
                                  resurface_kind, resurface_date, resurface_ref,
-                                 claimed_actor, claimed_session, claimed_pid, claimed_at,
+                                 claimed_actor, claimed_worktree, claimed_at,
                                  created_at, updated_at, group_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 issue.id.as_str(),
                 issue.title,
@@ -452,8 +459,7 @@ impl Store {
                 resurface_date(&issue.resurface_condition),
                 resurface_ref(&issue.resurface_condition),
                 claim.map(|c| c.actor.clone()),
-                claim.map(|c| c.session.clone()),
-                claim.map(|c| c.pid),
+                claim.map(|c| c.worktree.clone()),
                 claim.map(|c| c.at.to_rfc3339()),
                 issue.created_at.to_rfc3339(),
                 issue.updated_at.to_rfc3339(),
@@ -658,17 +664,10 @@ impl Store {
                 let n = tx.execute(
                     "UPDATE issues
                         SET progress = 'in_progress',
-                            claimed_actor = ?2, claimed_session = ?3,
-                            claimed_pid = ?4, claimed_at = ?5, updated_at = ?6
+                            claimed_actor = ?2, claimed_worktree = ?3,
+                            claimed_at = ?4, updated_at = ?5
                       WHERE id = ?1 AND progress = 'not_started'",
-                    params![
-                        id.as_str(),
-                        c.actor,
-                        c.session,
-                        c.pid,
-                        c.at.to_rfc3339(),
-                        now
-                    ],
+                    params![id.as_str(), c.actor, c.worktree, c.at.to_rfc3339(), now],
                 )?;
                 if n == 0 {
                     return Err(DbError::CannotClaim {
@@ -681,8 +680,8 @@ impl Store {
                 let n = tx.execute(
                     "UPDATE issues
                         SET progress = 'not_started',
-                            claimed_actor = NULL, claimed_session = NULL,
-                            claimed_pid = NULL, claimed_at = NULL, updated_at = ?2
+                            claimed_actor = NULL, claimed_worktree = NULL,
+                            claimed_at = NULL, updated_at = ?2
                       WHERE id = ?1 AND progress = 'in_progress'",
                     params![id.as_str(), now],
                 )?;
@@ -698,8 +697,8 @@ impl Store {
                 let n = tx.execute(
                     "UPDATE issues
                         SET progress = 'ended',
-                            claimed_actor = NULL, claimed_session = NULL,
-                            claimed_pid = NULL, claimed_at = NULL, updated_at = ?2
+                            claimed_actor = NULL, claimed_worktree = NULL,
+                            claimed_at = NULL, updated_at = ?2
                       WHERE id = ?1 AND progress = 'in_progress'",
                     params![id.as_str(), now],
                 )?;
@@ -937,7 +936,7 @@ fn progress_event(change: &Change, ctx: &Ctx, now: &DateTime<Utc>) -> Option<Pro
 
 const SELECT_ISSUE: &str = "SELECT id, title, description, progress, disposition,
                                    resurface_kind, resurface_date, resurface_ref,
-                                   claimed_actor, claimed_session, claimed_pid, claimed_at,
+                                   claimed_actor, claimed_worktree, claimed_at,
                                    created_at, updated_at, group_id
                             FROM issues";
 
@@ -1245,8 +1244,7 @@ struct RawIssue {
     resurface_date: Option<String>,
     resurface_ref: Option<String>,
     claimed_actor: Option<String>,
-    claimed_session: Option<String>,
-    claimed_pid: Option<i32>,
+    claimed_worktree: Option<String>,
     claimed_at: Option<String>,
     created_at: String,
     updated_at: String,
@@ -1265,26 +1263,19 @@ impl RawIssue {
             resurface_date: r.get_unwrap(6),
             resurface_ref: r.get_unwrap(7),
             claimed_actor: r.get_unwrap(8),
-            claimed_session: r.get_unwrap(9),
-            claimed_pid: r.get_unwrap(10),
-            claimed_at: r.get_unwrap(11),
-            created_at: r.get_unwrap(12),
-            updated_at: r.get_unwrap(13),
-            group_id: r.get_unwrap(14),
+            claimed_worktree: r.get_unwrap(9),
+            claimed_at: r.get_unwrap(10),
+            created_at: r.get_unwrap(11),
+            updated_at: r.get_unwrap(12),
+            group_id: r.get_unwrap(13),
         }
     }
 
     fn into_issue(self) -> std::result::Result<Issue, ParseError> {
-        let claim = match (
-            self.claimed_actor,
-            self.claimed_session,
-            self.claimed_pid,
-            self.claimed_at,
-        ) {
-            (Some(actor), Some(session), Some(pid), Some(at)) => Some(Claim {
+        let claim = match (self.claimed_actor, self.claimed_worktree, self.claimed_at) {
+            (Some(actor), Some(worktree), Some(at)) => Some(Claim {
                 actor,
-                session,
-                pid,
+                worktree,
                 at: parse_ts(&at),
             }),
             _ => None,
@@ -1329,11 +1320,10 @@ mod tests {
         }
     }
 
-    fn claim(pid: i32) -> Claim {
+    fn claim(sequence: i32) -> Claim {
         Claim {
             actor: "tester".to_string(),
-            session: "s".to_string(),
-            pid,
+            worktree: format!("/worktree/{sequence}"),
             at: Utc::now(),
         }
     }
@@ -1564,6 +1554,51 @@ mod tests {
         assert_eq!(resurface.reason.as_deref(), Some("後回しする理由"));
     }
 
+    #[test]
+    fn claim_migration_preserves_active_work_and_allows_release() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for (i, sql) in MIGRATIONS.iter().take(6).enumerate() {
+            conn.execute_batch(sql).unwrap();
+            conn.execute_batch(&format!("PRAGMA user_version = {}", i + 1))
+                .unwrap();
+        }
+        let at = "2026-09-01T01:23:45+00:00";
+        conn.execute(
+            "INSERT INTO issues
+               (id, title, progress, disposition, claimed_actor, claimed_session,
+                claimed_pid, claimed_at, created_at, updated_at)
+             VALUES ('t-1', '既存の着手', 'in_progress', 'accepted', 'old-agent',
+                     'old-session', 4242, ?1, ?1, ?1)",
+            params![at],
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(issues)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .map(std::result::Result::unwrap)
+            .collect();
+        assert!(columns.contains(&"claimed_worktree".to_string()));
+        assert!(!columns.contains(&"claimed_session".to_string()));
+        assert!(!columns.contains(&"claimed_pid".to_string()));
+
+        let mut store = Store { conn };
+        let issue = store.get(&iid("t-1")).unwrap();
+        let claim = issue.progress.claim().expect("既存の claim が残る");
+        assert_eq!(claim.actor, "old-agent");
+        assert_eq!(claim.worktree, "unknown");
+        assert_eq!(claim.at.to_rfc3339(), at);
+
+        store.apply(&iid("t-1"), Change::Release, &ctx()).unwrap();
+        assert_eq!(
+            store.get(&iid("t-1")).unwrap().progress,
+            Progress::NotStarted
+        );
+    }
+
     /// 型 → DB → 型 で往復しても値が変わらない。
     #[test]
     fn issue_round_trips_through_the_database() {
@@ -1597,8 +1632,7 @@ mod tests {
         let back = s.get(&iid("t-1")).unwrap();
         let stored = back.progress.claim().expect("着手中なので claim がある");
         assert_eq!(stored.actor, c.actor);
-        assert_eq!(stored.session, c.session);
-        assert_eq!(stored.pid, c.pid);
+        assert_eq!(stored.worktree, c.worktree);
     }
 
     #[test]

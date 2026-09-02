@@ -3,7 +3,7 @@ mod db;
 mod derived;
 mod domain;
 
-use chrono::{NaiveDate, Utc};
+use chrono::{NaiveDate, SecondsFormat, Utc};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::aot::{Shell, generate};
 use db::{ApplyOutcome, Change, Ctx, Store};
@@ -57,7 +57,9 @@ enum Command {
     Ready,
     /// List issues that need a human disposition decision
     Triage,
-    /// Claim one ready issue and record the actor and time
+    /// List every active claim with its actor, worktree, and start time
+    Claims,
+    /// Claim one ready issue and record the actor, worktree, and start time
     Start {
         /// Issue ID or unique six-character suffix to claim
         id: String,
@@ -85,12 +87,6 @@ enum Command {
     Log {
         /// Issue ID or unique six-character suffix whose decision history is shown
         id: String,
-    },
-    /// Find old claims whose owning process is no longer running
-    Stale {
-        /// Minimum claim age in hours
-        #[arg(long, default_value_t = 24)]
-        hours: i64,
     },
     /// Release a claim and record an optional reason or handoff
     Release {
@@ -357,6 +353,7 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
         Command::Capture { title } => cmd_create(title, Disposition::Undecided),
         Command::Ready => cmd_ready(),
         Command::Triage => cmd_triage(),
+        Command::Claims => cmd_claims(),
         Command::Start { id } => cmd_start(&id),
         Command::Done { id } => cmd_done(&id),
         Command::Write {
@@ -366,7 +363,6 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
             file,
         } => cmd_write(&id, title, message, file),
         Command::Log { id } => cmd_log(&id),
-        Command::Stale { hours } => cmd_stale(hours),
         Command::Release { id, reason } => cmd_release(&id, reason),
         Command::List => cmd_list(),
         Command::Show { id } => cmd_show(&id),
@@ -610,13 +606,41 @@ fn render_triage(view: &View) -> String {
     out
 }
 
+fn cmd_claims() -> Result<(), Box<dyn std::error::Error>> {
+    let (_, view) = load()?;
+    print_rows(&render_claims(&view), "No active claims");
+    Ok(())
+}
+
+fn render_claims(view: &View) -> String {
+    view.claims()
+        .into_iter()
+        .map(|(issue, claim)| {
+            format!(
+                "{}  {}  Claim: {}\n",
+                issue.id,
+                issue.title,
+                claim_details(claim)
+            )
+        })
+        .collect()
+}
+
+fn claim_details(claim: &Claim) -> String {
+    format!(
+        "{}  Worktree: {}  Started: {}",
+        claim.actor,
+        claim.worktree,
+        claim.at.to_rfc3339_opts(SecondsFormat::Secs, true)
+    )
+}
+
 fn cmd_start(id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = Store::open()?;
     let id = store.resolve_id(id)?;
     let claim = Claim {
         actor: actor::actor(),
-        session: actor::session_key(),
-        pid: actor::pid(),
+        worktree: actor::worktree()?,
         at: Utc::now(),
     };
     store.apply(&id, Change::Claim(claim.clone()), &ctx(None))?;
@@ -723,11 +747,7 @@ fn render_show(view: &View, issue: &Issue, progress_events: &[db::ProgressEvent]
         });
     }
     if let Some(c) = issue.progress.claim() {
-        head.push(format!(
-            "Claim: {} ({})",
-            c.actor,
-            c.at.format("%Y-%m-%d %H:%M")
-        ));
+        head.push(format!("Claim: {}", claim_details(c)));
     }
     blocks.push(head);
 
@@ -995,27 +1015,6 @@ fn format_decision(e: &db::Event) -> String {
     }
 }
 
-fn cmd_stale(hours: i64) -> Result<(), Box<dyn std::error::Error>> {
-    let (_, view) = load()?;
-    let stale = view.stale_claims(hours);
-    if stale.is_empty() {
-        println!("No stale claims");
-        return Ok(());
-    }
-    for (issue, claim) in stale {
-        let elapsed = chrono::Utc::now()
-            .signed_duration_since(claim.at)
-            .num_hours();
-        println!("{}  {}", issue.id, issue.title);
-        println!(
-            "  claimed by {} {} hours ago (process {} is no longer running)",
-            claim.actor, elapsed, claim.pid
-        );
-        println!("  To release: axon release {}", issue.id);
-    }
-    Ok(())
-}
-
 fn cmd_release(id: &str, reason: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = Store::open()?;
     let id = store.resolve_id(id)?;
@@ -1141,6 +1140,17 @@ mod tests {
         issue(id, Progress::Ended, Disposition::Accepted)
     }
 
+    fn claimed(id: &str, actor: &str, worktree: &str, at: &str) -> Issue {
+        let claim = Claim {
+            actor: actor.to_string(),
+            worktree: worktree.to_string(),
+            at: chrono::DateTime::parse_from_rfc3339(at)
+                .unwrap()
+                .with_timezone(&Utc),
+        };
+        issue(id, Progress::InProgress(claim), Disposition::Accepted)
+    }
+
     fn rejected(id: &str) -> Issue {
         issue(id, Progress::NotStarted, Disposition::Rejected)
     }
@@ -1196,6 +1206,24 @@ mod tests {
             show(&v, "a"),
             "a  a の作業\nProgress: NotStarted  Disposition: Accepted  Resurface condition: Always\n"
         );
+    }
+
+    #[test]
+    fn claims_and_show_report_the_same_claim_details() {
+        let v = view(
+            vec![
+                accepted("not-started"),
+                claimed("active", "codex", "/repo/worktree", "2026-09-01T01:23:45Z"),
+            ],
+            &[],
+            Vec::new(),
+        );
+        let details = "Claim: codex  Worktree: /repo/worktree  Started: 2026-09-01T01:23:45Z";
+        let claims = render_claims(&v);
+
+        assert_eq!(claims, format!("active  active の作業  {details}\n"));
+        assert_eq!(first_columns(&claims), ["active"]);
+        assert!(show(&v, "active").contains(details));
     }
 
     #[test]

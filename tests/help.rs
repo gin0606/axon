@@ -72,6 +72,7 @@ fn complete_help_is_an_english_self_contained_manual() {
         "Resurface condition",
         "## Basic workflow",
         "## Choosing a query",
+        "`axon claims`",
         "## Safety and concurrency",
         "## Input, output, and exit status",
         "# Command reference",

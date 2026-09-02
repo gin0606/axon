@@ -270,6 +270,7 @@ fn empty_issue_queries_keep_guidance_out_of_stdout() {
     for (command, guidance) in [
         ("ready", "No ready issues\n"),
         ("triage", "No issues need triage\n"),
+        ("claims", "No active claims\n"),
         ("list", "No issues\n"),
     ] {
         let output = repo.axon(&[command]);
@@ -309,6 +310,59 @@ fn linked_worktrees_share_the_same_database() {
     let list = stdout(&list);
     assert!(list.contains(&format!("{from_main}  [NotStarted/Accepted]")));
     assert!(list.contains(&format!("{from_linked}  [NotStarted/Undecided]")));
+
+    let start = repo.axon_in(&worktree, &["start", &from_main]);
+    assert_success(&start);
+    let claim_details = format!(
+        "Claim: test-actor  Worktree: {}  Started:",
+        worktree.display()
+    );
+
+    let claims = repo.axon(&["claims"]);
+    assert_success(&claims);
+    assert!(
+        stdout(&claims).starts_with(&format!(
+            "{from_main}  created in main worktree  {claim_details}"
+        )),
+        "{}",
+        stdout(&claims)
+    );
+
+    let show = repo.axon(&["show", &from_main]);
+    assert_success(&show);
+    assert!(stdout(&show).contains(&claim_details), "{}", stdout(&show));
+
+    assert_success(&repo.axon(&["release", &from_main, "--reason", "work stopped"]));
+    let claims = repo.axon(&["claims"]);
+    assert_success(&claims);
+    assert!(claims.stdout.is_empty());
+    assert_eq!(stderr(&claims), "No active claims\n");
+}
+
+#[test]
+fn legacy_claim_is_listed_shown_and_releasable_after_migration() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let issue = repo.plan("migrated active work");
+    repo.seed_legacy_claim(&issue, "legacy-agent", "2026-09-01T01:23:45+00:00");
+    let claim_details = "Claim: legacy-agent  Worktree: unknown  Started: 2026-09-01T01:23:45Z";
+
+    let claims = repo.axon(&["claims"]);
+    assert_success(&claims);
+    assert_eq!(
+        stdout(&claims),
+        format!("{issue}  migrated active work  {claim_details}\n")
+    );
+
+    let show = repo.axon(&["show", &issue]);
+    assert_success(&show);
+    assert!(stdout(&show).contains(claim_details), "{}", stdout(&show));
+
+    assert_success(&repo.axon(&["release", &issue]));
+    let show = repo.axon(&["show", &issue]);
+    assert_success(&show);
+    assert!(stdout(&show).contains("Progress: NotStarted"));
+    assert!(!stdout(&show).contains("Claim:"));
 }
 
 #[test]
@@ -345,6 +399,15 @@ fn non_git_subdirectory_uses_the_ancestor_database() {
     let show = dir.axon_in(&root, &["show", &issue]);
     assert_success(&show);
     assert!(stdout(&show).contains("outside Git"));
+
+    assert_success(&dir.axon_in(&subdirectory, &["start", &issue]));
+    let claims = dir.axon_in(&root, &["claims"]);
+    assert_success(&claims);
+    assert!(
+        stdout(&claims).contains(&format!("Worktree: {}", subdirectory.display())),
+        "{}",
+        stdout(&claims)
+    );
 }
 
 #[test]

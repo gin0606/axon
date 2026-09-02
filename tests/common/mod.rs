@@ -262,6 +262,24 @@ impl TestRepo {
             .unwrap();
     }
 
+    pub fn seed_legacy_claim(&self, id: &str, actor: &str, at: &str) {
+        let conn = self.connection();
+        conn.execute_batch(
+            "ALTER TABLE issues RENAME COLUMN claimed_worktree TO claimed_session;
+             ALTER TABLE issues ADD COLUMN claimed_pid INTEGER;
+             PRAGMA user_version = 6;",
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE issues
+                SET progress = 'in_progress', claimed_actor = ?2,
+                    claimed_session = 'legacy-session', claimed_pid = 4242, claimed_at = ?3
+              WHERE id = ?1",
+            params![id, actor, at],
+        )
+        .unwrap();
+    }
+
     fn connection(&self) -> Connection {
         Connection::open(self.root.join(".axon/axon.db")).unwrap()
     }

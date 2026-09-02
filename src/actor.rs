@@ -1,6 +1,8 @@
 //! 誰がこの操作をしているかの判定。エージェント検出は std-env / @vercel/detect-agent の規約に従う。
 
 use std::env;
+use std::io;
+use std::process::Command;
 
 /// 表示用のラベル。
 pub fn actor() -> String {
@@ -33,30 +35,18 @@ pub fn actor() -> String {
     }
 }
 
-/// claim の一意性を保証する識別子。セッション ID が取れなければ場所と PID から作る。
-pub fn session_key() -> String {
-    for key in ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID"] {
-        if let Ok(v) = env::var(key)
-            && !v.is_empty()
-        {
-            return v;
+pub fn worktree() -> io::Result<String> {
+    let current_dir = env::current_dir()?;
+    if let Ok(output) = Command::new("git")
+        .current_dir(&current_dir)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        && output.status.success()
+    {
+        let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !root.is_empty() {
+            return Ok(root);
         }
     }
-    let cwd = env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "?".to_string());
-    format!("{cwd}#{}", std::process::id())
-}
-
-pub fn pid() -> i32 {
-    std::process::id() as i32
-}
-
-/// そのプロセスがまだ生きているか。1 マシン前提なので PID で判定できる。
-/// 権限が無い場合 (EPERM) も存在はしているので、生存とみなす。
-pub fn process_alive(pid: i32) -> bool {
-    if pid <= 0 {
-        return false;
-    }
-    unsafe { libc::kill(pid, 0) == 0 || *libc::__error() == libc::EPERM }
+    Ok(current_dir.to_string_lossy().into_owned())
 }

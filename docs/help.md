@@ -32,7 +32,7 @@ Read Progress and Disposition together. `Ended + Accepted` means the accepted wo
 4. Use `axon write <id>` to update its title, description, work result, or handoff. When work will not continue, run `axon done <id>` to set Progress to `Ended`.
 5. Use `axon triage` to find `Undecided` or orphaned issues. Inspect them with `axon show` and `axon log`, then use `axon decide accept` or `axon decide reject` only after a person makes the decision.
 
-If a session may have died while holding a claim, use `axon stale` to find stale claims. Check the recorded actor and session before `axon release <id>`. `stale` only reports; it never releases a claim.
+Use `axon claims` to inspect every active claim, including its actor, worktree, and start time. If work has stopped, release that claim explicitly with `axon release <id>`; axon does not infer stale claims from age or process state.
 
 ## Choosing a query
 
@@ -40,16 +40,16 @@ If a session may have died while holding a claim, use `axon stale` to find stale
 | --- | --- |
 | `axon ready` | Which issues can be started now? |
 | `axon triage` | Which issues require a human disposition decision? |
+| `axon claims` | Which issues are currently claimed, and by whom, where, and since when? |
 | `axon list` | What issues exist, including blocked, deferred, active, ended, and rejected ones? |
 | `axon show <id>` | What is this issue's current state, claim, progress history, dependencies, dependents, group, and blocking cause? |
 | `axon log <id>` | Why did its Disposition or resurface condition change? |
-| `axon stale` | Which claims are old and owned by processes that are no longer running? |
 
 `plan` creates `Accepted` work, while `capture` creates `Undecided` work. A captured issue therefore appears in `triage`, not `ready`. Use `list` when an issue appears in neither query.
 
 ## Commands that change data
 
-- `start` atomically checks that an issue is ready, sets Progress to `InProgress`, creates its claim, and records the actor and time. It never selects an issue for you.
+- `start` atomically checks that an issue is ready, sets Progress to `InProgress`, creates its claim with the actor, worktree, and start time, and records the progress event. It never selects an issue for you.
 - `done` accepts only `InProgress -> Ended`. It removes the claim and records the actor and time in progress history. On success, it prints only the target issue's end confirmation; run `axon ready` separately to query current candidates across all relationships and resurface conditions. It does not accept a reason; record work results in the issue description.
 - `release` accepts only `InProgress -> NotStarted`. It removes the claim and records the optional handoff or release reason in progress history.
 - `decide accept`, `decide reject`, and `decide undecide` change only Disposition and record the optional reason in the decision log.
@@ -66,9 +66,9 @@ Every `--reason` option is optional. Reasons belong to typed state changes rathe
 
 ## Safety and concurrency
 
-- Query commands do not claim work or make decisions. `ready`, `triage`, and `stale` deliberately separate observation from mutation.
+- Query commands do not claim work or make decisions. `ready`, `triage`, and `claims` deliberately separate observation from mutation.
 - `start` checks readiness and acquires the claim in one transaction. Concurrent attempts to start the same issue cannot both succeed.
-- A claim identifies its actor, session, process, and start time. Do not release a live claim merely because it is old.
+- A claim identifies its actor, worktree, and start time. `claims` and `show` report these facts without guessing whether the work is still active.
 - `done` and `release` operate on the current claim and reject issues in any other Progress state.
 - Rejecting a dependency makes dependents orphaned. axon reports this for human triage instead of guessing whether the dependency should be removed.
 - A resurface reference and a dependency have different meaning. If referenced issue X is rejected, `when after X` becomes surfaced because waiting is over; `dep add --needs X` becomes orphaned because X's result will not exist.
@@ -80,7 +80,7 @@ Every `--reason` option is optional. Reasons belong to typed state changes rathe
 
 Help, query results, details, and successful mutation confirmations go to standard output. Argument and operation errors go to standard error and return a non-zero status.
 
-When `ready`, `triage`, or `list` has no rows, standard output stays empty so pipelines receive no false candidate. A short explanation is written to standard error and the command still succeeds. In issue-list output, the first whitespace-separated field is always the issue ID, so commands such as `axon ready | fzf --preview 'axon show {1}'` work predictably.
+When `ready`, `triage`, `claims`, or `list` has no rows, standard output stays empty so pipelines receive no false candidate. A short explanation is written to standard error and the command still succeeds. In issue-list output, the first whitespace-separated field is always the issue ID, so commands such as `axon ready | fzf --preview 'axon show {1}'` work predictably.
 
 Issue titles, descriptions, reasons, group names, and other user-provided text are displayed unchanged and may use any language. Fixed help, status labels, confirmations, warnings, and errors are in English. There is no localization mode.
 

@@ -21,8 +21,7 @@ pub enum ParseError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Claim {
     pub actor: String,
-    pub session: String,
-    pub pid: i32,
+    pub worktree: String,
     pub at: DateTime<Utc>,
 }
 
@@ -242,8 +241,7 @@ mod tests {
     fn claim() -> Claim {
         Claim {
             actor: "tester".to_string(),
-            session: "s".to_string(),
-            pid: 1,
+            worktree: "/worktree".to_string(),
             at: Utc::now(),
         }
     }
