@@ -14,14 +14,19 @@ pre-commit:
 post-checkout:
   jobs:
     - name: release-build
-      run: test "{3}" != "1" || mise exec -- cargo build --release
+      run: test "{3}" != "1" || ./scripts/build-canonical-axon
+
+post-commit:
+  jobs:
+    - name: release-build
+      run: ./scripts/build-canonical-axon
 
 post-merge:
   jobs:
     - name: release-build
-      run: mise exec -- cargo build --release
+      run: ./scripts/build-canonical-axon
 
 post-rewrite:
   jobs:
     - name: release-build
-      run: test "{1}" != "rebase" || mise exec -- cargo build --release
+      run: ./scripts/build-canonical-axon

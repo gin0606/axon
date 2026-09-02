@@ -9,5 +9,5 @@ default_branch="$(git rev-parse --abbrev-ref origin/HEAD | sed 's|^origin/||')"
 git pull --rebase origin "$default_branch"
 
 # worktree から共有 DB を操作する canonical binary を、同期後の main から作る
-mise exec -- cargo build --release
+./scripts/build-canonical-axon
 git push origin "$default_branch"
