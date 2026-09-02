@@ -46,6 +46,22 @@ impl TestDir {
         axon_command(&self.path, &self.git_config)
     }
 
+    pub fn axon_command_in(&self, directory: &Path) -> Command {
+        axon_command(directory, &self.git_config)
+    }
+
+    pub fn axon_in(&self, directory: &Path, args: &[&str]) -> Output {
+        self.axon_command_in(directory).args(args).output().unwrap()
+    }
+
+    pub fn init_git(&self, directory: &Path) {
+        let output = git_command(directory, &self.git_config)
+            .args(["init", "--quiet"])
+            .output()
+            .unwrap();
+        assert_success(&output);
+    }
+
     fn git_config(&self) -> &Path {
         &self.git_config
     }
@@ -103,6 +119,10 @@ impl TestRepo {
     pub fn init(&self, prefix: &str) {
         let output = self.axon(&["init", prefix]);
         assert_success(&output);
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     pub fn plan(&self, title: &str) -> String {

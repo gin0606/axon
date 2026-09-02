@@ -1,6 +1,6 @@
 # axon CLI
 
-axon is a local-first issue tracker that keeps independent decisions on separate axes. Its primary use is coordinating coding agents and people inside one Git repository. It stores one untracked SQLite database per repository and shares it across that repository's worktrees.
+axon is a local-first issue tracker that keeps independent decisions on separate axes. Its primary use is coordinating coding agents and people inside one directory tree, whether or not Git manages it. It stores one SQLite database per management root and shares a Git repository's database across its worktrees.
 
 ## State model
 
@@ -26,7 +26,7 @@ Read Progress and Disposition together. `Ended + Accepted` means the accepted wo
 
 ## Basic workflow
 
-1. Run `axon init` once in a Git repository.
+1. Run `axon init` once at the root of the work you want to manage. Inside Git, axon uses the repository's common root regardless of the current subdirectory.
 2. Use `axon plan <title>` for work already accepted, or `axon capture <title>` for an observation that still needs a decision.
 3. Use `axon ready` to find mechanically startable work. Choose an explicit ID, then run `axon start <id>` to claim only that issue.
 4. Use `axon write <id>` to update its title, description, work result, or handoff. When work will not continue, run `axon done <id>` to set Progress to `Ended`.
@@ -86,9 +86,11 @@ Issue titles, descriptions, reasons, group names, and other user-provided text a
 
 ## Storage, worktrees, and identifiers
 
-axon stores data in `.axon/axon.db` beside the repository's common Git directory and does not track it with Git. `git rev-parse --git-common-dir` is used so all worktrees of the same repository share one database.
+axon stores data in `.axon/axon.db` under a management root and does not track it with Git. Inside Git, the management root is the directory containing the common Git directory. `git rev-parse --git-common-dir` is used so all worktrees of the same repository share one database. Commands in a Git repository never fall back to an axon database outside that common root.
 
-Issue IDs have the form `<prefix>-<random 6 characters>`. The prefix comes from `axon init` or defaults to the repository directory name. Commands accept a full ID or its six-character suffix; an ambiguous suffix fails and lists its matches. Groups are addressed by their user-chosen slug.
+Outside Git, `axon init` makes the current directory the management root. Other commands search from the current directory toward its ancestors and use the nearest `.axon/axon.db`. Running `axon init` anywhere below an existing non-Git management root fails and reports that root instead of silently creating a nested database.
+
+Issue IDs have the form `<prefix>-<random 6 characters>`. The prefix comes from `axon init` or defaults to the management root directory name. Commands accept a full ID or its six-character suffix; an ambiguous suffix fails and lists its matches. Groups are addressed by their user-chosen slug.
 
 ## Help forms
 

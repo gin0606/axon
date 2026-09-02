@@ -1,4 +1,4 @@
-//! SQLite への永続化。DB は git 管理外に置き、worktree 間で共有する。
+//! SQLite への永続化。DB は管理 root に置き、Git worktree 間でも共有する。
 
 use crate::derived::View;
 use crate::domain::*;
@@ -14,8 +14,10 @@ use std::process::Command;
 pub enum DbError {
     #[error("SQLite: {0}")]
     Sqlite(#[from] rusqlite::Error),
-    #[error("not inside a Git repository")]
-    NotInRepo,
+    #[error("I/O: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("could not resolve Git common root: {0}")]
+    GitRoot(String),
     #[error("axon is not initialized; run `axon init`")]
     NotInitialized,
     #[error("axon is already initialized at {0}")]
@@ -200,24 +202,73 @@ fn migrate_with(conn: &mut Connection, migrations: &[&str]) -> Result<()> {
     }
 }
 
-/// worktree から呼ばれても同じ DB を指すよう、git の共通ディレクトリを基準にする。
-fn repo_root() -> Result<PathBuf> {
-    let out = Command::new("git")
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .output()
-        .map_err(|_| DbError::NotInRepo)?;
-    if !out.status.success() {
-        return Err(DbError::NotInRepo);
+#[derive(Clone, Copy)]
+enum ResolveFor {
+    Init,
+    Open,
+}
+
+fn management_root(resolve_for: ResolveFor) -> Result<PathBuf> {
+    let current_dir = std::env::current_dir()?;
+    if let Some(root) = git_management_root(&current_dir)? {
+        return Ok(root);
     }
-    let git_dir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim().to_string());
+
+    if let Some(root) = current_dir
+        .ancestors()
+        .find(|root| database_path(root).is_file())
+    {
+        return match resolve_for {
+            ResolveFor::Init => Err(DbError::AlreadyInitialized(root.to_path_buf())),
+            ResolveFor::Open => Ok(root.to_path_buf()),
+        };
+    }
+
+    match resolve_for {
+        ResolveFor::Init => Ok(current_dir),
+        ResolveFor::Open => Err(DbError::NotInitialized),
+    }
+}
+
+/// worktree から呼ばれても同じ DB を指すよう、Git の共通ディレクトリを基準にする。
+fn git_management_root(current_dir: &Path) -> Result<Option<PathBuf>> {
+    let output = Command::new("git")
+        .current_dir(current_dir)
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .output();
+    let output = match output {
+        Ok(output) => output,
+        Err(_) if !has_git_marker(current_dir) => return Ok(None),
+        Err(error) => return Err(DbError::GitRoot(error.to_string())),
+    };
+    if !output.status.success() {
+        if has_git_marker(current_dir) {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let detail = if stderr.is_empty() {
+                output.status.to_string()
+            } else {
+                stderr
+            };
+            return Err(DbError::GitRoot(detail));
+        }
+        return Ok(None);
+    }
+    let git_dir = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim().to_string());
     git_dir
         .parent()
         .map(Path::to_path_buf)
-        .ok_or(DbError::NotInRepo)
+        .map(Some)
+        .ok_or_else(|| DbError::GitRoot("Git returned a common directory without a parent".into()))
 }
 
-fn db_path() -> Result<PathBuf> {
-    Ok(repo_root()?.join(".axon").join("axon.db"))
+fn has_git_marker(current_dir: &Path) -> bool {
+    current_dir
+        .ancestors()
+        .any(|directory| directory.join(".git").exists())
+}
+
+fn database_path(root: &Path) -> PathBuf {
+    root.join(".axon").join("axon.db")
 }
 
 pub struct Store {
@@ -322,24 +373,30 @@ impl Store {
         Ok(Store { conn })
     }
 
-    pub fn init(prefix: &str) -> Result<PathBuf> {
-        let path = db_path()?;
+    pub fn init(prefix: Option<&str>) -> Result<(PathBuf, String)> {
+        let root = management_root(ResolveFor::Init)?;
+        let path = database_path(&root);
         if path.exists() {
-            return Err(DbError::AlreadyInitialized(path));
+            return Err(DbError::AlreadyInitialized(root));
         }
-        std::fs::create_dir_all(path.parent().expect("database path has a parent directory"))
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let prefix = prefix.map(str::to_owned).unwrap_or_else(|| {
+            root.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "axon".to_string())
+        });
+        std::fs::create_dir_all(path.parent().expect("database path has a parent directory"))?;
         let mut conn = Connection::open(&path)?;
         migrate(&mut conn)?;
         conn.execute(
             "INSERT INTO meta (key, value) VALUES ('prefix', ?1)",
-            params![prefix],
+            params![&prefix],
         )?;
-        Ok(path)
+        Ok((path, prefix))
     }
 
     pub fn open() -> Result<Self> {
-        let path = db_path()?;
+        let root = management_root(ResolveFor::Open)?;
+        let path = database_path(&root);
         if !path.exists() {
             return Err(DbError::NotInitialized);
         }

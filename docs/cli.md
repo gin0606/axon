@@ -45,7 +45,7 @@ issue は独立した 3 軸と 2 種類の関係を持つ。
 
 ### 標準フロー
 
-1. リポジトリごとに一度 `axon init` を実行する。
+1. 管理したい作業の root で一度 `axon init` を実行する。Git 配下では実行したサブディレクトリにかかわらず common root を使う。
 2. やると決めた作業は `axon plan <title>`、判断前の懸念は `axon capture <title>` で登録する。
 3. `axon ready` から対象を選び、`axon start <id>` でその 1 件への着手を記録する。`start` は候補を自動選択せず、同じ issue の二重着手を拒否する。
 4. 必要なら `axon write <id>` で説明や申し送りを残し、作業が終わったら `axon done <id>` で終了する。
@@ -80,9 +80,11 @@ reason を受け取るのは、状態だけから意図を復元できない操�
 
 ### 保存場所、worktree、ID
 
-データは git 管理外の SQLite DB `.axon/axon.db` に保存する。git worktree では `git rev-parse --git-common-dir` から共通のリポジトリ位置を求めるため、同じリポジトリの全 worktree が 1 つの DB を共有する。
+データは管理 root 配下の SQLite DB `.axon/axon.db` に保存する。Git 配下では `git rev-parse --git-common-dir` の親を管理 root とするため、同じリポジトリの全 worktree が 1 つの DB を共有する。common root が管理境界になり、その外側にある Git 外の axon DB へはフォールバックしない。
 
-issue ID は `<prefix>-<ランダム 6 文字>` の形式で、prefix は `axon init` の引数、またはリポジトリのディレクトリ名から決まる。コマンドには完全な ID のほか、`a3f9k2` のような prefix を除いた 6 文字も渡せる。短縮形が複数件に一致する場合は候補を示して失敗する。グループは人が付けた slug で参照する。
+Git 外での `init` はカレントディレクトリを管理 root にする。通常操作はカレントから祖先方向へ `.axon/axon.db` を探索し、最も近いものを使う。既存の管理 root 配下で `init` しても暗黙の入れ子は作らず、既存 root を示して失敗する。
+
+issue ID は `<prefix>-<ランダム 6 文字>` の形式で、prefix は `axon init` の引数、または管理 root のディレクトリ名から決まる。コマンドには完全な ID のほか、`a3f9k2` のような prefix を除いた 6 文字も渡せる。短縮形が複数件に一致する場合は候補を示して失敗する。グループは人が付けた slug で参照する。
 
 ## 機能ごとの目的
 
@@ -92,9 +94,9 @@ issue ID は `<prefix>-<ランダム 6 文字>` の形式で、prefix は `axon 
 
 ### init
 
-**目的**: リポジトリで axon を使い始める。issue ID の接頭辞を決める。
+**目的**: ディレクトリツリーで axon を使い始める。issue ID の接頭辞を決める。
 
-**設計**: 接頭辞は既定でリポジトリのディレクトリ名。ID を `<接頭辞>-<ランダム 6 文字>` にするのは、番号から順序を推測させないため (`data-model.md` D-2)。
+**設計**: 接頭辞は既定で管理 root のディレクトリ名。ID を `<接頭辞>-<ランダム 6 文字>` にするのは、番号から順序を推測させないため (`data-model.md` D-2)。
 
 ### completion
 

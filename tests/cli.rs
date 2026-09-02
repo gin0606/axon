@@ -1,6 +1,8 @@
 mod common;
 
-use common::{TestRepo, assert_failure, assert_success, stderr, stdout};
+use std::fs;
+
+use common::{TestDir, TestRepo, assert_failure, assert_success, stderr, stdout};
 
 #[test]
 fn created_issues_are_observable_through_the_query_commands() {
@@ -307,6 +309,152 @@ fn linked_worktrees_share_the_same_database() {
     let list = stdout(&list);
     assert!(list.contains(&format!("{from_main}  [NotStarted/Accepted]")));
     assert!(list.contains(&format!("{from_linked}  [NotStarted/Undecided]")));
+}
+
+#[test]
+fn git_subdirectory_uses_the_common_root_database() {
+    let repo = TestRepo::new();
+    let subdirectory = repo.root().join("nested");
+    fs::create_dir(&subdirectory).unwrap();
+
+    let init = repo.axon_in(&subdirectory, &["init"]);
+    assert_success(&init);
+    assert!(repo.root().join(".axon/axon.db").is_file());
+    assert!(!subdirectory.join(".axon").exists());
+
+    let plan = repo.axon_in(&subdirectory, &["plan", "from a subdirectory"]);
+    assert_success(&plan);
+    assert!(stdout(&plan).starts_with("repo-"), "{}", stdout(&plan));
+}
+
+#[test]
+fn non_git_subdirectory_uses_the_ancestor_database() {
+    let dir = TestDir::new("non-git");
+    let root = dir.path().join("workspace");
+    let subdirectory = root.join("nested/deep");
+    fs::create_dir_all(&subdirectory).unwrap();
+
+    let init = dir.axon_in(&root, &["init"]);
+    assert_success(&init);
+    assert!(root.join(".axon/axon.db").is_file());
+
+    let plan = dir.axon_in(&subdirectory, &["plan", "outside Git"]);
+    assert_success(&plan);
+    assert!(stdout(&plan).starts_with("workspace-"), "{}", stdout(&plan));
+    let issue = stdout(&plan).split_whitespace().next().unwrap().to_string();
+    let show = dir.axon_in(&root, &["show", &issue]);
+    assert_success(&show);
+    assert!(stdout(&show).contains("outside Git"));
+}
+
+#[test]
+fn non_git_lookup_uses_the_nearest_ancestor_database() {
+    let dir = TestDir::new("nearest");
+    let outer = dir.path().join("outer");
+    let inner_source = dir.path().join("inner-source");
+    fs::create_dir(&outer).unwrap();
+    fs::create_dir(&inner_source).unwrap();
+
+    assert_success(&dir.axon_in(&outer, &["init", "outer"]));
+    let outer_issue = dir.axon_in(&outer, &["plan", "outer issue"]);
+    assert_success(&outer_issue);
+    let outer_issue = stdout(&outer_issue)
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+
+    assert_success(&dir.axon_in(&inner_source, &["init", "inner"]));
+    let inner_issue = dir.axon_in(&inner_source, &["plan", "inner issue"]);
+    assert_success(&inner_issue);
+    let inner_issue = stdout(&inner_issue)
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+
+    let inner = outer.join("nested");
+    let deep = inner.join("deep");
+    fs::create_dir_all(&deep).unwrap();
+    fs::rename(inner_source.join(".axon"), inner.join(".axon")).unwrap();
+
+    let list = dir.axon_in(&deep, &["list"]);
+    assert_success(&list);
+    let list = stdout(&list);
+    assert!(list.contains(&inner_issue), "{list}");
+    assert!(!list.contains(&outer_issue), "{list}");
+}
+
+#[test]
+fn non_git_init_rejects_an_implicit_nested_management_root() {
+    let dir = TestDir::new("nested-init");
+    let root = dir.path().join("workspace");
+    let nested = root.join("nested");
+    fs::create_dir_all(&nested).unwrap();
+    assert_success(&dir.axon_in(&root, &["init", "outer"]));
+
+    let init = dir.axon_in(&nested, &["init", "inner"]);
+    assert_failure(&init);
+    let error = stderr(&init);
+    assert!(error.contains("axon is already initialized at"), "{error}");
+    assert!(error.contains(&root.display().to_string()), "{error}");
+    assert!(!nested.join(".axon").exists());
+}
+
+#[test]
+fn git_repository_does_not_fall_back_to_an_outer_non_git_database() {
+    let dir = TestDir::new("git-boundary");
+    let outer = dir.path().join("outer");
+    let repo = outer.join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    assert_success(&dir.axon_in(&outer, &["init", "outer"]));
+    assert_success(&dir.axon_in(&outer, &["plan", "outer issue"]));
+    dir.init_git(&repo);
+
+    let list = dir.axon_in(&repo, &["list"]);
+    assert_failure(&list);
+    assert!(stdout(&list).is_empty());
+    assert!(stderr(&list).contains("axon is not initialized"));
+
+    let init = dir.axon_in(&repo, &["init", "inner"]);
+    assert_success(&init);
+    assert!(repo.join(".axon/axon.db").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_git_probe_does_not_bypass_the_repository_boundary() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TestDir::new("git-probe-failure");
+    let outer = dir.path().join("outer");
+    let repo = outer.join("repo");
+    let fake_bin = dir.path().join("fake-bin");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir(&fake_bin).unwrap();
+    assert_success(&dir.axon_in(&outer, &["init", "outer"]));
+    assert_success(&dir.axon_in(&outer, &["plan", "outer issue"]));
+    dir.init_git(&repo);
+
+    let fake_git = fake_bin.join("git");
+    fs::write(&fake_git, "#!/bin/sh\nexit 128\n").unwrap();
+    let mut permissions = fs::metadata(&fake_git).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_git, permissions).unwrap();
+
+    let list = dir
+        .axon_command_in(&repo)
+        .env("PATH", &fake_bin)
+        .arg("list")
+        .output()
+        .unwrap();
+    assert_failure(&list);
+    assert!(stdout(&list).is_empty());
+    assert!(
+        stderr(&list).contains("could not resolve Git common root"),
+        "{}",
+        stderr(&list)
+    );
 }
 
 #[test]

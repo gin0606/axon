@@ -25,9 +25,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Initialize axon in this repository
+    /// Initialize axon at the current management root
     Init {
-        /// Issue ID prefix (defaults to the repository directory name)
+        /// Issue ID prefix (defaults to the management root directory name)
         prefix: Option<String>,
     },
     /// Generate a shell completion script
@@ -447,14 +447,7 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_init(prefix: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-    let prefix = match prefix {
-        Some(p) => p,
-        None => std::env::current_dir()?
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "axon".to_string()),
-    };
-    let path = Store::init(&prefix)?;
+    let (path, prefix) = Store::init(prefix.as_deref())?;
     println!("Initialized axon at {}", path.display());
     println!("Issue IDs will use the form {prefix}-xxxxxx");
     Ok(())
