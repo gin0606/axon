@@ -83,6 +83,126 @@ fn decision_reasons_are_read_back_from_log() {
 }
 
 #[test]
+fn progress_reasons_follow_the_command_contract() {
+    let repo = TestRepo::new();
+    repo.init("test");
+
+    let done_issue = repo.plan("finish normally");
+    assert_success(&repo.axon(&["start", &done_issue]));
+    let before = repo.issue_snapshot(&done_issue);
+    let old_form = repo.axon(&["done", &done_issue, "--reason", "old result"]);
+    assert_failure(&old_form);
+    assert!(old_form.stdout.is_empty());
+    assert!(stderr(&old_form).contains("unexpected argument '--reason'"));
+    assert_eq!(repo.issue_snapshot(&done_issue), before);
+
+    assert_success(&repo.axon(&["done", &done_issue]));
+    let show = repo.axon(&["show", &done_issue]);
+    assert_success(&show);
+    let show = stdout(&show);
+    assert!(
+        show.lines()
+            .any(|line| line.contains("test-actor  Ended") && line.ends_with("Ended")),
+        "done event unexpectedly contained a reason:\n{show}"
+    );
+    let log = repo.axon(&["log", &done_issue]);
+    assert_success(&log);
+    assert_eq!(stdout(&log), "No decision history\n");
+
+    let release_without_reason = repo.plan("release without reason");
+    assert_success(&repo.axon(&["start", &release_without_reason]));
+    assert_success(&repo.axon(&["release", &release_without_reason]));
+    let show = repo.axon(&["show", &release_without_reason]);
+    assert_success(&show);
+    let show = stdout(&show);
+    assert!(
+        show.lines()
+            .any(|line| { line.contains("test-actor  Released") && line.ends_with("Released") }),
+        "reasonless release event was not preserved:\n{show}"
+    );
+
+    let release_with_reason = repo.plan("release with reason");
+    assert_success(&repo.axon(&["start", &release_with_reason]));
+    assert_success(&repo.axon(&[
+        "release",
+        &release_with_reason,
+        "--reason",
+        "handoff to another session",
+    ]));
+    let show = repo.axon(&["show", &release_with_reason]);
+    assert_success(&show);
+    let show = stdout(&show);
+    assert!(
+        show.contains("test-actor  Released  (handoff to another session)"),
+        "release reason missing from progress history:\n{show}"
+    );
+    let log = repo.axon(&["log", &release_with_reason]);
+    assert_success(&log);
+    assert_eq!(stdout(&log), "No decision history\n");
+}
+
+#[test]
+fn group_reject_records_an_optional_reason_only_for_changed_issues() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    assert_success(&repo.axon(&["group", "new", "reasoned"]));
+
+    let already_rejected = repo.plan("already rejected");
+    let newly_rejected = repo.plan("newly rejected");
+    for issue in [&already_rejected, &newly_rejected] {
+        assert_success(&repo.axon(&["group", "set", issue, "reasoned"]));
+    }
+    assert_success(&repo.axon(&["decide", "reject", &already_rejected]));
+    let already_before = repo.issue_snapshot(&already_rejected);
+
+    let reject = repo.axon(&[
+        "group",
+        "reject",
+        "reasoned",
+        "--reason",
+        "scope was cancelled",
+    ]);
+    assert_success(&reject);
+    assert_eq!(stdout(&reject), "1 issues in reasoned set to Rejected\n");
+    assert_eq!(repo.issue_snapshot(&already_rejected), already_before);
+
+    let already_log = repo.axon(&["log", &already_rejected]);
+    assert_success(&already_log);
+    assert!(!stdout(&already_log).contains("scope was cancelled"));
+    let newly_log = repo.axon(&["log", &newly_rejected]);
+    assert_success(&newly_log);
+    assert!(stdout(&newly_log).contains("scope was cancelled"));
+
+    let newly_before = repo.issue_snapshot(&newly_rejected);
+    let repeated = repo.axon(&[
+        "group",
+        "reject",
+        "reasoned",
+        "--reason",
+        "must not create another event",
+    ]);
+    assert_success(&repeated);
+    assert_eq!(stdout(&repeated), "0 issues in reasoned set to Rejected\n");
+    assert_eq!(repo.issue_snapshot(&already_rejected), already_before);
+    assert_eq!(repo.issue_snapshot(&newly_rejected), newly_before);
+
+    assert_success(&repo.axon(&["group", "new", "reasonless"]));
+    let reasonless = repo.plan("reject without reason");
+    assert_success(&repo.axon(&["group", "set", &reasonless, "reasonless"]));
+    assert_success(&repo.axon(&["group", "reject", "reasonless"]));
+    let log = repo.axon(&["log", &reasonless]);
+    assert_success(&log);
+    let log = stdout(&log);
+    assert!(
+        log.lines().any(|line| {
+            line.contains("Disposition: Accepted -> Rejected")
+                && line.ends_with("Disposition: Accepted -> Rejected")
+        }),
+        "reasonless group rejection was not recorded correctly:\n{log}"
+    );
+}
+
+#[test]
 fn empty_issue_queries_keep_guidance_out_of_stdout() {
     let repo = TestRepo::new();
     repo.init("test");
@@ -171,14 +291,9 @@ fn repeated_transitions_fail_without_changing_state_history_or_timestamp() {
     );
     assert_eq!(repo.issue_snapshot(&done_issue), before);
 
-    assert_success(&repo.axon(&["done", &done_issue, "--reason", "completed"]));
+    assert_success(&repo.axon(&["done", &done_issue]));
     let before = repo.issue_snapshot(&done_issue);
-    let repeated = repo.axon(&[
-        "done",
-        &done_issue,
-        "--reason",
-        "SECRET RESULT MUST NOT BE ECHOED",
-    ]);
+    let repeated = repo.axon(&["done", &done_issue]);
     assert_failure(&repeated);
     assert!(repeated.stdout.is_empty());
     assert_eq!(

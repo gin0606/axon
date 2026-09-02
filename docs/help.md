@@ -29,7 +29,7 @@ Read Progress and Disposition together. `Ended + Accepted` means the accepted wo
 1. Run `axon init` once in a Git repository.
 2. Use `axon plan <title>` for work already accepted, or `axon capture <title>` for an observation that still needs a decision.
 3. Use `axon ready` to find mechanically startable work. Choose an explicit ID, then run `axon start <id>` to claim only that issue.
-4. Use `axon write <id>` to update its title or description. When work will not continue, run `axon done <id>` to set Progress to `Ended` and record an optional result.
+4. Use `axon write <id>` to update its title, description, work result, or handoff. When work will not continue, run `axon done <id>` to set Progress to `Ended`.
 5. Use `axon triage` to find `Undecided` or orphaned issues. Inspect them with `axon show` and `axon log`, then use `axon decide accept` or `axon decide reject` only after a person makes the decision.
 
 If a session may have died while holding a claim, use `axon stale` to find stale claims. Check the recorded actor and session before `axon release <id>`. `stale` only reports; it never releases a claim.
@@ -50,7 +50,7 @@ If a session may have died while holding a claim, use `axon stale` to find stale
 ## Commands that change data
 
 - `start` atomically checks that an issue is ready, sets Progress to `InProgress`, creates its claim, and records the actor and time. It never selects an issue for you.
-- `done` accepts only `InProgress -> Ended`. It removes the claim and records the optional result in progress history.
+- `done` accepts only `InProgress -> Ended`. It removes the claim and records the actor and time in progress history. It does not accept a reason; record work results in the issue description.
 - `release` accepts only `InProgress -> NotStarted`. It removes the claim and records the optional handoff or release reason in progress history.
 - `decide accept`, `decide reject`, and `decide undecide` change only Disposition and record the optional reason in the decision log.
 - `when at`, `when after`, and `when clear` change only the resurface condition and record the optional reason in the decision log.
@@ -58,9 +58,11 @@ If a session may have died while holding a claim, use `axon stale` to find stale
 - `dep add` and `dep rm` add or remove an issue dependency. A dependency means the other issue's result is required, not merely that it should happen first.
 - `group new`, `group set`, and `group unset` manage group membership. An issue belongs to at most one group.
 - `group dep add` and `group dep rm` manage dependencies between groups.
-- `group reject` converges every descendant issue to `Rejected`; already rejected issues remain unchanged and receive no duplicate decision event.
+- `group reject` converges every descendant issue to `Rejected`. Its optional reason is recorded for issues that actually change; already rejected issues remain unchanged and receive no decision event.
 
 `write`, membership changes, dependency changes, and `group reject` are target-setting operations: repeating an already satisfied request succeeds without changing timestamps or adding history. `start`, `done`, `release`, `decide`, and `when` are transitions: an invalid transition or a request for the current value fails without changing state, history, or timestamps.
+
+Every `--reason` option is optional. Reasons belong to typed state changes rather than free-standing comments: `release` reasons appear in progress history from `show`, while `decide`, `when`, and `group reject` reasons appear in decision history from `log`. `start` and `done` do not accept reasons.
 
 ## Safety and concurrency
 
@@ -72,7 +74,7 @@ If a session may have died while holding a claim, use `axon stale` to find stale
 - A resurface reference and a dependency have different meaning. If referenced issue X is rejected, `when after X` becomes surfaced because waiting is over; `dep add --needs X` becomes orphaned because X's result will not exist.
 - Issue dependencies and `AfterIssue` references form one issue-wait graph for cycle detection even though their meanings remain distinct. `dep add` and `when after` reject direct or indirect cycles. Group dependencies and the group-parent hierarchy are separate acyclic graphs; axon does not detect deadlocks spanning issue and group relationships.
 - Cycle checks and edge updates run in the same write transaction. Removing an edge remains allowed even when an existing database already contains a cycle.
-- Decision reasons and progress results are user-provided text. axon stores and displays them verbatim; do not put secrets in issue data or command arguments.
+- Decision and release reasons are user-provided text. axon stores and displays them verbatim; do not put secrets in issue data or command arguments.
 
 ## Input, output, and exit status
 

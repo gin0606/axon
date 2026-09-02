@@ -98,6 +98,21 @@ fn nested_help_path_matches_the_subcommand_help_flag() {
 }
 
 #[test]
+fn reason_options_match_the_operation_contract() {
+    let (done, _) = axon(&["done", "--help"]);
+    let (release, _) = axon(&["release", "--help"]);
+    let (group_reject, _) = axon(&["group", "reject", "--help"]);
+
+    for output in [&done, &release, &group_reject] {
+        assert_eq!(output.status.code(), Some(0));
+        assert!(output.stderr.is_empty());
+    }
+    assert!(!String::from_utf8_lossy(&done.stdout).contains("--reason"));
+    assert!(String::from_utf8_lossy(&release.stdout).contains("--reason"));
+    assert!(String::from_utf8_lossy(&group_reject.stdout).contains("--reason"));
+}
+
+#[test]
 fn invalid_help_path_fails_on_stderr() {
     let (output, _) = axon(&["help", "group", "missing"]);
 

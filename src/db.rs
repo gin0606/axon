@@ -865,7 +865,7 @@ fn progress_event(change: &Change, ctx: &Ctx, now: &DateTime<Utc>) -> Option<Pro
         Change::End => Some(ProgressEvent {
             kind: ProgressEventKind::Done,
             actor: ctx.actor.clone(),
-            reason: ctx.reason.clone(),
+            reason: None,
             at: *now,
         }),
         Change::Release => Some(ProgressEvent {
@@ -1786,7 +1786,7 @@ mod tests {
         assert_eq!(events[1].reason.as_deref(), Some("理由"));
         assert_eq!(events[2].kind, ProgressEventKind::Start);
         assert_eq!(events[3].kind, ProgressEventKind::Done);
-        assert_eq!(events[3].reason.as_deref(), Some("理由"));
+        assert_eq!(events[3].reason, None, "done は理由を受け取らない");
         assert!(s.events(&iid("t-1")).unwrap().is_empty());
 
         s.apply(&iid("t-1"), Change::Decide(Disposition::Rejected), &ctx())

@@ -45,13 +45,8 @@ enum Command {
     Triage,
     /// Claim one ready issue and record the actor and time
     Start { id: String },
-    /// End an InProgress issue and record its result
-    Done {
-        id: String,
-        /// Result to record in progress history
-        #[arg(short, long)]
-        reason: Option<String>,
-    },
+    /// End an InProgress issue
+    Done { id: String },
     /// Update an issue's title or description
     Write {
         id: String,
@@ -118,7 +113,12 @@ enum GroupCmd {
     /// Remove an issue from its group
     Unset { id: String },
     /// Reject every descendant issue in a group
-    Reject { slug: String },
+    Reject {
+        slug: String,
+        /// Reason to record for issues that change to Rejected
+        #[arg(short, long)]
+        reason: Option<String>,
+    },
     /// Manage group dependencies
     #[command(subcommand)]
     Dep(GroupDepCmd),
@@ -297,7 +297,7 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
         Command::Ready => cmd_ready(),
         Command::Triage => cmd_triage(),
         Command::Start { id } => cmd_start(&id),
-        Command::Done { id, reason } => cmd_done(&id, reason),
+        Command::Done { id } => cmd_done(&id),
         Command::Write {
             id,
             title,
@@ -408,7 +408,7 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             store.apply(&id, Change::SetGroup(None), &ctx(None))?;
             println!("{id} removed from its group");
         }
-        GroupCmd::Reject { slug } => {
+        GroupCmd::Reject { slug, reason } => {
             let view = view_of(&store)?;
             let id = store.resolve_slug(&slug)?;
             let targets: Vec<_> = view
@@ -417,7 +417,7 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
                 .filter(|i| i.disposition != Disposition::Rejected)
                 .map(|i| i.id.clone())
                 .collect();
-            let c = ctx(Some(format!("Rejected through group {slug}")));
+            let c = ctx(reason);
             let mut changed = 0;
             for t in &targets {
                 if store.apply(t, Change::ConvergeDisposition(Disposition::Rejected), &c)?
@@ -579,10 +579,10 @@ fn ctx(reason: Option<String>) -> Ctx {
     }
 }
 
-fn cmd_done(id: &str, reason: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_done(id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = Store::open()?;
     let id = store.resolve_id(id)?;
-    store.apply(&id, Change::End, &ctx(reason))?;
+    store.apply(&id, Change::End, &ctx(None))?;
     println!("Ended {id}");
 
     let view = view_of(&store)?;

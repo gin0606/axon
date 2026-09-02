@@ -16,6 +16,10 @@ axon completion zsh > _axon    # シェル補完スクリプトを生成
 
 `completion` は `bash`、`elvish`、`fish`、`powershell`、`zsh` を受け付ける。生成したスクリプトは各シェルの補完ディレクトリに置くか、そのシェルの方法で読み込む。
 
+## reason と履歴
+
+`-r` / `--reason` はすべて任意。状態から意図を復元できない操作だけが受け取る。`release` の理由は `show` の進行履歴に、`decide` / `when` / `group reject` の理由は `log` の判断履歴に保存される。`start` と `done` は reason を受け取らず、作業結果や申し送りは issue の description に残す。
+
 ## ドキュメント
 
 | ファイル | 内容 |
