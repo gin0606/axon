@@ -1,4 +1,5 @@
 /target
+/mise.local.toml
 /_apalache-out/
 *.itf.json
 .axon/
