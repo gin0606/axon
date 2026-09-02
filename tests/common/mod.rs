@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use rusqlite::{Connection, params};
+
 static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
 
 pub struct TestDir {
@@ -63,6 +65,26 @@ impl Drop for TestDir {
 pub struct TestRepo {
     dir: TestDir,
     root: PathBuf,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct IssueState {
+    title: String,
+    description: Option<String>,
+    progress: String,
+    commitment: String,
+    condition_kind: Option<String>,
+    condition_date: Option<String>,
+    condition_reference: Option<String>,
+    group_id: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct IssueSnapshot {
+    state: IssueState,
+    updated_at: String,
+    decision_events: i64,
+    progress_events: i64,
 }
 
 impl TestRepo {
@@ -132,6 +154,66 @@ impl TestRepo {
         path
     }
 
+    pub fn issue_snapshot(&self, id: &str) -> IssueSnapshot {
+        let conn = self.connection();
+        let (state, updated_at) = conn
+            .query_row(
+                "SELECT title, description, progress, commitment,
+                        cond_kind, cond_date, cond_ref, group_id, updated_at
+                   FROM issues WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok((
+                        IssueState {
+                            title: row.get(0)?,
+                            description: row.get(1)?,
+                            progress: row.get(2)?,
+                            commitment: row.get(3)?,
+                            condition_kind: row.get(4)?,
+                            condition_date: row.get(5)?,
+                            condition_reference: row.get(6)?,
+                            group_id: row.get(7)?,
+                        },
+                        row.get(8)?,
+                    ))
+                },
+            )
+            .unwrap();
+        let decision_events = conn
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE issue_id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let progress_events = conn
+            .query_row(
+                "SELECT COUNT(*) FROM progress_events WHERE issue_id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        IssueSnapshot {
+            state,
+            updated_at,
+            decision_events,
+            progress_events,
+        }
+    }
+
+    pub fn dep_count(&self, table: &str) -> i64 {
+        assert!(matches!(table, "issue_deps" | "group_deps"));
+        self.connection()
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+
+    fn connection(&self) -> Connection {
+        Connection::open(self.root.join(".axon/axon.db")).unwrap()
+    }
+
     fn create_issue(&self, command: &str, title: &str) -> String {
         let output = self.axon(&[command, title]);
         assert_success(&output);
@@ -148,6 +230,15 @@ pub fn assert_success(output: &Output) {
         output.status.success(),
         "command failed with {}\nstdout:\n{}\nstderr:\n{}",
         output.status,
+        stdout(output),
+        stderr(output)
+    );
+}
+
+pub fn assert_failure(output: &Output) {
+    assert!(
+        !output.status.success(),
+        "command unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
         stdout(output),
         stderr(output)
     );

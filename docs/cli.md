@@ -57,6 +57,10 @@ issue は独立した 3 軸と 2 種類の関係を持つ。
 
 候補の読み取りと変更は分けてある。`ready` は着手せず、`triage` は採否を変えず、`stale` は claim を解放しない。変更コマンドには対象 ID または slug を明示する。
 
+変更操作の反復時の扱いは、その意味から決める。`start` / `done` / `release` / `decide` / `when` は状態遷移なので、事前条件違反や同値指定では失敗する。`write` / `group set` / `group unset` / `dep add` / `dep rm` / `group dep add` / `group dep rm` / `group reject` は目標値や集合の設定なので、目標をすでに満たしていれば成功 no-op になる。`plan` / `capture` は追加操作なので、呼び出すたびに新しい issue を作る。
+
+失敗した状態遷移は、状態、履歴、`updated_at` を変えない。設定の成功 no-op も `updated_at` を変えず、`group reject` はすでに不採用の issue に判断履歴を追加しない。
+
 ### 出力と終了コード
 
 - help、検索結果、詳細、状態変更の確認は **stdout** に出す。help は DB を開かず、成功時は終了コード 0 になる
@@ -94,7 +98,7 @@ issue ID は `<prefix>-<ランダム 6 文字>` の形式で、prefix は `axon 
 
 **設計**: `ready` は候補を読み取るだけにし、`start <id>` は指定された issue だけを claim する。候補の選択と状態更新を分ける。
 
-`start` は `progress = not_started` を条件に更新するため、同じ issue への実行が並行しても 1 つだけ成功し、二重着手を防げる。
+`start` は実行時点で issue が ready であることを、claim の更新と同じトランザクションで検査する。同じ issue への実行が並行しても 1 つだけ成功し、二重着手を防げる。
 
 成功した `start` は actor と時刻を状態遷移と同じトランザクションで進行履歴に残す。理由の入力は求めない。
 

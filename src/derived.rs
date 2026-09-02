@@ -283,17 +283,7 @@ impl View {
     pub fn newly_ready_after(&self, id: &IssueId) -> Vec<&Issue> {
         self.dependents(id)
             .into_iter()
-            .filter(|i| {
-                matches!(i.progress, Progress::NotStarted)
-                    && i.commitment == Commitment::Accepted
-                    && self.is_surfaced(i)
-                    && !self.is_orphaned(&i.id)
-                    // 対象の issue 以外に未終端の依存が残っていないこと
-                    && self
-                        .depends_on(&i.id)
-                        .iter()
-                        .all(|d| &d.id == id || d.is_terminal())
-            })
+            .filter(|i| self.is_ready(i))
             .collect()
     }
 }
@@ -879,6 +869,21 @@ mod tests {
             &[("a", "x"), ("b", "x"), ("b", "other"), ("u", "x")],
         );
         assert_eq!(ids(&v.newly_ready_after(&iid("x"))), ["a"]);
+    }
+
+    #[test]
+    fn newly_ready_after_excludes_group_blocked_dependents() {
+        let v = view_with_groups(
+            vec![
+                done("x"),
+                in_group(accepted("target"), "delivery"),
+                in_group(accepted("foundation-work"), "foundation"),
+            ],
+            &[("target", "x")],
+            vec![group("foundation", None), group("delivery", None)],
+            &[("delivery", "foundation")],
+        );
+        assert!(v.newly_ready_after(&iid("x")).is_empty());
     }
 
     #[test]

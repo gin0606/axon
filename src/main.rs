@@ -5,7 +5,7 @@ mod domain;
 
 use chrono::{NaiveDate, Utc};
 use clap::{CommandFactory, Parser, Subcommand};
-use db::{Change, Ctx, Store};
+use db::{ApplyOutcome, Change, Ctx, Store};
 use derived::View;
 use domain::*;
 
@@ -390,10 +390,15 @@ fn cmd_group(c: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
                 .map(|i| i.id.clone())
                 .collect();
             let c = ctx(Some(format!("{slug} ごと不採用にした")));
+            let mut changed = 0;
             for t in &targets {
-                store.apply(t, Change::Decide(Commitment::Rejected), &c)?;
+                if store.apply(t, Change::ConvergeCommitment(Commitment::Rejected), &c)?
+                    == ApplyOutcome::Changed
+                {
+                    changed += 1;
+                }
             }
-            println!("{slug} の {} 件を不採用にしました", targets.len());
+            println!("{slug} の {changed} 件を不採用にしました");
         }
         GroupCmd::Dep(d) => match d {
             GroupDepCmd::Add { slug, needs } => {
@@ -782,13 +787,12 @@ fn cmd_decide(c: DecideCmd) -> Result<(), Box<dyn std::error::Error>> {
         DecideCmd::Undecide { id, reason } => (id, Commitment::Undecided, reason),
     };
     let id = store.resolve_id(&raw)?;
-    let before = store.get(&id)?;
     store.apply(&id, Change::Decide(commitment), &ctx(reason))?;
     println!("{id} を{}にしました", commitment.label());
 
     // 着手中のまま不採用にすると「作業は止まっているのに着手中」が残るため促す。
     // 進行と採否は別の軸なので、こちらでは終了させない。
-    if commitment == Commitment::Rejected && before.progress.claim().is_some() {
+    if commitment == Commitment::Rejected && store.get(&id)?.progress.claim().is_some() {
         println!("着手中のままです。作業を止めるなら `axon done {id}` も実行してください");
     }
     Ok(())
@@ -926,13 +930,8 @@ fn cmd_stale(hours: i64) -> Result<(), Box<dyn std::error::Error>> {
 fn cmd_release(id: &str, reason: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = Store::open()?;
     let id = store.resolve_id(id)?;
-    let before = store.get(&id)?;
-    let Some(claim) = before.progress.claim() else {
-        return Err(format!("{id} は着手されていません").into());
-    };
-    let who = claim.actor.clone();
     store.apply(&id, Change::Release, &ctx(reason))?;
-    println!("{id} の着手 ({who}) を取り消しました");
+    println!("{id} の着手を取り消しました");
     Ok(())
 }
 

@@ -1,5 +1,6 @@
 //! SQLite への永続化。DB は git 管理外に置き、worktree 間で共有する。
 
+use crate::derived::View;
 use crate::domain::*;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -26,10 +27,20 @@ pub enum DbError {
     NoSuchGroup(String),
     #[error("{id} は複数の issue に一致します: {candidates}")]
     AmbiguousId { id: String, candidates: String },
-    #[error("{id} は着手できません ({reason})")]
-    CannotClaim { id: String, reason: String },
-    #[error("{id} は{action}できません (着手中ではありません)")]
-    CannotProgress { id: String, action: &'static str },
+    #[error("{id} は着手できません ({fact})")]
+    CannotClaim { id: String, fact: String },
+    #[error("{id} は{action}できません (進行は{progress}です)")]
+    CannotProgress {
+        id: String,
+        action: &'static str,
+        progress: &'static str,
+    },
+    #[error("{id} の{field}はすでに{current}です")]
+    Unchanged {
+        id: String,
+        field: &'static str,
+        current: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, DbError>;
@@ -286,13 +297,7 @@ impl Store {
     }
 
     pub fn get(&self, id: &IssueId) -> Result<Issue> {
-        let sql = format!("{SELECT_ISSUE} WHERE id = ?1");
-        let mut stmt = self.conn.prepare(&sql)?;
-        let raw = stmt
-            .query_row(params![id.as_str()], |r| Ok(RawIssue::from_row(r)))
-            .optional()?
-            .ok_or_else(|| DbError::NoSuchIssue(id.to_string()))?;
-        Ok(raw.into_issue()?)
+        read_issue(&self.conn, id)
     }
 
     pub fn add_dep(&self, issue: &IssueId, depends_on: &IssueId) -> Result<()> {
@@ -366,9 +371,24 @@ impl Store {
     }
 
     /// 状態更新の唯一の経路。更新と履歴の記録を同じトランザクションで行う。
-    pub fn apply(&mut self, id: &IssueId, change: Change, ctx: &Ctx) -> Result<()> {
-        let before = self.get(id)?;
-        let tx = self.conn.transaction()?;
+    pub fn apply(&mut self, id: &IssueId, change: Change, ctx: &Ctx) -> Result<ApplyOutcome> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let before = read_issue(&tx, id)?;
+
+        if let Some((field, current)) = unchanged_transition(&before, &change) {
+            return Err(DbError::Unchanged {
+                id: id.to_string(),
+                field,
+                current,
+            });
+        }
+        if unchanged_setting(&before, &change) {
+            tx.commit()?;
+            return Ok(ApplyOutcome::Unchanged);
+        }
+
         let now = Utc::now();
         let progress_event = progress_event(&change, ctx, &now);
         let now = now.to_rfc3339();
@@ -376,6 +396,18 @@ impl Store {
         let record = records_decision(&change);
         match change {
             Change::Claim(c) => {
+                let view = View::new(
+                    read_all(&tx)?,
+                    read_deps(&tx)?,
+                    read_groups(&tx)?,
+                    read_group_deps(&tx)?,
+                );
+                if !view.is_ready(&before) {
+                    return Err(DbError::CannotClaim {
+                        id: id.to_string(),
+                        fact: not_ready_fact(&view, &before),
+                    });
+                }
                 let n = tx.execute(
                     "UPDATE issues
                         SET progress = 'in_progress',
@@ -392,13 +424,9 @@ impl Store {
                     ],
                 )?;
                 if n == 0 {
-                    let reason = match before.progress.claim() {
-                        Some(cl) => format!("{} が着手中", cl.actor),
-                        None => format!("状態が{}", before.progress.label()),
-                    };
                     return Err(DbError::CannotClaim {
                         id: id.to_string(),
-                        reason,
+                        fact: format!("進行は{}です", before.progress.label()),
                     });
                 }
             }
@@ -415,6 +443,7 @@ impl Store {
                     return Err(DbError::CannotProgress {
                         id: id.to_string(),
                         action: "解放",
+                        progress: before.progress.label(),
                     });
                 }
             }
@@ -431,10 +460,11 @@ impl Store {
                     return Err(DbError::CannotProgress {
                         id: id.to_string(),
                         action: "終了",
+                        progress: before.progress.label(),
                     });
                 }
             }
-            Change::Decide(c) => {
+            Change::Decide(c) | Change::ConvergeCommitment(c) => {
                 tx.execute(
                     "UPDATE issues SET commitment = ?2, updated_at = ?3 WHERE id = ?1",
                     params![id.as_str(), c.as_db(), now],
@@ -479,7 +509,7 @@ impl Store {
             log_progress_event(&tx, id, &event)?;
         }
         tx.commit()?;
-        Ok(())
+        Ok(ApplyOutcome::Changed)
     }
 
     pub fn events(&self, id: &IssueId) -> Result<Vec<Event>> {
@@ -607,10 +637,18 @@ pub enum Change {
     Release,
     End,
     Decide(Commitment),
+    /// バッチ設定で採否を目標値へ収束させる。同値は成功 no-op。
+    ConvergeCommitment(Commitment),
     SetTitle(String),
     SetDescription(Option<String>),
     SetCondition(Option<Condition>),
     SetGroup(Option<GroupId>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ApplyOutcome {
+    Changed,
+    Unchanged,
 }
 
 fn progress_event(change: &Change, ctx: &Ctx, now: &DateTime<Utc>) -> Option<ProgressEvent> {
@@ -642,6 +680,61 @@ const SELECT_ISSUE: &str = "SELECT id, title, description, progress, commitment,
                                    claimed_actor, claimed_session, claimed_pid, claimed_at,
                                    created_at, updated_at, group_id
                             FROM issues";
+
+fn read_issue(conn: &Connection, id: &IssueId) -> Result<Issue> {
+    let sql = format!("{SELECT_ISSUE} WHERE id = ?1");
+    let mut stmt = conn.prepare(&sql)?;
+    let raw = stmt
+        .query_row(params![id.as_str()], |r| Ok(RawIssue::from_row(r)))
+        .optional()?
+        .ok_or_else(|| DbError::NoSuchIssue(id.to_string()))?;
+    Ok(raw.into_issue()?)
+}
+
+fn unchanged_transition(issue: &Issue, change: &Change) -> Option<(&'static str, String)> {
+    match change {
+        Change::Decide(commitment) if issue.commitment == *commitment => {
+            Some(("採否", issue.commitment.label().to_string()))
+        }
+        Change::SetCondition(condition) if &issue.condition == condition => Some((
+            "時期",
+            issue
+                .condition
+                .as_ref()
+                .map(describe_cond)
+                .unwrap_or_else(|| "常に浮上".to_string()),
+        )),
+        _ => None,
+    }
+}
+
+fn unchanged_setting(issue: &Issue, change: &Change) -> bool {
+    match change {
+        Change::ConvergeCommitment(commitment) => issue.commitment == *commitment,
+        Change::SetTitle(title) => issue.title == title.as_str(),
+        Change::SetDescription(description) => &issue.description == description,
+        Change::SetGroup(group) => issue.group.as_ref() == group.as_ref(),
+        _ => false,
+    }
+}
+
+fn not_ready_fact(view: &View, issue: &Issue) -> String {
+    if !matches!(issue.progress, Progress::NotStarted) {
+        format!("進行は{}です", issue.progress.label())
+    } else if issue.commitment != Commitment::Accepted {
+        format!("採否は{}です", issue.commitment.label())
+    } else if !view.is_surfaced(issue) {
+        "時期の条件を満たしていません".to_string()
+    } else if view.is_orphaned(&issue.id) {
+        "前提を失っています".to_string()
+    } else if view.is_blocked(&issue.id) {
+        "未終了の前提があります".to_string()
+    } else if view.is_group_blocked(issue) {
+        "未終了のグループ依存があります".to_string()
+    } else {
+        "ready ではありません".to_string()
+    }
+}
 
 fn resolve_issue_id(conn: &Connection, input: &str) -> Result<IssueId> {
     let mut stmt = conn.prepare("SELECT id FROM issues WHERE id = ?1 OR id LIKE '%-' || ?1")?;
@@ -748,7 +841,10 @@ fn read_show_snapshot(conn: &Connection, input: &str) -> Result<ShowSnapshot> {
 }
 
 fn records_decision(change: &Change) -> bool {
-    matches!(change, Change::Decide(_) | Change::SetCondition(_))
+    matches!(
+        change,
+        Change::Decide(_) | Change::ConvergeCommitment(_) | Change::SetCondition(_)
+    )
 }
 
 fn describe(before: &Issue, change: &Change) -> (&'static str, Option<String>, Option<String>) {
@@ -768,7 +864,7 @@ fn describe(before: &Issue, change: &Change) -> (&'static str, Option<String>, O
             Some(before.progress.as_db().to_string()),
             Some("ended".to_string()),
         ),
-        Change::Decide(c) => (
+        Change::Decide(c) | Change::ConvergeCommitment(c) => (
             "commitment",
             Some(before.commitment.as_db().to_string()),
             Some(c.as_db().to_string()),
@@ -1276,6 +1372,37 @@ mod tests {
             Commitment::Rejected,
             "進行が採否を動かさない"
         );
+    }
+
+    #[test]
+    fn convergent_commitment_skips_a_target_changed_after_batch_selection() {
+        let mut s = store();
+        s.insert(&issue("t-1", 0)).unwrap();
+
+        assert_eq!(
+            s.apply(
+                &iid("t-1"),
+                Change::ConvergeCommitment(Commitment::Rejected),
+                &ctx(),
+            )
+            .unwrap(),
+            ApplyOutcome::Changed
+        );
+        let after_change = s.get(&iid("t-1")).unwrap();
+        let events_after_change = s.events(&iid("t-1")).unwrap().len();
+
+        assert_eq!(
+            s.apply(
+                &iid("t-1"),
+                Change::ConvergeCommitment(Commitment::Rejected),
+                &ctx(),
+            )
+            .unwrap(),
+            ApplyOutcome::Unchanged
+        );
+        let after_noop = s.get(&iid("t-1")).unwrap();
+        assert_eq!(after_noop.updated_at, after_change.updated_at);
+        assert_eq!(s.events(&iid("t-1")).unwrap().len(), events_after_change);
     }
 
     // ---- 履歴 ----
