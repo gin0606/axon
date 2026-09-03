@@ -13,6 +13,7 @@ axon 自体は、誰が着手対象や採否を決め、いつレビューする
 採用済みの新しい Issue または Group の登録を依頼されたら、`skills/axon-plan-issue/SKILL.md` の手順に従う。
 既存 Entity の採否相談または判断見直しを依頼されたら、未判断、前提喪失、Accepted からの不採用化、Rejected / Ended の再検討を含めて `skills/axon-triage-issue/SKILL.md` の手順に従う。
 採用済み Entity の実装・計画進行、または Disposition を問わず InProgress Entity の進行同期・引き渡し・打ち切り・完了を依頼されたら、`skills/axon-implement-issue/SKILL.md` の手順に従う。
+Entity 数を問わず、tracker data に対する宣言 file の review / canonicalize、または `axon export` / `axon import prepare|check|apply` の実行を扱うときは `skills/axon-declaration-plan/SKILL.md` に従う。内容の採否や判断も伴う場合は、同 skill が定める順序で plan / capture / triage skill を併用する。これらのコマンド自体の実装、文書、テストを変更・レビューする作業には declaration skill を使わない。宣言を使わない単一 Entity の通常操作は各既存 skill を使う。
 
 `axon ready` または `axon triage` の候補整理を依頼された場合は、優先候補、重複候補、判断材料を提案してよい。ただし、ユーザーの確認前に着手や採否の変更を行わない。
 

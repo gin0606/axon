@@ -189,6 +189,10 @@ impl TestRepo {
             .unwrap();
     }
 
+    pub fn execute_batch(&self, sql: &str) {
+        self.connection().execute_batch(sql).unwrap();
+    }
+
     pub fn add_worktree(&self) -> PathBuf {
         let commit = git_command(&self.root, &self.dir.git_config)
             .args([

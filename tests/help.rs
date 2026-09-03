@@ -30,9 +30,11 @@ fn complete_help_is_self_contained_and_does_not_open_a_database() {
         "Disposition",
         "Resurface condition",
         "## Basic workflow",
+        "## Editing a plan declaration",
         "# Command reference",
         "## `axon group plan`",
         "## `axon group capture`",
+        "## `axon import apply`",
     ] {
         assert!(stdout.contains(required), "missing {required:?}");
     }

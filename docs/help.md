@@ -31,6 +31,20 @@ A dependency is satisfied only by an `Ended` non-Rejected target. A Rejected tar
 
 Use `--parent <group-id>` on any creation command to create an Entity inside a Group atomically. Use `--kind issue|group` on list queries when only one kind is relevant.
 
+## Editing a plan declaration
+
+Use a declaration file when several Issues, Groups, containment edges, and dependencies need to be reviewed and changed as one plan. A declaration edits only the Entities listed under `issues` and `groups`; relationships do not expand that edit set.
+
+1. Export an existing edit set with `axon export <id>...`, `axon export --group <group-id>`, or `axon export --group <group-id> --recursive`. Combine selectors to take their union.
+2. Add or edit Entity records and their owned relationships. New records use `id: null`, a unique `key`, `base: null`, and the initial Accepted/NotStarted observed state.
+3. Run `axon import prepare <file>` to assign final IDs and rewrite canonical YAML. This changes the file but not the database.
+4. Run `axon import check <file>` to inspect structural changes and changes to ready, blocked, orphaned, active-scope, and Group-completion facts.
+5. Run `axon import apply <file>` explicitly. It repeats validation under a write lock, applies every change in one SQLite transaction, and refreshes fingerprints and observed snapshots in the file.
+
+Progress, Disposition, resurface conditions, claims, external references, and incoming relationships are read-only in declarations. Use the ordinary transition commands for state changes. A stale fingerprint stops check/apply instead of merging concurrent changes.
+
+Treat an exported declaration as a working snapshot. After a successful apply, keep the rewritten file only when it is intentionally maintained elsewhere; otherwise remove the temporary working file after verifying the result. If the database commit succeeds but rewriting the file fails, retain the original file and run the same `apply` again: axon accepts the retry only when the database already matches the complete declared result.
+
 ## Choosing a query
 
 | Command | Question answered |
@@ -51,12 +65,15 @@ Use `--parent <group-id>` on any creation command to create an Entity inside a G
 - `show`, `write`, `start`, `done`, `release`, `decide`, `when`, `dep`, and `log` resolve the target kind from the common ID namespace.
 - `dep add` and `dep rm` support Issue-to-Issue, Issue-to-Group, Group-to-Issue, and Group-to-Group dependencies.
 - `group set` moves either kind below a Group; `group unset` removes its parent.
+- `import prepare` changes only its YAML file; `import apply` is the only declaration command that changes Entity data.
 
 An Ended Group cannot be moved, gain or lose descendants, or change its outgoing dependencies. A terminal descendant below an Ended Group cannot be made non-terminal. New follow-up work belongs outside that completed scope.
 
 ## Safety and concurrency
 
 State transitions check their preconditions and write history in one transaction. `start` checks readiness while acquiring its claim. Group completion and release inspect descendants in that same transaction.
+
+Declaration apply validates the same containment and wait-graph invariants against a tentative full snapshot while holding an immediate write transaction. A parse, conflict, invariant, or SQLite failure leaves every Entity unchanged.
 
 Dependency, `AfterEntity`, and containment edges are projected into activation and completion wait graphs. Relation changes reject any cycle spanning those relationship types. Group-originated waits apply to the Group and all descendants. Edge-removing `dep rm`, `when clear`, `when at`, and `group unset` remain available to repair invalid legacy data.
 

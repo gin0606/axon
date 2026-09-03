@@ -1,5 +1,6 @@
 mod actor;
 mod db;
+mod declaration;
 mod derived;
 mod domain;
 
@@ -141,6 +142,21 @@ enum Command {
         /// Entity ID or unique ID suffix
         id: String,
     },
+    /// Export an editable plan declaration as canonical YAML
+    Export {
+        /// Entity IDs or unique ID suffixes to edit
+        #[arg(value_name = "ID")]
+        ids: Vec<String>,
+        /// Group ID or unique suffix; includes the group and its direct children
+        #[arg(long = "group", value_name = "GROUP")]
+        groups: Vec<String>,
+        /// Include every descendant of each --group selector
+        #[arg(long, requires = "groups")]
+        recursive: bool,
+    },
+    /// Prepare, validate, or atomically apply a plan declaration
+    #[command(subcommand)]
+    Import(ImportCmd),
     /// Change an Entity Disposition
     #[command(subcommand)]
     Decide(DecideCmd),
@@ -186,6 +202,25 @@ enum GroupCmd {
     Unset {
         /// Entity ID or unique ID suffix
         id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ImportCmd {
+    /// Assign final IDs and rewrite a declaration into canonical form without changing the DB
+    Prepare {
+        /// YAML declaration file to rewrite
+        file: std::path::PathBuf,
+    },
+    /// Validate a canonical declaration and show structural and derived changes
+    Check {
+        /// Canonical YAML declaration file
+        file: std::path::PathBuf,
+    },
+    /// Validate and atomically apply a canonical declaration
+    Apply {
+        /// Canonical YAML declaration file to apply and refresh
+        file: std::path::PathBuf,
     },
 }
 
@@ -300,11 +335,48 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
         Command::Log { id } => cmd_log(&id),
         Command::List { kind } => cmd_list(kind),
         Command::Show { id } => cmd_show(&id),
+        Command::Export {
+            ids,
+            groups,
+            recursive,
+        } => cmd_export(ids, groups, recursive),
+        Command::Import(command) => cmd_import(command),
         Command::Decide(command) => cmd_decide(command),
         Command::When(command) => cmd_when(command),
         Command::Dep(command) => cmd_dep(command),
         Command::Group(command) => cmd_group(command),
     }
+}
+
+fn cmd_export(
+    ids: Vec<String>,
+    groups: Vec<String>,
+    recursive: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut store = Store::open()?;
+    print!(
+        "{}",
+        declaration::export(&mut store, &ids, &groups, recursive)?
+    );
+    Ok(())
+}
+
+fn cmd_import(command: ImportCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let mut store = Store::open()?;
+    match command {
+        ImportCmd::Prepare { file } => {
+            declaration::prepare(&mut store, &file)?;
+            println!("Prepared {}", file.display());
+        }
+        ImportCmd::Check { file } => {
+            print!("{}", declaration::check(&mut store, &file)?);
+        }
+        ImportCmd::Apply { file } => {
+            print!("{}", declaration::apply(&mut store, &file)?);
+            println!("Applied {}", file.display());
+        }
+    }
+    Ok(())
 }
 
 fn cmd_init(prefix: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -320,10 +392,7 @@ fn cmd_create(
     title: Vec<String>,
     parent: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let title = title.join(" ");
-    if title.trim().is_empty() {
-        return Err("title must not be empty".into());
-    }
+    let title = normalize_title(&title.join(" "))?;
     let mut store = Store::open()?;
     let parent = parent
         .as_deref()
@@ -872,12 +941,9 @@ fn cmd_write(
     let current = store.get(&id)?;
     let mut changed = Vec::new();
     if let Some(title) = title {
-        let title = title.trim();
-        if title.is_empty() {
-            return Err("title must not be empty".into());
-        }
+        let title = normalize_title(&title)?;
         if title != current.title {
-            store.apply(&id, Change::SetTitle(title.to_string()), &ctx(None))?;
+            store.apply(&id, Change::SetTitle(title), &ctx(None))?;
             changed.push("title updated");
         }
     }
@@ -901,6 +967,14 @@ fn cmd_write(
         }
     }
     Ok(())
+}
+
+fn normalize_title(title: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let title = title.trim();
+    if title.is_empty() || title.contains(['\n', '\r']) {
+        return Err("title must be a non-empty single-line string".into());
+    }
+    Ok(title.to_string())
 }
 
 fn ctx(reason: Option<String>) -> Ctx {
@@ -1017,6 +1091,10 @@ mod tests {
             "axon group set",
             "axon group unset",
             "axon dep add",
+            "axon export",
+            "axon import prepare",
+            "axon import check",
+            "axon import apply",
         ] {
             assert!(help.contains(&format!("## `{path}`\n")), "{path}");
         }

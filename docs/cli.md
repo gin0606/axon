@@ -46,6 +46,17 @@ axon の操作対象は `Issue` と `Group` の 2 kind を持つ Entity であ�
 
 `stale` は claim の経過時間やプロセス状態から自動判定せず、`claims` と同じ保存済み事実を返す。解放は人が判断して `release` を明示する。
 
+### Plan 宣言ファイル
+
+複数 Entity と関係を一枚で編集するときは、`axon export` と `axon import prepare|check|apply` を使う。形式の正は `docs/declaration-file.md` とする。
+
+- `export <id>...` は明示 Entity、`export --group <id>` は Group と直下、`--recursive` 付きは全子孫を編集対象にする。selector の和集合だけを選び、関係から編集対象を広げない
+- `import prepare <file>` は新規 Entity の最終 ID を割り当て、同じ file を canonical YAML へ atomic replace する。DB は変えない
+- `import check <file>` は競合と制約を検査し、所有値の構造差分と導出値の差分を表示する。file と DB は変えない
+- `import apply <file>` は write lock 内で同じ検査をやり直し、一つの transaction で全変更を反映してから file の snapshot を更新する
+
+apply は暗黙の既定動作にせず、明示 subcommand だけで実行する。DB commit 後の file 更新だけが失敗したときは、DB が宣言の最終値に完全一致する場合に限り同じ file の再 apply を DB no-op として受け付ける。
+
 ## Group の進行
 
 Group は計画範囲を明示的に進める Entity であり、子孫から自動完了しない。

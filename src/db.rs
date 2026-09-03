@@ -49,6 +49,8 @@ pub enum DbError {
         projection: &'static str,
         path: String,
     },
+    #[error("invalid import: {0}")]
+    InvalidImport(String),
 }
 
 pub type Result<T> = std::result::Result<T, DbError>;
@@ -307,6 +309,18 @@ pub struct ShowSnapshot {
     pub progress_events: Vec<ProgressEvent>,
 }
 
+#[derive(Clone)]
+pub struct StoreSnapshot {
+    pub entities: Vec<Entity>,
+    pub dependencies: Vec<(EntityId, EntityId)>,
+}
+
+impl StoreSnapshot {
+    pub fn view(&self) -> View {
+        View::new(self.entities.clone(), self.dependencies.clone())
+    }
+}
+
 impl Store {
     fn from_conn(mut conn: Connection) -> Result<Self> {
         conn.execute_batch("PRAGMA foreign_keys = ON")?;
@@ -379,6 +393,33 @@ impl Store {
         Ok(View::new(self.all()?, self.deps()?))
     }
 
+    pub fn snapshot(&mut self) -> Result<StoreSnapshot> {
+        let tx = self.conn.transaction()?;
+        let snapshot = read_snapshot(&tx)?;
+        tx.commit()?;
+        Ok(snapshot)
+    }
+
+    pub fn transactional_import<T, E, F>(
+        &mut self,
+        build: F,
+    ) -> std::result::Result<(T, StoreSnapshot), E>
+    where
+        E: From<DbError>,
+        F: FnOnce(StoreSnapshot) -> std::result::Result<(T, StoreSnapshot), E>,
+    {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(DbError::from)?;
+        let before = read_snapshot(&tx).map_err(E::from)?;
+        let (value, desired) = build(before.clone())?;
+        apply_import_snapshot(&tx, &before, &desired).map_err(E::from)?;
+        let after = read_snapshot(&tx).map_err(E::from)?;
+        tx.commit().map_err(DbError::from)?;
+        Ok((value, after))
+    }
+
     pub fn resolve_id(&self, input: &str) -> Result<EntityId> {
         resolve_id(&self.conn, input)
     }
@@ -437,10 +478,7 @@ impl Store {
                 "Ended group {source} cannot change its dependencies"
             )));
         }
-        tx.execute(
-            "INSERT INTO entity_deps (entity_id, depends_on_id) VALUES (?1,?2)",
-            params![source.as_str(), target.as_str()],
-        )?;
+        write_dependency(&tx, source, target, true)?;
         validate_relations(&read_view(&tx)?)?;
         tx.commit()?;
         Ok(ApplyOutcome::Changed)
@@ -468,10 +506,7 @@ impl Store {
                 "Ended group {source} cannot change its dependencies"
             )));
         }
-        tx.execute(
-            "DELETE FROM entity_deps WHERE entity_id=?1 AND depends_on_id=?2",
-            params![source.as_str(), target.as_str()],
-        )?;
+        write_dependency(&tx, source, target, false)?;
         tx.commit()?;
         Ok(ApplyOutcome::Changed)
     }
@@ -598,16 +633,10 @@ impl Store {
                 }
             }
             Change::SetTitle(title) => {
-                tx.execute(
-                    "UPDATE entities SET title=?2, updated_at=?3 WHERE id=?1",
-                    params![id.as_str(), title, now.to_rfc3339()],
-                )?;
+                write_entity_setting(&tx, id, &Change::SetTitle(title.clone()), &now)?;
             }
             Change::SetDescription(description) => {
-                tx.execute(
-                    "UPDATE entities SET description=?2, updated_at=?3 WHERE id=?1",
-                    params![id.as_str(), description, now.to_rfc3339()],
-                )?;
+                write_entity_setting(&tx, id, &Change::SetDescription(description.clone()), &now)?;
             }
             Change::SetParent(parent) => {
                 validate_parent_target(&tx, parent.as_ref())?;
@@ -638,14 +667,7 @@ impl Store {
                         )));
                     }
                 }
-                tx.execute(
-                    "UPDATE entities SET parent_id=?2, updated_at=?3 WHERE id=?1",
-                    params![
-                        id.as_str(),
-                        parent.as_ref().map(EntityId::as_str),
-                        now.to_rfc3339()
-                    ],
-                )?;
+                write_entity_setting(&tx, id, &Change::SetParent(parent.clone()), &now)?;
                 if parent.is_some() {
                     let updated = read_view(&tx)?;
                     validate_structure(&updated)?;
@@ -954,6 +976,231 @@ fn write_entity(conn: &Connection, entity: &Entity) -> Result<()> {
         ],
     )?;
     Ok(())
+}
+
+fn read_snapshot(conn: &Connection) -> Result<StoreSnapshot> {
+    Ok(StoreSnapshot {
+        entities: read_all(conn)?,
+        dependencies: read_deps(conn)?,
+    })
+}
+
+pub fn validate_import_snapshot(before: &StoreSnapshot, desired: &StoreSnapshot) -> Result<()> {
+    let before_view = before.view();
+    let desired_view = desired.view();
+    let desired_ids = desired
+        .entities
+        .iter()
+        .map(|entity| entity.id.clone())
+        .collect::<HashSet<_>>();
+    if desired_ids.len() != desired.entities.len() {
+        return Err(DbError::InvalidImport(
+            "the final snapshot contains duplicate Entity IDs".to_string(),
+        ));
+    }
+    if let Some(missing) = before
+        .entities
+        .iter()
+        .find(|entity| !desired_ids.contains(&entity.id))
+    {
+        return Err(DbError::InvalidImport(format!(
+            "the final snapshot removes {}",
+            missing.id
+        )));
+    }
+
+    for after in &desired.entities {
+        let Some(current) = before_view.get(&after.id) else {
+            if after.progress != Progress::NotStarted
+                || after.disposition != Disposition::Accepted
+                || after.resurface_condition != ResurfaceCondition::Always
+            {
+                return Err(DbError::InvalidImport(format!(
+                    "new Entity {} does not have the required initial state",
+                    after.id
+                )));
+            }
+            continue;
+        };
+        if current.kind != after.kind
+            || current.progress != after.progress
+            || current.disposition != after.disposition
+            || current.resurface_condition != after.resurface_condition
+        {
+            return Err(DbError::InvalidImport(format!(
+                "read-only state changed for {}",
+                after.id
+            )));
+        }
+        if current.kind == EntityKind::Group
+            && matches!(current.progress, Progress::Ended)
+            && (current.parent != after.parent
+                || direct_dependency_ids(&before_view, &current.id)
+                    != direct_dependency_ids(&desired_view, &after.id))
+        {
+            return Err(DbError::Containment(format!(
+                "Ended group {} cannot change its parent or dependencies",
+                after.id
+            )));
+        }
+        if current.parent != after.parent
+            && before_view
+                .ancestors(&current.id)
+                .into_iter()
+                .any(|ancestor| matches!(ancestor.progress, Progress::Ended))
+        {
+            return Err(DbError::Containment(format!(
+                "{} cannot move within an Ended group",
+                after.id
+            )));
+        }
+    }
+
+    for after in &desired.entities {
+        let parent_changed = before_view
+            .get(&after.id)
+            .is_none_or(|before| before.parent != after.parent);
+        if parent_changed
+            && desired_view
+                .ancestors(&after.id)
+                .into_iter()
+                .any(|ancestor| matches!(ancestor.progress, Progress::Ended))
+        {
+            return Err(DbError::Containment(format!(
+                "cannot add {} below an Ended group",
+                after.id
+            )));
+        }
+    }
+    validate_structure(&desired_view)?;
+    validate_relations(&desired_view)?;
+    Ok(())
+}
+
+fn apply_import_snapshot(
+    conn: &Connection,
+    before: &StoreSnapshot,
+    desired: &StoreSnapshot,
+) -> Result<()> {
+    validate_import_snapshot(before, desired)?;
+    let before_view = before.view();
+    let now = Utc::now();
+    for after in &desired.entities {
+        if before_view.get(&after.id).is_none() {
+            let mut entity = after.clone();
+            entity.parent = None;
+            entity.created_at = now;
+            entity.updated_at = now;
+            write_entity(conn, &entity)?;
+        }
+    }
+    for after in &desired.entities {
+        let current = before_view.get(&after.id);
+        if current.is_none_or(|current| current.title != after.title) {
+            write_entity_setting(
+                conn,
+                &after.id,
+                &Change::SetTitle(after.title.clone()),
+                &now,
+            )?;
+        }
+        if current.is_none_or(|current| current.description != after.description) {
+            write_entity_setting(
+                conn,
+                &after.id,
+                &Change::SetDescription(after.description.clone()),
+                &now,
+            )?;
+        }
+        if current.is_none_or(|current| current.parent != after.parent) {
+            write_entity_setting(
+                conn,
+                &after.id,
+                &Change::SetParent(after.parent.clone()),
+                &now,
+            )?;
+        }
+    }
+    if before.dependencies != desired.dependencies {
+        let before = before.dependencies.iter().cloned().collect::<HashSet<_>>();
+        let desired = desired.dependencies.iter().cloned().collect::<HashSet<_>>();
+        for (source, target) in before.difference(&desired) {
+            write_dependency(conn, source, target, false)?;
+        }
+        for (source, target) in desired.difference(&before) {
+            write_dependency(conn, source, target, true)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_entity_setting(
+    conn: &Connection,
+    id: &EntityId,
+    change: &Change,
+    now: &DateTime<Utc>,
+) -> Result<()> {
+    match change {
+        Change::SetTitle(title) => {
+            conn.execute(
+                "UPDATE entities SET title=?2, updated_at=?3 WHERE id=?1",
+                params![id.as_str(), title, now.to_rfc3339()],
+            )?;
+        }
+        Change::SetDescription(description) => {
+            conn.execute(
+                "UPDATE entities SET description=?2, updated_at=?3 WHERE id=?1",
+                params![id.as_str(), description, now.to_rfc3339()],
+            )?;
+        }
+        Change::SetParent(parent) => {
+            conn.execute(
+                "UPDATE entities SET parent_id=?2, updated_at=?3 WHERE id=?1",
+                params![
+                    id.as_str(),
+                    parent.as_ref().map(EntityId::as_str),
+                    now.to_rfc3339()
+                ],
+            )?;
+        }
+        _ => {
+            return Err(DbError::InvalidImport(
+                "a transition was passed to the setting writer".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn write_dependency(
+    conn: &Connection,
+    source: &EntityId,
+    target: &EntityId,
+    present: bool,
+) -> Result<()> {
+    if present {
+        conn.execute(
+            "INSERT INTO entity_deps (entity_id, depends_on_id) VALUES (?1,?2)",
+            params![source.as_str(), target.as_str()],
+        )?;
+    } else {
+        conn.execute(
+            "DELETE FROM entity_deps WHERE entity_id=?1 AND depends_on_id=?2",
+            params![source.as_str(), target.as_str()],
+        )?;
+    }
+    Ok(())
+}
+
+fn direct_dependency_ids(view: &View, id: &EntityId) -> Vec<EntityId> {
+    let mut ids = view
+        .dependencies()
+        .iter()
+        .filter(|(source, _)| source == id)
+        .map(|(_, target)| target.clone())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
 }
 
 fn read_view(conn: &Connection) -> Result<View> {
