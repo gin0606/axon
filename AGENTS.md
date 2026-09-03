@@ -11,7 +11,8 @@ axon 自体は、誰が着手対象や採否を決め、いつレビューする
 
 未判断の新しい Issue または Group の登録を依頼されたら、`skills/axon-capture-issue/SKILL.md` の手順に従う。
 採用済みの新しい Issue または Group の登録を依頼されたら、`skills/axon-plan-issue/SKILL.md` の手順に従う。
-既存 Entity の採否相談、判断見直し、title、description、parent、outgoing dependency の変更、または独立した追加情報の Note 追記を依頼されたら、Disposition や Progress を問わず `skills/axon-triage-issue/SKILL.md` の手順に従う。Undecided の declaration 編集は採否を変えずに反映できるが、Accepted / Rejected の実変更は同 skill の再判断手順を使う。
+既存 Entity の採否相談、判断見直し、title、description、parent、outgoing dependency の変更を依頼されたら、Disposition や Progress を問わず `skills/axon-triage-issue/SKILL.md` の手順に従う。Undecided の declaration 編集は採否を変えずに反映できるが、Accepted / Rejected の実変更は同 skill の再判断手順を使う。
+既存 Entity への独立した追加情報の Note 追記を依頼されたら、または他の workflow で作業結果や申し送りを残す必要が生じたら、`skills/axon-add-note/SKILL.md` の手順に従う。
 採用済み Entity の実装・計画進行、または Disposition を問わず InProgress Entity の進行同期・引き渡し・打ち切り・完了を依頼されたら、`skills/axon-implement-issue/SKILL.md` の手順に従う。
 Entity 数を問わず、tracker data に対する宣言 file の review / canonicalize、または `axon export` / `axon import prepare|check|apply` の実行を扱うときは `skills/axon-declaration-plan/SKILL.md` に従う。内容の採否や判断も伴う場合は、同 skill が定める順序で plan / capture / triage skill を併用する。これらのコマンド自体の実装、文書、テストを変更・レビューする作業には declaration skill を使わない。宣言 file を使わない既存 Entity の declaration 編集は triage skill、それ以外の単一 Entity 操作は該当する既存 skill を使う。
 
@@ -25,12 +26,16 @@ axon を使う中で、CLI の不足、不自然な往復、分かりにくい�
 
 ## 判断と申し送り
 
-判断を変えるときは必ず理由を残す (`axon decide` / `axon when` の `-r`)。
+Entity を操作する前は `axon show <id>` の出力を省略せず、plan declaration、Control state、記録件数、表示された全 Note を読む。Declaration Revision があれば `axon revision list <id>` と各 `axon revision show <id> <number>` も読み、古い Revision や Note を重要でないものとして読み飛ばさない。
+
+判断や作業の保留理由を状態変更へ結び付けるときは、必ず reason を残す (`axon decide` / `axon when` / `axon release` の `-r`)。
 「なぜやるのか」「なぜやらないのか」「なぜ今やらないのか」は、類似の問題を考えるときや決定を再考するときに効く情報で、`axon log <id>` で辿れる。
 
 Entity が何であるかを変える title、description、parent、outgoing dependency は plan declaration である。Accepted / Rejected の declaration を変える場合は、理由付きで Undecided に戻し、編集後の全文を確認してから改めて採否を判断する。
 
-調査結果、作業結果、申し送りなど、Entity の定義や状態を変えない追加情報は `axon note add <id> -m <body>` または `-F <file>` で追記する。既存 description へ継ぎ足さない。Note は追記専用なので、訂正や前提変化も新しい Note として残す。
+調査結果、作業結果、申し送りなど、Entity の定義や状態を変えない追加情報は Note へ追記する。既存 description へ継ぎ足さない。明示された Note 追加と、着手中 Entity で確定した重要情報は、エージェントが本文を構成して追加してよい。単なる進捗実況、定型的な開始・完了報告、reason と同じ内容の重複 Note は作らない。
+
+Note は追記専用である。誤りや前提変化は既存 Note を編集せず、元の Note 番号を示す新しい Note として残す。plan declaration や Control state を変える内容は Note として反映せず、該当する Entity workflow で扱う。情報分類または対象 Entity が不明な場合と、Note 本文がユーザーの判断を代弁する場合だけ、追加前にユーザーへ確認する。
 
 ## ビルド
 

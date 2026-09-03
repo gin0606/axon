@@ -15,12 +15,13 @@ Git linked worktree では共有 `.axon` が作業ディレクトリの外に置
 
 - 新しい Issue または Group を採用済みで登録する明示的な依頼にだけ使う
 - まだ採否を決めていない着想や計画範囲は [`axon-capture-issue`](../axon-capture-issue/SKILL.md) で扱う
+- 既存 Entity への追加情報だけを残す依頼は [`axon-add-note`](../axon-add-note/SKILL.md)、既存 Entity の plan declaration 変更は `axon-triage-issue` で扱う
 - 登録後に `axon start` や実装を行うのは、別途明示的に依頼された場合だけとする
 
 ## 調査
 
 1. 関連するコード、文書、Entity を必要な範囲で読み、目的と制約を確認する。
-2. `axon list` と必要に応じて `axon triage` を確認し、重複候補だけ `axon show <id>` で読む。
+2. `axon list` と必要に応じて `axon triage` を確認する。重複候補は `axon show <id>` の出力を省略せず、plan declaration、Control state、記録件数、表示された全 Note を読む。Declaration Revision があれば `axon revision list <id>` と各 `axon revision show <id> <number>` も読み、古い記録を重複判断から除外しない。
 3. 目的、対象、完了条件に加え、kind と構造的役割が同じ未終端 Entity があれば登録せず、既存 ID と判断材料をユーザーに提示する。kind は構造上の判断材料であり、重複を自動的に除外する条件ではない。
 4. cross-kind でも scope と完了条件が実質的に同じなら、既存 Entity を使う、既存 Group の子として作る、誤分類を整理する、別 Entity として並存させる、のどれかをユーザーが確認するまで登録しない。一部が重なるだけで役割が異なるなら登録を止めず、関連候補を最終案と一緒に提示する。依存などの関係は合意なしに設定しない。
 5. 同じ作業を扱った終了済みまたは不採用の Entity があれば履歴を提示し、新規作成するか既存の判断を見直すかをユーザーに確認する。
@@ -29,9 +30,10 @@ Git linked worktree では共有 `.axon` が作業ディレクトリの外に置
 
 ## 最終案
 
-タイトルと description の案を作る。定型を埋めること自体を目的にせず、少なくとも「なぜ行うか」と「何を満たせば終了か」を後から読み取れるようにする。この 2 点がタイトルだけで明らかなら description は省略してよい。
+title、description、parent、outgoing dependency を新しい Entity の plan declaration として作る。定型を埋めること自体を目的にせず、少なくとも「なぜ行うか」と「何を満たせば終了か」を後から読み取れるようにする。この 2 点がタイトルだけで明らかなら description は省略してよい。
 
 対象と対象外、制約や既存の判断、依存や親 Group は、実装時の判断に必要な場合だけ加える。複数の Entity を包含する明示的な計画範囲を登録する場合は Group、それ以外の作業は Issue とする。
+調査結果、作業結果、申し送りなど、作成後に得られる追加情報を格納する場所として description を使わない。その情報は必要になった時点で `axon-add-note` により Note へ追加する。
 
 最終案を提示または登録する前に、先行する会話を知らない別セッションが `axon show <id>` だけを読む前提で、タイトルと description を読み直す。会話内でだけ定義した固有名詞、指示語、比較対象、暗黙の合意が残っている場合は、本文中で意味を説明するか、不要なら一般化した表現に置き換える。
 
@@ -55,8 +57,8 @@ Git linked worktree では共有 `.axon` が作業ディレクトリの外に置
 1. 合意済みの内容が title と任意の親 Group だけで完結する場合は、Issue なら `axon plan <title>`、Group なら `axon group plan <title>` を実行する。親 Group がある場合は `--parent <group-id>` を同じ command に付け、完成状態を原子的に作成する。
 2. description、dependency、その他の後続設定がある場合は、Issue なら `axon capture <title>`、Group なら `axon group capture <title>` で Undecided として作成する。合意済みの親 Group は `--parent <group-id>` で作成時に設定する。
 3. Undecided のまま `axon write <id> -m <description>` と合意した関係設定を行う。既存 Entity の後付けや移動だけに `axon group set` を使う。
-4. `axon show <id>` で kind、文面、親 Group、dependency が最終案どおりであることを確認し、すべて揃ってから `axon decide accept <id> -r <理由>` を単独で実行する。途中の操作が失敗した場合は Accepted にせず、Undecided の ID と残作業を報告する。
-5. `axon show <id>` で採用済みの完成状態を確認する。
+4. `axon show <id>` の出力を省略せず読み、plan declaration が draft、Declaration Revision が 0 件であり、kind、文面、親 Group、dependency、表示された全 Note が最終案どおりであることを確認する。すべて揃ってから `axon decide accept <id> -r <理由>` を状態変更 command として単独で実行する。途中の操作が失敗した場合は Accepted にせず、Undecided の ID と残作業を報告する。
+5. `axon show <id>` の出力を省略せず読み、採用済みの plan declaration が Declaration Revision として固定された完成状態を確認する。`axon revision list <id>` と各 `axon revision show <id> <number>` で全 Revision を確認する。
 6. 作成した ID、kind、反映内容をユーザーに報告する。
 
 作成 command の成否や返された ID が不明なときは、`axon list` で作成済みか確認してから再実行する。同じ作業を推測で重複登録しない。作成後の操作だけが失敗した場合は、作成済み ID と残作業を報告し、別の Entity を作らない。

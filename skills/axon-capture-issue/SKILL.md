@@ -16,12 +16,13 @@ Git linked worktree では共有 `.axon` が作業ディレクトリの外に置
 - ユーザーが未判断の Issue または Group としての記録を依頼した場合、またはリポジトリのドッグフーディング規約が Issue への記録を求める場合に使う
 - 解決策を早期に固定せず、まず観測した問題を書く
 - `axon decide`、`axon start`、実装は行わない
+- 既存 Entity への追加情報だけを残す依頼は [`axon-add-note`](../axon-add-note/SKILL.md)、既存 Entity の plan declaration 変更は `axon-triage-issue` で扱う
 - 別の作業中に見つけた問題なら、その作業を不必要に中断しない
 
 ## 確認
 
 1. `axon triage` と `axon list` を必要な範囲で確認する。
-2. 重複の可能性がある Entity だけ `axon show <id>` で読む。
+2. 重複の可能性がある Entity は `axon show <id>` の出力を省略せず、plan declaration、Control state、記録件数、表示された全 Note を読む。Declaration Revision があれば `axon revision list <id>` と各 `axon revision show <id> <number>` も読み、古い記録を重複判断から除外しない。
 3. 観測した問題と期待する挙動に加え、kind と構造的役割が同じ未終端 Entity があれば、新規作成せず既存 ID を報告する。kind は構造上の判断材料であり、重複を自動的に除外する条件ではない。
 4. cross-kind でも scope と完了条件が実質的に同じなら、既存 Entity を使う、既存 Group の子として作る、誤分類を整理する、別 Entity として並存させる、のどれかをユーザーが確認するまで作成しない。一部が重なるだけで役割が異なるなら別 Entity として記録し、関連候補を報告する。依存などの関係は合意なしに設定しない。
 5. 同じ問題を扱った終了済みまたは不採用の Entity があれば履歴を提示し、新規作成するか既存の判断を見直すかをユーザーに確認する。
@@ -30,7 +31,7 @@ Git linked worktree では共有 `.axon` が作業ディレクトリの外に置
 
 ## 記述
 
-Issue のタイトルは解決策ではなく問題を表す。Group のタイトルは検討する計画範囲を表す。
+title、description、parent、outgoing dependency は新しい Entity の plan declaration になる。Issue のタイトルは解決策ではなく問題を表す。Group のタイトルは検討する計画範囲を表す。
 Issue の description からは、少なくとも観測した問題と期待する挙動が読み取れるようにする。Group では、なぜ一つの計画範囲として扱うかと、含める候補を記録する。次の情報は再現や判断に必要な場合だけ加える。
 
 - 何をしようとしていたか
@@ -38,6 +39,7 @@ Issue の description からは、少なくとも観測した問題と期待す�
 - 現在の回避策
 
 解決案がある場合は候補として分け、観測した事実と混同しない。
+後から得られた調査結果や申し送りを追記する場所として description を使わない。その情報は作成後、必要になった時点で `axon-add-note` により Note へ追加する。
 
 登録前に、先行する会話を知らない別セッションが `axon show <id>` だけを読む前提で、タイトルと description を読み直す。会話内でだけ定義した固有名詞、指示語、比較対象、暗黙の合意が残っている場合は、本文中で意味を説明するか、不要なら一般化した表現に置き換える。
 
@@ -45,7 +47,7 @@ Issue の description からは、少なくとも観測した問題と期待す�
 
 1. Issue なら `axon capture <title>`、明示的な計画範囲である Group なら `axon group capture <title>` を実行する。kind が指定されず単一の作業や懸念を記録する場合は Issue とする。合意済みの親 Group がある場合は `--parent <group-id>` を同じ作成 command に付け、作成と包含を原子的に行う。
 2. 返された ID に `axon write <id> -m <description>` で説明を書く。
-3. `axon show <id>` で未判断であること、文面、合意した親 Group を確認する。
+3. `axon show <id>` の出力を省略せず読み、plan declaration が draft、Disposition が Undecided、Declaration Revision が 0 件であり、文面、合意した親 Group、表示された全 Note が意図どおりであることを確認する。
 4. 作成した ID、kind、要点をユーザーに報告し、元の作業があれば戻る。
 
 作成 command の成否や返された ID が不明なときは、`axon triage` や `axon list` で作成済みか確認してから再実行する。同じ内容を推測で重複登録しない。作成後の操作だけが失敗した場合は、作成済み ID と残作業を報告し、別の Entity を作らない。
