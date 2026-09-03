@@ -2,9 +2,10 @@ mod actor;
 mod db;
 mod declaration;
 mod derived;
+mod display;
 mod domain;
 
-use chrono::{NaiveDate, SecondsFormat, Utc};
+use chrono::{NaiveDate, Utc};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use db::{Change, Ctx, Store};
@@ -660,7 +661,7 @@ fn claim_details(claim: &Claim) -> String {
         "{}  Worktree: {}  Started: {}",
         claim.actor,
         claim.worktree,
-        claim.at.to_rfc3339_opts(SecondsFormat::Secs, true)
+        display::timestamp(&claim.at)
     )
 }
 
@@ -804,7 +805,7 @@ fn render_show(
             rendered_notes.push(format!(
                 "Note {}  {}  {}\n{}",
                 note.number,
-                note.created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+                display::timestamp(&note.created_at),
                 note.actor,
                 note.body
             ));
@@ -852,7 +853,7 @@ fn render_show(
                 .unwrap_or_default();
             history.push(format!(
                 "  {}  {}  {action}{reason}",
-                event.at.format("%Y-%m-%d %H:%M"),
+                display::timestamp(&event.at),
                 event.actor
             ));
         }
@@ -926,7 +927,7 @@ fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
                     format!(
                         "{}  {}  {}  {}\n",
                         note.number,
-                        note.created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+                        display::timestamp(&note.created_at),
                         note.actor,
                         first_line
                     )
@@ -940,7 +941,7 @@ fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
             println!("{id}  Note {}", note.number);
             println!(
                 "Recorded: {}  {}",
-                note.created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+                display::timestamp(&note.created_at),
                 note.actor
             );
             println!();
@@ -978,9 +979,7 @@ fn cmd_revision(command: RevisionCmd) -> Result<(), Box<dyn std::error::Error>> 
                     format!(
                         "{}  {}{}  {}\n",
                         revision.number,
-                        revision
-                            .created_at
-                            .to_rfc3339_opts(SecondsFormat::Secs, true),
+                        display::timestamp(&revision.created_at),
                         marks,
                         revision.title
                     )
@@ -1040,9 +1039,7 @@ fn render_revision(id: &EntityId, entity: &Entity, revision: &DeclarationRevisio
     format!(
         "{id}  Declaration Revision {}{marks}\nCreated: {}\nTitle: {}\nParent: {parent}\n\nDescription:\n{description}\n\nOutgoing dependencies:\n{dependencies}\n",
         revision.number,
-        revision
-            .created_at
-            .to_rfc3339_opts(SecondsFormat::Secs, true),
+        display::timestamp(&revision.created_at),
         revision.title
     )
 }
@@ -1278,7 +1275,7 @@ fn cmd_log(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
     for event in events {
         print!(
             "{}  {}  {}",
-            event.at.format("%Y-%m-%d %H:%M"),
+            display::timestamp(&event.at),
             event.actor,
             format_decision(&event)
         );

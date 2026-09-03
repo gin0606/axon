@@ -451,6 +451,51 @@ fn linked_worktrees_share_entity_state_and_claims() {
     assert!(claims.contains(&format!("Worktree: {}", worktree.display())));
 }
 
+#[cfg(unix)]
+#[test]
+fn human_timestamps_use_local_time_with_a_numeric_offset() {
+    fn run(repo: &TestRepo, args: &[&str]) -> String {
+        stdout(&repo.axon_in_timezone("JST-9", args))
+    }
+
+    let repo = TestRepo::new();
+    repo.init("test");
+    let issue = repo.plan("timestamped task");
+    repo.undecide(&issue);
+    repo.accept(&issue);
+    assert_success(&repo.axon(&["start", &issue]));
+    assert_success(&repo.axon(&["note", "add", &issue, "-m", "timestamped note"]));
+    repo.execute_batch(&format!(
+        "UPDATE entities SET claimed_at = '2026-09-01T17:55:00Z' WHERE id = '{issue}';
+         UPDATE entity_events SET at = '2026-09-01T17:55:00Z' WHERE entity_id = '{issue}';
+         UPDATE entity_progress_events SET at = '2026-09-01T17:55:00Z' WHERE entity_id = '{issue}';
+         UPDATE entity_notes SET at = '2026-09-01T17:55:00Z' WHERE entity_id = '{issue}';
+         UPDATE declaration_revisions SET created_at = '2026-09-01T17:55:00Z'
+           WHERE entity_id = '{issue}';"
+    ));
+
+    let expected = "2026-09-02 02:55 +09:00";
+
+    assert!(run(&repo, &["claims"]).contains(&format!("Started: {expected}")));
+
+    let show = run(&repo, &["show", &issue]);
+    assert!(show.contains(&format!("Started: {expected}")));
+    assert!(show.contains(&format!("Note 1  {expected}  test-actor")));
+    assert!(show.contains(&format!("  {expected}  test-actor  Started")));
+
+    let log = run(&repo, &["log", &issue]);
+    assert!(log.starts_with(expected), "{log}");
+    assert!(run(&repo, &["note", "list", &issue]).contains(&format!("1  {expected}")));
+    assert!(
+        run(&repo, &["note", "show", &issue, "1"])
+            .contains(&format!("Recorded: {expected}  test-actor"))
+    );
+    assert!(run(&repo, &["revision", "list", &issue]).contains(&format!("1  {expected}")));
+    assert!(
+        run(&repo, &["revision", "show", &issue, "1"]).contains(&format!("Created: {expected}"))
+    );
+}
+
 #[test]
 fn git_and_non_git_management_roots_keep_their_boundaries() {
     let dir = TestDir::new("roots");

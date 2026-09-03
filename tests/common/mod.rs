@@ -145,6 +145,15 @@ impl TestRepo {
         self.axon_in(&self.root, args)
     }
 
+    #[cfg(unix)]
+    pub fn axon_in_timezone(&self, timezone: &str, args: &[&str]) -> Output {
+        axon_command(&self.root, &self.dir.git_config)
+            .env("TZ", timezone)
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
     pub fn axon_in(&self, directory: &Path, args: &[&str]) -> Output {
         axon_command(directory, &self.dir.git_config)
             .args(args)
