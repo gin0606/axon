@@ -395,6 +395,21 @@ fn decision_and_progress_history_work_for_groups() {
 }
 
 #[test]
+fn rejecting_in_progress_entity_reports_only_the_saved_disposition() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let issue = repo.plan("active task");
+    assert_success(&repo.axon(&["start", &issue]));
+
+    let rejected = repo.axon(&["decide", "reject", &issue, "--reason", "stopped"]);
+    assert_success(&rejected);
+    assert_eq!(
+        stdout(&rejected),
+        format!("{issue} Disposition set to Rejected\n")
+    );
+}
+
+#[test]
 fn old_slug_commands_are_not_compatibility_aliases() {
     for args in [
         &["group", "new", "legacy"][..],

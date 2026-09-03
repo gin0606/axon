@@ -1203,9 +1203,6 @@ fn cmd_decide(command: DecideCmd) -> Result<(), Box<dyn std::error::Error>> {
     let id = store.resolve_id(&args.id)?;
     store.apply(&id, Change::Decide(disposition), &ctx(args.reason))?;
     println!("{id} Disposition set to {}", disposition.label());
-    if disposition == Disposition::Rejected && store.get(&id)?.progress.claim().is_some() {
-        println!("The Entity remains InProgress; if work has stopped, also run `axon done {id}`");
-    }
     Ok(())
 }
 
