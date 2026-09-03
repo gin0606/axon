@@ -449,7 +449,7 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn load() -> Result<(Store, View), Box<dyn std::error::Error>> {
-    let store = Store::open()?;
+    let mut store = Store::open()?;
     let view = store.view()?;
     Ok((store, view))
 }

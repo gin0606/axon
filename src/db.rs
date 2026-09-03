@@ -381,16 +381,21 @@ impl Store {
             })?)
     }
 
+    #[cfg(test)]
     pub fn all(&self) -> Result<Vec<Entity>> {
         read_all(&self.conn)
     }
 
+    #[cfg(test)]
     pub fn deps(&self) -> Result<Vec<(EntityId, EntityId)>> {
         read_deps(&self.conn)
     }
 
-    pub fn view(&self) -> Result<View> {
-        Ok(View::new(self.all()?, self.deps()?))
+    pub fn view(&mut self) -> Result<View> {
+        let tx = self.conn.transaction()?;
+        let view = read_view(&tx)?;
+        tx.commit()?;
+        Ok(view)
     }
 
     pub fn snapshot(&mut self) -> Result<StoreSnapshot> {
@@ -1505,6 +1510,11 @@ fn read_show_snapshot(conn: &Connection, input: &str) -> Result<ShowSnapshot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::hooks::{AuthAction, Authorization};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
 
     fn id(value: &str) -> EntityId {
         EntityId::from_stored(value)
@@ -1689,6 +1699,86 @@ mod tests {
 
         drop(reader);
         drop(writer);
+        for candidate in [
+            path.clone(),
+            PathBuf::from(format!("{}-wal", path.display())),
+            PathBuf::from(format!("{}-shm", path.display())),
+        ] {
+            let _ = std::fs::remove_file(candidate);
+        }
+    }
+
+    #[test]
+    fn view_keeps_entities_and_dependencies_at_one_point_in_time() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "axon-view-snapshot-{}-{nonce}.db",
+            std::process::id()
+        ));
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch("PRAGMA journal_mode = WAL")
+            .unwrap();
+        let mut reader = Store::from_conn(connection).unwrap();
+        reader
+            .conn
+            .execute_batch(
+                "INSERT INTO entities (
+                  id,kind,title,progress,disposition,created_at,updated_at
+                 ) VALUES
+                  ('a','issue','a','not_started','accepted','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'),
+                  ('b','issue','b','not_started','accepted','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",
+            )
+            .unwrap();
+        let writer = Store::from_conn(Connection::open(&path).unwrap()).unwrap();
+        let write_attempted = Arc::new(AtomicBool::new(false));
+        let write_error = Arc::new(Mutex::new(None));
+        let attempted_from_hook = Arc::clone(&write_attempted);
+        let error_from_hook = Arc::clone(&write_error);
+
+        reader
+            .conn
+            .authorizer(Some(move |context: rusqlite::hooks::AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "entity_deps",
+                        ..
+                    }
+                ) && !attempted_from_hook.swap(true, Ordering::SeqCst)
+                    && let Err(error) = writer.conn.execute_batch(
+                        "BEGIN IMMEDIATE;
+                         UPDATE entities SET disposition='rejected' WHERE id='b';
+                         INSERT INTO entity_deps (entity_id,depends_on_id) VALUES ('a','b');
+                         COMMIT;",
+                    )
+                {
+                    *error_from_hook.lock().unwrap() = Some(error.to_string());
+                }
+                Authorization::Allow
+            }))
+            .unwrap();
+
+        let view = reader.view().unwrap();
+        assert!(write_attempted.load(Ordering::SeqCst));
+        assert_eq!(write_error.lock().unwrap().as_deref(), None);
+        assert_eq!(
+            view.get(&id("b")).unwrap().disposition,
+            Disposition::Accepted
+        );
+        assert!(view.dependency_targets(&id("a")).is_empty());
+
+        let fresh = reader.view().unwrap();
+        assert_eq!(
+            fresh.get(&id("b")).unwrap().disposition,
+            Disposition::Rejected
+        );
+        assert_eq!(fresh.dependency_targets(&id("a")).len(), 1);
+
+        drop(reader);
         for candidate in [
             path.clone(),
             PathBuf::from(format!("{}-wal", path.display())),
