@@ -161,6 +161,17 @@ impl TestRepo {
             .unwrap()
     }
 
+    pub fn axon_with_env(&self, args: &[&str], environment: &[(&str, Option<&str>)]) -> Output {
+        let mut command = axon_command(&self.root, &self.dir.git_config);
+        for (key, value) in environment {
+            match value {
+                Some(value) => command.env(key, value),
+                None => command.env_remove(key),
+            };
+        }
+        command.args(args).output().unwrap()
+    }
+
     pub fn axon_with_stdin(&self, args: &[&str], input: &str) -> Output {
         let mut child = axon_command(&self.root, &self.dir.git_config)
             .args(args)

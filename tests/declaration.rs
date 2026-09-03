@@ -12,6 +12,15 @@ fn write(path: &Path, contents: &str) {
     fs::write(path, contents).unwrap();
 }
 
+fn assert_show_relation(output: &str, label: &str, id: &str) {
+    assert!(
+        output.lines().any(|line| {
+            line.trim_start().starts_with(label) && line.split_whitespace().any(|field| field == id)
+        }),
+        "missing {label} for {id} in:\n{output}"
+    );
+}
+
 fn new_plan(dependencies: &str) -> String {
     format!(
         r#"schema: axon-plan/v2
@@ -128,12 +137,12 @@ fn prepare_check_and_apply_create_mixed_entities_and_dependencies() {
     let import = entity_id(&list, "import plan");
     let release = entity_id(&list, "release plan");
     let api_show = stdout(&repo.axon(&["show", &api]));
-    assert!(api_show.contains(&format!("Dependency: {storage}")));
-    assert!(api_show.contains(&format!("Dependency: {release}")));
+    assert_show_relation(&api_show, "Dependency:", &storage);
+    assert_show_relation(&api_show, "Dependency:", &release);
     let import_show = stdout(&repo.axon(&["show", &import]));
-    assert!(import_show.contains(&format!("Dependency: {storage}")));
-    assert!(import_show.contains(&format!("Dependency: {release}")));
-    assert!(import_show.contains("Direct children: 1"));
+    assert_show_relation(&import_show, "Dependency:", &storage);
+    assert_show_relation(&import_show, "Dependency:", &release);
+    assert!(import_show.contains("  Direct children: 1"));
     let (revision, title, parent, dependency_count) = repo.current_revision(&api);
     assert_eq!(revision, 1);
     assert_eq!(title, "import API");

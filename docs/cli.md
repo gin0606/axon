@@ -99,4 +99,6 @@ Ended Group は完了宣言を後から無効にしないため、親変更、su
 
 help、一覧、詳細、成功確認は stdout、エラーは stderr に出す。一覧が空なら stdout を空に保ち、案内だけを stderr に出して成功する。
 
+`show` は identity と現在状態を長文や履歴より先に置き、現在地から詳細へ読み進められる一つの出力にする。description と Note の本文は省略・整形せずに表示する。stdout が対話 terminal なら状態の識別を補助する ANSI style を使う。非対話出力と `NO_COLOR` では同じ文字、空白、改行、順序を無装飾で出し、状態の違いを色だけでは表さない。
+
 Git 配下では common Git directory の親を管理 root とし、全 worktree で `.axon/axon.db` を共有する。Git 外ではカレントから祖先へ最も近い DB を探す。Issue と Group は同じ `<prefix>-<ランダム 6 文字>` namespace を使い、完全 ID または一意な suffix で解決する。

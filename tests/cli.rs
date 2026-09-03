@@ -13,6 +13,14 @@ fn created_id(output: &Output) -> String {
         .to_string()
 }
 
+fn assert_show_field(output: &str, label: &str, expected: &str) {
+    let field = format!("{label} {expected}");
+    assert!(
+        output.lines().any(|line| line.contains(&field)),
+        "missing show field {field:?} in:\n{output}"
+    );
+}
+
 #[test]
 fn every_creation_command_accepts_an_initial_description() {
     let repo = TestRepo::new();
@@ -159,8 +167,50 @@ fn issues_and_groups_are_visible_as_entities_and_filterable_by_kind() {
     for id in [&issue, &group] {
         let show = repo.axon(&["show", id]);
         assert_success(&show);
-        assert!(stdout(&show).starts_with(&format!("{id}  ")));
+        let show = stdout(&show);
+        assert!(show.starts_with(&format!("{id}  ")));
+        assert!(!show.contains('\u{1b}'));
     }
+}
+
+#[test]
+fn show_keeps_non_terminal_output_plain() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let issue = repo.plan("styled output");
+
+    let plain = repo.axon(&["show", &issue]);
+    assert_success(&plain);
+    let plain = stdout(&plain);
+    assert!(!plain.contains('\u{1b}'));
+
+    let forced = repo.axon_with_env(
+        &["show", &issue],
+        &[("NO_COLOR", None), ("CLICOLOR_FORCE", Some("1"))],
+    );
+    assert_success(&forced);
+    assert_eq!(stdout(&forced), plain);
+
+    let no_color = repo.axon_with_env(
+        &["show", &issue],
+        &[("NO_COLOR", Some("1")), ("CLICOLOR_FORCE", Some("1"))],
+    );
+    assert_success(&no_color);
+    assert_eq!(stdout(&no_color), plain);
+}
+
+#[test]
+fn show_preserves_escape_sequences_stored_in_long_form_content() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let description = "description \u{1b}[31mred\u{1b}[0m";
+    let note = "note \u{1b}[32mgreen\u{1b}[0m";
+    let issue = created_id(&repo.axon(&["plan", "escaped content", "-m", description]));
+    assert_success(&repo.axon(&["note", "add", &issue, "-m", note]));
+
+    let show = stdout(&repo.axon(&["show", &issue]));
+    assert!(show.contains(description));
+    assert!(show.contains(note));
 }
 
 #[test]
@@ -187,13 +237,19 @@ fn a_group_explicitly_opens_and_completes_its_plan_scope() {
     assert_success(&repo.axon(&["done", &group]));
 
     let show = stdout(&repo.axon(&["show", &group]));
-    assert!(show.contains("Progress: Ended"));
-    assert!(show.contains(
-        "Direct children: 1 (Issue: 1, Group: 0, NotStarted: 0, InProgress: 0, Ended: 1, Undecided: 0, Accepted: 1, Rejected: 0, Terminal: 1)"
-    ));
-    assert!(show.contains(
-        "Descendants: 1 (Issue: 1, Group: 0, NotStarted: 0, InProgress: 0, Ended: 1, Undecided: 0, Accepted: 1, Rejected: 0, Terminal: 1)"
-    ));
+    assert_show_field(&show, "Progress:", "Ended");
+    assert!(show.contains("  Direct children: 1  Issue: 1  Group: 0  Terminal: 1"));
+    assert!(show.contains("  Descendants: 1  Issue: 1  Group: 0  Terminal: 1"));
+    assert_eq!(
+        show.matches("Progress: NotStarted: 0  InProgress: 0  Ended: 1")
+            .count(),
+        2
+    );
+    assert_eq!(
+        show.matches("Disposition: Undecided: 0  Accepted: 1  Rejected: 0")
+            .count(),
+        2
+    );
 }
 
 #[test]
@@ -271,9 +327,11 @@ fn triage_shows_only_the_active_scope_frontier() {
     assert!(!triage.contains(&child));
     let inactive = format!("inactive: {parent} (Progress=NotStarted, Disposition=Undecided)");
     assert!(stdout(&repo.axon(&["list"])).contains(&inactive));
-    assert!(stdout(&repo.axon(&["show", &child])).contains(&format!(
-        "Active scope: no ({parent} (Progress=NotStarted, Disposition=Undecided))"
-    )));
+    assert_show_field(
+        &stdout(&repo.axon(&["show", &child])),
+        "Active scope:",
+        &format!("no ({parent} (Progress=NotStarted, Disposition=Undecided))"),
+    );
 
     assert_success(&repo.axon(&["decide", "accept", &parent]));
     assert_success(&repo.axon(&["start", &parent]));
@@ -568,8 +626,12 @@ fn notes_preserve_full_bodies_and_work_for_every_entity_state() {
     let show = repo.axon(&["show", suffix]);
     assert_success(&show);
     let show = stdout(&show);
-    assert!(show.contains("Plan declaration: fixed at Revision 1"));
-    assert!(show.contains("Records: Notes: 2  Revisions: 1"));
+    assert_show_field(&show, "Plan declaration:", "fixed at Revision 1");
+    assert_show_field(
+        &show,
+        "Records:",
+        "Notes: 2  Revisions: 1  Decision history: 0  Progress history: 0",
+    );
     assert!(show.contains("Declaration description\nwith two lines"));
     assert!(show.contains(&long_markdown));
     assert!(
@@ -618,7 +680,7 @@ fn revision_commands_expose_fixed_declarations_and_structural_diffs() {
     let issue = repo.capture("first title");
 
     let draft = stdout(&repo.axon(&["show", &issue]));
-    assert!(draft.contains("Plan declaration: draft"));
+    assert_show_field(&draft, "Plan declaration:", "draft");
     assert!(draft.contains("Revisions: 0"));
     assert_success(&repo.axon(&["decide", "accept", &issue, "-r", "initial plan"]));
 
@@ -661,7 +723,7 @@ fn revision_commands_expose_fixed_declarations_and_structural_diffs() {
     assert!(diff.contains(&format!("Outgoing dependencies:\n+ {prerequisite}")));
 
     let show = stdout(&repo.axon(&["show", &issue]));
-    assert!(show.contains("Plan declaration: fixed at Revision 2"));
+    assert_show_field(&show, "Plan declaration:", "fixed at Revision 2");
     assert!(show.contains("Revisions: 2"));
     assert!(show.contains("Decision history: 3"));
     let log = stdout(&repo.axon(&["log", &issue]));

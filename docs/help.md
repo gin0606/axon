@@ -77,7 +77,7 @@ Treat an exported declaration as a working snapshot. After a successful apply, k
 - `group set` moves either kind below a Group; `group unset` removes its parent.
 - `import prepare` changes only its YAML file; `import apply` is the only declaration command that changes Entity data.
 
-`show` begins with the declaration's draft/fixed state and counts for Notes, Revisions, decision history, and progress history. The detailed state, description, and Notes come from one database read transaction.
+`show` obtains its current state, declaration metadata, relationships, description, Notes, and history from one database read transaction.
 
 An Ended Group cannot be moved, gain or lose descendants, or change its outgoing dependencies. A terminal descendant below an Ended Group cannot be made non-terminal. New follow-up work belongs outside that completed scope.
 
@@ -94,6 +94,8 @@ Claims record actor, worktree, and start time. axon does not decide that a claim
 ## Input, output, and exit status
 
 Successful results and mutation confirmations go to standard output. Errors go to standard error and return a non-zero status. Empty `ready`, `triage`, `claims`, `stale`, and `list` queries keep standard output empty and write only a short note to standard error.
+
+`show` places identity and current state before long-form content and history, so one complete output can be read from the current snapshot into its details. It preserves description and Note bodies. On an attended terminal it uses restrained ANSI styling to reinforce status values; piped and redirected output is plain, `NO_COLOR` disables styling, and text structure never depends on color.
 
 The first whitespace-separated field in every Entity list row is the Entity ID. The second identifies its kind. Note and Revision lists begin with their Entity-local number. Revision reads use one database snapshot, and optional descriptions label `present` or `absent` separately from their content. Note bodies are stored and displayed without trimming; a body containing only whitespace is rejected.
 

@@ -5,6 +5,7 @@ mod derived;
 mod display;
 mod domain;
 
+use anstyle::{AnsiColor, Color, Style};
 use chrono::{NaiveDate, Utc};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
@@ -13,6 +14,62 @@ use derived::{TriageReason, View};
 use domain::*;
 
 const CLI_GUIDE: &str = include_str!("../docs/help.md");
+
+const SHOW_HEADING: Style = Style::new().bold();
+const SHOW_ID: Style = Style::new()
+    .bold()
+    .fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
+const SHOW_ACTIVE: Style = Style::new()
+    .bold()
+    .fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
+const SHOW_ACCEPTED: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
+const SHOW_ATTENTION: Style = Style::new()
+    .bold()
+    .fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
+const SHOW_DANGER: Style = Style::new()
+    .bold()
+    .fg_color(Some(Color::Ansi(AnsiColor::Red)));
+const SHOW_MUTED: Style = Style::new().dimmed();
+
+#[derive(Clone, Copy)]
+enum ShowDecoration {
+    Plain,
+    Ansi,
+}
+
+impl ShowDecoration {
+    fn paint(self, style: Style, value: impl std::fmt::Display) -> String {
+        match self {
+            Self::Plain => value.to_string(),
+            Self::Ansi => format!("{style}{value}{style:#}"),
+        }
+    }
+}
+
+fn show_decoration(is_terminal: bool, no_color: bool) -> ShowDecoration {
+    if is_terminal && !no_color {
+        ShowDecoration::Ansi
+    } else {
+        ShowDecoration::Plain
+    }
+}
+
+fn write_show(output: &str, decoration: ShowDecoration) -> std::io::Result<()> {
+    match decoration {
+        ShowDecoration::Plain => write_show_to(std::io::stdout(), output),
+        ShowDecoration::Ansi => write_show_to(
+            anstream::AutoStream::new(std::io::stdout(), anstream::ColorChoice::Always),
+            output,
+        ),
+    }
+}
+
+fn write_show_to(mut stream: impl std::io::Write, output: &str) -> std::io::Result<()> {
+    match stream.write_all(output.as_bytes()) {
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        result => result,
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -732,6 +789,8 @@ fn cmd_list(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>> 
 }
 
 fn cmd_show(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::IsTerminal;
+
     let mut store = Store::open()?;
     let db::ShowSnapshot {
         id,
@@ -747,10 +806,14 @@ fn cmd_show(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
     debug_assert_eq!(counts.revisions, revisions.len());
     debug_assert_eq!(counts.notes, notes.len());
     let entity = view.get(&id).ok_or("entity not found")?;
-    print!(
-        "{}",
-        render_show(&view, entity, &progress_events, &notes, counts)
+    let decoration = show_decoration(
+        std::io::stdout().is_terminal(),
+        std::env::var_os("NO_COLOR").is_some(),
     );
+    write_show(
+        &render_show(&view, entity, &progress_events, &notes, counts, decoration),
+        decoration,
+    )?;
     Ok(())
 }
 
@@ -760,58 +823,112 @@ fn render_show(
     progress_events: &[db::ProgressEvent],
     notes: &[Note],
     counts: RecordCounts,
+    decoration: ShowDecoration,
 ) -> String {
     let mut blocks = Vec::<Vec<String>>::new();
-    let mut head = vec![
-        format!("{}  {}  {}", entity.id, entity.kind.label(), entity.title),
-        match entity.current_revision {
-            Some(revision) => format!("Plan declaration: fixed at Revision {revision}"),
-            None => "Plan declaration: draft".to_string(),
-        },
-        format!(
-            "Records: Notes: {}  Revisions: {}  Decision history: {}  Progress history: {}",
-            counts.notes, counts.revisions, counts.decisions, counts.progressions
-        ),
-        format!(
-            "Progress: {}  Disposition: {}  Resurface condition: {}",
-            entity.progress.label(),
-            entity.disposition.label(),
-            entity.resurface_condition.label()
-        ),
-    ];
-    if let Some(parent) = &entity.parent {
-        head.push(format!("Parent: {parent}"));
-    }
-    let active_scope = inactive_scope_reason(view, &entity.id)
+    let mut overview = vec![format!(
+        "{}  {}  {}",
+        decoration.paint(SHOW_ID, &entity.id),
+        decoration.paint(SHOW_MUTED, entity.kind.label()),
+        decoration.paint(SHOW_HEADING, &entity.title),
+    )];
+
+    let inactive_reason = inactive_scope_reason(view, &entity.id);
+    let active_scope = inactive_reason
+        .as_ref()
         .map(|reason| format!("no ({reason})"))
         .unwrap_or_else(|| "yes".to_string());
-    head.push(format!(
-        "Active scope: {active_scope}  Blocked: {}  Orphaned: {}",
-        yes_no(view.is_blocked(&entity.id)),
-        yes_no(view.is_orphaned(&entity.id))
+    let blocked = view.is_blocked(&entity.id);
+    let orphaned = view.is_orphaned(&entity.id);
+    let surfaced = view.is_surfaced(entity);
+    overview.push(render_inline_fields(
+        decoration,
+        vec![
+            (
+                "Progress",
+                decoration.paint(progress_style(&entity.progress), entity.progress.label()),
+            ),
+            (
+                "Disposition",
+                decoration.paint(
+                    disposition_style(entity.disposition),
+                    entity.disposition.label(),
+                ),
+            ),
+            ("Resurface condition", entity.resurface_condition.label()),
+        ],
+    ));
+    overview.push(render_inline_fields(
+        decoration,
+        vec![
+            (
+                "Active scope",
+                decoration.paint(
+                    if inactive_reason.is_some() {
+                        SHOW_ATTENTION
+                    } else {
+                        Style::new()
+                    },
+                    active_scope,
+                ),
+            ),
+            (
+                "Surfaced",
+                decoration.paint(
+                    if surfaced {
+                        Style::new()
+                    } else {
+                        SHOW_ATTENTION
+                    },
+                    yes_no(surfaced),
+                ),
+            ),
+            (
+                "Blocked",
+                decoration.paint(
+                    if blocked { SHOW_DANGER } else { SHOW_MUTED },
+                    yes_no(blocked),
+                ),
+            ),
+            (
+                "Orphaned",
+                decoration.paint(
+                    if orphaned { SHOW_DANGER } else { SHOW_MUTED },
+                    yes_no(orphaned),
+                ),
+            ),
+        ],
     ));
     if let Some(claim) = entity.progress.claim() {
-        head.push(format!("Claim: {}", claim_details(claim)));
-    }
-    blocks.push(head);
-
-    if let Some(description) = &entity.description {
-        blocks.push(vec![description.clone()]);
+        overview.push(render_inline_fields(
+            decoration,
+            vec![("Claim", decoration.paint(SHOW_ACTIVE, claim_details(claim)))],
+        ));
     }
 
-    if !notes.is_empty() {
-        let mut rendered_notes = vec!["Notes:".to_string()];
-        for note in notes {
-            rendered_notes.push(format!(
-                "Note {}  {}  {}\n{}",
-                note.number,
-                display::timestamp(&note.created_at),
-                note.actor,
-                note.body
-            ));
-        }
-        blocks.push(rendered_notes);
+    let (declaration, declaration_style) = match entity.current_revision {
+        Some(revision) => (format!("fixed at Revision {revision}"), Style::new()),
+        None => ("draft".to_string(), SHOW_ATTENTION),
+    };
+    let mut plan = vec![(
+        "Plan declaration",
+        decoration.paint(declaration_style, declaration),
+    )];
+    if let Some(parent) = &entity.parent {
+        plan.push(("Parent", decoration.paint(SHOW_ID, parent)));
     }
+    overview.push(render_inline_fields(decoration, plan));
+    overview.push(render_inline_fields(
+        decoration,
+        vec![(
+            "Records",
+            format!(
+                "Notes: {}  Revisions: {}  Decision history: {}  Progress history: {}",
+                counts.notes, counts.revisions, counts.decisions, counts.progressions
+            ),
+        )],
+    ));
+    blocks.push(overview);
 
     if entity.kind == EntityKind::Group {
         let summary = view.group_summary(&entity.id);
@@ -821,30 +938,128 @@ fn render_show(
             .filter(|descendant| !descendant.is_terminal())
             .map(|descendant| descendant.id.to_string())
             .collect::<Vec<_>>();
-        let mut group = vec![
-            render_entity_counts("Direct children", &summary.direct),
-            render_entity_counts("Descendants", &summary.descendants),
-            format!(
-                "Can complete: {}",
-                yes_no(view.can_complete_group(&entity.id))
-            ),
-        ];
+        let completable = view.can_complete_group(&entity.id);
+        let mut group = vec![format!(
+            "  {}",
+            render_inline_fields(
+                decoration,
+                vec![(
+                    "Can complete",
+                    decoration.paint(
+                        if completable {
+                            SHOW_ACCEPTED
+                        } else {
+                            SHOW_MUTED
+                        },
+                        yes_no(completable),
+                    ),
+                )],
+            )
+        )];
         if !remaining.is_empty() {
             group.push(format!(
-                "Non-terminal descendants: {}",
-                remaining.join(", ")
+                "  {}",
+                render_inline_fields(
+                    decoration,
+                    vec![("Non-terminal descendants", remaining.join(", "))],
+                )
             ));
         }
-        blocks.push(group);
+        group.push(String::new());
+        group.extend(render_entity_counts(
+            "Direct children",
+            &summary.direct,
+            decoration,
+        ));
+        group.push(String::new());
+        group.extend(render_entity_counts(
+            "Descendants",
+            &summary.descendants,
+            decoration,
+        ));
+        blocks.push(render_section(decoration, "Group", group));
+    }
+
+    let mut relations = Vec::<(&str, String)>::new();
+    for target in view.dependency_targets(&entity.id) {
+        let (label, style) = if target.disposition == Disposition::Rejected {
+            ("Orphaned:", SHOW_DANGER)
+        } else if target.is_terminal() {
+            ("Satisfied dependency:", SHOW_MUTED)
+        } else {
+            ("Dependency:", SHOW_ATTENTION)
+        };
+        relations.push((
+            label,
+            decoration.paint(
+                style,
+                format!("{}  {}  {}", target.id, target.kind.label(), target.title),
+            ),
+        ));
+    }
+    for dependent in view.direct_dependents(&entity.id) {
+        relations.push((
+            "Dependent:",
+            format!(
+                "{}  {}  {}",
+                dependent.id,
+                dependent.kind.label(),
+                dependent.title
+            ),
+        ));
+    }
+    for cause in view.blocking_causes(&entity.id) {
+        relations.push((
+            "Root cause:",
+            decoration.paint(
+                SHOW_DANGER,
+                format!("{}  {}  {}", cause.id, cause.kind.label(), cause.title),
+            ),
+        ));
+    }
+    if !relations.is_empty() {
+        blocks.push(render_section(
+            decoration,
+            "Relationships",
+            render_fields(decoration, "  ", relations),
+        ));
+    }
+
+    if let Some(description) = &entity.description {
+        blocks.push(render_section(
+            decoration,
+            "Description",
+            vec![description.clone()],
+        ));
+    }
+
+    if !notes.is_empty() {
+        let mut rendered_notes = Vec::new();
+        for note in notes {
+            if !rendered_notes.is_empty() {
+                rendered_notes.push(String::new());
+            }
+            rendered_notes.push(decoration.paint(
+                SHOW_HEADING,
+                format!(
+                    "Note {}  {}  {}",
+                    note.number,
+                    display::timestamp(&note.created_at),
+                    note.actor
+                ),
+            ));
+            rendered_notes.push(note.body.clone());
+        }
+        blocks.push(render_section(decoration, "Notes", rendered_notes));
     }
 
     if !progress_events.is_empty() {
-        let mut history = vec!["Progress history:".to_string()];
+        let mut history = Vec::new();
         for event in progress_events {
-            let action = match event.kind {
-                db::ProgressEventKind::Start => "Started",
-                db::ProgressEventKind::Done => "Ended",
-                db::ProgressEventKind::Release => "Released",
+            let (action, action_style) = match event.kind {
+                db::ProgressEventKind::Start => ("Started", SHOW_ACTIVE),
+                db::ProgressEventKind::Done => ("Ended", SHOW_MUTED),
+                db::ProgressEventKind::Release => ("Released", SHOW_ATTENTION),
             };
             let reason = event
                 .reason
@@ -852,48 +1067,13 @@ fn render_show(
                 .map(|reason| format!("  ({reason})"))
                 .unwrap_or_default();
             history.push(format!(
-                "  {}  {}  {action}{reason}",
+                "  {}  {}  {}{reason}",
                 display::timestamp(&event.at),
-                event.actor
+                event.actor,
+                decoration.paint(action_style, action),
             ));
         }
-        blocks.push(history);
-    }
-
-    let mut relations = Vec::new();
-    for target in view.dependency_targets(&entity.id) {
-        let label = if target.disposition == Disposition::Rejected {
-            "Orphaned"
-        } else if target.is_terminal() {
-            "Satisfied dependency"
-        } else {
-            "Dependency"
-        };
-        relations.push(format!(
-            "{label}: {}  {}  {}",
-            target.id,
-            target.kind.label(),
-            target.title
-        ));
-    }
-    for dependent in view.direct_dependents(&entity.id) {
-        relations.push(format!(
-            "Dependent: {}  {}  {}",
-            dependent.id,
-            dependent.kind.label(),
-            dependent.title
-        ));
-    }
-    for cause in view.blocking_causes(&entity.id) {
-        relations.push(format!(
-            "Root cause: {}  {}  {}",
-            cause.id,
-            cause.kind.label(),
-            cause.title
-        ));
-    }
-    if !relations.is_empty() {
-        blocks.push(relations);
+        blocks.push(render_section(decoration, "Progress history", history));
     }
 
     format!(
@@ -905,6 +1085,60 @@ fn render_show(
             .collect::<Vec<_>>()
             .join("\n\n")
     )
+}
+
+fn render_section(decoration: ShowDecoration, heading: &str, lines: Vec<String>) -> Vec<String> {
+    std::iter::once(decoration.paint(SHOW_HEADING, heading))
+        .chain(lines)
+        .collect()
+}
+
+fn render_inline_fields(decoration: ShowDecoration, fields: Vec<(&str, String)>) -> String {
+    fields
+        .into_iter()
+        .map(|(label, value)| {
+            format!(
+                "{} {value}",
+                decoration.paint(SHOW_MUTED, format!("{label}:"))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+fn render_fields(
+    decoration: ShowDecoration,
+    indent: &str,
+    fields: Vec<(&str, String)>,
+) -> Vec<String> {
+    let width = fields
+        .iter()
+        .map(|(label, _)| label.chars().count())
+        .max()
+        .unwrap_or_default();
+    fields
+        .into_iter()
+        .map(|(label, value)| {
+            let label = decoration.paint(SHOW_MUTED, format!("{label:<width$}"));
+            format!("{indent}{label}  {value}")
+        })
+        .collect()
+}
+
+fn progress_style(progress: &Progress) -> Style {
+    match progress {
+        Progress::NotStarted => Style::new(),
+        Progress::InProgress(_) => SHOW_ACTIVE,
+        Progress::Ended => SHOW_MUTED,
+    }
+}
+
+fn disposition_style(disposition: Disposition) -> Style {
+    match disposition {
+        Disposition::Undecided => SHOW_ATTENTION,
+        Disposition::Accepted => SHOW_ACCEPTED,
+        Disposition::Rejected => SHOW_MUTED,
+    }
 }
 
 fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
@@ -1143,20 +1377,48 @@ fn push_optional_diff_side(output: &mut String, prefix: char, value: Option<&str
     }
 }
 
-fn render_entity_counts(label: &str, counts: &derived::EntityCounts) -> String {
-    format!(
-        "{label}: {} (Issue: {}, Group: {}, NotStarted: {}, InProgress: {}, Ended: {}, Undecided: {}, Accepted: {}, Rejected: {}, Terminal: {})",
-        counts.total,
-        counts.issues,
-        counts.groups,
-        counts.not_started,
-        counts.in_progress,
-        counts.ended,
-        counts.undecided,
-        counts.accepted,
-        counts.rejected,
-        counts.terminal
-    )
+fn render_entity_counts(
+    label: &str,
+    counts: &derived::EntityCounts,
+    decoration: ShowDecoration,
+) -> Vec<String> {
+    vec![
+        format!(
+            "  {}: {}  {}",
+            decoration.paint(SHOW_HEADING, label),
+            counts.total,
+            render_inline_fields(
+                decoration,
+                vec![
+                    ("Issue", counts.issues.to_string()),
+                    ("Group", counts.groups.to_string()),
+                    ("Terminal", counts.terminal.to_string()),
+                ],
+            )
+        ),
+        format!(
+            "    {}",
+            render_inline_fields(
+                decoration,
+                vec![
+                    ("Progress", format!("NotStarted: {}", counts.not_started)),
+                    ("InProgress", counts.in_progress.to_string()),
+                    ("Ended", counts.ended.to_string()),
+                ],
+            )
+        ),
+        format!(
+            "    {}",
+            render_inline_fields(
+                decoration,
+                vec![
+                    ("Disposition", format!("Undecided: {}", counts.undecided),),
+                    ("Accepted", counts.accepted.to_string()),
+                    ("Rejected", counts.rejected.to_string()),
+                ],
+            )
+        ),
+    ]
 }
 
 fn inactive_scope_reason(view: &View, id: &EntityId) -> Option<String> {
@@ -1492,9 +1754,141 @@ mod tests {
         let mut issue = entity("i", EntityKind::Issue);
         issue.parent = Some(group.id.clone());
         let view = View::new(vec![group.clone(), issue], vec![]);
-        let output = render_show(&view, &group, &[], &[], RecordCounts::default());
+        let output = render_show(
+            &view,
+            &group,
+            &[],
+            &[],
+            RecordCounts::default(),
+            ShowDecoration::Plain,
+        );
         assert!(output.starts_with("g  Group  g title\n"));
-        assert!(output.contains("Descendants: 1 (Issue: 1, Group: 0"));
+        assert!(output.contains("Group\n  Can complete: no\n"));
+        assert!(output.contains("  Descendants: 1  Issue: 1  Group: 0  Terminal: 0"));
+        assert!(output.contains("    Progress: NotStarted: 1  InProgress: 0  Ended: 0"));
+        assert!(output.contains("    Disposition: Undecided: 0  Accepted: 1  Rejected: 0"));
+    }
+
+    #[test]
+    fn show_can_render_ansi_styles_without_changing_its_text() {
+        let issue = entity("i", EntityKind::Issue);
+        let view = View::new(vec![issue.clone()], vec![]);
+        let plain = render_show(
+            &view,
+            &issue,
+            &[],
+            &[],
+            RecordCounts::default(),
+            ShowDecoration::Plain,
+        );
+        let styled = render_show(
+            &view,
+            &issue,
+            &[],
+            &[],
+            RecordCounts::default(),
+            ShowDecoration::Ansi,
+        );
+
+        assert!(!plain.contains('\u{1b}'));
+        assert_eq!(plain.lines().count(), 5);
+        assert!(!plain.contains("Status\n"));
+        assert!(!plain.contains("Plan\n"));
+        assert!(styled.contains("\u{1b}["));
+        assert!(styled.contains("\u{1b}[32mAccepted\u{1b}[0m"));
+        assert_eq!(anstream::adapter::strip_str(&styled).to_string(), plain);
+    }
+
+    #[test]
+    fn show_only_decorates_attended_terminals() {
+        assert!(matches!(show_decoration(true, false), ShowDecoration::Ansi));
+        assert!(matches!(
+            show_decoration(false, false),
+            ShowDecoration::Plain
+        ));
+        assert!(matches!(show_decoration(true, true), ShowDecoration::Plain));
+    }
+
+    #[test]
+    fn show_reports_surfaced_state_in_plain_text() {
+        let mut issue = entity("i", EntityKind::Issue);
+        issue.resurface_condition =
+            ResurfaceCondition::AfterEntity(EntityId::from_stored("target"));
+        let target = entity("target", EntityKind::Issue);
+        let view = View::new(vec![issue.clone(), target.clone()], vec![]);
+        let waiting = render_show(
+            &view,
+            &issue,
+            &[],
+            &[],
+            RecordCounts::default(),
+            ShowDecoration::Plain,
+        );
+
+        assert!(waiting.contains("Resurface condition: AfterEntity(target)"));
+        assert!(waiting.contains("Surfaced: no"));
+
+        let mut ended_target = target;
+        ended_target.progress = Progress::Ended;
+        let view = View::new(vec![issue.clone(), ended_target], vec![]);
+        let surfaced = render_show(
+            &view,
+            &issue,
+            &[],
+            &[],
+            RecordCounts::default(),
+            ShowDecoration::Plain,
+        );
+
+        assert!(surfaced.contains("Surfaced: yes"));
+    }
+
+    #[test]
+    fn show_orders_current_graph_and_long_form_information() {
+        let mut issue = entity("i", EntityKind::Issue);
+        issue.description = Some("description body\nwith two lines".to_string());
+        let dependency = entity("d", EntityKind::Issue);
+        let view = View::new(
+            vec![issue.clone(), dependency.clone()],
+            vec![(issue.id.clone(), dependency.id.clone())],
+        );
+        let at = Utc::now();
+        let notes = vec![Note {
+            number: 1,
+            body: "note body\nwith two lines".to_string(),
+            actor: "tester".to_string(),
+            created_at: at,
+        }];
+        let progress_events = vec![db::ProgressEvent {
+            kind: db::ProgressEventKind::Release,
+            actor: "tester".to_string(),
+            reason: Some("handoff".to_string()),
+            at,
+        }];
+        let output = render_show(
+            &view,
+            &issue,
+            &progress_events,
+            &notes,
+            RecordCounts {
+                notes: 1,
+                revisions: 1,
+                decisions: 0,
+                progressions: 1,
+            },
+            ShowDecoration::Plain,
+        );
+
+        let relationships = output.find("\n\nRelationships\n").unwrap();
+        let description = output.find("\n\nDescription\n").unwrap();
+        let notes = output.find("\n\nNotes\n").unwrap();
+        let progress = output.find("\n\nProgress history\n").unwrap();
+        assert!(relationships < description);
+        assert!(description < notes);
+        assert!(notes < progress);
+        assert!(output.contains("Description\ndescription body\nwith two lines"));
+        assert!(output.contains("Notes\nNote 1"));
+        assert!(output.contains("note body\nwith two lines"));
     }
 
     #[test]
