@@ -2,8 +2,9 @@
 
 use rusqlite::{Connection, params};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
@@ -131,6 +132,23 @@ impl TestRepo {
             .unwrap()
     }
 
+    pub fn axon_with_stdin(&self, args: &[&str], input: &str) -> Output {
+        let mut child = axon_command(&self.root, &self.dir.git_config)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+
     pub fn snapshot(&self, id: &str) -> EntitySnapshot {
         let connection = self.connection();
         let mut snapshot = connection
@@ -177,6 +195,12 @@ impl TestRepo {
     pub fn dep_count(&self) -> i64 {
         self.connection()
             .query_row("SELECT COUNT(*) FROM entity_deps", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    pub fn entity_count(&self) -> i64 {
+        self.connection()
+            .query_row("SELECT COUNT(*) FROM entities", [], |row| row.get(0))
             .unwrap()
     }
 

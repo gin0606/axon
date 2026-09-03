@@ -38,6 +38,8 @@ fn complete_help_is_self_contained_and_does_not_open_a_database() {
     ] {
         assert!(stdout.contains(required), "missing {required:?}");
     }
+    assert_eq!(stdout.matches("-m, --message <MESSAGE>").count(), 5);
+    assert_eq!(stdout.matches("-F, --file <FILE>").count(), 5);
     assert!(!dir.path().join(".axon").exists());
 }
 
@@ -62,6 +64,8 @@ fn leaf_help_documents_common_entity_inputs_and_kind_filters() {
         let help = help_stdout(args);
         assert!(help.contains("title"), "{help}");
         assert!(help.contains("--parent"), "{help}");
+        assert!(help.contains("-m, --message <MESSAGE>"), "{help}");
+        assert!(help.contains("-F, --file <FILE>"), "{help}");
     }
     for command in ["ready", "triage", "claims", "stale", "list"] {
         let help = help_stdout(&[command, "--help"]);

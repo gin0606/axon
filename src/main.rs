@@ -57,6 +57,12 @@ enum Command {
         /// Parent group ID or unique ID suffix
         #[arg(long)]
         parent: Option<String>,
+        /// Initial description; an empty value leaves it absent
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+        /// File containing the initial description, or - for standard input
+        #[arg(short = 'F', long)]
+        file: Option<String>,
         /// One or more words joined with spaces to form the issue title
         #[arg(required = true, value_name = "TITLE")]
         title: Vec<String>,
@@ -66,6 +72,12 @@ enum Command {
         /// Parent group ID or unique ID suffix
         #[arg(long)]
         parent: Option<String>,
+        /// Initial description; an empty value leaves it absent
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+        /// File containing the initial description, or - for standard input
+        #[arg(short = 'F', long)]
+        file: Option<String>,
         /// One or more words joined with spaces to form the issue title
         #[arg(required = true, value_name = "TITLE")]
         title: Vec<String>,
@@ -178,6 +190,12 @@ enum GroupCmd {
         /// Parent group ID or unique ID suffix
         #[arg(long)]
         parent: Option<String>,
+        /// Initial description; an empty value leaves it absent
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+        /// File containing the initial description, or - for standard input
+        #[arg(short = 'F', long)]
+        file: Option<String>,
         /// One or more words joined with spaces to form the group title
         #[arg(required = true, value_name = "TITLE")]
         title: Vec<String>,
@@ -187,6 +205,12 @@ enum GroupCmd {
         /// Parent group ID or unique ID suffix
         #[arg(long)]
         parent: Option<String>,
+        /// Initial description; an empty value leaves it absent
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+        /// File containing the initial description, or - for standard input
+        #[arg(short = 'F', long)]
+        file: Option<String>,
         /// One or more words joined with spaces to form the group title
         #[arg(required = true, value_name = "TITLE")]
         title: Vec<String>,
@@ -314,12 +338,32 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
     match Cli::parse_from(args).command {
         Command::Init { prefix } => cmd_init(prefix),
         Command::Completion { shell } => write_completion(shell).map_err(Into::into),
-        Command::Plan { title, parent } => {
-            cmd_create(EntityKind::Issue, Disposition::Accepted, title, parent)
-        }
-        Command::Capture { title, parent } => {
-            cmd_create(EntityKind::Issue, Disposition::Undecided, title, parent)
-        }
+        Command::Plan {
+            title,
+            parent,
+            message,
+            file,
+        } => cmd_create(
+            EntityKind::Issue,
+            Disposition::Accepted,
+            title,
+            parent,
+            message,
+            file,
+        ),
+        Command::Capture {
+            title,
+            parent,
+            message,
+            file,
+        } => cmd_create(
+            EntityKind::Issue,
+            Disposition::Undecided,
+            title,
+            parent,
+            message,
+            file,
+        ),
         Command::Ready { kind } => cmd_ready(kind),
         Command::Triage { kind } => cmd_triage(kind),
         Command::Claims { kind } | Command::Stale { kind } => cmd_claims(kind),
@@ -391,8 +435,11 @@ fn cmd_create(
     disposition: Disposition,
     title: Vec<String>,
     parent: Option<String>,
+    message: Option<String>,
+    file: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let title = normalize_title(&title.join(" "))?;
+    let description = read_description(message, file)?.and_then(normalize_description);
     let mut store = Store::open()?;
     let parent = parent
         .as_deref()
@@ -403,7 +450,7 @@ fn cmd_create(
         id: EntityId::generate(&store.prefix()?),
         kind,
         title,
-        description: None,
+        description,
         progress: Progress::NotStarted,
         disposition,
         resurface_condition: ResurfaceCondition::Always,
@@ -424,12 +471,32 @@ fn cmd_create(
 
 fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
     match command {
-        GroupCmd::Plan { title, parent } => {
-            cmd_create(EntityKind::Group, Disposition::Accepted, title, parent)
-        }
-        GroupCmd::Capture { title, parent } => {
-            cmd_create(EntityKind::Group, Disposition::Undecided, title, parent)
-        }
+        GroupCmd::Plan {
+            title,
+            parent,
+            message,
+            file,
+        } => cmd_create(
+            EntityKind::Group,
+            Disposition::Accepted,
+            title,
+            parent,
+            message,
+            file,
+        ),
+        GroupCmd::Capture {
+            title,
+            parent,
+            message,
+            file,
+        } => cmd_create(
+            EntityKind::Group,
+            Disposition::Undecided,
+            title,
+            parent,
+            message,
+            file,
+        ),
         GroupCmd::Set { id, parent } => {
             let mut store = Store::open()?;
             let id = store.resolve_id(&id)?;
@@ -919,19 +986,7 @@ fn cmd_write(
     message: Option<String>,
     file: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::Read;
-
-    let body = match (message, file) {
-        (Some(message), None) => Some(message),
-        (None, Some(file)) if file == "-" => {
-            let mut buffer = String::new();
-            std::io::stdin().read_to_string(&mut buffer)?;
-            Some(buffer)
-        }
-        (None, Some(file)) => Some(std::fs::read_to_string(file)?),
-        (Some(_), Some(_)) => return Err("-m and -F cannot be used together".into()),
-        (None, None) => None,
-    };
+    let body = read_description(message, file)?;
     if title.is_none() && body.is_none() {
         return Err("nothing to write; provide --title, -m, or -F".into());
     }
@@ -948,7 +1003,7 @@ fn cmd_write(
         }
     }
     if let Some(body) = body {
-        let body = (!body.trim().is_empty()).then(|| body.trim().to_string());
+        let body = normalize_description(body);
         if body != current.description {
             let removed = body.is_none();
             store.apply(&id, Change::SetDescription(body), &ctx(None))?;
@@ -967,6 +1022,29 @@ fn cmd_write(
         }
     }
     Ok(())
+}
+
+fn read_description(
+    message: Option<String>,
+    file: Option<String>,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    use std::io::Read;
+
+    match (message, file) {
+        (Some(message), None) => Ok(Some(message)),
+        (None, Some(file)) if file == "-" => {
+            let mut buffer = String::new();
+            std::io::stdin().read_to_string(&mut buffer)?;
+            Ok(Some(buffer))
+        }
+        (None, Some(file)) => Ok(Some(std::fs::read_to_string(file)?)),
+        (Some(_), Some(_)) => Err("-m and -F cannot be used together".into()),
+        (None, None) => Ok(None),
+    }
+}
+
+fn normalize_description(description: String) -> Option<String> {
+    (!description.trim().is_empty()).then(|| description.trim().to_string())
 }
 
 fn normalize_title(title: &str) -> Result<String, Box<dyn std::error::Error>> {

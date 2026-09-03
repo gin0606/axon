@@ -2,6 +2,128 @@ mod common;
 
 use common::{TestDir, TestRepo, assert_failure, assert_success, stderr, stdout};
 use std::fs;
+use std::process::Output;
+
+fn created_id(output: &Output) -> String {
+    assert_success(output);
+    stdout(output)
+        .split_whitespace()
+        .next()
+        .expect("create command prints an ID")
+        .to_string()
+}
+
+#[test]
+fn every_creation_command_accepts_an_initial_description() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let cases = [
+        (
+            vec!["plan", "accepted issue", "--message", " issue body "],
+            "issue",
+            "accepted",
+            "issue body",
+        ),
+        (
+            vec!["capture", "captured issue", "-m", "capture body"],
+            "issue",
+            "undecided",
+            "capture body",
+        ),
+        (
+            vec!["group", "plan", "accepted group", "-m", "group body"],
+            "group",
+            "accepted",
+            "group body",
+        ),
+        (
+            vec![
+                "group",
+                "capture",
+                "captured group",
+                "--message",
+                "follow-up body",
+            ],
+            "group",
+            "undecided",
+            "follow-up body",
+        ),
+    ];
+
+    for (args, kind, disposition, description) in cases {
+        let id = created_id(&repo.axon(&args));
+        let snapshot = repo.snapshot(&id);
+        assert_eq!(snapshot.kind, kind);
+        assert_eq!(snapshot.disposition, disposition);
+        assert_eq!(snapshot.description.as_deref(), Some(description));
+    }
+}
+
+#[test]
+fn creation_description_files_stdin_and_empty_values_match_write() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let description = repo.root().join("description.md");
+    fs::write(&description, "\n file body \n").unwrap();
+
+    let from_file =
+        created_id(&repo.axon(&["plan", "from file", "--file", description.to_str().unwrap()]));
+    assert_eq!(
+        repo.snapshot(&from_file).description.as_deref(),
+        Some("file body")
+    );
+
+    let from_stdin = created_id(&repo.axon_with_stdin(
+        &["group", "capture", "from stdin", "-F", "-"],
+        "\n stdin body \n",
+    ));
+    assert_eq!(
+        repo.snapshot(&from_stdin).description.as_deref(),
+        Some("stdin body")
+    );
+
+    let empty_message = created_id(&repo.axon(&["capture", "empty message", "-m", "  "]));
+    assert_eq!(repo.snapshot(&empty_message).description, None);
+
+    fs::write(&description, " \n").unwrap();
+    let empty_file = created_id(&repo.axon(&[
+        "group",
+        "plan",
+        "empty file",
+        "-F",
+        description.to_str().unwrap(),
+    ]));
+    assert_eq!(repo.snapshot(&empty_file).description, None);
+}
+
+#[test]
+fn creation_input_failures_do_not_leave_partial_entities() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let missing = repo.root().join("missing.md");
+    let existing = repo.root().join("description.md");
+    fs::write(&existing, "body").unwrap();
+    let failures = [
+        vec!["plan", "missing file", "-F", missing.to_str().unwrap()],
+        vec!["capture", "invalid\ntitle", "-m", "body"],
+        vec!["group", "plan", "missing parent", "--parent", "unknown"],
+        vec![
+            "group",
+            "capture",
+            "conflicting input",
+            "-m",
+            "body",
+            "-F",
+            existing.to_str().unwrap(),
+        ],
+    ];
+
+    for args in failures {
+        let before = repo.entity_count();
+        assert_failure(&repo.axon(&args));
+        assert_eq!(repo.entity_count(), before, "{args:?}");
+    }
+}
 
 #[test]
 fn issues_and_groups_are_visible_as_entities_and_filterable_by_kind() {
