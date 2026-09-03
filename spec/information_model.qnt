@@ -1,4 +1,4 @@
-// docs/information-model.md の作業仮説を、情報の統治規約として検査可能にしたモデル。
+// docs/information-model.md の規範契約を検査可能にしたモデル。
 //
 // 検査対象は「どの情報を誰が所有し、どの操作がどこを変えてよいか」に限る。
 // ready / blocked / orphaned / active scope などの導出規則、dependency の待ち graph の
@@ -9,8 +9,7 @@
 // 対象外: claim、actor の本人性、DB 直接編集、複数利用者の並行編集の merge、redaction、
 // 公開名称・コマンド構文・出力文言。AtDate は clock を持たない不透明な control 値として扱う。
 //
-// docs/information-model.md は実装仕様ではなく作業記録なので、このモデルも実装の正ではない。
-// 整理を採用・変更・破棄するときは、先にこのモデルを更新して検査を通す。
+// 情報統治を変えるときは、Rust 実装より先に規範文書とこのモデルを更新して検査を通す。
 module information_model {
   // ---- Identity ----
   type Id = int

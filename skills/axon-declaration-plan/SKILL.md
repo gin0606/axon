@@ -7,21 +7,32 @@ description: Entity 数を問わず axon tracker data の strict YAML 宣言を�
 
 宣言された Entity の所有値を一つの snapshot で検査し、原子的に反映する。Progress、Disposition、Resurface condition、claim は変更しない。
 
-この skill は内容を決める手順ではなく、確定した計画の反映経路である。内容の決定または DB への登録・apply が依頼範囲にあるとき、新規 Entity の目的、重複、分解、採否は `axon-plan-issue`、既存 Entity の判断変更は `axon-triage-issue` の規約で先に確定する。artifact-only の相談では plan / capture / triage の調査と相談だけを使い、reflection command を実行しない。`capture`、`decide`、`when`、declaration apply など live DB の変更は、その変更自体をユーザーが明示的に依頼した場合だけ行う。読み取り専用の review / check と形式だけの canonicalize は、採用や状態変更を意味せず、plan / triage を要求しない。ユーザーが完成した宣言内容を明示した場合も、apply 前の重複・履歴・境界・波及の調査は省略せず、変更のない内容を再提示して確認する工程だけを省略してよい。
+この skill は内容を決める手順ではなく、確定した計画の反映経路である。内容の決定または DB への登録・apply が依頼範囲にあるとき、新規 Accepted Entity の目的、重複、分解、採否は `axon-plan-issue`、新規 Undecided Entity は `axon-capture-issue`、新規 Rejected Entity は `axon-capture-issue` で完成前の declaration を作ってから `axon-triage-issue`、既存 Entity の判断変更は `axon-triage-issue` の規約で先に確定する。artifact-only の相談では plan / capture / triage の調査と相談だけを使い、reflection command を実行しない。`capture`、`decide`、`when`、declaration apply など live DB の変更は、その変更自体をユーザーが明示的に依頼した場合だけ行う。読み取り専用の review / check と形式だけの canonicalize は、採用や状態変更を意味せず、plan / triage を要求しない。ユーザーが完成した宣言内容を明示した場合も、apply 前の重複・履歴・境界・波及の調査は省略せず、変更のない内容を再提示して確認する工程だけを省略してよい。
 
 live DB の変更を合意して plan / capture / triage を併用するときは、次の順序を守る。
 
 1. plan / triage skill の調査、相談、最終案確認までを行う。
-2. 宣言が直接作成できる Accepted Entity と title、description、parent、dependency の個別反映コマンドは実行せず、宣言 apply に置き換える。宣言が作成できない新規 Undecided / Rejected だけは後述の例外とする。
+2. 最終状態が Accepted / NotStarted / Always で宣言から直接作成できる Entity と、staging 済み Undecided Entity の title、description、parent、dependency の後続する個別反映コマンドは実行せず、宣言 apply に置き換える。直接作成できない新規 Undecided / Rejected と、最終 resurface condition が Always でない新規 Accepted は後述の staging 手順を使う。
 3. 可能なら、状態軸を変える前の現状でも宣言する構造を preflight する。
-4. Accepted 化や resurface condition の充足など Entity を ready / active にし得る状態軸変更では、inactive な現在状態のまま宣言 workflow で parent / dependency などを先に反映・検証し、その後に状態軸を変更する。最終状態の artifact が必要なら状態変更後に fresh export する。
-5. Rejected / Undecided 化や未充足の resurface condition など Entity を ready / active から外す状態軸変更では、通常コマンドで状態を先に反映・検証してから fresh export し、宣言 workflow で構造を反映する。先行変更前の export を再利用しない。
+4. declaration の実変更を伴う場合は、活性化・非活性化の別や既存の fixed / Undecided を問わず、Disposition を Undecided に保ったまま declaration apply と全文確認を行う。最終 resurface condition の変更も Undecided の間に通常コマンドで反映・検証し、最終 Accepted / Rejected の判断を最後に行う。最終 Undecided なら再判断しない。この順序により、完成前の declaration が一時的に ready / active になることを防ぐ。
+5. declaration の実変更を伴わない状態軸変更では、Accepted 化や resurface condition の充足など ready / active にし得る変更は必要な現状検証の後に行い、Rejected / Undecided 化や未充足の resurface condition など ready / active から外す変更は先に反映・検証する。最終状態の artifact が必要なら状態変更後に fresh export し、先行変更前の export を再利用しない。
+
+既存の Accepted / Rejected Entity に declaration の実変更がある場合、import は固定を迂回せず拒否する。triage flow で変更内容と最終 Disposition に合意したうえで、理由付き `decide undecide` を先に単独で反映し、fresh export から宣言 workflow を実行する。apply 後の全文と関係を確認してから、最終 Accepted / Rejected なら別の理由付き判断として反映し、最終 Undecided なら再判断せず draft のまま止める。宣言が同じ no-op だけならこの再判断を行わない。前後の判断と apply は一つの transaction にはならないため、各 phase 後に状態を確認し、途中失敗は下記の partial-completion として扱う。prepare / check 後は、新しく割り当てた ID を含む editable Entity の正確な ID 集合と key 対応を控える。最終判断がある場合、Undecided apply 後の file を intermediate apply working file と呼び、ユーザー所有の宣言 artifact をまだ置き換えない。最終判断後は intermediate を stale で再 apply 不可とし、控えた全 ID を明示して別の same-filesystem final-state working file へ fresh export する。動的な `--group` / `--recursive` selector は再利用しない。final-state working file の editable ID / key 集合が控えた意図と完全に一致し、no-diff check が通ることを確認する。そのうえで、作業開始時からの原本の content drift、symlink / hardlink、metadata を後述のユーザー所有 file の手順で再確認し、final-state working file で一度だけ atomic replace する。最終 refresh または置換が失敗したら原本を変更せず、intermediate と final-state working file の両方を保持し、各 path、stale / replayable の別、反映済み DB 状態を報告する。
+
+組み合わせの判定表は次のとおりとする。
+
+- 既存 fixed + 実変更 + 最終 Accepted / Rejected: Undecided へ戻す → apply → 全文確認 → 最終 resurface condition を反映・確認 → 最終判断
+- 既存 fixed + 実変更 + 最終 Undecided: Undecided へ戻す → apply → 全文確認 → 最終 resurface condition を反映・確認して終了
+- 既存 Undecided: apply → 全文確認 → 最終 resurface condition を反映・確認 → 合意がある場合だけ最終判断
+- 新規 Accepted / NotStarted / Always: declaration から直接作成
+- 新規 Accepted + Always 以外の resurface condition: capture → Undecided の間に apply → 全文確認 → resurface condition を反映・確認 → Accepted
+- 新規 Undecided / Rejected: capture → Undecided の間に apply → 全文確認 → resurface condition を反映・確認 → Rejected のみ最終判断
 
 状態軸変更と declaration apply は順序を問わず一つの transaction にならない。どちらかの phase を反映した後に残りの phase が失敗したら、そこで止まり、作業 file を保持し、反映済み変更と未反映部分を列挙する。自動で巻き戻さず、再試行または別途承認された補償変更のどちらにするかをユーザーへ確認する。
 
 宣言内の readonly field を変えた入力や check error は宣言の誤りとして止める。import / canonicalize の依頼や readonly field の編集自体を、`decide` / `when` など別の状態変更への許可とみなさない。その状態判断を別に行う場合は、ユーザーが triage flow で明示的に結論を出したときだけ上記の二段階手順へ進む。
 
-宣言から直接作成できるのは Accepted / NotStarted / Always の Entity だけである。新規 Undecided / Rejected を Accepted に正規化しない。読み取り専用の review では契約外だと報告する。登録まで明示的に依頼された場合は、新規 Undecided を `axon-capture-issue` で先に作成し、Rejected にする判断も明示された場合だけ `axon-triage-issue` で反映・検証してから fresh export する。この先行登録と declaration apply は非原子的なので、後続が失敗した場合は上記の partial-completion 手順で引き渡す。
+宣言から直接作成できるのは Accepted / NotStarted / Always の Entity だけである。新規 Undecided / Rejected や、Always 以外の resurface condition を持つ新規 Accepted を Accepted / Always に正規化しない。読み取り専用の review では契約外だと報告する。登録まで明示的に依頼された場合は、それらを `axon-capture-issue` で Undecided として先に作成する。fresh export から完全な declaration を apply・確認し、最終 resurface condition の変更があれば Undecided の間に反映・検証する。最終 Undecided ならそこで終了し、Accepted / Rejected の判断も明示されている場合は、最後に `axon-triage-issue` で理由付き判断を反映・検証する。固定後に declaration を apply しない。prepare / check 後は capture した ID と宣言内で新しく割り当てた ID を含む正確な editable ID 集合と key 対応を控える。この staging、declaration apply、状態変更は非原子的なので、後続が失敗した場合は上記の partial-completion 手順で引き渡す。最終判断を伴うユーザー所有 artifact は、Undecided apply 後に置き換えず、控えた ID を明示した最終判断後の fresh export に対して上記と同じ安全な一度だけの置換手順を使う。
 
 ## 編集面を作る
 
@@ -59,8 +70,8 @@ apply command の出力を失い commit 成否が不明なら、`DB applied` を
 
 ## 一時ファイル
 
-apply 成功後、宣言 file を永続的な成果物として残す合意がなければ、結果確認後にエージェント自身が作った一時ファイルだけを片付ける。ユーザーが用意した file は削除しない。失敗中、競合調査中、または再 apply に必要な file は片付けない。
+apply 成功後、宣言 file を永続的な成果物として残す合意がなければ、結果確認後にエージェント自身が作った一時ファイルだけを片付ける。最終判断を伴う場合は、final-state working file による置換と検証が成功した後に、intermediate と final-state の両方のエージェント所有一時 file を片付ける。ユーザーが用意した file は削除しない。失敗中、競合調査中、または再 apply に必要な file は片付けない。最終判断後の stale intermediate は復旧用の証拠としてのみ保持し、再 apply に使わない。
 
 ## 引き渡し
 
-ユーザーへ `DB applied: yes/no/unknown` を明記し、実際に DB へ作成・変更した ID と kind、各 key から prepare 後 ID への対応、check/apply で確認した structural / derived impact と warning、競合や未解決事項を報告する。apply していない場合、prepare で割り当てた ID は file 内だけで未登録だと明記する。最後に、宣言原本を置換したか、ユーザー所有として変更していないか、working copy を保持または削除したかを明記する。working copy を保持する場合は正確な path、保持理由、同じ apply を安全に再実行できるか、次に有効な command も伝える。
+ユーザーへ `DB applied: yes/no/unknown` を明記し、実際に DB へ作成・変更した ID と kind、各 key から prepare 後 ID への対応、check/apply で確認した structural / derived impact と warning、競合や未解決事項を報告する。apply していない場合、prepare で割り当てた ID は file 内だけで未登録だと明記する。最後に、宣言原本を置換したか、ユーザー所有として変更していないか、intermediate / final-state working file を保持または削除したかを別々に明記する。working file を保持する場合は正確な path、保持理由、stale / replayable の別、同じ apply を安全に再実行できるか、次に有効な command も伝える。

@@ -14,7 +14,7 @@ fn write(path: &Path, contents: &str) {
 
 fn new_plan(dependencies: &str) -> String {
     format!(
-        r#"schema: axon-plan/v1
+        r#"schema: axon-plan/v2
 issues:
   - id: null
     key: api
@@ -134,6 +134,11 @@ fn prepare_check_and_apply_create_mixed_entities_and_dependencies() {
     assert!(import_show.contains(&format!("Dependency: {storage}")));
     assert!(import_show.contains(&format!("Dependency: {release}")));
     assert!(import_show.contains("Direct children: 1"));
+    let (revision, title, parent, dependency_count) = repo.current_revision(&api);
+    assert_eq!(revision, 1);
+    assert_eq!(title, "import API");
+    assert_eq!(parent, Some(import.clone()));
+    assert_eq!(dependency_count, 2);
     assert!(
         fs::read_to_string(&path)
             .unwrap()
@@ -141,6 +146,42 @@ fn prepare_check_and_apply_create_mixed_entities_and_dependencies() {
             .count()
             >= 4
     );
+}
+
+#[test]
+fn declaration_apply_rejects_a_fixed_owner_without_partial_changes() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let fixed = repo.plan("fixed title");
+    let fixed_rejected = repo.group_plan("rejected fixed group");
+    assert_success(&repo.axon(&[
+        "decide",
+        "reject",
+        &fixed_rejected,
+        "-r",
+        "declined as declared",
+    ]));
+    let draft = repo.capture("draft title");
+    let path = plan_path(&repo, "fixed.yml");
+    let exported = stdout(&repo.axon(&["export", &fixed, &fixed_rejected, &draft]));
+    let edited = exported
+        .replacen("title: fixed title", "title: forbidden title", 1)
+        .replacen(
+            "title: rejected fixed group",
+            "title: forbidden group title",
+            1,
+        )
+        .replacen("title: draft title", "title: allowed title", 1);
+    write(&path, &edited);
+
+    let check = repo.axon(&["import", "check", path.to_str().unwrap()]);
+    assert_failure(&check);
+    assert!(stderr(&check).contains("plan declaration"));
+    let apply = repo.axon(&["import", "apply", path.to_str().unwrap()]);
+    assert_failure(&apply);
+    assert_eq!(repo.snapshot(&fixed).title, "fixed title");
+    assert_eq!(repo.snapshot(&fixed_rejected).title, "rejected fixed group");
+    assert_eq!(repo.snapshot(&draft).title, "draft title");
 }
 
 #[test]
@@ -153,11 +194,11 @@ fn export_selectors_do_not_expand_the_edit_set_through_relations() {
     let grandchild = repo.plan("deep task");
     let prerequisite = repo.plan("outside prerequisite");
     let dependent = repo.plan("outside dependent");
-    assert_success(&repo.axon(&["group", "set", &child, &root]));
-    assert_success(&repo.axon(&["group", "set", &nested, &root]));
-    assert_success(&repo.axon(&["group", "set", &grandchild, &nested]));
-    assert_success(&repo.axon(&["dep", "add", &child, "--needs", &prerequisite]));
-    assert_success(&repo.axon(&["dep", "add", &dependent, "--needs", &child]));
+    repo.set_parent(&child, &root);
+    repo.set_parent(&nested, &root);
+    repo.set_parent(&grandchild, &nested);
+    repo.add_dependency(&child, &prerequisite);
+    repo.add_dependency(&dependent, &child);
 
     let direct = repo.axon(&["export", "--group", &root]);
     assert_success(&direct);
@@ -197,8 +238,8 @@ fn strict_yaml_and_read_only_or_stale_snapshots_are_rejected() {
     let exported = stdout(&repo.axon(&["export", &issue]));
 
     let duplicate = exported.replacen(
-        "schema: axon-plan/v1",
-        "schema: axon-plan/v1\nschema: axon-plan/v1",
+        "schema: axon-plan/v2",
+        "schema: axon-plan/v2\nschema: axon-plan/v2",
         1,
     );
     write(&path, &duplicate);
@@ -231,6 +272,7 @@ fn strict_yaml_and_read_only_or_stale_snapshots_are_rejected() {
     assert!(stderr(&check).contains("read-only observed"));
 
     write(&path, &exported);
+    assert_success(&repo.axon(&["decide", "undecide", &issue, "-r", "edit declaration"]));
     assert_success(&repo.axon(&["write", &issue, "--title", "changed elsewhere"]));
     let check = repo.axon(&["import", "check", path.to_str().unwrap()]);
     assert_failure(&check);
@@ -238,6 +280,7 @@ fn strict_yaml_and_read_only_or_stale_snapshots_are_rejected() {
 
     let current = stdout(&repo.axon(&["export", &issue]));
     write(&path, &current);
+    assert_success(&repo.axon(&["decide", "accept", &issue, "-r", "declaration fixed"]));
     assert_success(&repo.axon(&["start", &issue]));
     let check = repo.axon(&["import", "check", path.to_str().unwrap()]);
     assert_failure(&check);
@@ -273,7 +316,7 @@ fn prepare_rejects_ids_that_it_could_not_have_assigned() {
 fn reference_like_lines_in_multiline_descriptions_are_preserved() {
     let repo = TestRepo::new();
     repo.init("test");
-    let issue = repo.plan("literal content");
+    let issue = repo.capture("literal content");
     let description = plan_path(&repo, "description.md");
     write(
         &description,
@@ -391,7 +434,7 @@ fn a_hundred_entity_plan_remains_a_single_atomic_edit() {
     let repo = TestRepo::new();
     repo.init("scale");
     let path = plan_path(&repo, "large.yml");
-    let mut yaml = String::from("schema: axon-plan/v1\nissues:\n");
+    let mut yaml = String::from("schema: axon-plan/v2\nissues:\n");
     for index in 0..100 {
         yaml.push_str(&format!(
             "  - id: null\n    key: task-{index}\n    base: null\n    title: task {index}\n    description: long description {index}\n    observed:\n      progress: not_started\n      claim: null\n      disposition: accepted\n      resurface:\n        kind: always\n"

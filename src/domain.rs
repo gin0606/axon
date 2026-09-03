@@ -215,6 +215,7 @@ pub struct Entity {
     pub description: Option<String>,
     pub progress: Progress,
     pub disposition: Disposition,
+    pub current_revision: Option<i64>,
     pub resurface_condition: ResurfaceCondition,
     pub parent: Option<EntityId>,
     pub created_at: DateTime<Utc>,
@@ -225,6 +226,33 @@ impl Entity {
     pub fn is_terminal(&self) -> bool {
         matches!(self.progress, Progress::Ended) || self.disposition == Disposition::Rejected
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclarationRevision {
+    pub number: i64,
+    pub title: String,
+    pub description: Option<String>,
+    pub parent: Option<EntityId>,
+    pub dependencies: Vec<EntityId>,
+    pub created_at: DateTime<Utc>,
+    pub baseline: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Note {
+    pub number: i64,
+    pub body: String,
+    pub actor: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RecordCounts {
+    pub notes: usize,
+    pub revisions: usize,
+    pub decisions: usize,
+    pub progressions: usize,
 }
 
 #[cfg(test)]

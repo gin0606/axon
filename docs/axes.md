@@ -20,7 +20,9 @@
 
 実装と CLI で使う英語語彙は次に固定する。A の終端は完遂だけでなく打ち切りも含むため `Done` ではなく `Ended`、B は将来の作業への約束ではなく現在の採否判断なので `Commitment` ではなく `Disposition` と呼ぶ。作業の保持と解放は `claim` / `release`、関係は `dependency` / `dependent`、阻害を説明する表示は `root cause` または `blocking cause` とする。
 
-思想的コアは Quint (`spec/axon.qnt`)、group を明示的な計画 Entity にする今回の拡張は `spec/group_plan.qnt` のランダムシミュレーションで別々に検査する。詳細は §5。
+思想的コアは Quint (`spec/axon.qnt`)、group を明示的な計画 Entity にする拡張は
+`spec/group_plan.qnt`、plan declaration と追加情報の統治は
+`spec/information_model.qnt` のランダムシミュレーションで別々に検査する。詳細は §5。
 
 ### 保留した論点
 
@@ -334,6 +336,11 @@ reason は状態からだけでは意図を復元できない操作に限って�
 
 `spec/group_plan.qnt` は今回の設計だけを扱う拡張 model で、3 issue と 3 group からなる固定 Entity 集合を共有状態にする。実装上の DB transaction に対応して、各操作は 1 action で原子的に実行する。時刻は `AtDate` の評価に必要な小さい整数 clock だけを持つ。通信、障害、複数 actor、wall-clock、永続化はこの状態機械の関心ではない。
 
+`spec/information_model.qnt` は Entity ごとの plan declaration、Control state、
+Declaration Revision、Note、判断履歴、進行履歴を共有状態として扱う。title と
+description の内容、actor の本人性、wall-clock、SQLite、CLI 構文は抽象化し、
+情報の所有範囲、固定、Revision の現在参照、追記専用性、操作ごとの変更範囲を検査する。
+
 拡張 model が保存状態として持つのは Entity map、一親の parent map、dependency 集合、clock である。`ready`、`blocked`、`orphaned`、active scope、`triage`、blocking cause、group の完了可能性、2 つの待機グラフは純粋関数で導出する。操作 witness のために使う `observed` は ghost state であり、axon の保存対象ではない。
 
 ### Group 拡張で検査する性質
@@ -363,15 +370,18 @@ reason は状態からだけでは意図を復元できない操作に限って�
 | witness | 親 group の start 後に入れ子の Entity が ready になる |
 | witness | 親 group が判断対象なら、その子孫は triage に出ない |
 
-検査は次の順で行う。`quint run` は bounded random simulation であり、反例が見つからなかったことは全状態についての証明ではない。
+検査は Quint 0.32.0 で次の順で行う。先頭の version 出力が異なる場合は、この再現条件の成功として扱わない。`quint run` は bounded random simulation であり、反例が見つからなかったことは全状態についての証明ではない。
 
 ```sh
+quint --version
+
 quint typecheck spec/axon.qnt
 quint run spec/axon.qnt --main axon \
   --invariants invRejectedEndedStillBlocks invReadyExclusive \
     invIssueWaitsAcyclic invBlockedHasCause invCauseIsUnresolved \
     invCondRefSatisfiedByRejection invCondAndDepDiffer \
-  --max-steps 80
+  --max-samples 1000 --max-steps 80 --backend rust --n-threads 8 \
+  --seed 2026090301
 
 quint typecheck spec/group_plan.qnt
 quint run spec/group_plan.qnt --main group_plan \
@@ -387,10 +397,36 @@ quint run spec/group_plan.qnt --main group_plan \
     wRejectedChildGroupCanComplete wGroupDependencyOrphaned \
     wGroupDependencyBlocksDescendant wInheritedGroupBlockingCause \
     wGroupAfterGroup wNestedEntityReady wTriageFrontier \
-  --max-steps 80
+  --max-samples 1000 --max-steps 80 --backend rust --n-threads 8 \
+  --seed 2026090302
+
+quint typecheck spec/information_model.qnt
+quint run spec/information_model.qnt --main information_model \
+  --invariants invDecidedDeclarationFrozen invOnlyOwnerDeclarationChanges \
+    invChildSetOwnedByChild invIncomingDependencyOwnedBySource invParentsAcyclic \
+    invCurrentSnapshotByDisposition invDecidedMatchesSnapshot \
+    invLatestDecisionMatchesCurrentSnapshot invSnapshotOnlyForDecided \
+    invEverySnapshotHasOrigin invDecisionSnapshotIndexesMonotonic \
+    invConsecutiveSnapshotsDiffer invRecordsAppendOnly invDeclarationOpScope \
+    invDecideOpScope invSetWhenOpScope invProgressOpScope invSupplementalOpScope \
+    invSupplementalNeverRestricted invSupplementalRefUniquePerTarget \
+    invSupplementalTargetsExist invSupplementalFullyObservable \
+  --witnesses wSetTitle wSetDescription wSetParent wUnsetParent wAddDependency \
+    wRemoveDependency wDecide wSetWhen wStart wDone wRelease wAddSupplemental \
+    wFrozenNoOpAccepted wEndedUndecidedDeclarationEdited wNotStartedAndFrozen \
+    wFrozenGroupGainsChild wFrozenTargetGainsIncomingDependency \
+    wRedecidedWithNewSnapshot wSameSnapshotTwoDecisions \
+    wUndecideClearsCurrentSnapshot wHistoricalSnapshotReappearsAsNew \
+    wBaselineWithoutDecisionHistory wSupplementalOnDecidedAndEnded \
+    wRepeatedSupplementalCreatesNewRecord wStorageOrderDiffersFromInputTime \
+    wAllRecordKindsPresent \
+  --max-samples 1000 --max-steps 80 --backend rust --n-threads 8 \
+  --seed 2026090303
 ```
 
-2026-09-02 の確認では、core を 10,000 traces、改訂後の group 拡張を 1,000 traces、それぞれ最大 80 steps で実行した。core の 7 invariant と group 拡張の 14 invariant に反例は見つからず、group 拡張では 14 action と上記 8 scenario の witness がすべて少なくとも 1 trace で観測された (group 拡張は `--max-samples 1000 --seed=0xf0db5bd0d50664f9 --backend=rust` で再現可能)。これは bounded random simulation の結果であり、完全探索による証明ではない。
+検査成功は command の exit status 0 だけではない。列挙した全 invariant に反例がなく、列挙した全 witness が出力上 1 trace 以上で観測されたことを確認する。witness 未観測でも `quint run` 自体は成功終了するため、出力確認を省略しない。backend、sample 数、seed を変えた検査は、その実行条件も結果とともに記録する。
+
+2026-09-03 の統合確認では、core、group 拡張、情報統治を各 1,000 traces、最大 80 steps で実行した。core の 7 invariant、group 拡張の 14 invariant、情報統治の 22 invariant に反例は見つからず、列挙した witness はすべて少なくとも 1 trace で観測された。これは bounded random simulation の結果であり、完全探索による証明ではない。
 
 ### 以前の model で見つかった考慮漏れ
 
@@ -465,7 +501,7 @@ Ended group には再 open を用意しない。次を禁止して、完了宣�
 - Ended group を依存元とする dependency の追加・削除
 - Ended group の子孫を terminal から非 terminal に戻す Disposition 変更
 
-Ended の Entity は `Progress` が終端を保つため、title / description の訂正と、terminal のままである Disposition 変更は許可できる。完了後に見つかった追加作業は、Ended group の外に新しい issue または group として作る。
+Ended の Entity も declaration 固定について他の Progress と同じ規則に従う。title / description を訂正する場合は Undecided に戻して draft を編集し、改めて採否を判断する。Progress は Ended のままであり、Ended group の構造固定と子孫の terminal 制約も維持する。完了後に見つかった追加作業は、Ended group の外に新しい issue または group として作る。
 
 ### Dependency と Resurface condition
 

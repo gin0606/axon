@@ -51,12 +51,23 @@ pub enum DbError {
     },
     #[error("invalid import: {0}")]
     InvalidImport(String),
+    #[error("a Note body must contain non-whitespace text")]
+    EmptyNote,
+    #[error("Note {number} does not exist for {id}")]
+    NoSuchNote { id: String, number: i64 },
+    #[error("Declaration Revision {number} does not exist for {id}")]
+    NoSuchRevision { id: String, number: i64 },
+    #[error("the plan declaration of {0} is fixed by its Disposition")]
+    DeclarationFixed(String),
+    #[error("unsupported axon schema version {found}; expected {expected}")]
+    UnsupportedSchema { found: i64, expected: i64 },
 }
 
 pub type Result<T> = std::result::Result<T, DbError>;
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
+#[cfg(test)]
 const SCHEMA_V1: &str = r#"
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE issues (
@@ -79,6 +90,7 @@ CREATE TABLE issue_deps (
 );
 "#;
 
+#[cfg(test)]
 const SCHEMA_V2: &str = r#"
 CREATE TABLE groups (
   id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL, description TEXT,
@@ -93,6 +105,7 @@ CREATE TABLE group_deps (
 ALTER TABLE issues ADD COLUMN group_id TEXT REFERENCES groups(id);
 "#;
 
+#[cfg(test)]
 const SCHEMA_V3: &str = r#"
 CREATE TABLE events (
   id INTEGER PRIMARY KEY, issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
@@ -102,8 +115,10 @@ CREATE TABLE events (
 CREATE INDEX idx_events_issue ON events (issue_id, at);
 "#;
 
+#[cfg(test)]
 const SCHEMA_V4: &str = "DELETE FROM events WHERE field NOT IN ('commitment', 'condition');";
 
+#[cfg(test)]
 const SCHEMA_V5: &str = r#"
 CREATE TABLE progress_events (
   id INTEGER PRIMARY KEY, issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
@@ -113,6 +128,7 @@ CREATE TABLE progress_events (
 CREATE INDEX idx_progress_events_issue ON progress_events (issue_id, at);
 "#;
 
+#[cfg(test)]
 const SCHEMA_V6: &str = r#"
 ALTER TABLE issues RENAME COLUMN commitment TO disposition;
 ALTER TABLE issues RENAME COLUMN cond_kind TO resurface_kind;
@@ -130,12 +146,14 @@ WHERE field = 'condition' AND new_value IS NOT NULL;
 UPDATE events SET field = 'resurface_condition' WHERE field = 'condition';
 "#;
 
+#[cfg(test)]
 const SCHEMA_V7: &str = r#"
 ALTER TABLE issues RENAME COLUMN claimed_session TO claimed_worktree;
 UPDATE issues SET claimed_worktree = 'unknown' WHERE progress = 'in_progress';
 ALTER TABLE issues DROP COLUMN claimed_pid;
 "#;
 
+#[cfg(test)]
 const SCHEMA_V8: &str = r#"
 CREATE TABLE entities (
   id TEXT PRIMARY KEY,
@@ -215,22 +233,133 @@ DROP TABLE issues;
 DROP TABLE groups;
 "#;
 
+const FRESH_SCHEMA: &str = r#"
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE entities (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('issue','group')),
+  title TEXT NOT NULL,
+  description TEXT,
+  progress TEXT NOT NULL CHECK (progress IN ('not_started','in_progress','ended')),
+  disposition TEXT NOT NULL CHECK (disposition IN ('undecided','accepted','rejected')),
+  current_revision INTEGER,
+  resurface_kind TEXT CHECK (resurface_kind IN ('date','after_entity')),
+  resurface_date TEXT,
+  resurface_ref TEXT,
+  parent_id TEXT REFERENCES entities(id),
+  claimed_actor TEXT,
+  claimed_worktree TEXT,
+  claimed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK (id <> parent_id),
+  CHECK ((disposition = 'undecided' AND current_revision IS NULL) OR
+         (disposition IN ('accepted','rejected') AND current_revision IS NOT NULL)),
+  CHECK ((progress = 'in_progress' AND claimed_actor IS NOT NULL AND
+          claimed_worktree IS NOT NULL AND claimed_at IS NOT NULL) OR
+         (progress <> 'in_progress' AND claimed_actor IS NULL AND
+          claimed_worktree IS NULL AND claimed_at IS NULL)),
+  CHECK ((resurface_kind IS NULL AND resurface_date IS NULL AND resurface_ref IS NULL) OR
+         (resurface_kind = 'date' AND resurface_date IS NOT NULL AND resurface_ref IS NULL) OR
+         (resurface_kind = 'after_entity' AND resurface_ref IS NOT NULL AND resurface_date IS NULL)),
+  FOREIGN KEY (id,current_revision)
+    REFERENCES declaration_revisions(entity_id,revision) DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE TABLE entity_deps (
+  entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  depends_on_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  PRIMARY KEY (entity_id, depends_on_id), CHECK (entity_id <> depends_on_id)
+);
+
+CREATE TABLE declaration_revisions (
+  entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  title TEXT NOT NULL,
+  description TEXT,
+  parent_id TEXT REFERENCES entities(id),
+  created_at TEXT NOT NULL,
+  baseline INTEGER NOT NULL DEFAULT 0 CHECK (baseline IN (0,1)),
+  PRIMARY KEY (entity_id, revision)
+);
+
+CREATE TABLE revision_dependencies (
+  entity_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  depends_on_id TEXT NOT NULL REFERENCES entities(id),
+  PRIMARY KEY (entity_id, revision, depends_on_id),
+  FOREIGN KEY (entity_id,revision)
+    REFERENCES declaration_revisions(entity_id,revision) ON DELETE CASCADE
+);
+
+CREATE TABLE entity_events (
+  id INTEGER PRIMARY KEY,
+  entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  field TEXT NOT NULL CHECK (field IN ('disposition','resurface_condition')),
+  old_value TEXT,
+  new_value TEXT,
+  revision INTEGER,
+  actor TEXT NOT NULL,
+  reason TEXT,
+  at TEXT NOT NULL,
+  CHECK ((field = 'disposition' AND new_value = 'undecided' AND revision IS NULL) OR
+         (field = 'disposition' AND new_value IN ('accepted','rejected') AND revision IS NOT NULL) OR
+         (field = 'resurface_condition' AND revision IS NULL)),
+  FOREIGN KEY (entity_id,revision)
+    REFERENCES declaration_revisions(entity_id,revision)
+);
+CREATE INDEX idx_entity_events_entity ON entity_events (entity_id, id);
+
+CREATE TABLE entity_progress_events (
+  id INTEGER PRIMARY KEY,
+  entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('start','done','release')),
+  actor TEXT NOT NULL,
+  reason TEXT,
+  at TEXT NOT NULL
+);
+CREATE INDEX idx_entity_progress_events_entity ON entity_progress_events (entity_id, id);
+
+CREATE TABLE entity_notes (
+  entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  note INTEGER NOT NULL CHECK (note > 0),
+  body TEXT NOT NULL CHECK (length(trim(body)) > 0),
+  actor TEXT NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY (entity_id,note)
+);
+"#;
+
+#[cfg(test)]
 const MIGRATIONS: &[&str] = &[
     SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8,
 ];
 
-fn migrate(conn: &mut Connection) -> Result<()> {
-    loop {
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let version: i64 = tx.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        let Some(sql) = MIGRATIONS.get(version as usize) else {
-            tx.commit()?;
-            return Ok(());
-        };
-        tx.execute_batch(sql)?;
-        tx.pragma_update(None, "user_version", version + 1)?;
-        tx.commit()?;
+fn configure(conn: &Connection) -> Result<()> {
+    conn.execute_batch("PRAGMA foreign_keys = ON")?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(())
+}
+
+fn initialize_schema(conn: &mut Connection) -> Result<()> {
+    configure(conn)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute_batch(FRESH_SCHEMA)?;
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn require_current_schema(conn: &Connection) -> Result<()> {
+    configure(conn)?;
+    let found: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if found != SCHEMA_VERSION {
+        return Err(DbError::UnsupportedSchema {
+            found,
+            expected: SCHEMA_VERSION,
+        });
     }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -306,7 +435,28 @@ pub struct Store {
 pub struct ShowSnapshot {
     pub id: EntityId,
     pub view: View,
+    pub decision_events: Vec<Event>,
     pub progress_events: Vec<ProgressEvent>,
+    pub revisions: Vec<DeclarationRevision>,
+    pub notes: Vec<Note>,
+    pub counts: RecordCounts,
+}
+
+pub struct RevisionSnapshot {
+    pub entity: Entity,
+    pub revisions: Vec<DeclarationRevision>,
+}
+
+impl RevisionSnapshot {
+    pub fn revision(&self, number: i64) -> Result<&DeclarationRevision> {
+        self.revisions
+            .iter()
+            .find(|revision| revision.number == number)
+            .ok_or_else(|| DbError::NoSuchRevision {
+                id: self.entity.id.to_string(),
+                number,
+            })
+    }
 }
 
 #[derive(Clone)]
@@ -322,9 +472,8 @@ impl StoreSnapshot {
 }
 
 impl Store {
-    fn from_conn(mut conn: Connection) -> Result<Self> {
-        conn.execute_batch("PRAGMA foreign_keys = ON")?;
-        migrate(&mut conn)?;
+    fn from_conn(conn: Connection) -> Result<Self> {
+        require_current_schema(&conn)?;
         debug_assert_eq!(
             conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .ok(),
@@ -346,7 +495,7 @@ impl Store {
         });
         std::fs::create_dir_all(path.parent().expect("database path has a parent"))?;
         let mut conn = Connection::open(&path)?;
-        migrate(&mut conn)?;
+        initialize_schema(&mut conn)?;
         conn.execute(
             "INSERT INTO meta (key, value) VALUES ('prefix', ?1)",
             params![prefix],
@@ -365,7 +514,9 @@ impl Store {
 
     #[cfg(test)]
     pub fn in_memory(prefix: &str) -> Result<Self> {
-        let store = Self::from_conn(Connection::open_in_memory()?)?;
+        let mut conn = Connection::open_in_memory()?;
+        initialize_schema(&mut conn)?;
+        let store = Self::from_conn(conn)?;
         store.conn.execute(
             "INSERT INTO meta (key, value) VALUES ('prefix', ?1)",
             params![prefix],
@@ -433,6 +584,57 @@ impl Store {
         read_entity(&self.conn, id)
     }
 
+    pub fn notes(&self, id: &EntityId) -> Result<Vec<Note>> {
+        read_entity(&self.conn, id)?;
+        read_notes(&self.conn, id)
+    }
+
+    pub fn note(&self, id: &EntityId, number: i64) -> Result<Note> {
+        read_entity(&self.conn, id)?;
+        read_note(&self.conn, id, number)
+    }
+
+    pub fn add_note(&mut self, id: &EntityId, body: &str, actor: &str) -> Result<Note> {
+        if body.trim().is_empty() {
+            return Err(DbError::EmptyNote);
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        read_entity(&tx, id)?;
+        let number = tx.query_row(
+            "SELECT coalesce(max(note),0) + 1 FROM entity_notes WHERE entity_id=?1",
+            params![id.as_str()],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let created_at = Utc::now();
+        tx.execute(
+            "INSERT INTO entity_notes (entity_id,note,body,actor,at)
+             VALUES (?1,?2,?3,?4,?5)",
+            params![id.as_str(), number, body, actor, created_at.to_rfc3339()],
+        )?;
+        tx.commit()?;
+        Ok(Note {
+            number,
+            body: body.to_string(),
+            actor: actor.to_string(),
+            created_at,
+        })
+    }
+
+    #[cfg(test)]
+    pub fn revisions(&self, id: &EntityId) -> Result<Vec<DeclarationRevision>> {
+        read_entity(&self.conn, id)?;
+        read_revisions(&self.conn, id)
+    }
+
+    pub fn revision_snapshot(&mut self, id: &EntityId) -> Result<RevisionSnapshot> {
+        let tx = self.conn.transaction()?;
+        let snapshot = read_revision_snapshot(&tx, id)?;
+        tx.commit()?;
+        Ok(snapshot)
+    }
+
     pub fn insert(&mut self, entity: &Entity) -> Result<()> {
         let tx = self
             .conn
@@ -483,6 +685,9 @@ impl Store {
                 "Ended group {source} cannot change its dependencies"
             )));
         }
+        if source_entity.disposition != Disposition::Undecided {
+            return Err(DbError::DeclarationFixed(source.to_string()));
+        }
         write_dependency(&tx, source, target, true)?;
         validate_relations(&read_view(&tx)?)?;
         tx.commit()?;
@@ -511,6 +716,9 @@ impl Store {
                 "Ended group {source} cannot change its dependencies"
             )));
         }
+        if source_entity.disposition != Disposition::Undecided {
+            return Err(DbError::DeclarationFixed(source.to_string()));
+        }
         write_dependency(&tx, source, target, false)?;
         tx.commit()?;
         Ok(ApplyOutcome::Changed)
@@ -531,6 +739,19 @@ impl Store {
         if unchanged_setting(&before, &change) {
             tx.commit()?;
             return Ok(ApplyOutcome::Unchanged);
+        }
+        if matches!(
+            change,
+            Change::SetTitle(_) | Change::SetDescription(_) | Change::SetParent(_)
+        ) && before.disposition != Disposition::Undecided
+            && !matches!(
+                change,
+                Change::SetParent(_)
+                    if before.kind == EntityKind::Group
+                        && matches!(before.progress, Progress::Ended)
+            )
+        {
+            return Err(DbError::DeclarationFixed(id.to_string()));
         }
 
         let now = Utc::now();
@@ -599,9 +820,20 @@ impl Store {
                 clear_claim_and_set_progress(&tx, id, "not_started", &now)?;
             }
             Change::Decide(disposition) => {
+                let current_revision = if *disposition == Disposition::Undecided {
+                    None
+                } else {
+                    Some(ensure_current_revision(&tx, id, &now, false)?)
+                };
                 tx.execute(
-                    "UPDATE entities SET disposition=?2, updated_at=?3 WHERE id=?1",
-                    params![id.as_str(), disposition.as_db(), now.to_rfc3339()],
+                    "UPDATE entities SET disposition=?2,current_revision=?3,updated_at=?4
+                     WHERE id=?1",
+                    params![
+                        id.as_str(),
+                        disposition.as_db(),
+                        current_revision,
+                        now.to_rfc3339()
+                    ],
                 )?;
                 let updated = read_view(&tx)?;
                 if updated
@@ -697,14 +929,20 @@ impl Store {
             )?;
         }
         if let Some((field, old_value, new_value)) = decision_event(&before, &change) {
+            let revision = match change {
+                Change::Decide(_) => read_entity(&tx, id)?.current_revision,
+                _ => None,
+            };
             tx.execute(
-                "INSERT INTO entity_events (entity_id,field,old_value,new_value,actor,reason,at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT INTO entity_events
+                 (entity_id,field,old_value,new_value,revision,actor,reason,at)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
                 params![
                     id.as_str(),
                     field,
                     old_value,
                     new_value,
+                    revision,
                     ctx.actor,
                     ctx.reason,
                     now.to_rfc3339()
@@ -716,32 +954,7 @@ impl Store {
     }
 
     pub fn events(&self, id: &EntityId) -> Result<Vec<Event>> {
-        let mut statement = self.conn.prepare(
-            "SELECT field,old_value,new_value,actor,reason,at
-             FROM entity_events WHERE entity_id=?1 ORDER BY id",
-        )?;
-        let rows = statement.query_map(params![id.as_str()], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, String>(5)?,
-            ))
-        })?;
-        rows.map(|row| {
-            let (field, old_value, new_value, actor, reason, at) = row?;
-            Ok(Event {
-                field,
-                old_value,
-                new_value,
-                actor,
-                reason,
-                at: parse_time(&at)?,
-            })
-        })
-        .collect()
+        read_events(&self.conn, id)
     }
 
     #[cfg(test)]
@@ -958,10 +1171,10 @@ fn write_entity(conn: &Connection, entity: &Entity) -> Result<()> {
     let claim = entity.progress.claim();
     conn.execute(
         "INSERT INTO entities (
-          id,kind,title,description,progress,disposition,
+          id,kind,title,description,progress,disposition,current_revision,
           resurface_kind,resurface_date,resurface_ref,parent_id,
           claimed_actor,claimed_worktree,claimed_at,created_at,updated_at
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
         params![
             entity.id.as_str(),
             entity.kind.as_db(),
@@ -969,6 +1182,7 @@ fn write_entity(conn: &Connection, entity: &Entity) -> Result<()> {
             entity.description,
             entity.progress.as_db(),
             entity.disposition.as_db(),
+            entity.current_revision,
             entity.resurface_condition.kind_db(),
             resurface_date(&entity.resurface_condition),
             resurface_ref(&entity.resurface_condition),
@@ -980,7 +1194,73 @@ fn write_entity(conn: &Connection, entity: &Entity) -> Result<()> {
             entity.updated_at.to_rfc3339(),
         ],
     )?;
+    if let Some(revision) = entity.current_revision {
+        write_revision(conn, entity, revision, &[], false, &entity.created_at)?;
+    }
     Ok(())
+}
+
+fn write_revision(
+    conn: &Connection,
+    entity: &Entity,
+    revision: i64,
+    dependencies: &[EntityId],
+    baseline: bool,
+    created_at: &DateTime<Utc>,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO declaration_revisions
+         (entity_id,revision,title,description,parent_id,created_at,baseline)
+         VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        params![
+            entity.id.as_str(),
+            revision,
+            entity.title,
+            entity.description,
+            entity.parent.as_ref().map(EntityId::as_str),
+            created_at.to_rfc3339(),
+            baseline,
+        ],
+    )?;
+    for dependency in dependencies {
+        conn.execute(
+            "INSERT INTO revision_dependencies (entity_id,revision,depends_on_id)
+             VALUES (?1,?2,?3)",
+            params![entity.id.as_str(), revision, dependency.as_str()],
+        )?;
+    }
+    Ok(())
+}
+
+fn ensure_current_revision(
+    conn: &Connection,
+    id: &EntityId,
+    created_at: &DateTime<Utc>,
+    baseline: bool,
+) -> Result<i64> {
+    let entity = read_entity(conn, id)?;
+    let dependencies = read_deps(conn)?
+        .into_iter()
+        .filter_map(|(source, target)| (source == *id).then_some(target))
+        .collect::<Vec<_>>();
+    let latest = conn.query_row(
+        "SELECT max(revision) FROM declaration_revisions WHERE entity_id=?1",
+        params![id.as_str()],
+        |row| row.get::<_, Option<i64>>(0),
+    )?;
+    if let Some(number) = latest {
+        let revision = read_revision(conn, id, number)?;
+        if revision.title == entity.title
+            && revision.description == entity.description
+            && revision.parent == entity.parent
+            && revision.dependencies == dependencies
+        {
+            return Ok(number);
+        }
+    }
+    let number = latest.unwrap_or(0) + 1;
+    write_revision(conn, &entity, number, &dependencies, baseline, created_at)?;
+    Ok(number)
 }
 
 fn read_snapshot(conn: &Connection) -> Result<StoreSnapshot> {
@@ -1030,12 +1310,21 @@ pub fn validate_import_snapshot(before: &StoreSnapshot, desired: &StoreSnapshot)
         if current.kind != after.kind
             || current.progress != after.progress
             || current.disposition != after.disposition
+            || current.current_revision != after.current_revision
             || current.resurface_condition != after.resurface_condition
         {
             return Err(DbError::InvalidImport(format!(
                 "read-only state changed for {}",
                 after.id
             )));
+        }
+        let declaration_changed = current.title != after.title
+            || current.description != after.description
+            || current.parent != after.parent
+            || direct_dependency_ids(&before_view, &current.id)
+                != direct_dependency_ids(&desired_view, &after.id);
+        if declaration_changed && current.disposition != Disposition::Undecided {
+            return Err(DbError::DeclarationFixed(after.id.to_string()));
         }
         if current.kind == EntityKind::Group
             && matches!(current.progress, Progress::Ended)
@@ -1090,10 +1379,18 @@ fn apply_import_snapshot(
     validate_import_snapshot(before, desired)?;
     let before_view = before.view();
     let now = Utc::now();
+    let new_ids = desired
+        .entities
+        .iter()
+        .filter(|entity| before_view.get(&entity.id).is_none())
+        .map(|entity| entity.id.clone())
+        .collect::<Vec<_>>();
     for after in &desired.entities {
         if before_view.get(&after.id).is_none() {
             let mut entity = after.clone();
             entity.parent = None;
+            entity.disposition = Disposition::Undecided;
+            entity.current_revision = None;
             entity.created_at = now;
             entity.updated_at = now;
             write_entity(conn, &entity)?;
@@ -1135,6 +1432,13 @@ fn apply_import_snapshot(
         for (source, target) in desired.difference(&before) {
             write_dependency(conn, source, target, true)?;
         }
+    }
+    for id in new_ids {
+        let revision = ensure_current_revision(conn, &id, &now, false)?;
+        conn.execute(
+            "UPDATE entities SET disposition='accepted',current_revision=?2 WHERE id=?1",
+            params![id.as_str(), revision],
+        )?;
     }
     Ok(())
 }
@@ -1214,7 +1518,7 @@ fn read_view(conn: &Connection) -> Result<View> {
 
 fn read_all(conn: &Connection) -> Result<Vec<Entity>> {
     let mut statement = conn.prepare(
-        "SELECT id,kind,title,description,progress,disposition,
+        "SELECT id,kind,title,description,progress,disposition,current_revision,
          resurface_kind,resurface_date,resurface_ref,parent_id,
          claimed_actor,claimed_worktree,claimed_at,created_at,updated_at
          FROM entities ORDER BY created_at,id",
@@ -1226,7 +1530,7 @@ fn read_all(conn: &Connection) -> Result<Vec<Entity>> {
 fn read_entity(conn: &Connection, id: &EntityId) -> Result<Entity> {
     let raw = conn
         .query_row(
-            "SELECT id,kind,title,description,progress,disposition,
+            "SELECT id,kind,title,description,progress,disposition,current_revision,
              resurface_kind,resurface_date,resurface_ref,parent_id,
              claimed_actor,claimed_worktree,claimed_at,created_at,updated_at
              FROM entities WHERE id=?1",
@@ -1251,6 +1555,122 @@ fn read_deps(conn: &Connection) -> Result<Vec<(EntityId, EntityId)>> {
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
+fn read_notes(conn: &Connection, id: &EntityId) -> Result<Vec<Note>> {
+    let mut statement = conn
+        .prepare("SELECT note,body,actor,at FROM entity_notes WHERE entity_id=?1 ORDER BY note")?;
+    let rows = statement.query_map(params![id.as_str()], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    rows.map(|row| {
+        let (number, body, actor, at) = row?;
+        Ok(Note {
+            number,
+            body,
+            actor,
+            created_at: parse_time(&at)?,
+        })
+    })
+    .collect()
+}
+
+fn read_note(conn: &Connection, id: &EntityId, number: i64) -> Result<Note> {
+    let row = conn
+        .query_row(
+            "SELECT body,actor,at FROM entity_notes WHERE entity_id=?1 AND note=?2",
+            params![id.as_str(), number],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| DbError::NoSuchNote {
+            id: id.to_string(),
+            number,
+        })?;
+    Ok(Note {
+        number,
+        body: row.0,
+        actor: row.1,
+        created_at: parse_time(&row.2)?,
+    })
+}
+
+fn read_revision_dependencies(
+    conn: &Connection,
+    id: &EntityId,
+    revision: i64,
+) -> Result<Vec<EntityId>> {
+    let mut statement = conn.prepare(
+        "SELECT depends_on_id FROM revision_dependencies
+         WHERE entity_id=?1 AND revision=?2 ORDER BY depends_on_id",
+    )?;
+    let rows = statement.query_map(params![id.as_str(), revision], |row| {
+        row.get::<_, String>(0)
+            .map(|value| EntityId::from_stored(&value))
+    })?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+fn read_revision(conn: &Connection, id: &EntityId, number: i64) -> Result<DeclarationRevision> {
+    let row = conn
+        .query_row(
+            "SELECT title,description,parent_id,created_at,baseline
+             FROM declaration_revisions WHERE entity_id=?1 AND revision=?2",
+            params![id.as_str(), number],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, bool>(4)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| DbError::NoSuchRevision {
+            id: id.to_string(),
+            number,
+        })?;
+    Ok(DeclarationRevision {
+        number,
+        title: row.0,
+        description: row.1,
+        parent: row.2.as_deref().map(EntityId::from_stored),
+        dependencies: read_revision_dependencies(conn, id, number)?,
+        created_at: parse_time(&row.3)?,
+        baseline: row.4,
+    })
+}
+
+fn read_revisions(conn: &Connection, id: &EntityId) -> Result<Vec<DeclarationRevision>> {
+    let mut statement = conn.prepare(
+        "SELECT revision FROM declaration_revisions WHERE entity_id=?1 ORDER BY revision",
+    )?;
+    let rows = statement.query_map(params![id.as_str()], |row| row.get::<_, i64>(0))?;
+    let numbers = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+    numbers
+        .into_iter()
+        .map(|number| read_revision(conn, id, number))
+        .collect()
+}
+
+fn read_revision_snapshot(conn: &Connection, id: &EntityId) -> Result<RevisionSnapshot> {
+    Ok(RevisionSnapshot {
+        entity: read_entity(conn, id)?,
+        revisions: read_revisions(conn, id)?,
+    })
+}
+
 fn resolve_id(conn: &Connection, input: &str) -> Result<EntityId> {
     let mut statement =
         conn.prepare("SELECT id FROM entities WHERE id=?1 OR id LIKE '%' || ?1 ORDER BY id")?;
@@ -1273,6 +1693,7 @@ struct RawEntity {
     description: Option<String>,
     progress: String,
     disposition: String,
+    current_revision: Option<i64>,
     resurface_kind: Option<String>,
     resurface_date: Option<String>,
     resurface_ref: Option<String>,
@@ -1293,15 +1714,16 @@ impl RawEntity {
             description: row.get(3)?,
             progress: row.get(4)?,
             disposition: row.get(5)?,
-            resurface_kind: row.get(6)?,
-            resurface_date: row.get(7)?,
-            resurface_ref: row.get(8)?,
-            parent: row.get(9)?,
-            claimed_actor: row.get(10)?,
-            claimed_worktree: row.get(11)?,
-            claimed_at: row.get(12)?,
-            created_at: row.get(13)?,
-            updated_at: row.get(14)?,
+            current_revision: row.get(6)?,
+            resurface_kind: row.get(7)?,
+            resurface_date: row.get(8)?,
+            resurface_ref: row.get(9)?,
+            parent: row.get(10)?,
+            claimed_actor: row.get(11)?,
+            claimed_worktree: row.get(12)?,
+            claimed_at: row.get(13)?,
+            created_at: row.get(14)?,
+            updated_at: row.get(15)?,
         })
     }
 
@@ -1315,13 +1737,23 @@ impl RawEntity {
             (None, None, None) => None,
             _ => return Err(ParseError::MissingClaim.into()),
         };
+        let disposition = Disposition::from_db(&self.disposition)?;
+        if (disposition == Disposition::Undecided) != self.current_revision.is_none() {
+            return Err(ParseError::Disposition(format!(
+                "{} with current revision {:?}",
+                disposition.label(),
+                self.current_revision
+            ))
+            .into());
+        }
         Ok(Entity {
             id: EntityId::from_stored(&self.id),
             kind: EntityKind::from_db(&self.kind)?,
             title: self.title,
             description: self.description,
             progress: Progress::from_db(&self.progress, claim)?,
-            disposition: Disposition::from_db(&self.disposition)?,
+            disposition,
+            current_revision: self.current_revision,
             resurface_condition: ResurfaceCondition::from_db(
                 self.resurface_kind.as_deref(),
                 self.resurface_date.as_deref(),
@@ -1425,9 +1857,41 @@ pub struct Event {
     pub field: String,
     pub old_value: Option<String>,
     pub new_value: Option<String>,
+    pub revision: Option<i64>,
     pub actor: String,
     pub reason: Option<String>,
     pub at: DateTime<Utc>,
+}
+
+fn read_events(conn: &Connection, id: &EntityId) -> Result<Vec<Event>> {
+    let mut statement = conn.prepare(
+        "SELECT field,old_value,new_value,revision,actor,reason,at
+         FROM entity_events WHERE entity_id=?1 ORDER BY id",
+    )?;
+    let rows = statement.query_map(params![id.as_str()], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<i64>>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, String>(6)?,
+        ))
+    })?;
+    rows.map(|row| {
+        let (field, old_value, new_value, revision, actor, reason, at) = row?;
+        Ok(Event {
+            field,
+            old_value,
+            new_value,
+            revision,
+            actor,
+            reason,
+            at: parse_time(&at)?,
+        })
+    })
+    .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1500,9 +1964,23 @@ fn read_progress_events(conn: &Connection, id: &EntityId) -> Result<Vec<Progress
 
 fn read_show_snapshot(conn: &Connection, input: &str) -> Result<ShowSnapshot> {
     let id = resolve_id(conn, input)?;
+    let decision_events = read_events(conn, &id)?;
+    let progress_events = read_progress_events(conn, &id)?;
+    let revisions = read_revisions(conn, &id)?;
+    let notes = read_notes(conn, &id)?;
+    let counts = RecordCounts {
+        notes: notes.len(),
+        revisions: revisions.len(),
+        decisions: decision_events.len(),
+        progressions: progress_events.len(),
+    };
     Ok(ShowSnapshot {
         view: read_view(conn)?,
-        progress_events: read_progress_events(conn, &id)?,
+        decision_events,
+        progress_events,
+        revisions,
+        notes,
+        counts,
         id,
     })
 }
@@ -1529,6 +2007,7 @@ mod tests {
             description: None,
             progress: Progress::NotStarted,
             disposition: Disposition::Accepted,
+            current_revision: Some(1),
             resurface_condition: ResurfaceCondition::Always,
             parent: parent.map(id),
             created_at: now,
@@ -1559,6 +2038,9 @@ mod tests {
             .unwrap();
         store
             .insert(&entity("t-i", EntityKind::Issue, None))
+            .unwrap();
+        store
+            .apply(&id("t-g"), Change::Decide(Disposition::Undecided), &ctx())
             .unwrap();
         store.add_dep(&id("t-g"), &id("t-i")).unwrap();
         assert_eq!(store.all().unwrap().len(), 2);
@@ -1616,6 +2098,9 @@ mod tests {
         store
             .insert(&entity("i", EntityKind::Issue, Some("g")))
             .unwrap();
+        store
+            .apply(&id("g"), Change::Decide(Disposition::Undecided), &ctx())
+            .unwrap();
         let error = store.add_dep(&id("g"), &id("i")).unwrap_err();
         assert!(matches!(error, DbError::Cycle { .. }));
         assert!(store.deps().unwrap().is_empty());
@@ -1658,6 +2143,187 @@ mod tests {
     }
 
     #[test]
+    fn decided_entities_have_an_initial_revision_but_drafts_do_not() {
+        let mut store = Store::in_memory("t").unwrap();
+        store
+            .insert(&entity("accepted", EntityKind::Issue, None))
+            .unwrap();
+        let mut draft = entity("draft", EntityKind::Issue, None);
+        draft.disposition = Disposition::Undecided;
+        draft.current_revision = None;
+        store.insert(&draft).unwrap();
+
+        let accepted = store.get(&id("accepted")).unwrap();
+        assert_eq!(accepted.current_revision, Some(1));
+        assert_eq!(store.revisions(&accepted.id).unwrap().len(), 1);
+        assert_eq!(store.get(&id("draft")).unwrap().current_revision, None);
+        assert!(store.revisions(&id("draft")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn declaration_edits_require_undecided_and_redecisions_point_to_revisions() {
+        let mut store = Store::in_memory("t").unwrap();
+        store.insert(&entity("i", EntityKind::Issue, None)).unwrap();
+        let before = store.get(&id("i")).unwrap();
+
+        assert_eq!(
+            store
+                .apply(&id("i"), Change::SetTitle(before.title.clone()), &ctx(),)
+                .unwrap(),
+            ApplyOutcome::Unchanged
+        );
+        assert!(matches!(
+            store.apply(&id("i"), Change::SetTitle("changed".into()), &ctx()),
+            Err(DbError::DeclarationFixed(_))
+        ));
+        assert_eq!(store.get(&id("i")).unwrap().updated_at, before.updated_at);
+
+        store
+            .apply(&id("i"), Change::Decide(Disposition::Undecided), &ctx())
+            .unwrap();
+        assert_eq!(store.get(&id("i")).unwrap().current_revision, None);
+        assert_eq!(store.revisions(&id("i")).unwrap().len(), 1);
+        store
+            .apply(&id("i"), Change::SetTitle("changed".into()), &ctx())
+            .unwrap();
+        store
+            .apply(&id("i"), Change::Decide(Disposition::Accepted), &ctx())
+            .unwrap();
+        assert_eq!(store.get(&id("i")).unwrap().current_revision, Some(2));
+        assert_eq!(store.revisions(&id("i")).unwrap().len(), 2);
+        assert_eq!(
+            store.events(&id("i")).unwrap().last().unwrap().revision,
+            Some(2)
+        );
+
+        store
+            .apply(&id("i"), Change::Decide(Disposition::Undecided), &ctx())
+            .unwrap();
+        store
+            .apply(&id("i"), Change::Decide(Disposition::Rejected), &ctx())
+            .unwrap();
+        assert_eq!(store.get(&id("i")).unwrap().current_revision, Some(2));
+        assert_eq!(store.revisions(&id("i")).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn notes_are_append_only_numbered_and_reject_blank_bodies() {
+        let mut store = Store::in_memory("t").unwrap();
+        store.insert(&entity("i", EntityKind::Issue, None)).unwrap();
+        let first = store.add_note(&id("i"), "first", "alice").unwrap();
+        let second = store.add_note(&id("i"), "first", "alice").unwrap();
+        assert_eq!((first.number, second.number), (1, 2));
+        assert_eq!(store.notes(&id("i")).unwrap(), [first, second]);
+        assert!(matches!(
+            store.add_note(&id("i"), " \n\t", "alice"),
+            Err(DbError::EmptyNote)
+        ));
+    }
+
+    #[test]
+    fn declaration_guards_and_notes_cover_every_kind_progress_and_disposition() {
+        let mut store = Store::in_memory("matrix").unwrap();
+        let kinds = [EntityKind::Issue, EntityKind::Group];
+        let progresses = ["not-started", "in-progress", "ended"];
+        let dispositions = [
+            Disposition::Undecided,
+            Disposition::Accepted,
+            Disposition::Rejected,
+        ];
+
+        for (kind_index, kind) in kinds.into_iter().enumerate() {
+            for (progress_index, progress) in progresses.into_iter().enumerate() {
+                for (disposition_index, disposition) in dispositions.into_iter().enumerate() {
+                    let value = format!("m-{kind_index}{progress_index}{disposition_index}");
+                    let mut candidate = entity(&value, kind, None);
+                    candidate.progress = match progress {
+                        "not-started" => Progress::NotStarted,
+                        "in-progress" => Progress::InProgress(claim()),
+                        "ended" => Progress::Ended,
+                        _ => unreachable!(),
+                    };
+                    candidate.disposition = disposition;
+                    candidate.current_revision =
+                        (disposition != Disposition::Undecided).then_some(1);
+                    store.insert(&candidate).unwrap();
+
+                    store
+                        .add_note(&candidate.id, "matrix note", "tester")
+                        .unwrap();
+                    assert_eq!(store.notes(&candidate.id).unwrap().len(), 1);
+
+                    let changed_title = format!("{value}-changed");
+                    if disposition == Disposition::Undecided {
+                        store
+                            .apply(
+                                &candidate.id,
+                                Change::SetTitle(changed_title.clone()),
+                                &ctx(),
+                            )
+                            .unwrap();
+                        store
+                            .apply(&candidate.id, Change::Decide(Disposition::Accepted), &ctx())
+                            .unwrap();
+                        assert_eq!(store.revisions(&candidate.id).unwrap().len(), 1);
+                    } else {
+                        assert!(matches!(
+                            store.apply(&candidate.id, Change::SetTitle(changed_title), &ctx()),
+                            Err(DbError::DeclarationFixed(_))
+                        ));
+                        assert_eq!(store.revisions(&candidate.id).unwrap().len(), 1);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn concurrent_note_additions_do_not_overwrite_each_other() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "axon-note-concurrency-{}-{nonce}.db",
+            std::process::id()
+        ));
+        let mut connection = Connection::open(&path).unwrap();
+        initialize_schema(&mut connection).unwrap();
+        let mut setup = Store::from_conn(connection).unwrap();
+        setup.insert(&entity("i", EntityKind::Issue, None)).unwrap();
+        drop(setup);
+
+        let threads = (0..8)
+            .map(|index| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let mut store = Store::from_conn(Connection::open(path).unwrap()).unwrap();
+                    store
+                        .add_note(&id("i"), &format!("note {index}"), "worker")
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut numbers = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap().number)
+            .collect::<Vec<_>>();
+        numbers.sort();
+        assert_eq!(numbers, (1..=8).collect::<Vec<_>>());
+
+        let store = Store::from_conn(Connection::open(&path).unwrap()).unwrap();
+        assert_eq!(store.notes(&id("i")).unwrap().len(), 8);
+        drop(store);
+        for candidate in [
+            path.clone(),
+            PathBuf::from(format!("{}-wal", path.display())),
+            PathBuf::from(format!("{}-shm", path.display())),
+        ] {
+            let _ = std::fs::remove_file(candidate);
+        }
+    }
+
+    #[test]
     fn show_snapshot_keeps_state_and_history_at_one_point_in_time() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1667,10 +2333,11 @@ mod tests {
             "axon-show-snapshot-{}-{nonce}.db",
             std::process::id()
         ));
-        let connection = Connection::open(&path).unwrap();
+        let mut connection = Connection::open(&path).unwrap();
         connection
             .execute_batch("PRAGMA journal_mode = WAL")
             .unwrap();
+        initialize_schema(&mut connection).unwrap();
         let mut reader = Store::from_conn(connection).unwrap();
         reader
             .insert(&entity("t-1", EntityKind::Issue, None))
@@ -1709,6 +2376,80 @@ mod tests {
     }
 
     #[test]
+    fn revision_snapshot_keeps_current_marker_and_rows_at_one_point_in_time() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "axon-revision-snapshot-{}-{nonce}.db",
+            std::process::id()
+        ));
+        let mut connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch("PRAGMA journal_mode = WAL")
+            .unwrap();
+        initialize_schema(&mut connection).unwrap();
+        let mut reader = Store::from_conn(connection).unwrap();
+        reader
+            .insert(&entity("i", EntityKind::Issue, None))
+            .unwrap();
+        let writer = Store::from_conn(Connection::open(&path).unwrap()).unwrap();
+        let write_attempted = Arc::new(AtomicBool::new(false));
+        let write_error = Arc::new(Mutex::new(None));
+        let attempted_from_hook = Arc::clone(&write_attempted);
+        let error_from_hook = Arc::clone(&write_error);
+
+        reader
+            .conn
+            .authorizer(Some(move |context: rusqlite::hooks::AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "declaration_revisions",
+                        ..
+                    }
+                ) && !attempted_from_hook.swap(true, Ordering::SeqCst)
+                    && let Err(error) = writer.conn.execute_batch(
+                        "BEGIN IMMEDIATE;
+                         UPDATE entities SET disposition='undecided',current_revision=NULL
+                           WHERE id='i';
+                         UPDATE entities SET title='changed' WHERE id='i';
+                         INSERT INTO declaration_revisions
+                           (entity_id,revision,title,created_at,baseline)
+                           VALUES ('i',2,'changed','2026-09-03T00:00:00Z',0);
+                         UPDATE entities SET disposition='accepted',current_revision=2
+                           WHERE id='i';
+                         COMMIT;",
+                    )
+                {
+                    *error_from_hook.lock().unwrap() = Some(error.to_string());
+                }
+                Authorization::Allow
+            }))
+            .unwrap();
+
+        let snapshot = reader.revision_snapshot(&id("i")).unwrap();
+        assert!(write_attempted.load(Ordering::SeqCst));
+        assert_eq!(write_error.lock().unwrap().as_deref(), None);
+        assert_eq!(snapshot.entity.current_revision, Some(1));
+        assert_eq!(snapshot.revisions.len(), 1);
+
+        let fresh = reader.revision_snapshot(&id("i")).unwrap();
+        assert_eq!(fresh.entity.current_revision, Some(2));
+        assert_eq!(fresh.revisions.len(), 2);
+
+        drop(reader);
+        for candidate in [
+            path.clone(),
+            PathBuf::from(format!("{}-wal", path.display())),
+            PathBuf::from(format!("{}-shm", path.display())),
+        ] {
+            let _ = std::fs::remove_file(candidate);
+        }
+    }
+
+    #[test]
     fn view_keeps_entities_and_dependencies_at_one_point_in_time() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1718,20 +2459,17 @@ mod tests {
             "axon-view-snapshot-{}-{nonce}.db",
             std::process::id()
         ));
-        let connection = Connection::open(&path).unwrap();
+        let mut connection = Connection::open(&path).unwrap();
         connection
             .execute_batch("PRAGMA journal_mode = WAL")
             .unwrap();
+        initialize_schema(&mut connection).unwrap();
         let mut reader = Store::from_conn(connection).unwrap();
         reader
-            .conn
-            .execute_batch(
-                "INSERT INTO entities (
-                  id,kind,title,progress,disposition,created_at,updated_at
-                 ) VALUES
-                  ('a','issue','a','not_started','accepted','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'),
-                  ('b','issue','b','not_started','accepted','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",
-            )
+            .insert(&entity("a", EntityKind::Issue, None))
+            .unwrap();
+        reader
+            .insert(&entity("b", EntityKind::Issue, None))
             .unwrap();
         let writer = Store::from_conn(Connection::open(&path).unwrap()).unwrap();
         let write_attempted = Arc::new(AtomicBool::new(false));
@@ -1828,6 +2566,9 @@ mod tests {
             )
             .unwrap();
         store
+            .apply(&id("e"), Change::Decide(Disposition::Undecided), &ctx())
+            .unwrap();
+        store
             .apply(&id("e"), Change::SetParent(None), &ctx())
             .unwrap();
 
@@ -1843,7 +2584,7 @@ mod tests {
     }
 
     #[test]
-    fn migration_keeps_existing_issues() {
+    fn legacy_schema_is_rejected_without_implicit_migration() {
         let connection = Connection::open_in_memory().unwrap();
         for (index, sql) in MIGRATIONS.iter().take(7).enumerate() {
             connection.execute_batch(sql).unwrap();
@@ -1870,13 +2611,12 @@ mod tests {
                 params![Utc::now().to_rfc3339()],
             )
             .unwrap();
-        let store = Store::from_conn(connection).unwrap();
-        let kept = store.get(&id("old-1")).unwrap();
-        assert_eq!(kept.kind, EntityKind::Issue);
-        assert_eq!(kept.title, "kept");
-        let active = store.get(&id("old-2")).unwrap();
-        let claim = active.progress.claim().unwrap();
-        assert_eq!(claim.actor, "unknown");
-        assert_eq!(claim.worktree, "unknown");
+        assert!(matches!(
+            Store::from_conn(connection),
+            Err(DbError::UnsupportedSchema {
+                found: 7,
+                expected: SCHEMA_VERSION,
+            })
+        ));
     }
 }

@@ -1,13 +1,15 @@
-# Entity 情報モデルの整理
+# Entity 情報の統治
 
-**位置づけ**: 2026-09-03 時点の作業記録。
+**位置づけ**: Entity が持つ情報の規範契約。
 
-これは現在の実装仕様や将来を拘束する決定ではない。追加情報を Entity の
-definition と分けて扱う検討から出発し、問題をどう分解し、どこまでを一つの
-設計問題として捉えたかを残す。今後この整理を採用、変更、または破棄するときは、
-結論だけでなく、どこを変えたかとその理由を記録するための比較対象として使う。
+この文書は、Entity の plan declaration と後から得られた追加情報を分離し、
+現在値、判断対象、履歴、観測の意味を一つに定める。実装、CLI、宣言ファイル、
+運用手順はこの契約に従う。契約を変える場合は、先にこの文書と
+`spec/information_model.qnt` を更新して検査し、その後に実装へ反映する。
 
-表に出る名前、コマンド構文、出力文言、表示順、実装の分割はこの記録に含めない。
+公開名称は、決定時点の declaration 全文を **Declaration Revision**、状態変更と
+独立した追記専用情報を **Note** とする。コマンド構文、出力順、保存形式の詳細は
+それぞれの契約文書で定める。
 
 ## 発端
 
@@ -27,9 +29,9 @@ definition と分けて扱う検討から出発し、問題をどう分解し、
 したがって、追加情報、definition の変更制御、definition の履歴を個別に検討せず、
 axon が持つ情報全体の中で責務を整理する。
 
-## 現行実装から使える区分
+## 変更前の実装から引き継いだ区分
 
-2026-09-03 時点の main には、今回の整理に使える次の区分がある。
+この契約を導入する前の実装には、整理の土台として使える次の区分があった。
 
 - Issue と Group は、共通の Entity identity、title、description、Progress、
   Disposition、Resurface condition、claim を持つ
@@ -42,8 +44,8 @@ axon が持つ情報全体の中で責務を整理する。
 - ready、blocked、orphaned、active scope などは保存せず、現在の保存情報から導出する
 - declaration の fingerprint は stale な編集の適用を拒否するが、意味的な lock や
   変更履歴ではない
-- 状態変更に結び付かない自由記述の追加記録は持たず、作業結果や通常の申し送りを
-  description に残している
+- 状態変更に結び付かない自由記述の追加記録はなく、作業結果や通常の申し送りを
+  description に残していた
 
 判断履歴と進行履歴を分けた設計は、記録を一つの汎用イベント列に畳まず、何についての
 情報かによって保存と参照の意味を分ける先例になる。
@@ -91,9 +93,9 @@ Plan declaration と observed state を分ける現行の宣言ファイルを�
 上位の統治契約は一つに揃えるが、保存先、利用者向けの操作、実装する Entity は分割して
 よい。実装が分かれていることと、意味の正が複数箇所に散っていることは区別する。
 
-## 現時点の具体像
+## 規範契約
 
-以下は上記の分類から導いた 2026-09-03 時点の作業仮説であり、まだ実装仕様ではない。
+以下を実装が満たす情報契約とする。
 
 ### Plan declaration の所有範囲
 
@@ -126,20 +128,20 @@ Rejected も固定するのは、不採用も特定の declaration に対する�
 ことを禁止しない。決定済み declaration の変更を採否の再検討として露出させる、意味上の
 ガードとして捉える。
 
-### 決定済み declaration の記録
+### Declaration Revision
 
-- Accepted または Rejected と判断された declaration の全文 snapshot を残す
-- snapshot は、その Entity が所有する plan declaration 全体を含む
-- 判断履歴から、各判断がどの snapshot に対するものかを特定できる
+- Accepted または Rejected と判断された declaration の全文 Revision を残す
+- Revision は、その Entity が所有する plan declaration 全体を含む
+- 判断履歴から、各判断がどの Revision に対するものかを特定できる
 - Undecided 中の編集過程は逐一履歴化しない
-- declaration が変わらず採否だけが変わった場合は、同じ snapshot に別の判断を結び付ける
-- 前回と次回の決定済み snapshot の全文および差分を観測できる
+- declaration が変わらず採否だけが変わった場合は、同じ Revision に別の判断を結び付ける
+- 前回と次回の決定済み Revision の全文および差分を観測できる
 - migration 前の履歴は復元せず、既存 Entity の現在値を baseline として扱う
 
 この形では、すべての write を履歴にするのではなく、採否判断の対象になった declaration を
 記録する。Undecided の間は draft として編集でき、決定時点の内容を後から検証できる。
 
-### Supplemental information
+### Note
 
 - Issue と Group の両方に追加できる
 - Progress、Disposition、Resurface condition によって追加を制限しない
@@ -159,33 +161,32 @@ Rejected も固定するのは、不採用も特定の declaration に対する�
 
 - Disposition と Resurface condition の理由は、現在どおり判断履歴に残す
 - Progress の操作は、現在どおり進行履歴に残す
-- 決定済み declaration の snapshot は、両者と異なる意味の記録として扱う
-- supplemental information は、状態変更に結び付かない追加記録としてさらに分ける
+- Declaration Revision は、両者と異なる意味の記録として扱う
+- Note は、状態変更に結び付かない追加記録としてさらに分ける
 - どの記録も、別の意味を持つ履歴へ無条件に混ぜない
 
 ### 観測
 
 - Entity の詳細表示から、付与された各種記録の件数を観測できる
-- supplemental information は省略せず全件を観測できる
-- 古い supplemental information を暗黙に低い重要度として扱わない
+- Note は省略せず全件を観測できる
+- 古い Note を暗黙に低い重要度として扱わない
 - 状態変更の操作は、利用者が事前に Entity の詳細を理解していることを前提にし、
-  supplemental information の再掲や既読確認を担わない
+  Note の再掲や既読確認を担わない
 - 出力は保存事実と導出事実を示し、次の行動を案内しない
 
 ## axon が保証しない範囲
 
 - actor の本人性
 - DB を直接編集した場合の耐改ざん性
-- 入力内容が plan declaration と supplemental information のどちらに属するかの自動判定
+- 入力内容が plan declaration と Note のどちらに属するかの自動判定
 - 利用者が情報を読んだか、理解したかの確認
 - Undecided 中の複数利用者による declaration 編集の自動マージ
 - 誤投入した機密情報を履歴全体から削除する redaction
 
-## この記録に含めなかったもの
+## 別の契約文書で定めるもの
 
 概念と挙動の整理後に決める次の事項は、意図的に記録対象から外した。
 
-- supplemental information と declaration snapshot の公開名称
 - 追加、一覧、個別参照、差分参照を行うコマンド構文
 - 出力の固定文言、ブロックの位置、並び順
 - 公開識別子の具体的な表記
@@ -197,5 +198,5 @@ Rejected も固定するのは、不採用も特定の declaration に対する�
 - `axon-eq8xys`: definition を変更せず追加情報を蓄積する経路の検討
 - `axon-t5ztjc`: Entity definition の変更を後から検証できない問題
 
-この記録は両者の採否や統合方法を決めない。各 Entity の扱いは、ここで整理した上位の
-問題と保証境界を参照して改めて判断する。
+この契約は両者を上位の情報統治として置き換える。個別 Entity の判断履歴は、採用までの
+経緯を参照する記録として残す。

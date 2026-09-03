@@ -310,6 +310,7 @@ mod tests {
             description: None,
             progress,
             disposition,
+            current_revision: (disposition != Disposition::Undecided).then_some(1),
             resurface_condition: ResurfaceCondition::Always,
             parent: parent.map(EntityId::from_stored),
             created_at: now,

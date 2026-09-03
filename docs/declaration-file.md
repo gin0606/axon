@@ -9,7 +9,7 @@
 次は既存と新規の issue / group、内部と境界をまたぐ関係を含む、`prepare` 前の完全な例である。fingerprint は例示値だが、文字数と表記は実際の canonical form と同じである。
 
 ```yaml
-schema: axon-plan/v1
+schema: axon-plan/v2
 issues:
   - id: demo-4d5e6f
     key: null
@@ -155,7 +155,7 @@ root は次の 5 field だけをこの順で持つ mapping とする。すべて
 
 | field | 型 | 所有者・意味 |
 | --- | --- | --- |
-| `schema` | string | 必ず `axon-plan/v1`。形式と fingerprint の version label を兼ねる |
+| `schema` | string | 必ず `axon-plan/v2`。形式と fingerprint の version label を兼ねる |
 | `issues` | list | 編集対象の issue の完全宣言 |
 | `groups` | list | 編集対象の group の完全宣言 |
 | `relations` | mapping | 編集可能・読み取り専用の関係を一箇所に正規化したもの |
@@ -179,6 +179,12 @@ root は次の 5 field だけをこの順で持つ mapping とする。すべて
 key は `^[a-z][a-z0-9-]{0,63}$` に一致し、`issues` と `groups` を通じて file 全体で一意とする。ID も両 list を通じて一意で、同じ DB Entity を二度宣言してはならない。
 
 title は前後の空白を prepare が除去し、空または改行を含む値を拒否する。description は YAML が返す文字列を Markdown として保存し、中身を解析しない。空文字または空白文字だけなら prepare が null に正規化する。non-null の内容は、YAML の改行正規化を除いて変更しない。canonical 出力では複数行 description を literal block で表し、保存値に末尾改行がなければ `|-` を使う。
+
+既存 Entity の title、description、parent、outgoing dependency は、その Entity の
+Disposition が `undecided` のときだけ実変更できる。`accepted` / `rejected` の Entity に
+実差分があれば check / apply は file 全体を拒否する。同じ値や同じ関係の再指定は変更では
+ないため成功 no-op とする。parent の owner は child、dependency の owner は dependent
+(source) であり、反対側 Entity の Disposition はこの guard に使わない。
 
 ### 2.2 observed
 
@@ -238,8 +244,8 @@ fingerprint は `blake3:` に続く lowercase 64 桁の hex string とする。
 
 各 Entity の fingerprint は、次の token 列を上から順に encode して BLAKE3 へ渡す。
 
-1. schema `axon-plan/v1`
-2. fingerprint 構造の version label `axon-entity-fingerprint/v1`
+1. schema `axon-plan/v2`
+2. fingerprint 構造の version label `axon-entity-fingerprint/v2`
 3. kind (`issue` / `group`)
 4. ID
 5. title
@@ -402,7 +408,7 @@ check は file と DB を変更しない。すべての Entity に ID があり�
 1. strict schema、identity、reference、relation の局所検証
 2. base と現在の DB snapshot の競合検知
 3. observed、references、readonly relations が現在値と一致することの検証
-4. 編集後の仮 snapshot を組み立て、axon 本体の包含、Ended group、dependency、待機 graph などの制約を検証
+4. 編集後の仮 snapshot を組み立て、Entity ごとの declaration 固定と、axon 本体の包含、Ended group、dependency、待機 graph などの制約を検証
 5. 作成・更新、title / description、parent、dependency の構造差分を表示
 6. ready、blocked、orphaned、active scope、group 完了可能性など、適用前後で変わる導出値を表示
 
@@ -431,7 +437,7 @@ DB commit 後、file 更新だけに失敗した場合は、同じ宣言を再�
 
 ```yaml
 # 未知 field
-schema: axon-plan/v1
+schema: axon-plan/v2
 issues: []
 groups: []
 relations:
@@ -443,7 +449,7 @@ priority: high
 
 ```yaml
 # duplicate key
-schema: axon-plan/v1
+schema: axon-plan/v2
 issues: []
 issues: []
 ```

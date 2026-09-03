@@ -31,9 +31,12 @@ Git リポジトリ内では common root を管理境界として常に優先す
 | テーブル | 役割 |
 | --- | --- |
 | `meta` | ID の接頭辞などの設定 |
-| `entities` | kind、文面、A / B / C、parent group、claim。Issue / Group の共有状態を持つ |
+| `entities` | kind、現在の plan declaration、A / B / C、claim、current Revision。Issue / Group の共有状態を持つ |
 | `entity_deps` | Entity 間の依存。両端は kind の全組み合わせを許す |
-| `entity_events` | B (`disposition`) / C (`resurface_condition`) の Entity 単位の判断ログ |
+| `declaration_revisions` | Accepted / Rejected と判断された plan declaration の不変な全文 Revision |
+| `revision_dependencies` | 各 Declaration Revision が所有した outgoing dependency |
+| `entity_notes` | 状態と独立した追記専用 Note。Entity 内連番、本文、actor、保存時刻を持つ |
+| `entity_events` | B (`disposition`) / C (`resurface_condition`) の Entity 単位の判断ログ。B の判断は対象 Revision を参照する |
 | `entity_progress_events` | A (進行) の Entity 単位の状態遷移履歴 |
 
 設計上の要点:
@@ -43,8 +46,21 @@ Git リポジトリ内では common root を管理境界として常に優先す
 - **claim は actor / worktree / at を持つ**。worktree は新しい `start` では必ず保存し、移行前から存在する claim だけは `unknown` として保持する
 - **C の直和型は CHECK 制約で整合性を保つ**。`resurface_kind` が取る値ごとに、どの列が埋まっているべきかを縛る
 - **待機関係は DAG に保つ**。dependency、`AfterEntity`、包含を activation / completion の 2 つの wait graph に射影し、両方を同じ write transaction で検査する。group を待機元にした辺は全子孫へ展開する
-- **スキーマは `user_version` で版を持つ**。開くたびに不足分だけ流す。各 migration の DDL と `user_version` 更新は同じトランザクションで確定し、中断後に安全に再実行できるようにする
-- schema v8 は既存 issue を同じ ID の `kind=issue` Entity へ移し、判断履歴・進行履歴・claim・dependency を保持する。旧 group は開発用 DB に存在しないことを前提に救済しない
+- **決定済み declaration と Revision の参照を DB 制約でも一致させる**。Undecided は `current_revision IS NULL`、Accepted / Rejected は同じ Entity の Revision を必ず参照する
+- **Revision と判断は同じ transaction で確定する**。直前と同じ declaration は Revision を再利用し、違う場合だけ Entity 内連番を追加する
+- **Note の追加は immediate transaction で連番を割り当てる**。入力時刻ではなくこの保存順を正にし、空白だけの本文を CLI と CHECK 制約の両方で拒否する
+- **複数テーブルの詳細表示は一つの read transaction から作る**。現在 Entity、関係、履歴、Revision、Note、件数を異なる時点から混ぜない
+- **スキーマは `user_version` で版を持つが、通常起動時に migration しない**。実装と一致する fresh schema だけを開き、旧版や未知の版は Entity を読む前に version error として拒否する
+
+### 互換性を持たない schema 切り替え
+
+情報契約の導入時は、開発中の現在 DB を一回だけ別の fresh DB へ切り替える。通常の open、公開 import、将来の migration としてこの処理を残さない。
+
+- Entity ID、kind、現在の declaration、A / B / C、claim、parent、dependency を保持する
+- 切り替え前の判断履歴と進行履歴は復元せず、Note も存在しない状態から始める
+- Accepted / Rejected の各 Entity には、切り替え時の現在 declaration を baseline Revision 1 として作る
+- Undecided は Revision を持たない draft とする
+- 元 DB と機械可読 snapshot を backup として保持し、件数、各現在値、関係、CLI の主要 query を検証してから切り替える
 
 ## 決着した論点
 
@@ -148,14 +164,14 @@ claim の解放は、`claims` または `show` で actor / worktree / at を確�
 
 ### D-7 (決着): 進行履歴は判断ログと分ける
 
-A (進行) の `start` / `done` / `release` は、状態遷移に結び付いた型付きの進行イベントとして `progress_events` に残す。`start` と `done` は actor と時刻だけを記録し、理由の入力を受けない。`release` は actor・時刻に加えて、指定された場合だけ任意の解放理由や申し送りを記録する。進行状態の更新とイベントの保存は `Store::apply` の同じトランザクションで行う。作業結果や通常の申し送りは issue の description に残す。
+A (進行) の `start` / `done` / `release` は、状態遷移に結び付いた型付きの進行イベントとして `progress_events` に残す。`start` と `done` は actor と時刻だけを記録し、理由の入力を受けない。`release` は actor・時刻に加えて、指定された場合だけ任意の解放理由を記録する。進行状態の更新とイベントの保存は `Store::apply` の同じトランザクションで行う。作業結果や通常の申し送りは `entity_notes` に別の Note として残す。
 
-これは自由記述の Comment / Note ではない。状態を変えずに追記する経路は持たず、各記録がどの進行操作によって生まれたかを型で判別できるようにする。
+進行履歴は Note ではない。各記録がどの進行操作によって生まれたかを型で判別でき、状態を変えない自由記述は Note の経路へ分ける。
 
 表示先は `axon show` とする。B/C の `axon log` は「なぜ判断したか」を辿る用途に絞ったままにし、進行履歴を混ぜない。
 
 進行履歴の順序は時刻ではなく、同じトランザクションで進行イベントが保存された順序を正とする。並行操作ではコマンド開始時に取得した時刻と、条件付き更新が成立する順序が逆転しうるため。
 
-過去の migration で判断以外のイベントは削除済みであり、そこから進行履歴を復元することはできない。`progress_events` を導入した版以降の `start` / `done` / `release` だけを記録する。
+互換性を持たない schema 切り替えでは過去の進行履歴を復元しない。切り替え後の `start` / `done` / `release` だけを記録する。
 
 契約変更前に保存された `done` の reason は過去の事実として保持し、`show` で読み続ける。新しい `done` だけに変更後の契約を適用するため、スキーマから reason 列は削除しない。

@@ -121,6 +121,26 @@ impl TestRepo {
         self.create(&["group", "capture", title])
     }
 
+    pub fn undecide(&self, id: &str) {
+        assert_success(&self.axon(&["decide", "undecide", id, "-r", "test declaration edit"]));
+    }
+
+    pub fn accept(&self, id: &str) {
+        assert_success(&self.axon(&["decide", "accept", id, "-r", "test declaration fixed"]));
+    }
+
+    pub fn set_parent(&self, id: &str, parent: &str) {
+        self.undecide(id);
+        assert_success(&self.axon(&["group", "set", id, parent]));
+        self.accept(id);
+    }
+
+    pub fn add_dependency(&self, source: &str, target: &str) {
+        self.undecide(source);
+        assert_success(&self.axon(&["dep", "add", source, "--needs", target]));
+        self.accept(source);
+    }
+
     pub fn axon(&self, args: &[&str]) -> Output {
         self.axon_in(&self.root, args)
     }
@@ -196,6 +216,29 @@ impl TestRepo {
         self.connection()
             .query_row("SELECT COUNT(*) FROM entity_deps", [], |row| row.get(0))
             .unwrap()
+    }
+
+    pub fn current_revision(&self, id: &str) -> (i64, String, Option<String>, i64) {
+        let connection = self.connection();
+        let (revision, title, parent) = connection
+            .query_row(
+                "SELECT e.current_revision,r.title,r.parent_id
+                 FROM entities e JOIN declaration_revisions r
+                   ON r.entity_id=e.id AND r.revision=e.current_revision
+                 WHERE e.id=?1",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        let dependencies = connection
+            .query_row(
+                "SELECT COUNT(*) FROM revision_dependencies
+                 WHERE entity_id=?1 AND revision=?2",
+                params![id, revision],
+                |row| row.get(0),
+            )
+            .unwrap();
+        (revision, title, parent, dependencies)
     }
 
     pub fn entity_count(&self) -> i64 {

@@ -154,6 +154,12 @@ enum Command {
         /// Entity ID or unique ID suffix
         id: String,
     },
+    /// Add and inspect durable notes
+    #[command(subcommand)]
+    Note(NoteCmd),
+    /// Inspect immutable plan declaration revisions
+    #[command(subcommand)]
+    Revision(RevisionCmd),
     /// Export an editable plan declaration as canonical YAML
     Export {
         /// Entity IDs or unique ID suffixes to edit
@@ -319,6 +325,58 @@ enum DepCmd {
     },
 }
 
+#[derive(Subcommand)]
+enum NoteCmd {
+    /// Append a note to an Entity
+    Add {
+        /// Entity ID or unique ID suffix
+        id: String,
+        /// Note body
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+        /// File containing the note body, or - for standard input
+        #[arg(short = 'F', long)]
+        file: Option<String>,
+    },
+    /// List notes for an Entity
+    List {
+        /// Entity ID or unique ID suffix
+        id: String,
+    },
+    /// Show one note by its Entity-local number
+    Show {
+        /// Entity ID or unique ID suffix
+        id: String,
+        /// Entity-local note number
+        number: i64,
+    },
+}
+
+#[derive(Subcommand)]
+enum RevisionCmd {
+    /// List plan declaration revisions for an Entity
+    List {
+        /// Entity ID or unique ID suffix
+        id: String,
+    },
+    /// Show one revision by its Entity-local number
+    Show {
+        /// Entity ID or unique ID suffix
+        id: String,
+        /// Entity-local revision number
+        number: i64,
+    },
+    /// Compare two plan declaration revisions
+    Diff {
+        /// Entity ID or unique ID suffix
+        id: String,
+        /// Older Entity-local revision number
+        from: i64,
+        /// Newer Entity-local revision number
+        to: i64,
+    },
+}
+
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     if requests_complete_help(&args) {
@@ -379,6 +437,8 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
         Command::Log { id } => cmd_log(&id),
         Command::List { kind } => cmd_list(kind),
         Command::Show { id } => cmd_show(&id),
+        Command::Note(command) => cmd_note(command),
+        Command::Revision(command) => cmd_revision(command),
         Command::Export {
             ids,
             groups,
@@ -453,6 +513,7 @@ fn cmd_create(
         description,
         progress: Progress::NotStarted,
         disposition,
+        current_revision: (disposition != Disposition::Undecided).then_some(1),
         resurface_condition: ResurfaceCondition::Always,
         parent,
         created_at: now,
@@ -674,17 +735,42 @@ fn cmd_show(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
     let db::ShowSnapshot {
         id,
         view,
+        decision_events,
         progress_events,
+        revisions,
+        notes,
+        counts,
     } = store.show_snapshot(raw)?;
+    debug_assert_eq!(counts.decisions, decision_events.len());
+    debug_assert_eq!(counts.progressions, progress_events.len());
+    debug_assert_eq!(counts.revisions, revisions.len());
+    debug_assert_eq!(counts.notes, notes.len());
     let entity = view.get(&id).ok_or("entity not found")?;
-    print!("{}", render_show(&view, entity, &progress_events));
+    print!(
+        "{}",
+        render_show(&view, entity, &progress_events, &notes, counts)
+    );
     Ok(())
 }
 
-fn render_show(view: &View, entity: &Entity, progress_events: &[db::ProgressEvent]) -> String {
+fn render_show(
+    view: &View,
+    entity: &Entity,
+    progress_events: &[db::ProgressEvent],
+    notes: &[Note],
+    counts: RecordCounts,
+) -> String {
     let mut blocks = Vec::<Vec<String>>::new();
     let mut head = vec![
         format!("{}  {}  {}", entity.id, entity.kind.label(), entity.title),
+        match entity.current_revision {
+            Some(revision) => format!("Plan declaration: fixed at Revision {revision}"),
+            None => "Plan declaration: draft".to_string(),
+        },
+        format!(
+            "Records: Notes: {}  Revisions: {}  Decision history: {}  Progress history: {}",
+            counts.notes, counts.revisions, counts.decisions, counts.progressions
+        ),
         format!(
             "Progress: {}  Disposition: {}  Resurface condition: {}",
             entity.progress.label(),
@@ -710,6 +796,20 @@ fn render_show(view: &View, entity: &Entity, progress_events: &[db::ProgressEven
 
     if let Some(description) = &entity.description {
         blocks.push(vec![description.clone()]);
+    }
+
+    if !notes.is_empty() {
+        let mut rendered_notes = vec!["Notes:".to_string()];
+        for note in notes {
+            rendered_notes.push(format!(
+                "Note {}  {}  {}\n{}",
+                note.number,
+                note.created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+                note.actor,
+                note.body
+            ));
+        }
+        blocks.push(rendered_notes);
     }
 
     if entity.kind == EntityKind::Group {
@@ -804,6 +904,246 @@ fn render_show(view: &View, entity: &Entity, progress_events: &[db::ProgressEven
             .collect::<Vec<_>>()
             .join("\n\n")
     )
+}
+
+fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let mut store = Store::open()?;
+    match command {
+        NoteCmd::Add { id, message, file } => {
+            let id = store.resolve_id(&id)?;
+            let body = read_description(message, file)?
+                .ok_or("a Note body is required; provide -m or -F")?;
+            let note = store.add_note(&id, &body, &actor::actor())?;
+            println!("{id}  Note {} recorded", note.number);
+        }
+        NoteCmd::List { id } => {
+            let id = store.resolve_id(&id)?;
+            let notes = store.notes(&id)?;
+            let rows = notes
+                .into_iter()
+                .map(|note| {
+                    let first_line = note.body.lines().next().unwrap_or_default();
+                    format!(
+                        "{}  {}  {}  {}\n",
+                        note.number,
+                        note.created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+                        note.actor,
+                        first_line
+                    )
+                })
+                .collect::<String>();
+            print_rows(&rows, "No notes");
+        }
+        NoteCmd::Show { id, number } => {
+            let id = store.resolve_id(&id)?;
+            let note = store.note(&id, number)?;
+            println!("{id}  Note {}", note.number);
+            println!(
+                "Recorded: {}  {}",
+                note.created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+                note.actor
+            );
+            println!();
+            print!("{}", note.body);
+            if !note.body.ends_with('\n') {
+                println!();
+            }
+        }
+    }
+    Ok(())
+}
+
+fn cmd_revision(command: RevisionCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let mut store = Store::open()?;
+    match command {
+        RevisionCmd::List { id } => {
+            let id = store.resolve_id(&id)?;
+            let snapshot = store.revision_snapshot(&id)?;
+            let rows = snapshot
+                .revisions
+                .into_iter()
+                .map(|revision| {
+                    let mut marks = Vec::new();
+                    if snapshot.entity.current_revision == Some(revision.number) {
+                        marks.push("current");
+                    }
+                    if revision.baseline {
+                        marks.push("baseline");
+                    }
+                    let marks = if marks.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [{}]", marks.join(", "))
+                    };
+                    format!(
+                        "{}  {}{}  {}\n",
+                        revision.number,
+                        revision
+                            .created_at
+                            .to_rfc3339_opts(SecondsFormat::Secs, true),
+                        marks,
+                        revision.title
+                    )
+                })
+                .collect::<String>();
+            print_rows(&rows, "No declaration revisions");
+        }
+        RevisionCmd::Show { id, number } => {
+            let id = store.resolve_id(&id)?;
+            let snapshot = store.revision_snapshot(&id)?;
+            let revision = snapshot.revision(number)?;
+            print!("{}", render_revision(&id, &snapshot.entity, revision));
+        }
+        RevisionCmd::Diff { id, from, to } => {
+            let id = store.resolve_id(&id)?;
+            let snapshot = store.revision_snapshot(&id)?;
+            let from_revision = snapshot.revision(from)?;
+            let to_revision = snapshot.revision(to)?;
+            print!("{}", render_revision_diff(&id, from_revision, to_revision));
+        }
+    }
+    Ok(())
+}
+
+fn render_revision(id: &EntityId, entity: &Entity, revision: &DeclarationRevision) -> String {
+    let mut marks = Vec::new();
+    if entity.current_revision == Some(revision.number) {
+        marks.push("current");
+    }
+    if revision.baseline {
+        marks.push("baseline");
+    }
+    let marks = if marks.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", marks.join(", "))
+    };
+    let description = match revision.description.as_deref() {
+        Some(description) => format!("present\n{description}"),
+        None => "absent".to_string(),
+    };
+    let parent = revision
+        .parent
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "(none)".to_string());
+    let dependencies = if revision.dependencies.is_empty() {
+        "  (none)".to_string()
+    } else {
+        revision
+            .dependencies
+            .iter()
+            .map(|dependency| format!("  {dependency}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    format!(
+        "{id}  Declaration Revision {}{marks}\nCreated: {}\nTitle: {}\nParent: {parent}\n\nDescription:\n{description}\n\nOutgoing dependencies:\n{dependencies}\n",
+        revision.number,
+        revision
+            .created_at
+            .to_rfc3339_opts(SecondsFormat::Secs, true),
+        revision.title
+    )
+}
+
+fn render_revision_diff(
+    id: &EntityId,
+    from: &DeclarationRevision,
+    to: &DeclarationRevision,
+) -> String {
+    let mut output = format!(
+        "{id}  Declaration Revision {} -> {}\n\n",
+        from.number, to.number
+    );
+    push_value_diff(&mut output, "Title", &from.title, &to.title);
+    push_optional_value_diff(
+        &mut output,
+        "Description",
+        from.description.as_deref(),
+        to.description.as_deref(),
+    );
+    push_value_diff(
+        &mut output,
+        "Parent",
+        &from
+            .parent
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "(none)".to_string()),
+        &to.parent
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "(none)".to_string()),
+    );
+
+    let mut removed = from
+        .dependencies
+        .iter()
+        .filter(|dependency| !to.dependencies.contains(dependency))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let mut added = to
+        .dependencies
+        .iter()
+        .filter(|dependency| !from.dependencies.contains(dependency))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    removed.sort();
+    added.sort();
+    output.push_str("Outgoing dependencies:\n");
+    if removed.is_empty() && added.is_empty() {
+        output.push_str("  unchanged\n");
+    } else {
+        for dependency in removed {
+            output.push_str(&format!("- {dependency}\n"));
+        }
+        for dependency in added {
+            output.push_str(&format!("+ {dependency}\n"));
+        }
+    }
+    output
+}
+
+fn push_value_diff(output: &mut String, label: &str, from: &str, to: &str) {
+    output.push_str(&format!("{label}:\n"));
+    if from == to {
+        output.push_str("  unchanged\n");
+    } else {
+        for line in from.lines() {
+            output.push_str(&format!("- {line}\n"));
+        }
+        for line in to.lines() {
+            output.push_str(&format!("+ {line}\n"));
+        }
+    }
+}
+
+fn push_optional_value_diff(
+    output: &mut String,
+    label: &str,
+    from: Option<&str>,
+    to: Option<&str>,
+) {
+    output.push_str(&format!("{label}:\n"));
+    if from == to {
+        output.push_str("  unchanged\n");
+        return;
+    }
+    push_optional_diff_side(output, '-', from);
+    push_optional_diff_side(output, '+', to);
+}
+
+fn push_optional_diff_side(output: &mut String, prefix: char, value: Option<&str>) {
+    match value {
+        None => output.push_str(&format!("{prefix} absent\n")),
+        Some(value) => {
+            output.push_str(&format!("{prefix} present\n"));
+            for line in value.split('\n') {
+                output.push_str(&format!("{prefix} {line}\n"));
+            }
+        }
+    }
 }
 
 fn render_entity_counts(label: &str, counts: &derived::EntityCounts) -> String {
@@ -945,10 +1285,13 @@ fn cmd_log(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
             event.actor,
             format_decision(&event)
         );
-        match event.reason {
-            Some(reason) => println!("  ({reason})"),
-            None => println!(),
+        if let Some(reason) = event.reason {
+            print!("  ({reason})");
         }
+        if let Some(revision) = event.revision {
+            print!("  [Revision {revision}]");
+        }
+        println!();
     }
     Ok(())
 }
@@ -1141,6 +1484,7 @@ mod tests {
             description: None,
             progress: Progress::NotStarted,
             disposition: Disposition::Accepted,
+            current_revision: Some(1),
             resurface_condition: ResurfaceCondition::Always,
             parent: None,
             created_at: now,
@@ -1154,7 +1498,7 @@ mod tests {
         let mut issue = entity("i", EntityKind::Issue);
         issue.parent = Some(group.id.clone());
         let view = View::new(vec![group.clone(), issue], vec![]);
-        let output = render_show(&view, &group, &[]);
+        let output = render_show(&view, &group, &[], &[], RecordCounts::default());
         assert!(output.starts_with("g  Group  g title\n"));
         assert!(output.contains("Descendants: 1 (Issue: 1, Group: 0"));
     }
@@ -1169,6 +1513,12 @@ mod tests {
             "axon group set",
             "axon group unset",
             "axon dep add",
+            "axon note add",
+            "axon note list",
+            "axon note show",
+            "axon revision list",
+            "axon revision show",
+            "axon revision diff",
             "axon export",
             "axon import prepare",
             "axon import check",

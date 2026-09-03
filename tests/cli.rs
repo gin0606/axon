@@ -169,7 +169,7 @@ fn a_group_explicitly_opens_and_completes_its_plan_scope() {
     repo.init("test");
     let group = repo.group_plan("delivery");
     let issue = repo.plan("implementation");
-    assert_success(&repo.axon(&["group", "set", &issue, &group]));
+    repo.set_parent(&issue, &group);
 
     let ready = stdout(&repo.axon(&["ready"]));
     assert!(ready.contains(&group));
@@ -202,7 +202,7 @@ fn release_of_a_group_waits_for_active_descendants() {
     repo.init("test");
     let group = repo.group_plan("delegated plan");
     let issue = repo.plan("delegated task");
-    assert_success(&repo.axon(&["group", "set", &issue, &group]));
+    repo.set_parent(&issue, &group);
     assert_success(&repo.axon(&["start", &group]));
     assert_success(&repo.axon(&["start", &issue]));
 
@@ -221,13 +221,7 @@ fn dependencies_and_after_conditions_accept_every_kind_combination() {
     repo.init("test");
     let prerequisite_group = repo.group_plan("foundation");
     let dependent_issue = repo.plan("delivery issue");
-    assert_success(&repo.axon(&[
-        "dep",
-        "add",
-        &dependent_issue,
-        "--needs",
-        &prerequisite_group,
-    ]));
+    repo.add_dependency(&dependent_issue, &prerequisite_group);
     assert!(!stdout(&repo.axon(&["ready"])).contains(&dependent_issue));
     assert_success(&repo.axon(&["start", &prerequisite_group]));
     assert_success(&repo.axon(&["done", &prerequisite_group]));
@@ -242,7 +236,7 @@ fn dependencies_and_after_conditions_accept_every_kind_combination() {
 
     let rejected_group = repo.group_plan("rejected prerequisite");
     let dependent_group = repo.group_plan("orphaned plan");
-    assert_success(&repo.axon(&["dep", "add", &dependent_group, "--needs", &rejected_group]));
+    repo.add_dependency(&dependent_group, &rejected_group);
     assert_success(&repo.axon(&["decide", "reject", &rejected_group]));
     let triage = stdout(&repo.axon(&["triage"]));
     assert!(triage.contains(&format!("{dependent_group}  Group  Orphaned")));
@@ -255,8 +249,8 @@ fn group_dependency_applies_to_its_descendant_frontier() {
     let plan = repo.group_plan("delivery");
     let task = repo.plan("delivery task");
     let prerequisite = repo.plan("external result");
-    assert_success(&repo.axon(&["group", "set", &task, &plan]));
-    assert_success(&repo.axon(&["dep", "add", &plan, "--needs", &prerequisite]));
+    repo.set_parent(&task, &plan);
+    repo.add_dependency(&plan, &prerequisite);
     assert!(!stdout(&repo.axon(&["ready"])).contains(&plan));
     assert_success(&repo.axon(&["start", &prerequisite]));
     assert_success(&repo.axon(&["done", &prerequisite]));
@@ -301,6 +295,7 @@ fn ended_group_structure_and_descendant_terminal_state_are_fixed() {
     assert_failure(&move_group);
     assert!(stderr(&move_group).contains("Ended group"));
     let issue = repo.plan("late work");
+    repo.undecide(&issue);
     let add_child = repo.axon(&["group", "set", &issue, &ended]);
     assert_failure(&add_child);
     assert!(stderr(&add_child).contains("below an Ended group"));
@@ -318,9 +313,10 @@ fn containment_and_wait_relations_are_checked_as_one_atomic_graph() {
     repo.init("test");
     let group = repo.group_plan("plan");
     let child = repo.plan("child");
-    assert_success(&repo.axon(&["group", "set", &child, &group]));
+    repo.set_parent(&child, &group);
     let before = repo.dep_count();
 
+    repo.undecide(&group);
     let cycle = repo.axon(&["dep", "add", &group, "--needs", &child]);
     assert_failure(&cycle);
     assert!(stderr(&cycle).contains("wait graph"));
@@ -338,7 +334,7 @@ fn settings_are_noops_but_transitions_reject_repetition() {
     repo.init("test");
     let group = repo.group_plan("plan");
     let issue = repo.plan("task");
-    assert_success(&repo.axon(&["group", "set", &issue, &group]));
+    repo.set_parent(&issue, &group);
     let before = repo.snapshot(&issue);
     assert_success(&repo.axon(&["group", "set", &issue, &group]));
     assert_eq!(repo.snapshot(&issue), before);
@@ -350,8 +346,36 @@ fn settings_are_noops_but_transitions_reject_repetition() {
     assert_eq!(repo.snapshot(&group), before);
 
     let prerequisite = repo.plan("prerequisite");
+    repo.add_dependency(&issue, &prerequisite);
     assert_success(&repo.axon(&["dep", "add", &issue, "--needs", &prerequisite]));
-    assert_success(&repo.axon(&["dep", "add", &issue, "--needs", &prerequisite]));
+    assert_eq!(repo.dep_count(), 1);
+}
+
+#[test]
+fn fixed_declarations_reject_relation_changes_but_allow_noops() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let first_group = repo.group_plan("first");
+    let second_group = repo.group_plan("second");
+    let issue = repo.plan("task");
+    let first_prerequisite = repo.plan("first prerequisite");
+    let second_prerequisite = repo.plan("second prerequisite");
+
+    repo.set_parent(&issue, &first_group);
+    let before = repo.snapshot(&issue);
+    assert_success(&repo.axon(&["group", "set", &issue, &first_group]));
+    let move_attempt = repo.axon(&["group", "set", &issue, &second_group]);
+    assert_failure(&move_attempt);
+    assert!(stderr(&move_attempt).contains("plan declaration"));
+    assert_eq!(repo.snapshot(&issue), before);
+
+    repo.add_dependency(&issue, &first_prerequisite);
+    assert_success(&repo.axon(&["dep", "add", &issue, "--needs", &first_prerequisite]));
+    let add_attempt = repo.axon(&["dep", "add", &issue, "--needs", &second_prerequisite]);
+    assert_failure(&add_attempt);
+    assert!(stderr(&add_attempt).contains("plan declaration"));
+    let remove_attempt = repo.axon(&["dep", "rm", &issue, "--needs", &first_prerequisite]);
+    assert_failure(&remove_attempt);
     assert_eq!(repo.dep_count(), 1);
 }
 
@@ -432,4 +456,162 @@ fn git_and_non_git_management_roots_keep_their_boundaries() {
     assert_success(&created);
     assert!(repository.join(".axon/axon.db").is_file());
     assert!(!nested.join(".axon").exists());
+}
+
+#[test]
+fn notes_preserve_full_bodies_and_work_for_every_entity_state() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let accepted = created_id(&repo.axon(&[
+        "plan",
+        "documented task",
+        "-m",
+        "Declaration description\nwith two lines",
+    ]));
+    let undecided = repo.group_capture("draft group");
+    let rejected = repo.plan("declined task");
+    assert_success(&repo.axon(&["decide", "reject", &rejected, "-r", "not now"]));
+    let ended = repo.group_plan("finished group");
+    assert_success(&repo.axon(&["start", &ended]));
+    assert_success(&repo.axon(&["done", &ended]));
+
+    for id in [&undecided, &rejected, &ended] {
+        assert_success(&repo.axon(&["note", "add", id, "-m", "state-independent note"]));
+    }
+
+    let long_markdown = format!(
+        "# Investigation\n\n- preserves Markdown\n- preserves spacing  \n\n```text\n{}\n```\n",
+        "long evidence ".repeat(400)
+    );
+    let note_file = repo.root().join("note.md");
+    fs::write(&note_file, &long_markdown).unwrap();
+    assert_success(&repo.axon(&["note", "add", &accepted, "-F", note_file.to_str().unwrap()]));
+    assert_success(&repo.axon(&[
+        "note",
+        "add",
+        &accepted,
+        "-m",
+        "second note\nkeeps its newline",
+    ]));
+
+    let suffix = accepted.rsplit('-').next().unwrap();
+    let list = repo.axon(&["note", "list", suffix]);
+    assert_success(&list);
+    let list = stdout(&list);
+    assert!(list.contains("1  "));
+    assert!(list.contains("2  "));
+
+    let first = repo.axon(&["note", "show", suffix, "1"]);
+    assert_success(&first);
+    assert!(stdout(&first).ends_with(&long_markdown));
+
+    let show = repo.axon(&["show", suffix]);
+    assert_success(&show);
+    let show = stdout(&show);
+    assert!(show.contains("Plan declaration: fixed at Revision 1"));
+    assert!(show.contains("Records: Notes: 2  Revisions: 1"));
+    assert!(show.contains("Declaration description\nwith two lines"));
+    assert!(show.contains(&long_markdown));
+    assert!(
+        show.find("Note 1").unwrap() < show.find("Note 2").unwrap(),
+        "notes must stay in save order"
+    );
+
+    for id in [&undecided, &rejected, &ended] {
+        let show = repo.axon(&["show", id]);
+        assert_success(&show);
+        assert!(stdout(&show).contains("state-independent note"));
+    }
+}
+
+#[test]
+fn notes_reject_missing_or_blank_input_and_unknown_local_numbers() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let issue = repo.plan("task");
+    let blank_file = repo.root().join("blank-note.md");
+    fs::write(&blank_file, " \n\t ").unwrap();
+
+    for args in [
+        vec!["note", "add", &issue],
+        vec!["note", "add", &issue, "-m", " \n\t"],
+        vec!["note", "add", &issue, "-F", blank_file.to_str().unwrap()],
+    ] {
+        assert_failure(&repo.axon(&args));
+    }
+
+    let missing = repo.axon(&["note", "show", &issue, "99"]);
+    assert_failure(&missing);
+    assert!(stderr(&missing).contains("Note 99 does not exist"));
+    let missing = repo.axon(&["revision", "show", &issue, "99"]);
+    assert_failure(&missing);
+    assert!(stderr(&missing).contains("Declaration Revision 99 does not exist"));
+}
+
+#[test]
+fn revision_commands_expose_fixed_declarations_and_structural_diffs() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let parent = repo.group_plan("delivery");
+    let prerequisite = repo.plan("foundation");
+    let issue = repo.capture("first title");
+
+    let draft = stdout(&repo.axon(&["show", &issue]));
+    assert!(draft.contains("Plan declaration: draft"));
+    assert!(draft.contains("Revisions: 0"));
+    assert_success(&repo.axon(&["decide", "accept", &issue, "-r", "initial plan"]));
+
+    repo.undecide(&issue);
+    assert_success(&repo.axon(&[
+        "write",
+        &issue,
+        "--title",
+        "second title",
+        "-m",
+        "new description\nwith detail",
+    ]));
+    assert_success(&repo.axon(&["group", "set", &issue, &parent]));
+    assert_success(&repo.axon(&["dep", "add", &issue, "--needs", &prerequisite]));
+    repo.accept(&issue);
+
+    let suffix = issue.rsplit('-').next().unwrap();
+    let list = repo.axon(&["revision", "list", suffix]);
+    assert_success(&list);
+    let list = stdout(&list);
+    assert!(list.contains("1  "));
+    assert!(list.contains("2  "));
+    assert!(list.contains("[current]  second title"));
+
+    let revision = repo.axon(&["revision", "show", suffix, "2"]);
+    assert_success(&revision);
+    let revision = stdout(&revision);
+    assert!(revision.contains("Declaration Revision 2 [current]"));
+    assert!(revision.contains("Title: second title"));
+    assert!(revision.contains("new description\nwith detail"));
+    assert!(revision.contains(&format!("Parent: {parent}")));
+    assert!(revision.contains(&format!("  {prerequisite}")));
+
+    let diff = repo.axon(&["revision", "diff", suffix, "1", "2"]);
+    assert_success(&diff);
+    let diff = stdout(&diff);
+    assert!(diff.contains("Title:\n- first title\n+ second title"));
+    assert!(diff.contains("Description:\n- absent\n+ present\n+ new description\n+ with detail"));
+    assert!(diff.contains(&format!("Parent:\n- (none)\n+ {parent}")));
+    assert!(diff.contains(&format!("Outgoing dependencies:\n+ {prerequisite}")));
+
+    let show = stdout(&repo.axon(&["show", &issue]));
+    assert!(show.contains("Plan declaration: fixed at Revision 2"));
+    assert!(show.contains("Revisions: 2"));
+    assert!(show.contains("Decision history: 3"));
+    let log = stdout(&repo.axon(&["log", &issue]));
+    assert!(log.contains("[Revision 1]"));
+    assert!(log.contains("[Revision 2]"));
+
+    repo.undecide(&issue);
+    assert_success(&repo.axon(&["write", &issue, "-m", "(none)"]));
+    repo.accept(&issue);
+    let literal = stdout(&repo.axon(&["revision", "show", &issue, "3"]));
+    assert!(literal.contains("Description:\npresent\n(none)"));
+    let absence_to_literal = stdout(&repo.axon(&["revision", "diff", &issue, "1", "3"]));
+    assert!(absence_to_literal.contains("Description:\n- absent\n+ present\n+ (none)"));
 }

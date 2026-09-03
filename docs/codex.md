@@ -75,6 +75,20 @@ prefix_rule(
     ],
     not_match = ["axon group unknown axon-abc123"],
 )
+
+prefix_rule(
+    pattern = ["axon", "note", "add"],
+    decision = "allow",
+    justification = "Allow axon to append Notes to its shared local database",
+    match = [
+        "axon note add axon-abc123 --message handoff",
+        "axon note add axon-abc123 --file result.md",
+    ],
+    not_match = [
+        "axon note list axon-abc123",
+        "axon revision show axon-abc123 1",
+    ],
+)
 ```
 
 Codex を再起動すると、列挙した axon の状態変更だけが確認なしで sandbox 外においてログインユーザーの権限で実行される。この Rule は `.axon` だけにファイル権限を与えるものではないため、PATH 上の信頼できる axon binary にだけ使う。`axon ready`、`axon show`、`axon list` などの読み取りコマンド、将来追加される未列挙の subcommand、axon 以外のコマンドには一致せず、通常の sandbox 制限が引き続き適用される。実行ファイルの絶対パスや wrapper 経由の呼び出しにも一致しないため、Codex からは `axon ...` の形で実行する。

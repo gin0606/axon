@@ -19,17 +19,24 @@ axon の操作対象は `Issue` と `Group` の 2 kind を持つ Entity であ�
 
 旧 slug ベースの `group new` / `group list` / `group show` / `group reject` / `group dep` は提供しない。Group は Issue と同じ自動生成 ID で参照する。
 
-### 共通の状態・文面・関係操作
+### 共通の状態・宣言・関係操作
 
 次の command は ID から kind を解決し、Issue / Group の両方へ同じ入口を使う。
 
 - `show` / `write` / `log`
+- `note add|list|show` / `revision list|show|diff`
 - `start` / `done` / `release`
 - `decide accept|reject|undecide`
 - `when at|after|clear`
 - `dep add|rm`
 
 `when after` の参照先と dependency の両端も kind の全組み合わせを許す。`AfterEntity` は参照先が Ended または Rejected なら浮上する。dependency は Rejected を前提喪失として扱う。
+
+title、description、parent Group、outgoing dependency は対象 Entity 自身が所有する plan declaration である。Undecided は draft として実変更でき、Accepted / Rejected は判断対象を固定する。固定済み declaration の変更は `decide undecide`、編集、全文確認、再判断として露出させる。同じ値の再指定は実変更ではないため no-op とする。
+
+Accepted / Rejected への判断時には declaration 全文を Entity 内連番の Declaration Revision として保存する。直前の Revision と同じなら再利用し、判断履歴から対象 Revision を参照できる。`revision list|show|diff` は Entity と Revision を一つの read transaction から読み、`revision diff` は title、description、parent、outgoing dependency を別々に比較する。optional な description は `present` / `absent` を本文と分けて表示する。
+
+`note add` は本文または file から非空の Note を一件追記する追加操作である。Issue / Group、Progress、Disposition を問わず使え、declaration、状態、関係、導出値を変えない。Note は Entity 内連番、本文、actor、保存時刻を持ち、通常操作では編集・削除しない。`show` は declaration の固定状態と記録件数を冒頭に示し、description と全 Note を一つの read transaction から保存順で省略せず表示する。
 
 ### 包含
 
@@ -55,7 +62,7 @@ axon の操作対象は `Issue` と `Group` の 2 kind を持つ Entity であ�
 - `import check <file>` は競合と制約を検査し、所有値の構造差分と導出値の差分を表示する。file と DB は変えない
 - `import apply <file>` は write lock 内で同じ検査をやり直し、一つの transaction で全変更を反映してから file の snapshot を更新する
 
-apply は暗黙の既定動作にせず、明示 subcommand だけで実行する。DB commit 後の file 更新だけが失敗したときは、DB が宣言の最終値に完全一致する場合に限り同じ file の再 apply を DB no-op として受け付ける。
+apply は暗黙の既定動作にせず、明示 subcommand だけで実行する。既存の固定済み Entity に一つでも declaration の実変更があれば、file 全体を変更せず拒否する。DB commit 後の file 更新だけが失敗したときは、DB が宣言の最終値に完全一致する場合に限り同じ file の再 apply を DB no-op として受け付ける。
 
 ## Group の進行
 
@@ -76,8 +83,9 @@ Group の `release` は InProgress の子孫が 0 件のときだけ成功する
 | 状態遷移 | `start` / `done` / `release` / `decide` / `when` | 失敗 |
 | 設定 | `write` / `group set|unset` / `dep add|rm` | 成功 no-op |
 | 追加 | `plan` / `capture` / `group plan` / `group capture` | 新規 Entity を追加 |
+| 追記 | `note add` | 新規 Note を追加 |
 
-失敗した遷移と成功 no-op は状態、履歴、`updated_at` を変えない。`start` と `done` は reason を持たず、`release` の任意 reason は進行履歴、`decide` / `when` の任意 reason は判断履歴に保存する。
+失敗した遷移と成功 no-op は状態、履歴、`updated_at` を変えない。`start` と `done` は reason を持たず、`release` の任意 reason は進行履歴、`decide` / `when` の任意 reason は判断履歴に保存する。作業結果や通常の申し送りは、declaration の description ではなく Note に残す。
 
 ## 原子性と deadlock 防止
 

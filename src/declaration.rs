@@ -10,8 +10,8 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
-const SCHEMA: &str = "axon-plan/v1";
-const FINGERPRINT_VERSION: &str = "axon-entity-fingerprint/v1";
+const SCHEMA: &str = "axon-plan/v2";
+const FINGERPRINT_VERSION: &str = "axon-entity-fingerprint/v2";
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeclarationError {
@@ -626,6 +626,7 @@ fn validate_against(
                 description: record.description.clone(),
                 progress: Progress::NotStarted,
                 disposition: Disposition::Accepted,
+                current_revision: Some(1),
                 resurface_condition: ResurfaceCondition::Always,
                 parent: None,
                 created_at: now,

@@ -20,6 +20,14 @@ A root Entity is in active scope. A Group opens its descendants only while it is
 
 A dependency is satisfied only by an `Ended` non-Rejected target. A Rejected target makes the dependent orphaned. In contrast, an `AfterEntity` condition is satisfied by either `Ended` or `Rejected`, because waiting has ended even when no result will be produced.
 
+## Plan declarations, revisions, and notes
+
+An Entity owns a plan declaration consisting of its title, description, parent Group, and outgoing dependencies. `Undecided` declarations are drafts. `Accepted` and `Rejected` declarations are fixed because the Disposition is a decision about that exact definition. To change a fixed declaration, use `axon decide undecide <id> -r <reason>`, edit it, inspect the complete result, and decide it again.
+
+Each decision to `Accepted` or `Rejected` records the complete declaration as an immutable Declaration Revision. An unchanged declaration reuses its previous Revision. Use `axon revision list <id>`, `axon revision show <id> <number>`, and `axon revision diff <id> <from> <to>` to inspect the decision targets and their structural differences.
+
+A Note is append-only information learned after an Entity was defined: investigation evidence, results, corrections, or handoff context. Add one with `axon note add <id> -m <body>` or `axon note add <id> -F <file>`. Notes can be added to either kind in every state without changing the declaration or control state. `note list` and `note show` use stable Entity-local numbers. `axon show` displays the description and every Note in save order without truncation; axon does not infer importance from age.
+
 ## Basic workflow
 
 1. Run `axon init` once at the management root.
@@ -56,16 +64,20 @@ Treat an exported declaration as a working snapshot. After a successful apply, k
 | `axon list` | Which Entities exist, including inactive, blocked, deferred, ended, and rejected ones? |
 | `axon show <id>` | What is this Entity's state, plan scope, relationships, claim, history, and derived status? |
 | `axon log <id>` | Why did its Disposition or resurface condition change? |
+| `axon note list|show` | What supplemental information has been appended to this Entity? |
+| `axon revision list|show|diff` | Which declaration was decided, and how did decided declarations differ? |
 
 ## Commands that change data
 
 - `start`, `done`, `release`, `decide`, and `when` are transitions. Repeating the current value fails without changing state, timestamps, or history.
-- `write`, `group set`, `group unset`, `dep add`, and `dep rm` are settings. Repeating an already satisfied request succeeds without changing timestamps or history.
-- `plan`, `capture`, `group plan`, and `group capture` are additions and create a new Entity each time.
+- `write`, `group set`, `group unset`, `dep add`, and `dep rm` are declaration settings. A real change requires an `Undecided` owner; repeating an already satisfied request succeeds without changing timestamps or history.
+- `plan`, `capture`, `group plan`, and `group capture` are additions and create a new Entity each time. `note add` is also an addition and always appends a new Note.
 - `show`, `write`, `start`, `done`, `release`, `decide`, `when`, `dep`, and `log` resolve the target kind from the common ID namespace.
 - `dep add` and `dep rm` support Issue-to-Issue, Issue-to-Group, Group-to-Issue, and Group-to-Group dependencies.
 - `group set` moves either kind below a Group; `group unset` removes its parent.
 - `import prepare` changes only its YAML file; `import apply` is the only declaration command that changes Entity data.
+
+`show` begins with the declaration's draft/fixed state and counts for Notes, Revisions, decision history, and progress history. The detailed state, description, and Notes come from one database read transaction.
 
 An Ended Group cannot be moved, gain or lose descendants, or change its outgoing dependencies. A terminal descendant below an Ended Group cannot be made non-terminal. New follow-up work belongs outside that completed scope.
 
@@ -83,10 +95,12 @@ Claims record actor, worktree, and start time. axon does not decide that a claim
 
 Successful results and mutation confirmations go to standard output. Errors go to standard error and return a non-zero status. Empty `ready`, `triage`, `claims`, `stale`, and `list` queries keep standard output empty and write only a short note to standard error.
 
-The first whitespace-separated field in every list row is the Entity ID. The second identifies its kind. User-provided titles, descriptions, and reasons are displayed unchanged.
+The first whitespace-separated field in every Entity list row is the Entity ID. The second identifies its kind. Note and Revision lists begin with their Entity-local number. Revision reads use one database snapshot, and optional descriptions label `present` or `absent` separately from their content. Note bodies are stored and displayed without trimming; a body containing only whitespace is rejected.
 
 ## Storage, worktrees, and identifiers
 
 axon stores `.axon/axon.db` at the management root. In Git, the management root is the parent of the common Git directory, so linked worktrees share the database. Outside Git, commands search ancestors for the nearest database.
+
+The executable opens only the schema version it implements. It does not rewrite an older database during an ordinary command; an unsupported version fails before Entity data is read or changed.
 
 Every Issue and Group ID uses `<prefix>-<random six characters>`. The prefix comes from `axon init`; kind is not encoded in the ID. A full ID or a unique suffix may be used wherever an Entity ID is accepted. Group slugs do not exist.

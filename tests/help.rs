@@ -38,8 +38,8 @@ fn complete_help_is_self_contained_and_does_not_open_a_database() {
     ] {
         assert!(stdout.contains(required), "missing {required:?}");
     }
-    assert_eq!(stdout.matches("-m, --message <MESSAGE>").count(), 5);
-    assert_eq!(stdout.matches("-F, --file <FILE>").count(), 5);
+    assert_eq!(stdout.matches("-m, --message <MESSAGE>").count(), 6);
+    assert_eq!(stdout.matches("-F, --file <FILE>").count(), 6);
     assert!(!dir.path().join(".axon").exists());
 }
 

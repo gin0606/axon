@@ -21,7 +21,9 @@ Codex の linked worktree から共有 DB を更新する場合は、[Codex の 
 
 ## reason と履歴
 
-`-r` / `--reason` はすべて任意。状態から意図を復元できない操作だけが受け取る。`release` の理由は `show` の進行履歴に、`decide` / `when` の理由は `log` の判断履歴に保存される。`start` と `done` は reason を受け取らず、作業結果や申し送りは Entity の description に残す。
+`-r` / `--reason` はすべて任意。状態から意図を復元できない操作だけが受け取る。`release` の理由は `show` の進行履歴に、`decide` / `when` の理由は `log` の判断履歴に保存される。`start` と `done` は reason を受け取らない。作業結果や申し送りは `axon note add <id> -m <body>` で追記し、Entity が何であるかを定める description とは分ける。
+
+title、description、parent、outgoing dependency は Entity の plan declaration である。Accepted / Rejected では固定され、変更には Undecided への戻しと再判断が必要になる。判断対象になった全文は Declaration Revision として残り、`axon revision list|show|diff` で確認できる。Note は状態を問わず追記でき、`axon show` では description と全 Note を省略せず表示する。
 
 ## ドキュメント
 
@@ -31,12 +33,14 @@ Codex の linked worktree から共有 DB を更新する場合は、[Codex の 
 | [docs/help.md](docs/help.md) | `axon help` と `axon --help` に埋め込む英語の利用マニュアル |
 | [docs/axes.md](docs/axes.md) | 状態モデルの軸。**なぜこの設計なのか**の記録。決着した論点が 24 件 |
 | [docs/declaration-file.md](docs/declaration-file.md) | export / import が扱う strict YAML の形式契約 |
+| [docs/information-model.md](docs/information-model.md) | plan declaration、Revision、Note、状態、履歴の規範契約 |
 | [docs/data-model.md](docs/data-model.md) | 永続化とスキーマ。SQLite 単体、git 管理外 |
 | [docs/codex.md](docs/codex.md) | Codex の linked worktree から共有 DB を更新するための sandbox 設定 |
 | [docs/dry-run.md](docs/dry-run.md) | 運用シナリオを通した検証 |
 | [docs/implementation.md](docs/implementation.md) | 実装方針と最小スコープ |
 | [spec/axon.qnt](spec/axon.qnt) | Quint による形式仕様。A / B / C / D の思想的コアだけを状態機械として検査する |
 | [spec/group_plan.qnt](spec/group_plan.qnt) | 明示的な計画 group の拡張仕様。Entity、包含、状態遷移、導出値をコアと分けて検査する |
+| [spec/information_model.qnt](spec/information_model.qnt) | 情報分類、declaration 固定、Revision、Note の変更範囲を検査する |
 
 設計の議論では、Quint のシミュレーションで考慮漏れが 3 件見つかっている (`orphaned` が推移しない問題、`blocking cause` がグループ依存を辿らない問題、Ended group 自身を親変更できる問題)。いずれも議論だけでは見落としていた。
 
