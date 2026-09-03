@@ -17,6 +17,8 @@ axon completion zsh > _axon    # シェル補完スクリプトを生成
 
 `completion` は `bash`、`elvish`、`fish`、`powershell`、`zsh` を受け付ける。生成したスクリプトは各シェルの補完ディレクトリに置くか、そのシェルの方法で読み込む。
 
+Codex の linked worktree から共有 DB を更新する場合は、[Codex の sandbox 設定](docs/codex.md)を一度だけ行う。
+
 ## reason と履歴
 
 `-r` / `--reason` はすべて任意。状態から意図を復元できない操作だけが受け取る。`release` の理由は `show` の進行履歴に、`decide` / `when` の理由は `log` の判断履歴に保存される。`start` と `done` は reason を受け取らず、作業結果や申し送りは Entity の description に残す。
@@ -30,6 +32,7 @@ axon completion zsh > _axon    # シェル補完スクリプトを生成
 | [docs/axes.md](docs/axes.md) | 状態モデルの軸。**なぜこの設計なのか**の記録。決着した論点が 24 件 |
 | [docs/declaration-file.md](docs/declaration-file.md) | export / import が扱う strict YAML の形式契約 |
 | [docs/data-model.md](docs/data-model.md) | 永続化とスキーマ。SQLite 単体、git 管理外 |
+| [docs/codex.md](docs/codex.md) | Codex の linked worktree から共有 DB を更新するための sandbox 設定 |
 | [docs/dry-run.md](docs/dry-run.md) | 運用シナリオを通した検証 |
 | [docs/implementation.md](docs/implementation.md) | 実装方針と最小スコープ |
 | [spec/axon.qnt](spec/axon.qnt) | Quint による形式仕様。A / B / C / D の思想的コアだけを状態機械として検査する |

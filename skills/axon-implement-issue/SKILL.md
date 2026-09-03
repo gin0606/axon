@@ -7,6 +7,10 @@ description: ユーザーから指定された採用済みの axon Entity の着
 
 指定された 1 件の Entity の作業状況と axon 上の進行を一致させる。この skill は axon 外の作業内容や権限を追加しない。
 
+## 共有 DB への書き込み権限
+
+Git linked worktree では共有 `.axon` が作業ディレクトリの外に置かれることがある。状態変更 command が共有 DB への書き込み権限不足で拒否された場合は、その command だけを実行環境の許可機構で再実行する。読み取り・探索 command や他の program まで権限を広げず、再実行できなければ状態を推測せずに拒否と未反映を報告する。
+
 ## 着手
 
 1. `axon show <id>` で kind、本文、採否、進行、依存、親 Group を確認する。
