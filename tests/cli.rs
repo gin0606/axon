@@ -550,6 +550,7 @@ fn notes_reject_missing_or_blank_input_and_unknown_local_numbers() {
     for args in [
         vec!["note", "add", &issue],
         vec!["note", "add", &issue, "-m", " \n\t"],
+        vec!["note", "add", &issue, "-m", "\u{00a0}\u{3000}"],
         vec!["note", "add", &issue, "-F", blank_file.to_str().unwrap()],
     ] {
         assert_failure(&repo.axon(&args));

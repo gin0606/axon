@@ -48,7 +48,7 @@ Git リポジトリ内では common root を管理境界として常に優先す
 - **待機関係は DAG に保つ**。dependency、`AfterEntity`、包含を activation / completion の 2 つの wait graph に射影し、両方を同じ write transaction で検査する。group を待機元にした辺は全子孫へ展開する
 - **決定済み declaration と Revision の参照を DB 制約でも一致させる**。Undecided は `current_revision IS NULL`、Accepted / Rejected は同じ Entity の Revision を必ず参照する
 - **Revision と判断は同じ transaction で確定する**。直前と同じ declaration は Revision を再利用し、違う場合だけ Entity 内連番を追加する
-- **Note の追加は immediate transaction で連番を割り当てる**。入力時刻ではなくこの保存順を正にし、空白だけの本文を CLI と CHECK 制約の両方で拒否する
+- **Note の追加は immediate transaction で連番を割り当てる**。入力時刻ではなくこの保存順を正にし、空白だけの本文は Store の書き込み境界で拒否する。DB の `NOT NULL` / `CHECK` 制約も NULL、空文字、U+0020 だけの本文を拒否する
 - **複数テーブルの詳細表示は一つの read transaction から作る**。現在 Entity、関係、履歴、Revision、Note、件数を異なる時点から混ぜない
 - **スキーマは `user_version` で版を持つが、通常起動時に migration しない**。実装と一致する fresh schema だけを開き、旧版や未知の版は Entity を読む前に version error として拒否する
 
