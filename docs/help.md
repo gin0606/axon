@@ -50,7 +50,7 @@ Treat an exported declaration as a working snapshot. After a successful apply, k
 | Command | Question answered |
 | --- | --- |
 | `axon ready` | Which active Entities can start now? |
-| `axon triage` | Which active-frontier Entities need a human decision? |
+| `axon triage` | Which Entities are on the active decision frontier? |
 | `axon claims` | Which Entities are claimed, by whom, where, and since when? |
 | `axon stale` | The same complete claim facts, without inferring staleness from age or process state. |
 | `axon list` | Which Entities exist, including inactive, blocked, deferred, ended, and rejected ones? |
