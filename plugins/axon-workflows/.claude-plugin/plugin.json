@@ -1,0 +1,9 @@
+{
+  "name": "axon-workflows",
+  "description": "Axon Entityを起点に外部作業を完遂する個人用ワークフロー",
+  "version": "0.1.0",
+  "author": {
+    "name": "gin0606"
+  },
+  "repository": "https://github.com/gin0606/axon"
+}

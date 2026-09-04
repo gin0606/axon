@@ -1,0 +1,9 @@
+{
+  "name": "axon",
+  "description": "Axon Skill Kitへ個人用の判断と協業方針を加えるワークフロー",
+  "version": "0.1.0",
+  "author": {
+    "name": "gin0606"
+  },
+  "repository": "https://github.com/gin0606/axon"
+}

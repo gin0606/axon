@@ -1,0 +1,9 @@
+{
+  "name": "axon-kit",
+  "description": "Reusable Axon model and safe tracker-operation capabilities",
+  "version": "0.1.0",
+  "author": {
+    "name": "gin0606"
+  },
+  "repository": "https://github.com/gin0606/axon"
+}

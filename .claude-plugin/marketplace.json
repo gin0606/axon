@@ -1,0 +1,21 @@
+{
+  "name": "personal",
+  "owner": {
+    "name": "gin0606"
+  },
+  "description": "WIP",
+  "plugins": [
+    {
+      "name": "axon-kit",
+      "source": "./plugins/axon-kit"
+    },
+    {
+      "name": "axon",
+      "source": "./plugins/axon"
+    },
+    {
+      "name": "axon-workflows",
+      "source": "./plugins/axon-workflows"
+    }
+  ]
+}
