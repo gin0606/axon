@@ -4,7 +4,16 @@
 
 axon の操作対象は `Issue` と `Group` の 2 kind を持つ Entity である。どちらも同じ公開 ID、文面、Progress、Disposition、Resurface condition、claim を持つ。対象 kind を先に選ばせる namespace は作らず、ID を受け取る top-level command が kind を解決する。
 
-完全な利用者向け help は英語の `docs/help.md`、状態モデルと設計理由の正は `docs/axes.md` に置く。Usage、引数、option、コマンドツリーは Clap の定義から生成する。`axon help` と `axon --help` は完全 help、`axon -h` は短い一覧を返す。
+英語の利用マニュアルは `docs/help.md`、状態モデルと設計理由の正は `docs/axes.md` に置く。Usage、引数、option、コマンドツリーは Clap の定義から生成する。引数なしの `axon`、`axon help`、`axon -h`、`axon --help` は、次に調べる command をすぐ選べる同一の root help を返す。`axon help <command path>` と各 command の `--help` は Clap による個別の詳細を返す。全 command の help を連結する入口は持たない。`axon docs` は状態モデルと基本 workflow を Markdown ではない端末向け形式で返す。
+
+| 分類 | command 順序 |
+| --- | --- |
+| Workflow | `plan`, `capture`, `ready`, `triage`, `start`, `done`, `release` |
+| Inspect | `show`, `list`, `claims`, `log`, `note`, `revision` |
+| Plan management | `write`, `group`, `dep`, `decide`, `when`, `export`, `import` |
+| Setup & utilities | `init`, `completion`, `docs`, `help` |
+
+分類内では、対になる操作と同じ対象を扱う namespace を隣接させる。namespace 内は `group plan|capture|set|unset`、`dep add|rm`、`decide accept|reject|undecide`、`when at|after|clear`、`note add|list|show`、`revision list|show|diff`、`import prepare|check|apply` の順とする。
 
 ## コマンド境界
 

@@ -17,40 +17,72 @@ fn help_stdout(args: &[&str]) -> String {
 }
 
 #[test]
-fn complete_help_is_self_contained_and_does_not_open_a_database() {
-    let (output, dir) = axon(&["--help"]);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success());
-    assert!(output.stderr.is_empty());
-    for required in [
-        "# axon CLI",
-        "## State model",
-        "Entity",
-        "Progress",
-        "Disposition",
-        "Resurface condition",
-        "## Basic workflow",
-        "## Editing a plan declaration",
-        "# Command reference",
-        "## `axon group plan`",
-        "## `axon group capture`",
-        "## `axon import apply`",
+fn root_help_forms_match_and_stay_concise() {
+    let root = help_stdout(&[]);
+    for args in [
+        &["help"][..],
+        &["-h"][..],
+        &["--help"][..],
+        &["-h", "plan"][..],
+        &["--help", "plan"][..],
     ] {
-        assert!(stdout.contains(required), "missing {required:?}");
+        assert_eq!(root, help_stdout(args), "{args:?}");
     }
-    assert_eq!(stdout.matches("-m, --message <MESSAGE>").count(), 6);
-    assert_eq!(stdout.matches("-F, --file <FILE>").count(), 6);
-    assert!(!dir.path().join(".axon").exists());
+    assert!(root.contains("Usage: axon <COMMAND>"));
+    assert!(root.contains("axon docs"));
+    assert!(!root.contains("help all"));
 }
 
 #[test]
-fn bare_help_matches_root_long_help_and_short_help_stays_short() {
-    let (root, _) = axon(&["--help"]);
-    let (help, _) = axon(&["help"]);
-    assert_eq!(root.stdout, help.stdout);
-    let short = help_stdout(&["-h"]);
-    assert!(short.contains("Usage: axon <COMMAND>"));
-    assert!(!short.contains("# axon CLI"));
+fn root_help_groups_commands_in_workflow_order() {
+    let help = help_stdout(&["-h"]);
+    let sections = [
+        (
+            "Workflow:",
+            [
+                "plan", "capture", "ready", "triage", "start", "done", "release",
+            ]
+            .as_slice(),
+        ),
+        (
+            "Inspect:",
+            ["show", "list", "claims", "log", "note", "revision"].as_slice(),
+        ),
+        (
+            "Plan management:",
+            [
+                "write", "group", "dep", "decide", "when", "export", "import",
+            ]
+            .as_slice(),
+        ),
+        (
+            "Setup & utilities:",
+            ["init", "completion", "docs", "help"].as_slice(),
+        ),
+    ];
+
+    let mut previous_section = 0;
+    for (index, (heading, commands)) in sections.iter().enumerate() {
+        let section = help
+            .find(*heading)
+            .unwrap_or_else(|| panic!("missing section {heading:?}"));
+        assert!(section >= previous_section, "{heading}");
+        previous_section = section;
+        let section_end = sections
+            .get(index + 1)
+            .and_then(|(next_heading, _)| help.find(next_heading))
+            .unwrap_or(help.len());
+        let section_help = &help[section..section_end];
+
+        let mut previous_command = 0;
+        for command in *commands {
+            let command = section_help
+                .find(&format!("\n  {command}"))
+                .unwrap_or_else(|| panic!("missing command {command:?}"));
+            assert!(command >= previous_command, "{heading}: {command}");
+            previous_command = command;
+        }
+    }
 }
 
 #[test]
@@ -82,16 +114,50 @@ fn leaf_help_documents_common_entity_inputs_and_kind_filters() {
 }
 
 #[test]
-fn removed_slug_commands_are_absent_from_complete_help() {
-    let help = help_stdout(&["--help"]);
-    for path in [
-        "axon group new",
-        "axon group list",
-        "axon group show",
-        "axon group reject",
-        "axon group dep",
+fn help_command_drills_into_nested_command_help() {
+    assert_eq!(
+        help_stdout(&["help", "group", "plan"]),
+        help_stdout(&["group", "plan", "--help"])
+    );
+}
+
+#[test]
+fn docs_explains_the_model_in_terminal_text_without_opening_a_database() {
+    let (output, dir) = axon(&["docs"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    for required in [
+        "Axon concepts",
+        "State axes",
+        "Progress",
+        "Disposition",
+        "Resurface condition",
+        "Relationships and derived state",
+        "Basic workflow",
+        "axon plan / axon capture      Create an Issue",
+        "axon help <COMMAND PATH>",
     ] {
-        assert!(!help.contains(&format!("## `{path}")), "{path}");
+        assert!(stdout.contains(required), "missing {required:?}");
+    }
+    assert!(!stdout.lines().any(|line| line.starts_with('#')));
+    assert!(!stdout.contains('`'));
+    assert!(!dir.path().join(".axon").exists());
+}
+
+#[test]
+fn help_all_is_not_a_command() {
+    let (output, _) = axon(&["help", "all"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand 'all'"));
+}
+
+#[test]
+fn removed_slug_commands_are_absent_from_group_help() {
+    let help = help_stdout(&["group", "--help"]);
+    for command in ["new", "list", "show", "reject", "dep"] {
+        assert!(!help.contains(&format!("\n  {command}")), "{command}");
     }
 }
 
@@ -101,12 +167,17 @@ fn removed_stale_command_is_not_a_compatibility_alias() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
+    assert!(!help_stdout(&["--help"]).contains("\n  stale"));
 }
 
 #[test]
 fn help_and_completion_do_not_open_a_database() {
     for args in [
+        &[][..],
         &["help"][..],
+        &["docs"][..],
+        &["docs", "--help"][..],
+        &["--help"][..],
         &["-h"][..],
         &["group", "plan", "--help"][..],
         &["completion", "zsh"][..],
@@ -123,7 +194,12 @@ fn help_and_completion_do_not_open_a_database() {
 fn generated_output_treats_closed_stdout_as_success() {
     use std::os::fd::{FromRawFd, OwnedFd};
 
-    for args in [&["--help"][..], &["completion", "bash"][..]] {
+    for args in [
+        &["docs"][..],
+        &["--help"][..],
+        &["-h"][..],
+        &["completion", "bash"][..],
+    ] {
         let dir = TestDir::new("closed-pipe");
         let mut pipe = [0; 2];
         assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);

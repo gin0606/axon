@@ -7,13 +7,39 @@ mod domain;
 
 use anstyle::{AnsiColor, Color, Style};
 use chrono::{NaiveDate, Utc};
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use db::{Change, Ctx, Store};
 use derived::{TriageReason, View};
 use domain::*;
 
-const CLI_GUIDE: &str = include_str!("../docs/help.md");
+struct HelpSection {
+    heading: &'static str,
+    commands: &'static [&'static str],
+}
+
+const HELP_SECTIONS: &[HelpSection] = &[
+    HelpSection {
+        heading: "Workflow",
+        commands: &[
+            "plan", "capture", "ready", "triage", "start", "done", "release",
+        ],
+    },
+    HelpSection {
+        heading: "Inspect",
+        commands: &["show", "list", "claims", "log", "note", "revision"],
+    },
+    HelpSection {
+        heading: "Plan management",
+        commands: &[
+            "write", "group", "dep", "decide", "when", "export", "import",
+        ],
+    },
+    HelpSection {
+        heading: "Setup & utilities",
+        commands: &["init", "completion", "docs", "help"],
+    },
+];
 
 const OUTPUT_HEADING: Style = Style::new().bold();
 const OUTPUT_ID: Style = Style::new()
@@ -123,6 +149,8 @@ enum Command {
         #[arg(value_enum)]
         shell: Shell,
     },
+    /// Explain Axon's state model and basic workflow
+    Docs,
     /// Create an Accepted issue
     Plan {
         /// Parent group ID or unique ID suffix
@@ -176,7 +204,7 @@ enum Command {
         /// Entity ID or unique ID suffix
         id: String,
     },
-    /// End one InProgress Entity
+    /// Mark one InProgress Entity as Ended
     Done {
         /// Entity ID or unique ID suffix
         id: String,
@@ -444,8 +472,11 @@ enum RevisionCmd {
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
-    if requests_complete_help(&args) {
-        if let Err(error) = write_complete_help() {
+    if args.len() == 1 {
+        if let Err(error) = cli_command().print_help() {
+            if error.kind() == std::io::ErrorKind::BrokenPipe {
+                return;
+            }
             eprintln!("Error: {error}");
             std::process::exit(1);
         }
@@ -458,9 +489,11 @@ fn main() {
 }
 
 fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> {
-    match Cli::parse_from(args).command {
+    let mut matches = cli_command().get_matches_from(args);
+    match Cli::from_arg_matches_mut(&mut matches)?.command {
         Command::Init { prefix } => cmd_init(prefix),
         Command::Completion { shell } => write_completion(shell).map_err(Into::into),
+        Command::Docs => cmd_docs(),
         Command::Plan {
             title,
             parent,
@@ -2059,50 +2092,164 @@ fn write_rows(rows: &str, empty_note: &str, decoration: OutputDecoration) -> std
     }
 }
 
-fn requests_complete_help(args: &[std::ffi::OsString]) -> bool {
-    match args.get(1).and_then(|argument| argument.to_str()) {
-        Some("--help") => true,
-        Some("help") => args.len() == 2,
-        _ => false,
-    }
+fn cli_command() -> clap::Command {
+    Cli::command().override_help(render_root_help(OutputDecoration::Ansi))
 }
 
-fn write_complete_help() -> std::io::Result<()> {
-    use std::io::Write;
-    let mut stdout = std::io::stdout().lock();
-    match stdout.write_all(render_complete_help().as_bytes()) {
-        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
-        result => result,
-    }
-}
+fn render_root_help(decoration: OutputDecoration) -> String {
+    use std::fmt::Write;
 
-fn render_complete_help() -> String {
     let mut command = Cli::command().term_width(0);
     command.build();
-    let mut output = String::new();
-    output.push_str(CLI_GUIDE.trim_end());
-    output.push_str("\n\n# Command reference\n");
-    write_leaf_help(&mut output, &mut command, "axon");
+    let standard = command.render_help().to_string();
+    let (preamble, remainder) = standard
+        .split_once("\n\nCommands:\n")
+        .expect("root help must contain a command section");
+    let (_, options) = remainder
+        .rsplit_once("\n\nOptions:\n")
+        .expect("root help must contain an option section");
+    let command_width = HELP_SECTIONS
+        .iter()
+        .flat_map(|section| section.commands)
+        .map(|name| name.len())
+        .max()
+        .unwrap_or_default();
+
+    let styles = command.get_styles();
+    let usage_heading = decoration.paint(*styles.get_usage(), "Usage:");
+    let mut output = preamble.replacen("Usage:", &usage_heading, 1);
+    for section in HELP_SECTIONS {
+        let heading = decoration.paint(*styles.get_header(), section.heading);
+        write!(output, "\n\n{heading}:\n").unwrap();
+        for name in section.commands {
+            let child = command
+                .get_subcommands()
+                .find(|child| child.get_name() == *name)
+                .expect("help section must reference an existing command");
+            let about = child
+                .get_about()
+                .or_else(|| child.get_long_about())
+                .unwrap_or_default();
+            let styled_name = decoration.paint(*styles.get_literal(), name);
+            let padding = command_width - name.len();
+            writeln!(output, "  {styled_name}{:padding$}  {about}", "").unwrap();
+        }
+        output.pop();
+    }
+    let more_help = decoration.paint(*styles.get_header(), "More help");
+    let help_path = decoration.paint(*styles.get_literal(), "axon help <COMMAND PATH>");
+    let docs = decoration.paint(*styles.get_literal(), "axon docs");
+    write!(
+        output,
+        "\n\n{more_help}:\n  {help_path}  Show detailed help for a command\n  {docs}                 Explain Axon's state model and basic workflow",
+    )
+    .unwrap();
+    let options_heading = decoration.paint(*styles.get_header(), "Options");
+    write!(output, "\n\n{options_heading}:\n").unwrap();
+    output.push_str(options);
     output
 }
 
-fn write_leaf_help(output: &mut String, command: &mut clap::Command, path: &str) {
-    let generated_help = !command.is_disable_help_subcommand_set();
-    let has_children = command
-        .get_subcommands()
-        .any(|child| !child.is_hide_set() && !(generated_help && child.get_name() == "help"));
-    if !has_children {
-        output.push_str(&format!("\n## `{path}`\n\n"));
-        output.push_str(command.render_long_help().to_string().trim_end());
-        output.push('\n');
-        return;
+fn cmd_docs() -> Result<(), Box<dyn std::error::Error>> {
+    let decoration = current_output_decoration();
+    write_output(&render_docs(decoration), decoration)?;
+    Ok(())
+}
+
+fn render_docs(decoration: OutputDecoration) -> String {
+    use std::fmt::Write;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "{}\n",
+        decoration.paint(OUTPUT_HEADING, "Axon concepts")
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "An Entity is either an Issue or a Group. Both kinds share the same state axes,\nrelationships, generated IDs, and commands.\n"
+    )
+    .unwrap();
+
+    writeln!(output, "{}", decoration.paint(OUTPUT_HEADING, "State axes")).unwrap();
+    writeln!(
+        output,
+        "  Progress             NotStarted, InProgress, or Ended. Ended means no more work."
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  Disposition          Undecided, Accepted, or Rejected. This records whether to pursue it."
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  Resurface condition  Always, AtDate, or AfterEntity. This controls when it returns to attention.\n"
+    )
+    .unwrap();
+
+    writeln!(
+        output,
+        "{}",
+        decoration.paint(OUTPUT_HEADING, "Relationships and derived state")
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  A dependency requires another Entity's result. An Ended non-Rejected Entity satisfies\n  it; a Rejected dependency makes its dependent orphaned. AfterEntity instead finishes\n  waiting when its reference is Ended or Rejected.\n\n  Containment places an Issue or Group under one parent Group. ready, blocked, orphaned,\n  surfaced, terminal, and active scope are derived when data is read; they are not stored.\n  An Entity is terminal when it is Ended or Rejected.\n"
+    )
+    .unwrap();
+
+    writeln!(output, "{}", decoration.paint(OUTPUT_HEADING, "Groups")).unwrap();
+    writeln!(
+        output,
+        "  An InProgress Group opens its descendants only while it is Accepted, surfaced, and\n  neither blocked nor orphaned. Starting a Group does not start its descendants. A Group\n  can end only after every descendant is terminal, and can be released only when no\n  descendant is InProgress.\n"
+    )
+    .unwrap();
+
+    writeln!(
+        output,
+        "{}",
+        decoration.paint(OUTPUT_HEADING, "Plan declarations and notes")
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  Title, description, parent, and outgoing dependencies form the plan declaration.\n  Accepted and Rejected declarations are fixed; return one to Undecided before editing it.\n  Notes append durable information without changing the declaration or state.\n"
+    )
+    .unwrap();
+
+    writeln!(
+        output,
+        "{}",
+        decoration.paint(OUTPUT_HEADING, "Basic workflow")
+    )
+    .unwrap();
+    for (command, description) in [
+        ("axon plan / axon capture", "Create an Issue"),
+        (
+            "axon ready / axon triage",
+            "Find the active work or decision frontier",
+        ),
+        ("axon start", "Claim one ready Entity"),
+        (
+            "axon done / axon release",
+            "End the work or release its claim",
+        ),
+        ("axon show", "Inspect one Entity and its current context"),
+    ] {
+        let styled_command = decoration.paint(OUTPUT_HEADING, command);
+        let padding = 28 - command.len();
+        writeln!(output, "  {styled_command}{:padding$}  {description}", "").unwrap();
     }
-    for child in command.get_subcommands_mut() {
-        if child.is_hide_set() || (generated_help && child.get_name() == "help") {
-            continue;
-        }
-        write_leaf_help(output, child, &format!("{path} {}", child.get_name()));
-    }
+    writeln!(
+        output,
+        "\nUse {} for command syntax and options.",
+        decoration.paint(OUTPUT_HEADING, "axon help <COMMAND PATH>")
+    )
+    .unwrap();
+    output
 }
 
 fn write_completion(shell: Shell) -> std::io::Result<()> {
@@ -2438,28 +2585,38 @@ mod tests {
     }
 
     #[test]
-    fn complete_help_contains_every_leaf() {
-        let help = render_complete_help();
-        for path in [
-            "axon plan",
-            "axon group plan",
-            "axon group capture",
-            "axon group set",
-            "axon group unset",
-            "axon dep add",
-            "axon note add",
-            "axon note list",
-            "axon note show",
-            "axon revision list",
-            "axon revision show",
-            "axon revision diff",
-            "axon export",
-            "axon import prepare",
-            "axon import check",
-            "axon import apply",
-        ] {
-            assert!(help.contains(&format!("## `{path}`\n")), "{path}");
+    fn root_help_and_docs_can_render_clap_style_without_changing_text() {
+        for render in [render_root_help, render_docs] {
+            let plain = render(OutputDecoration::Plain);
+            let styled = render(OutputDecoration::Ansi);
+            assert!(styled.contains("\u{1b}["));
+            assert_eq!(anstream::adapter::strip_str(&styled).to_string(), plain);
         }
-        assert!(!help.contains("## `axon group new`"));
+    }
+
+    #[test]
+    fn help_sections_cover_every_top_level_command_once() {
+        let mut command = Cli::command();
+        command.build();
+        let actual = command
+            .get_subcommands()
+            .filter(|command| !command.is_hide_set())
+            .map(|command| command.get_name())
+            .collect::<std::collections::BTreeSet<_>>();
+        let classified = HELP_SECTIONS
+            .iter()
+            .flat_map(|section| section.commands.iter().copied())
+            .collect::<Vec<_>>();
+        let unique = classified
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            classified.len(),
+            unique.len(),
+            "duplicate help classification"
+        );
+        assert_eq!(actual, unique);
     }
 }
