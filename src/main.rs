@@ -220,7 +220,7 @@ enum Command {
         #[arg(long, value_enum)]
         kind: Option<KindFilter>,
     },
-    /// Show one Entity and its relationships
+    /// Show one Entity; Groups include their complete subtree overview
     Show {
         /// Entity ID or unique ID suffix
         id: String,
@@ -885,7 +885,31 @@ fn cmd_list(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>> 
 }
 
 fn render_list_row(view: &View, entity: &Entity, decoration: OutputDecoration) -> String {
+    let marks = render_entity_marks(view, entity, false, decoration);
+    format!(
+        "{}  {}  [{}/{}]  {}{}\n",
+        decoration.paint(OUTPUT_ID, &entity.id),
+        decoration.paint(OUTPUT_MUTED, entity.kind.label()),
+        decoration.paint(progress_style(&entity.progress), entity.progress.label()),
+        decoration.paint(
+            disposition_style(entity.disposition),
+            entity.disposition.label()
+        ),
+        entity.title,
+        marks
+    )
+}
+
+fn render_entity_marks(
+    view: &View,
+    entity: &Entity,
+    include_ready: bool,
+    decoration: OutputDecoration,
+) -> String {
     let mut marks = Vec::new();
+    if include_ready && view.is_ready(entity) {
+        marks.push(decoration.paint(OUTPUT_ACCEPTED, "Ready"));
+    }
     if view.is_orphaned(&entity.id) {
         marks.push(decoration.paint(OUTPUT_DANGER, "Orphaned"));
     } else if view.is_blocked(&entity.id) {
@@ -900,23 +924,11 @@ fn render_list_row(view: &View, entity: &Entity, decoration: OutputDecoration) -
     if let Some(reason) = inactive_scope_reason(view, &entity.id) {
         marks.push(decoration.paint(OUTPUT_ATTENTION, format!("Inactive: {reason}")));
     }
-    let marks = if marks.is_empty() {
+    if marks.is_empty() {
         String::new()
     } else {
         format!("  {}", marks.join("  "))
-    };
-    format!(
-        "{}  {}  [{}/{}]  {}{}\n",
-        decoration.paint(OUTPUT_ID, &entity.id),
-        decoration.paint(OUTPUT_MUTED, entity.kind.label()),
-        decoration.paint(progress_style(&entity.progress), entity.progress.label()),
-        decoration.paint(
-            disposition_style(entity.disposition),
-            entity.disposition.label()
-        ),
-        entity.title,
-        marks
-    )
+    }
 }
 
 fn cmd_show(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -1062,12 +1074,6 @@ fn render_show(
 
     if entity.kind == EntityKind::Group {
         let summary = view.group_summary(&entity.id);
-        let remaining = view
-            .descendants(&entity.id)
-            .into_iter()
-            .filter(|descendant| !descendant.is_terminal())
-            .map(|descendant| decoration.paint(OUTPUT_ID, &descendant.id))
-            .collect::<Vec<_>>();
         let completable = view.can_complete_group(&entity.id);
         let mut group = vec![format!(
             "  {}",
@@ -1086,15 +1092,6 @@ fn render_show(
                 )],
             )
         )];
-        if !remaining.is_empty() {
-            group.push(format!(
-                "  {}",
-                render_inline_fields(
-                    decoration,
-                    vec![("Non-terminal descendants", remaining.join(", "))],
-                )
-            ));
-        }
         group.push(String::new());
         group.extend(render_entity_counts(
             "Direct children",
@@ -1108,10 +1105,32 @@ fn render_show(
             decoration,
         ));
         blocks.push(render_section(decoration, "Group", group));
+
+        let subtree = ordered_subtree(view, &entity.id);
+        blocks.push(render_section(
+            decoration,
+            "Subtree",
+            render_subtree(view, &subtree, decoration),
+        ));
+        let dependencies = render_subtree_dependencies(view, entity, &subtree, decoration);
+        if !dependencies.is_empty() {
+            blocks.push(render_section(decoration, "Dependencies", dependencies));
+        }
     }
 
     let mut relations = Vec::<(&str, String)>::new();
+    let direct_group_dependencies = if entity.kind == EntityKind::Group {
+        view.direct_dependencies(&entity.id)
+            .into_iter()
+            .map(|target| target.id.clone())
+            .collect::<std::collections::HashSet<_>>()
+    } else {
+        std::collections::HashSet::new()
+    };
     for target in view.dependency_targets(&entity.id) {
+        if direct_group_dependencies.contains(&target.id) {
+            continue;
+        }
         let (label, style) = if target.disposition == Disposition::Rejected {
             ("Orphaned:", OUTPUT_DANGER)
         } else if target.is_terminal() {
@@ -1128,6 +1147,9 @@ fn render_show(
         ));
     }
     for cause in view.blocking_causes(&entity.id) {
+        if direct_group_dependencies.contains(&cause.id) {
+            continue;
+        }
         relations.push((
             "Root cause:",
             render_related_entity(cause, OUTPUT_DANGER, decoration),
@@ -1198,6 +1220,110 @@ fn render_show(
             .collect::<Vec<_>>()
             .join("\n\n")
     )
+}
+
+fn ordered_subtree<'a>(view: &'a View, root: &EntityId) -> Vec<(usize, &'a Entity)> {
+    fn append_children<'a>(
+        view: &'a View,
+        parent: &EntityId,
+        depth: usize,
+        result: &mut Vec<(usize, &'a Entity)>,
+    ) {
+        let mut children = view.direct_children(parent);
+        children.sort_by(|left, right| left.id.cmp(&right.id));
+        for child in children {
+            result.push((depth, child));
+            append_children(view, &child.id, depth + 1, result);
+        }
+    }
+
+    let mut result = Vec::new();
+    append_children(view, root, 1, &mut result);
+    result
+}
+
+fn render_subtree(
+    view: &View,
+    subtree: &[(usize, &Entity)],
+    decoration: OutputDecoration,
+) -> Vec<String> {
+    if subtree.is_empty() {
+        return vec![format!(
+            "  {}",
+            decoration.paint(OUTPUT_MUTED, "No descendants")
+        )];
+    }
+
+    subtree
+        .iter()
+        .map(|(depth, entity)| {
+            format!(
+                "{}{}  {}  [{}/{}]  {}{}",
+                "  ".repeat(*depth),
+                decoration.paint(OUTPUT_ID, &entity.id),
+                decoration.paint(OUTPUT_MUTED, entity.kind.label()),
+                decoration.paint(progress_style(&entity.progress), entity.progress.label()),
+                decoration.paint(
+                    disposition_style(entity.disposition),
+                    entity.disposition.label()
+                ),
+                entity.title,
+                render_entity_marks(view, entity, true, decoration),
+            )
+        })
+        .collect()
+}
+
+fn render_subtree_dependencies(
+    view: &View,
+    group: &Entity,
+    subtree: &[(usize, &Entity)],
+    decoration: OutputDecoration,
+) -> Vec<String> {
+    let scope = std::iter::once(group)
+        .chain(subtree.iter().map(|(_, entity)| *entity))
+        .map(|entity| entity.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let mut owners = std::iter::once(group)
+        .chain(subtree.iter().map(|(_, entity)| *entity))
+        .filter_map(|owner| {
+            let mut targets = view.direct_dependencies(&owner.id);
+            targets.sort_by(|left, right| left.id.cmp(&right.id));
+            (!targets.is_empty()).then_some((owner, targets))
+        })
+        .collect::<Vec<_>>();
+    owners.sort_by(|(left, _), (right, _)| left.id.cmp(&right.id));
+
+    let mut lines = Vec::new();
+    for (owner, targets) in owners {
+        lines.push(format!("  {}", decoration.paint(OUTPUT_ID, &owner.id)));
+        for target in targets {
+            let (state, style) = if target.disposition == Disposition::Rejected {
+                ("Rejected", OUTPUT_DANGER)
+            } else if target.is_terminal() {
+                ("Satisfied", OUTPUT_MUTED)
+            } else {
+                ("Unresolved", OUTPUT_ATTENTION)
+            };
+            let external = if scope.contains(&target.id) {
+                String::new()
+            } else {
+                format!(
+                    "  {}",
+                    render_inline_fields(decoration, vec![("External", target.title.clone())])
+                )
+            };
+            lines.push(format!(
+                "    {}  {}{external}",
+                render_inline_fields(
+                    decoration,
+                    vec![("Needs", decoration.paint(OUTPUT_ID, &target.id))],
+                ),
+                decoration.paint(style, state),
+            ));
+        }
+    }
+    lines
 }
 
 fn render_related_entity(entity: &Entity, id_style: Style, decoration: OutputDecoration) -> String {

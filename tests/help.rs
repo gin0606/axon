@@ -77,6 +77,8 @@ fn leaf_help_documents_common_entity_inputs_and_kind_filters() {
     assert!(after.contains("Entity whose terminal state"));
     let set = help_stdout(&["group", "set", "--help"]);
     assert!(set.contains("Parent group ID"));
+    let show = help_stdout(&["show", "--help"]);
+    assert!(show.contains("complete subtree overview"), "{show}");
 }
 
 #[test]

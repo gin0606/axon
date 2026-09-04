@@ -35,7 +35,7 @@ A Note is append-only information learned after an Entity was defined: investiga
 3. Add an Entity to a plan with `axon group set <entity-id> <parent-group-id>`. Start the parent Group when its plan scope should become active.
 4. Use `axon ready` to find startable Entities and `axon start <id>` to claim one explicit target.
 5. Use `axon done <id>` when work ends. Finish all descendants before ending a Group.
-6. Use `axon triage` for the active frontier of Undecided and orphaned Entities. Use `axon list` to inspect inactive or otherwise hidden descendants.
+6. Use `axon triage` for the active frontier of Undecided and orphaned Entities. Use `axon show <group-id>` to inspect the Group's complete subtree, including inactive and terminal descendants, or `axon list` for the complete management-root inventory.
 
 Use `--parent <group-id>` on any creation command to create an Entity inside a Group atomically. Use `--kind issue|group` on list queries when only one kind is relevant.
 
@@ -62,7 +62,7 @@ Treat an exported declaration as a working snapshot. After a successful apply, k
 | `axon claims` | Which Entities are claimed, by whom, where, and since when? |
 | `axon stale` | The same complete claim facts, without inferring staleness from age or process state. |
 | `axon list` | Which Entities exist, including inactive, blocked, deferred, ended, and rejected ones? |
-| `axon show <id>` | What is this Entity's state, plan scope, relationships, claim, history, and derived status? |
+| `axon show <id>` | What is this Entity's state, plan scope, relationships, claim, history, and derived status? For a Group, what are the complete subtree and its direct dependencies? |
 | `axon log <id>` | Why did its Disposition or resurface condition change? |
 | `axon note list|show` | What supplemental information has been appended to this Entity? |
 | `axon revision list|show|diff` | Which declaration was decided, and how did decided declarations differ? |
@@ -77,7 +77,7 @@ Treat an exported declaration as a working snapshot. After a successful apply, k
 - `group set` moves either kind below a Group; `group unset` removes its parent.
 - `import prepare` changes only its YAML file; `import apply` is the only declaration command that changes Entity data.
 
-`show` obtains its current state, declaration metadata, relationships, description, Notes, and history from one database read transaction.
+`show` obtains its current state, declaration metadata, relationships, description, Notes, and history from one database read transaction. For a Group it also prints every descendant, including terminal Entities, as an ID-ordered containment tree with compact state markers. A following dependency section lists direct outgoing dependencies owned by the Group or its descendants, distinguishes satisfied, unresolved, and rejected targets, and labels targets outside the subtree without expanding them. Child descriptions, Notes, Revisions, histories, and claim details remain available through an individual `show` instead of being expanded into the Group view.
 
 An Ended Group cannot be moved, gain or lose descendants, or change its outgoing dependencies. A terminal descendant below an Ended Group cannot be made non-terminal. New follow-up work belongs outside that completed scope.
 

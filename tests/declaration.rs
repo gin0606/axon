@@ -140,8 +140,8 @@ fn prepare_check_and_apply_create_mixed_entities_and_dependencies() {
     assert_show_relation(&api_show, "Dependency:", &storage);
     assert_show_relation(&api_show, "Dependency:", &release);
     let import_show = stdout(&repo.axon(&["show", &import]));
-    assert_show_relation(&import_show, "Dependency:", &storage);
-    assert_show_relation(&import_show, "Dependency:", &release);
+    assert_show_relation(&import_show, "Needs:", &storage);
+    assert_show_relation(&import_show, "Needs:", &release);
     assert!(import_show.contains("  Direct children: 1"));
     let (revision, title, parent, dependency_count) = repo.current_revision(&api);
     assert_eq!(revision, 1);

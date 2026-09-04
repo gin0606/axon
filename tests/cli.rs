@@ -366,6 +366,151 @@ fn a_group_explicitly_opens_and_completes_its_plan_scope() {
             .count(),
         2
     );
+    assert!(show.contains(&format!(
+        "Subtree\n  {issue}  Issue  [Ended/Accepted]  implementation"
+    )));
+    assert!(!show.contains("Non-terminal descendants"));
+}
+
+#[test]
+fn group_show_renders_the_complete_subtree_and_direct_dependencies() {
+    let repo = TestRepo::new();
+    repo.init("test");
+
+    let external_satisfied = repo.plan("external foundation");
+    assert_success(&repo.axon(&["start", &external_satisfied]));
+    assert_success(&repo.axon(&["done", &external_satisfied]));
+    let external_unresolved = repo.plan("external review");
+    let external_rejected = repo.plan("rejected external result");
+    assert_success(&repo.axon(&[
+        "decide",
+        "reject",
+        &external_rejected,
+        "-r",
+        "not available",
+    ]));
+
+    let group = repo.group_plan("delivery");
+    let ended = created_id(&repo.axon(&["plan", "schema", "--parent", &group]));
+    let ready = created_id(&repo.axon(&["plan", "api", "--parent", &group]));
+    let active = created_id(&repo.axon(&["plan", "worker", "--parent", &group]));
+    let blocked = created_id(&repo.axon(&["plan", "release", "--parent", &group]));
+    let orphaned = created_id(&repo.axon(&["plan", "legacy", "--parent", &group]));
+    let deferred = created_id(&repo.axon(&["plan", "later", "--parent", &group]));
+    let rejected = created_id(&repo.axon(&["plan", "discarded", "--parent", &group]));
+    let nested = created_id(&repo.axon(&["group", "plan", "frontend", "--parent", &group]));
+    let nested_draft = created_id(&repo.axon(&["capture", "browser tests", "--parent", &nested]));
+
+    repo.add_dependency(&group, &external_satisfied);
+    repo.add_dependency(&ready, &ended);
+    repo.add_dependency(&blocked, &external_unresolved);
+    repo.add_dependency(&orphaned, &external_rejected);
+    assert_success(&repo.axon(&["dep", "add", &nested_draft, "--needs", &ready]));
+    assert_success(&repo.axon(&["when", "at", &deferred, "2099-01-02"]));
+    assert_success(&repo.axon(&["decide", "reject", &rejected, "-r", "not needed"]));
+
+    assert_success(&repo.axon(&["start", &group]));
+    assert_success(&repo.axon(&["start", &ended]));
+    assert_success(&repo.axon(&["done", &ended]));
+    assert_success(&repo.axon(&["start", &active]));
+
+    let show = stdout(&repo.axon(&["show", &group]));
+    let subtree = show
+        .split_once("\n\nSubtree\n")
+        .unwrap()
+        .1
+        .split_once("\n\nDependencies\n")
+        .unwrap()
+        .0;
+    for (id, title) in [
+        (&ended, "schema"),
+        (&ready, "api"),
+        (&active, "worker"),
+        (&blocked, "release"),
+        (&orphaned, "legacy"),
+        (&deferred, "later"),
+        (&rejected, "discarded"),
+        (&nested, "frontend"),
+        (&nested_draft, "browser tests"),
+    ] {
+        assert!(
+            subtree.contains(&format!("{id}  ")),
+            "missing {id}:\n{show}"
+        );
+        assert!(subtree.contains(title), "missing {title:?}:\n{show}");
+    }
+    let nested_line = subtree.lines().find(|line| line.contains(&nested)).unwrap();
+    let nested_draft_line = subtree
+        .lines()
+        .find(|line| line.contains(&nested_draft))
+        .unwrap();
+    assert!(nested_line.starts_with("  ") && !nested_line.starts_with("    "));
+    assert!(nested_draft_line.starts_with("    "));
+    assert!(subtree.contains(&format!("{ended}  Issue  [Ended/Accepted]  schema")));
+    assert!(subtree.contains(&format!(
+        "{rejected}  Issue  [NotStarted/Rejected]  discarded"
+    )));
+    assert!(subtree.contains(&format!(
+        "{ready}  Issue  [NotStarted/Accepted]  api  Ready"
+    )));
+    assert!(subtree.contains(&format!("{active}  Issue  [InProgress/Accepted]  worker")));
+    let subtree_line = |id: &str| {
+        subtree
+            .lines()
+            .find(|line| line.contains(id))
+            .unwrap_or_else(|| panic!("missing subtree line for {id}:\n{show}"))
+    };
+    assert!(subtree_line(&blocked).contains("Blocked"));
+    assert!(subtree_line(&orphaned).contains("Orphaned"));
+    assert!(subtree_line(&deferred).contains("Not surfaced"));
+    assert!(subtree_line(&nested_draft).contains("Inactive"));
+    assert!(!show.contains("Non-terminal descendants"));
+
+    let mut direct = [
+        &ended, &ready, &active, &blocked, &orphaned, &deferred, &rejected, &nested,
+    ];
+    direct.sort();
+    for pair in direct.windows(2) {
+        assert!(
+            subtree.find(pair[0]).unwrap() < subtree.find(pair[1]).unwrap(),
+            "siblings must be ID ordered:\n{subtree}"
+        );
+    }
+
+    let dependencies = show.split_once("\n\nDependencies\n").unwrap().1;
+    for owner in [&group, &ready, &blocked, &orphaned, &nested_draft] {
+        assert!(dependencies.contains(&format!("  {owner}\n")), "{show}");
+    }
+    assert!(dependencies.contains(&format!("Needs: {ended}  Satisfied")));
+    assert!(dependencies.contains(&format!(
+        "Needs: {external_unresolved}  Unresolved  External: external review"
+    )));
+    assert!(dependencies.contains(&format!(
+        "Needs: {external_rejected}  Rejected  External: rejected external result"
+    )));
+    assert_eq!(show.matches(&external_satisfied).count(), 1);
+
+    let issue_show = stdout(&repo.axon(&["show", &ready]));
+    assert!(!issue_show.contains("\n\nSubtree\n"));
+    assert!(!issue_show.contains("\n\nDependencies\n"));
+    assert!(issue_show.contains(&format!("Satisfied dependency:  {ended}")));
+
+    let waiting_group = repo.group_plan("waiting delivery");
+    repo.add_dependency(&waiting_group, &external_unresolved);
+    let waiting_show = stdout(&repo.axon(&["show", &waiting_group]));
+    assert_eq!(waiting_show.matches(&external_unresolved).count(), 1);
+    assert!(!waiting_show.contains("Root cause:"));
+}
+
+#[test]
+fn empty_group_show_names_its_empty_subtree() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let group = repo.group_plan("empty");
+
+    let show = stdout(&repo.axon(&["show", &group]));
+    assert!(show.contains("\n\nSubtree\n  No descendants\n"));
+    assert!(!show.contains("\n\nDependencies\n"));
 }
 
 #[test]
