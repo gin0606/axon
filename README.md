@@ -19,6 +19,22 @@ axon completion zsh > _axon    # シェル補完スクリプトを生成
 
 Codex の linked worktree から共有 DB を更新する場合は、[Codex の sandbox 設定](docs/codex.md)を一度だけ行う。
 
+## Agent skills
+
+[`plugins/axon-kit`](plugins/axon-kit) は、axon の状態・情報モデルと安全な tracker 操作を提供する公式の Axon Skill Kit である。`$axon-kit:conventions`、`capture`、`plan`、`triage`、`work-state`、`add-note`、`declaration` を、利用者固有の実装フローと分けて提供する。
+
+[`plugins/axon`](plugins/axon) は、このリポジトリで開発する個人用 workflow である。`$axon:start <issue-id>` は、公式 kit を使った着手と完了の間に、実装、テスト、self-review、commit を組み込む。
+
+両 plugin は [repo-local marketplace](.agents/plugins/marketplace.json) から開発できる。ローカルの Codex 設定へ追加するときは repository root で次を実行する。
+
+```sh
+codex plugin marketplace add .
+codex plugin add axon-kit@personal
+codex plugin add axon@personal
+```
+
+`axon` plugin は `axon-kit` plugin、および個人環境の `self-review` と `commit-conventions` skill を前提とする。継承や同名 skill の上書きではなく、workflow から必要な skill を明示的に併用する。
+
 ## reason と履歴
 
 `-r` / `--reason` はすべて任意。状態から意図を復元できない操作だけが受け取る。`release` の理由は `show` の進行履歴に、`decide` / `when` の理由は `log` の判断履歴に保存される。`start` と `done` は reason を受け取らない。作業結果や申し送りは `axon note add <id> -m <body>` で追記し、Entity が何であるかを定める description とは分ける。

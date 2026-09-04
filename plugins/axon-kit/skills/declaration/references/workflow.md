@@ -1,15 +1,10 @@
----
-name: axon-declaration-plan
-description: Entity 数を問わず axon tracker data の strict YAML 宣言を操作し、axon export/import の review、canonicalize、check、apply を安全に行う。コマンド自体の実装・文書・テストや、宣言を使わない単一 Entity の通常操作には使わない。
----
-
-# Plan 宣言を安全に編集する
+# Declaration workflow
 
 宣言された Entity の plan declaration を一つの snapshot で検査し、原子的に反映する。編集対象は title、description、parent、outgoing dependency だけであり、Progress、Disposition、Resurface condition、claim、Declaration Revision、Note は変更しない。Revision は決定時に axon が作る不変記録、Note は別 command で追加する追記専用情報であり、宣言 file から作成・編集・削除しない。
 
-この skill は内容を決める手順ではなく、確定した計画の反映経路である。内容の決定または DB への登録・apply が依頼範囲にあるとき、新規 Accepted Entity の目的、重複、分解、採否は `axon-plan-issue`、新規 Undecided Entity は `axon-capture-issue`、新規 Rejected Entity は `axon-capture-issue` で完成前の declaration を作ってから `axon-triage-issue`、既存 Entity の判断変更は `axon-triage-issue` の規約で先に確定する。独立した追加情報は宣言へ入れず、別途明示された範囲で `axon-add-note` を使う。artifact-only の相談では plan / capture / triage の調査と相談だけを使い、reflection command を実行しない。`capture`、`decide`、`when`、declaration apply、Note 追加など live DB の変更は、その変更自体をユーザーが明示的に依頼した場合だけ行う。読み取り専用の review / check と形式だけの canonicalize は、採用や状態変更を意味せず、plan / triage を要求しない。ユーザーが完成した宣言内容を明示した場合も、apply 前の重複・履歴・境界・波及の調査は省略せず、変更のない内容を再提示して確認する工程だけを省略してよい。
+この capability は内容を決める手順ではなく、確定した計画の反映経路である。内容の決定または DB への登録・apply が依頼範囲にあるとき、新規 Accepted Entity の目的、重複、分解、採否は `axon-kit:plan`、新規 Undecided Entity は `axon-kit:capture`、新規 Rejected Entity は `axon-kit:capture` で完成前の declaration を作ってから `axon-kit:triage`、既存 Entity の判断変更は `axon-kit:triage` の規約で先に確定する。独立した追加情報は宣言へ入れず、呼び出し元が要求した範囲で `axon-kit:add-note` を使う。artifact-only の依頼では live DB を変更しない。読み取り専用の review / check と形式だけの canonicalize は、採用や状態変更を意味しない。呼び出し元が完成した宣言内容を供給した場合も、apply 前の重複・履歴・境界・波及の調査は省略しない。
 
-live DB の変更を合意して plan / capture / triage を併用するときは、次の順序を守る。
+呼び出し元が live DB の変更と必要な判断を供給し、plan / capture / triage を併用するときは、次の順序を守る。
 
 1. plan / triage skill の調査、相談、最終案確認までを行う。既存 Entity は `axon show` の全出力に加え、`axon revision list` と各 `axon revision show` で全 Declaration Revision を読み、表示された全 Note も省略しない。
 2. 最終状態が Accepted / NotStarted / Always で宣言から直接作成できる Entity と、staging 済み Undecided Entity の title、description、parent、dependency の後続する個別反映コマンドは実行せず、宣言 apply に置き換える。直接作成できない新規 Undecided / Rejected と、最終 resurface condition が Always でない新規 Accepted は後述の staging 手順を使う。
@@ -23,22 +18,22 @@ live DB の変更を合意して plan / capture / triage を併用するとき�
 
 - 既存 fixed + 実変更 + 最終 Accepted / Rejected: Undecided へ戻す → apply → 全文確認 → 最終 resurface condition を反映・確認 → 最終判断
 - 既存 fixed + 実変更 + 最終 Undecided: Undecided へ戻す → apply → 全文確認 → 最終 resurface condition を反映・確認して終了
-- 既存 Undecided: apply → 全文確認 → 最終 resurface condition を反映・確認 → 合意がある場合だけ最終判断
+- 既存 Undecided: apply → 全文確認 → 最終 resurface condition を反映・確認 → 最終判断が供給されている場合だけ反映
 - 新規 Accepted / NotStarted / Always: declaration から直接作成
 - 新規 Accepted + Always 以外の resurface condition: capture → Undecided の間に apply → 全文確認 → resurface condition を反映・確認 → Accepted
 - 新規 Undecided / Rejected: capture → Undecided の間に apply → 全文確認 → resurface condition を反映・確認 → Rejected のみ最終判断
 
-状態軸変更と declaration apply は順序を問わず一つの transaction にならない。どちらかの phase を反映した後に残りの phase が失敗したら、そこで止まり、作業 file を保持し、反映済み変更と未反映部分を列挙する。自動で巻き戻さず、再試行または別途承認された補償変更のどちらにするかをユーザーへ確認する。
+状態軸変更と declaration apply は順序を問わず一つの transaction にならない。どちらかの phase を反映した後に残りの phase が失敗したら、そこで止まり、作業 file を保持し、反映済み変更と未反映部分を列挙する。自動で巻き戻さず、再試行または別途供給された補償変更のどちらにするかを呼び出し元へ返す。
 
-宣言内の readonly field を変えた入力や check error は宣言の誤りとして止める。Declaration Revision や Note を表す field を足した入力も、宣言 file の範囲外として apply しない。import / canonicalize の依頼や readonly field の編集自体を、`decide` / `when` / `note add` など別の変更への許可とみなさない。その状態判断を別に行う場合は、ユーザーが triage flow で明示的に結論を出したときだけ上記の二段階手順へ進む。
+宣言内の readonly field を変えた入力や check error は宣言の誤りとして止める。Declaration Revision や Note を表す field を足した入力も、宣言 file の範囲外として apply しない。import / canonicalize の依頼や readonly field の編集自体を、`decide` / `when` / `note add` など別の変更への許可とみなさない。状態判断を伴う場合は、呼び出し元の triage flow が明示的な結論を供給したときだけ上記の二段階手順へ進む。
 
-宣言から直接作成できるのは Accepted / NotStarted / Always の Entity だけである。新規 Undecided / Rejected や、Always 以外の resurface condition を持つ新規 Accepted を Accepted / Always に正規化しない。読み取り専用の review では契約外だと報告する。登録まで明示的に依頼された場合は、それらを `axon-capture-issue` で Undecided として先に作成する。fresh export から完全な declaration を apply・確認し、最終 resurface condition の変更があれば Undecided の間に反映・検証する。最終 Undecided ならそこで終了し、Accepted / Rejected の判断も明示されている場合は、最後に `axon-triage-issue` で理由付き判断を反映・検証する。固定後に declaration を apply しない。prepare / check 後は capture した ID と宣言内で新しく割り当てた ID を含む正確な editable ID 集合と key 対応を控える。この staging、declaration apply、状態変更は非原子的なので、後続が失敗した場合は上記の partial-completion 手順で引き渡す。最終判断を伴うユーザー所有 artifact は、Undecided apply 後に置き換えず、控えた ID を明示した最終判断後の fresh export に対して上記と同じ安全な一度だけの置換手順を使う。
+宣言から直接作成できるのは Accepted / NotStarted / Always の Entity だけである。新規 Undecided / Rejected や、Always 以外の resurface condition を持つ新規 Accepted を Accepted / Always に正規化しない。読み取り専用の review では契約外だと報告する。登録が要求されている場合は、それらを `axon-kit:capture` で Undecided として先に作成する。fresh export から完全な declaration を apply・確認し、最終 resurface condition の変更があれば Undecided の間に反映・検証する。最終 Undecided ならそこで終了し、Accepted / Rejected の判断も供給されている場合は、最後に `axon-kit:triage` で理由付き判断を反映・検証する。固定後に declaration を apply しない。prepare / check 後は capture した ID と宣言内で新しく割り当てた ID を含む正確な editable ID 集合と key 対応を控える。この staging、declaration apply、状態変更は非原子的なので、後続が失敗した場合は上記の partial-completion 手順で引き渡す。最終判断を伴うユーザー所有 artifact は、Undecided apply 後に置き換えず、控えた ID を明示した最終判断後の fresh export に対して上記と同じ安全な一度だけの置換手順を使う。
 
 ## 編集面を作る
 
 既存 Entity を含むときは、先に各 Entity の `axon show` と全 `axon revision list|show` を省略せず読み、明示 ID、`--group`、必要なら `--recursive` を組み合わせて `axon export` する。selector の和集合だけが編集対象であり、relation endpoint は自動的に編集対象にならない。作業用 YAML はリポジトリへ残す成果物と合意されていない限り、一時ファイルとして扱う。
 
-新規 plan を含む場合は、先に repository root の `docs/declaration-file.md` を最後まで読み、canonical example と field 契約を使って宣言を作る。最低限の top-level shape は `schema`、`issues`、`groups`、`relations.editable`、`relations.readonly`、`references.entities` であり、省略しない。新規 Entity は `id: null`、file 全体で一意な `key`、`base: null`、NotStarted / Accepted / Always / claim null で記述する。title、description、親、outgoing dependency 以外の保存状態を編集せず、Revision や Note の field を加えない。外部 snapshot と incoming relation は `references` / `relations.readonly` のまま保つ。
+新規 plan を含む場合は、先にインストール済み CLI の `axon help` で Declaration File Format の canonical example と field 契約を読み、その version の形式で宣言を作る。最低限の top-level shape は `schema`、`issues`、`groups`、`relations.editable`、`relations.readonly`、`references.entities` であり、省略しない。新規 Entity は `id: null`、file 全体で一意な `key`、`base: null`、NotStarted / Accepted / Always / claim null で記述する。title、description、親、outgoing dependency 以外の保存状態を編集せず、Revision や Note の field を加えない。外部 snapshot と incoming relation は `references` / `relations.readonly` のまま保つ。
 
 export だけを依頼された場合は、出力先が stdout、エージェント所有の一時 file、ユーザー指定 artifact のどれかを先に確定し、既存のユーザー file を明示許可なく置換しない。file へ出す場合は destination と同じ filesystem のエージェント所有 working file に stdout を受け、export 成功と `axon import check <working-file>` の成功・変更差分なしを確認してから rename する。既存の user-owned destination では後述の symlink / hardlink、metadata、source drift の規則も守り、失敗時は原本を変更しない。selector の範囲、editable / readonly 境界、参照 snapshot を確認し、出力内容または正確な保存先、`DB applied: no`、artifact の所有・保持状態を報告する。それ以上の編集や import を依頼されていなければ終了する。
 

@@ -1,0 +1,23 @@
+{
+  "name": "axon-kit",
+  "version": "0.1.0",
+  "description": "Reusable Axon model and safe tracker-operation capabilities",
+  "author": {
+    "name": "gin0606"
+  },
+  "repository": "https://github.com/gin0606/axon",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Axon Skill Kit",
+    "shortDescription": "Compose safe Axon tracker operations.",
+    "longDescription": "Provides Axon's state and information contracts plus focused capabilities for creating, triaging, recording, and progressing Entities without imposing an implementation workflow.",
+    "developerName": "gin0606",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Capture this concern in Axon without deciding it.",
+      "Register this accepted plan in Axon.",
+      "Inspect this Axon Entity and explain the valid next operations."
+    ]
+  }
+}

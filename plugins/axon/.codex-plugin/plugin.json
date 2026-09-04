@@ -1,0 +1,21 @@
+{
+  "name": "axon",
+  "version": "0.1.0",
+  "description": "Opinionated personal workflows built from Axon Skill Kit capabilities",
+  "author": {
+    "name": "gin0606"
+  },
+  "repository": "https://github.com/gin0606/axon",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Axon Workflow",
+    "shortDescription": "Finish Axon issues with review and commit.",
+    "longDescription": "Provides gin0606's personal Axon workflow that claims one specified Issue, implements and validates it, completes self-review, commits the result, and synchronizes final tracker state.",
+    "developerName": "gin0606",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Start this Axon Issue and finish it through self-review and commit."
+    ]
+  }
+}
