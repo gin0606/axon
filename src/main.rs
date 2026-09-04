@@ -171,12 +171,6 @@ enum Command {
         #[arg(long, value_enum)]
         kind: Option<KindFilter>,
     },
-    /// List every active claim without inferring staleness from age
-    Stale {
-        /// Include only one Entity kind
-        #[arg(long, value_enum)]
-        kind: Option<KindFilter>,
-    },
     /// Claim one ready Entity
     Start {
         /// Entity ID or unique ID suffix
@@ -495,7 +489,7 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
         ),
         Command::Ready { kind } => cmd_ready(kind),
         Command::Triage { kind } => cmd_triage(kind),
-        Command::Claims { kind } | Command::Stale { kind } => cmd_claims(kind),
+        Command::Claims { kind } => cmd_claims(kind),
         Command::Start { id } => cmd_start(&id),
         Command::Done { id } => cmd_done(&id),
         Command::Release { id, reason } => cmd_release(&id, reason),

@@ -60,7 +60,6 @@ Treat an exported declaration as a working snapshot. After a successful apply, k
 | `axon ready` | Which active Entities can start now? |
 | `axon triage` | Which Entities are on the active decision frontier? |
 | `axon claims` | Which Entities are claimed, by whom, where, and since when? |
-| `axon stale` | The same complete claim facts, without inferring staleness from age or process state. |
 | `axon list` | Which Entities exist, including inactive, blocked, deferred, ended, and rejected ones? |
 | `axon show <id>` | What is this Entity's state, plan scope, relationships, claim, history, and derived status? For a Group, what are the complete subtree and its direct dependencies? |
 | `axon log <id>` | Why did its Disposition or resurface condition change? |
@@ -93,7 +92,7 @@ Claims record actor, worktree, and start time. axon does not decide that a claim
 
 ## Input, output, and exit status
 
-Successful results and mutation confirmations go to standard output. Errors go to standard error and return a non-zero status. Empty `ready`, `triage`, `claims`, `stale`, and `list` queries keep standard output empty and write only a short note to standard error.
+Successful results and mutation confirmations go to standard output. Errors go to standard error and return a non-zero status. Empty `ready`, `triage`, `claims`, and `list` queries keep standard output empty and write only a short note to standard error.
 
 Human-readable output uses consistent structures for Entity rows, history and index rows, single-record details, and mutation confirmations. Entity rows begin with ID and kind; Note and Revision indexes begin with their Entity-local number. Long-form content and diffs remain separate from one-line records, and mutation confirmations begin with the affected Entity ID.
 

@@ -49,9 +49,9 @@ Accepted / Rejected への判断時には declaration 全文を Entity 内連番
 
 ### 一覧
 
-`ready` / `triage` / `claims` / `stale` / `list` は両 kind を同じ一覧に出し、`--kind issue|group` で任意に絞る。1 Entity を1行に出し、各行の第1列はID、第2列はkindとする。`triage` は `Reason:`、`claims` / `stale` は `Claim:`、`Worktree:`、`Started:` をidentityの後に置く。`list` は Progress / Disposition と、該当する例外状態だけを表示する。
+`ready` / `triage` / `claims` / `list` は両 kind を同じ一覧に出し、`--kind issue|group` で任意に絞る。1 Entity を1行に出し、各行の第1列はID、第2列はkindとする。`triage` は `Reason:`、`claims` は `Claim:`、`Worktree:`、`Started:` をidentityの後に置く。`list` は Progress / Disposition と、該当する例外状態だけを表示する。
 
-`stale` は claim の経過時間やプロセス状態から自動判定せず、`claims` と同じ保存済み事実を返す。解放は人が判断して `release` を明示する。
+`claims` は claim の経過時間やプロセス状態から staleness を推定しない。表示された保存済み事実を基に人が判断し、必要な claim だけ `release` で明示的に解放する。
 
 ### Plan 宣言ファイル
 

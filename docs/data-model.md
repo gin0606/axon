@@ -156,7 +156,7 @@ actor は一覧と調査の手掛かりであり、排他制御や `release` の
 
 ### D-6 (決着): claim はすべて一覧し、解放は人が判断する
 
-`axon claims` と `axon stale` は経過時間にかかわらず、現在 claim を持つすべての InProgress Entity を返す。正常な作業が約 2 日続くことがあり、stale とみなせる時間閾値には実用上の根拠がないため、`stale` も保存済み claim の一覧に留め、`--hours` や PID によるプロセス生存判定は持たない。
+`axon claims` は経過時間にかかわらず、現在 claim を持つすべての InProgress Entity を返す。正常な作業が約 2 日続くことがあり、stale とみなせる時間閾値には実用上の根拠がないため、`stale` command、`--hours`、PID によるプロセス生存判定は持たない。
 
 `start` を実行した axon CLI 自身の PID はコマンド終了と同時に死ぬため、作業セッションの生存判定には使えない。エージェントの session ID も axon 内に照合・再開経路がなく、排他制御や表示に寄与しないため保存しない。
 

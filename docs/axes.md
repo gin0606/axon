@@ -554,7 +554,7 @@ group の保存済み Progress と、配下の状況は別々に表示する。�
 
 issue 作成は `axon plan` / `axon capture`、group 作成は `axon group plan` / `axon group capture` とし、どちらも必要なら `--parent <group-id>` で親を同時指定できる。
 
-`show`、`write`、`start`、`done`、`release`、`decide`、`when`、`dep`、`log` は ID から kind を解決する共通 top-level command とする。`ready`、`triage`、`list`、`stale` は両 kind を同じ一覧へ出し、必要なら `--kind issue|group` で絞り込む。包含操作だけを `group set` / `group unset` として group namespace に残す。
+`show`、`write`、`start`、`done`、`release`、`decide`、`when`、`dep`、`log` は ID から kind を解決する共通 top-level command とする。`ready`、`triage`、`claims`、`list` は両 kind を同じ一覧へ出し、必要なら `--kind issue|group` で絞り込む。包含操作だけを `group set` / `group unset` として group namespace に残す。
 
 旧 `group new` / `group show` / `group list` / `group reject` / `group dep` と slug identity は互換 alias を残さない。
 

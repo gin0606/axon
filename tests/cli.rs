@@ -750,7 +750,7 @@ fn old_slug_commands_are_not_compatibility_aliases() {
 fn empty_queries_keep_guidance_out_of_stdout() {
     let repo = TestRepo::new();
     repo.init("test");
-    for command in ["ready", "triage", "claims", "stale", "list"] {
+    for command in ["ready", "triage", "claims", "list"] {
         let output = repo.axon(&[command]);
         assert_success(&output);
         assert!(output.stdout.is_empty(), "{command}");
@@ -771,7 +771,6 @@ fn linked_worktrees_share_entity_state_and_claims() {
     assert!(claims.contains(&group));
     assert!(claims.contains(&format!("{group}  Group  shared plan  Claim: test-actor")));
     assert!(claims.contains(&format!("Worktree: {}", worktree.display())));
-    assert_eq!(stdout(&repo.axon(&["stale"])), claims);
 }
 
 #[cfg(unix)]

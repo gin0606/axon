@@ -67,7 +67,7 @@ fn leaf_help_documents_common_entity_inputs_and_kind_filters() {
         assert!(help.contains("-m, --message <MESSAGE>"), "{help}");
         assert!(help.contains("-F, --file <FILE>"), "{help}");
     }
-    for command in ["ready", "triage", "claims", "stale", "list"] {
+    for command in ["ready", "triage", "claims", "list"] {
         let help = help_stdout(&[command, "--help"]);
         assert!(help.contains("--kind <KIND>"), "{help}");
         assert!(help.contains("issue"), "{help}");
@@ -93,6 +93,14 @@ fn removed_slug_commands_are_absent_from_complete_help() {
     ] {
         assert!(!help.contains(&format!("## `{path}")), "{path}");
     }
+}
+
+#[test]
+fn removed_stale_command_is_not_a_compatibility_alias() {
+    let (output, _) = axon(&["stale"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
 }
 
 #[test]
