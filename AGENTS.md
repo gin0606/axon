@@ -27,10 +27,6 @@ axon 自体は、誰が着手対象や採否を決め、いつレビューする
 - 申し送りや外部作業の完了条件を含む進行同期: [`axon:work-state`](plugins/axon/skills/work-state/SKILL.md)
 - ユーザー所有 artifact と状態変更を組み合わせる declaration 操作: [`axon:declaration`](plugins/axon/skills/declaration/SKILL.md)
 
-Axon Entity を起点に実装、review、commit などの外部作業を完遂する workflow では、まず [`axon-workflows:conventions`](plugins/axon-workflows/skills/conventions/SKILL.md) に従う。
-
-- Issue ID を指定した着手から self-review、commit、done までの完遂: [`axon-workflows:start`](plugins/axon-workflows/skills/start/SKILL.md)
-
 ## ドッグフーディング
 
 axon を使う中で、CLI の不足、不自然な往復、分かりにくい出力、手作業による補完、ドキュメントとの不一致を見つけたら、一般化できる問題を `axon:register` から `axon-kit:capture` を使う手順で記録する。

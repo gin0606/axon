@@ -12,10 +12,6 @@
     {
       "name": "axon",
       "source": "./plugins/axon"
-    },
-    {
-      "name": "axon-workflows",
-      "source": "./plugins/axon-workflows"
     }
   ]
 }
