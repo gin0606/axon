@@ -26,7 +26,10 @@ axon 自体は、誰が着手対象や採否を決め、いつレビューする
 - ユーザーとの既存 Entity の判断: [`axon:triage`](plugins/axon/skills/triage/SKILL.md)
 - 申し送りや外部作業の完了条件を含む進行同期: [`axon:work-state`](plugins/axon/skills/work-state/SKILL.md)
 - ユーザー所有 artifact と状態変更を組み合わせる declaration 操作: [`axon:declaration`](plugins/axon/skills/declaration/SKILL.md)
-- Issue ID を指定した着手から self-review、commit、done までの完遂: [`axon:start`](plugins/axon/skills/start/SKILL.md)
+
+Axon Entity を起点に実装、review、commit などの外部作業を完遂する workflow では、まず [`axon-workflows:conventions`](plugins/axon-workflows/skills/conventions/SKILL.md) に従う。
+
+- Issue ID を指定した着手から self-review、commit、done までの完遂: [`axon-workflows:start`](plugins/axon-workflows/skills/start/SKILL.md)
 
 ## ドッグフーディング
 
@@ -36,7 +39,7 @@ axon を使う中で、CLI の不足、不自然な往復、分かりにくい�
 
 ## このリポジトリの協業方針
 
-`axon ready` または `axon triage` の候補整理では、優先候補、重複候補、判断材料を提案してよい。ただし、ユーザーの確認前に対象の選択、着手、採否変更を行わない。この制約は axon の一般仕様ではなく、このリポジトリで人間とエージェントが協業するための方針である。
+`axon ready` または `axon triage` の候補整理では、優先候補、重複候補、判断材料を提案してよい。ただし、ユーザーの確認前に対象の選択、着手、採否変更を行わない。ユーザーが対象を指定した場合、または明示的な workflow が対象選択の範囲を与えた場合は、その範囲内で進めてよい。この制約は axon の一般仕様ではなく、このリポジトリで人間とエージェントが協業するための方針である。
 
 判断や作業の保留理由を状態変更へ結び付けるときは、必ず reason を残す (`axon decide` / `axon when` / `axon release` の `-r`)。「なぜやるのか」「なぜやらないのか」「なぜ今やらないのか」は `axon log <id>` で辿れる形にする。
 

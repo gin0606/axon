@@ -1,16 +1,16 @@
 {
   "name": "axon",
-  "version": "0.1.0+codex.20260904040245",
-  "description": "Axon Skill Kitを組み合わせた個人用ワークフロー",
+  "version": "0.1.0+codex.20260904051739",
+  "description": "Axon Skill Kit\u3078\u500b\u4eba\u7528\u306e\u5224\u65ad\u3068\u5354\u696d\u65b9\u91dd\u3092\u52a0\u3048\u308b\u30ef\u30fc\u30af\u30d5\u30ed\u30fc",
   "author": {
     "name": "gin0606"
   },
   "repository": "https://github.com/gin0606/axon",
   "skills": "./skills/",
   "interface": {
-    "displayName": "Axonワークフロー",
-    "shortDescription": "Axonの判断、進行、実装を個人用方針で扱います。",
-    "longDescription": "公式Axon Skill Kitに、重複確認、ユーザーとの判断、厳格なdeclaration操作、申し送り、実装、セルフレビュー、コミットの個人用ワークフローを組み合わせます。",
+    "displayName": "Axon\u500b\u4eba\u30ef\u30fc\u30af\u30d5\u30ed\u30fc",
+    "shortDescription": "Axon\u306e\u767b\u9332\u3001\u5224\u65ad\u3001\u9032\u884c\u3001\u5ba3\u8a00\u3092\u500b\u4eba\u7528\u65b9\u91dd\u3067\u6271\u3044\u307e\u3059\u3002",
+    "longDescription": "\u516c\u5f0fAxon Skill Kit\u306b\u3001\u81ea\u5f8b\u5b9f\u884c\u3068\u91cd\u8981\u306a\u610f\u601d\u6c7a\u5b9a\u306e\u5883\u754c\u3001\u91cd\u8907\u78ba\u8a8d\u3001\u69cb\u9020\u6574\u7406\u3001declaration artifact\u306e\u4fdd\u8b77\u3001\u7533\u3057\u9001\u308a\u306e\u500b\u4eba\u7528\u65b9\u91dd\u3092\u7d44\u307f\u5408\u308f\u305b\u307e\u3059\u3002",
     "developerName": "gin0606",
     "category": "Productivity",
     "capabilities": [
@@ -18,9 +18,9 @@
       "Write"
     ],
     "defaultPrompt": [
-      "このAxon Issueに着手し、セルフレビューとコミットまで完遂してください。",
-      "この作業を重複確認してからAxonへ登録してください。",
-      "このAxon Entityの選択肢を整理し、私が選んだ結論を反映してください。"
+      "\u3053\u306e\u4f5c\u696d\u3092\u91cd\u8907\u78ba\u8a8d\u3057\u3066\u304b\u3089Axon\u3078\u767b\u9332\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+      "\u3053\u306eAxon Entity\u306e\u9078\u629e\u80a2\u3092\u6574\u7406\u3057\u3001\u78ba\u5b9a\u3057\u305f\u7d50\u8ad6\u3092\u53cd\u6620\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+      "\u3053\u306edeclaration\u3092\u691c\u67fb\u3057\u3001\u6307\u5b9a\u3057\u305f\u7bc4\u56f2\u3078\u53cd\u6620\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
     ]
   }
 }

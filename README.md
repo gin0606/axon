@@ -23,17 +23,20 @@ Codex の linked worktree から共有 DB を更新する場合は、[Codex の 
 
 [`plugins/axon-kit`](plugins/axon-kit) は、axon の状態・情報モデルと安全な tracker 操作を提供する公式の Axon Skill Kit である。`$axon-kit:conventions`、`capture`、`plan`、`triage`、`work-state`、`add-note`、`declaration` を、利用者固有の実装フローと分けて提供する。
 
-[`plugins/axon`](plugins/axon) は、このリポジトリで開発する個人用 workflow である。`conventions`、`register`、`triage`、`work-state`、`declaration` で重複確認、ユーザー判断、厳格な artifact 操作、申し送りを公式 kit に重ねる。`$axon:start <issue-id>` は、公式 kit を使った着手と完了の間に、実装、テスト、self-review、commit を組み込む。
+[`plugins/axon`](plugins/axon) は、公式 kit に個人用の判断と協業方針を重ねる。`conventions`、`register`、`triage`、`work-state`、`declaration` で、自律実行と重要な意思決定の境界、重複確認、構造整理、artifact 保護、申し送りを扱う。
 
-両 plugin は [repo-local marketplace](.agents/plugins/marketplace.json) から開発できる。ローカルの Codex 設定へ追加するときは repository root で次を実行する。
+[`plugins/axon-workflows`](plugins/axon-workflows) は、Axon Entity を起点にリポジトリ上の作業を終端まで進める外側の個人用 workflow である。`$axon-workflows:start <issue-id>` は、指定した Accepted Issue の着手、実装、テスト、self-review、commit、done を一つの権限境界として完遂する。
+
+3 plugin は [repo-local marketplace](.agents/plugins/marketplace.json) から開発できる。ローカルの Codex 設定へ追加するときは repository root で次を実行する。
 
 ```sh
 codex plugin marketplace add .
 codex plugin add axon-kit@personal
 codex plugin add axon@personal
+codex plugin add axon-workflows@personal
 ```
 
-`axon` plugin は `axon-kit` plugin、および個人環境の `self-review` と `commit-conventions` skill を前提とする。継承や同名 skill の上書きではなく、workflow から必要な skill を明示的に併用する。
+`axon` plugin は `axon-kit` plugin を前提とする。`axon-workflows` plugin は両 plugin、および個人環境の `self-review` と `commit-conventions` skill を前提とする。継承や同名 skill の上書きではなく、workflow から必要な skill を明示的に併用する。
 
 ## reason と履歴
 
