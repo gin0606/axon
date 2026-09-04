@@ -1,28 +1,32 @@
 ---
 name: register
-description: 新しいIssueまたはGroupの重複と計画の完成度を確認し、ユーザーの判断に従ってUndecidedまたはAcceptedで登録する個人用ワークフロー。既存Entityの変更や実装には使わない。
+description: 新しいIssueまたはGroupの重複と計画の完成度を確認し、依頼から確定できるDisposition、declaration、構造、時期で登録する個人用ワークフロー。既存Entityの変更や実装には使わない。
 ---
 
 # 新しいAxon Entityを登録する
 
 `axon:conventions`と、最終状態に応じた`axon-kit:capture`または`axon-kit:plan`を使う。
 
-## 登録前の調査
+## 登録内容を確定する
 
-関連するコード、文書、Entityを必要な範囲で調べ、目的、scope、完了条件、kind、親Group、outgoing dependencyを確認する。`axon:conventions`の重複確認を行い、再利用や再判断が必要な候補があれば、新しいIDを割り当てる前にユーザーへ提示する。
+関連するコード、文書、Entityを必要な範囲で調べ、目的、scope、完了条件、kind、親Group、outgoing dependency、Resurface conditionを確定する。
 
-Issueは一つの懸念または作業、Groupは複数Entityを含み得る明示的な計画範囲に使う。kindや構造的役割が決まらない場合は登録しない。
+- ユーザーが実行または採用を明示していればAccepted、懸念や未解決事項の記録ならUndecidedとする。採否を読み取れない単独の「登録して」では確認する。
+- 一つの懸念または作業はIssue、複数Entityを含む明示的な計画範囲はGroupとする。合意済みscopeからkindを一意に決められない場合は確認する。
+- Resurface conditionは既定でAlwaysとする。明示された日付または待機先Entityは反映し、単に「後で」のように条件を選べない場合は確認する。
+
+`axon:conventions`に従い、合意済みの目的、scope、完了条件から親、dependency、分解を自律して導く。計画の意味、採用、公開仕様、独立した完了単位を新たに決める必要がある場合だけユーザーへ返す。
 
 ## 会話から独立したdeclarationを作る
 
 後続セッションが`axon show`だけを読んでも、なぜ存在し、何を満たせば終了かを理解できるtitleとdescriptionにする。会話内だけの指示語、比較対象、略称を残さない。観測と提案を区別し、登録後に得られる結果や申し送りをdescriptionの予約欄にしない。
 
-Acceptedとして登録する場合は、目的、scope、利用者から見える振る舞い、公開契約、状態モデル、後戻りしにくいコスト、分解、親、dependencyに、実装前に解消すべき判断が残っていないか確認する。残る場合は、この相談で決めるか、別の前提Entityとして表現するかをユーザーに選んでもらう。通常の実装詳細だけを理由に登録を止めない。
+ユーザーが示した内容と調査で確定した事実からdeclarationを構成する。通常の実装詳細は実装者に委ねる。目的、scope、完了条件そのものを補って発明する必要がある場合は、登録前にその判断を確認する。重要な意思決定を加えていなければ、完成した文面だけを理由に再確認を求めない。
 
-エージェントが目的、完了条件、構造へ実質的な判断を加えた場合は、最終案を提示し、ユーザーがその内容とDispositionを確認してから登録する。意味を変えない誤字修正や整形だけなら再確認を要求しない。
+## 重複を解決して登録する
 
-## 公式kitで登録する
+`axon:conventions`の重複確認を行う。完全に一致する未終端Entityを再利用できる場合は、そのIDと現在状態を結果とする。Dispositionの不一致、Ended、cross-kind、scopeの差、複数候補がある場合はユーザーの選択を得る。新しいIDの作成が明示されていれば新規登録する。
 
-採否未判断なら`axon-kit:capture`、採用済みなら`axon-kit:plan`を使う。登録後にstartや実装へ進まない。
+採否未判断なら`axon-kit:capture`、採用済みなら`axon-kit:plan`を使い、作成結果と関係を確認する。このskillは登録と検証で終了し、同じ依頼が明示的に実装workflowまで含み、そのworkflowへ引き渡す場合を除いてstartや実装へ進まない。
 
-作成したID、kind、declaration、Control state、重複判断、readinessへの影響、部分完了または未解決事項を報告する。
+作成または再利用したID、kind、declaration、Control state、重複判断、readinessへの影響、未解決事項を報告する。

@@ -1,38 +1,60 @@
 # 宣言ファイルの個人用ワークフロー
 
+## 依頼された終端を確定する
+
+操作前に、artifactだけを扱うかlive DBまで反映するかを依頼から確定する。
+
+- reviewまたはcheckは原本とDBを変更しない。必要なら専用working fileでprepareして検査する。
+- exportは指定scopeを出力してartifactを検査する。既存の出力先を上書きするのは明示されている場合だけとする。
+- canonicalizeは専用working fileをprepare、checkし、commentが失われることを既知の変換として原本を置き換える。DBは変更しない。
+- 「DBへ反映する」「applyする」「Entityの計画をこの内容に更新する」という依頼はDBへの反映まで含む。
+- 単に「declarationを更新する」だけでfileとDBのどちらが終端か決められない場合は確認する。
+
+requested artifactまたはDB状態の検証までで終了する。同じ依頼に外部作業workflowが明示されていない限り、Entityのstartや実装へ進まない。
+
 ## 内容判断と反映経路を分ける
 
-宣言内容、新規Entityの採否、重複、分解は`axon:register`、既存Entityの判断と固定declarationの変更は`axon:triage`で確定する。独立した追加情報は宣言へ混ぜず、依頼範囲に応じて`axon-kit:add-note`を使う。artifactだけの依頼ではlive DBを変更しない。
+宣言内容、新規Entityの採否、重複、分解は`axon:register`、既存Entityの判断と固定declarationの変更は`axon:triage`の方針に従う。独立した追加情報は宣言へ混ぜず、依頼範囲に応じて`axon-kit:add-note`を使う。
 
-固定declarationの実変更は、理由付きでUndecidedへ戻し、fresh exportからapplyし、全文と関係を確認した後に最終Dispositionを別の判断として反映する。Resurface conditionも宣言とは別に変更する。各phaseは一つのtransactionではないため、途中失敗では自動で巻き戻さず、反映済みと未反映を分けて報告する。
+目的、scope、完了条件が合意済みなら、新規ID、親、dependency、包含、分解を自律して構成する。目的、scope、完了条件、採否、時期、計画の意味を新たに決める場合だけ確認する。
 
-新規AcceptedかつNotStarted、AlwaysのEntityだけを宣言から直接作成する。それ以外の初期状態はcaptureで準備し、Undecidedの間にdeclarationを反映してから、Resurface conditionと最終Dispositionを別々に適用する。
+既存の固定declarationは、必要な理由付きUndecided化、fresh exportへの変更、apply、全文と関係の確認、供給済みDispositionへの再判断を一続きの機械的な操作として完了する。明示されたResurface conditionも宣言とは別のControl state操作として反映する。
 
-## 編集対象と履歴を確認する
+新規AcceptedかつNotStarted、AlwaysのEntityだけを宣言から直接作成する。それ以外の初期状態はUndecidedで準備し、declarationを反映してから、供給済みのResurface conditionと最終Dispositionを別々に適用する。
 
-既存Entityは`axon show`の全出力、全Declaration Revision、表示された全Noteを読む。明示ID、`--group`、`--recursive`の和集合だけを編集対象とし、relation endpointが自動的に編集対象になると解釈しない。
+## 編集対象を固定する
 
-最終判断を伴う場合は、prepare後に割り当てられたIDとkeyの対応を控える。Undecidedでapplyした中間fileを最終artifactにせず、最終判断後に控えたIDを明示してfresh exportし、差分なしのcheckを通したものを最終版にする。動的selectorを再利用して対象を増減させない。
+既存Entityは`axon show`、関係するDeclaration Revision、判断または変更に関係するNoteを読む。明示ID、`--group`、`--recursive`で選ばれた和集合だけを編集対象とし、relation endpointを自動的な編集対象とみなさない。
+
+prepareで新規IDが割り当てられた場合はkeyとの対応を保持する。Control state変更後に最終artifactを作るときは、保持したIDを明示してfresh exportする。動的selectorを再利用して対象を意図せず増減させない。
 
 ## ユーザー所有fileを保護する
 
-export、prepare、applyは、出力先と同じfilesystemに作ったエージェント専用working fileで行う。原本の内容とmetadataを控え、原本は全検証が終わるまで変更しない。symlinkまたはhardlinkは自動置換せず、扱いをユーザーへ確認する。
+prepare、canonicalize、applyの書き換えは、出力先と同じfilesystemに作るエージェント専用working fileで行う。原本の内容とmetadataを控え、検証が終わるまで変更しない。
 
-通常fileではmode、ownerとgroup、ACL、全xattr、macOSまたはBSDのfile flagsを保存する。canonical rewrite後にworking fileへ再適用して検証し、原本にdriftがないことを確認してから一度だけatomic replaceする。一項目でも保存、再適用、検証できなければ、失われるmetadataを示して許可を得るか、working fileを保持して停止する。mtimeとctimeは保持対象にしない。
+通常fileは内容、mode、owner、groupを保ち、ACL、拡張属性、file flagsが存在する場合だけ、それらもworking fileへ再適用して検証する。原本にdriftがないことを確認してからatomic replaceする。symlinkまたはhardlinkは自動置換せず、扱いをユーザーへ返す。
 
-## 準備、検査、反映
+必要なmetadataを保存または検証できない場合は原本を維持し、検証済みworking fileと保存できない内容を報告する。mtimeとctimeは保持対象にしない。
 
-1. `axon import prepare <working-file>`を単独で実行し、commentが失われることを前提にcanonical YAMLを確認する。
-2. 編集対象、割り当てID、parent、outgoing dependency、readonly境界、外部snapshotを確認する。
-3. `axon import check <working-file>`を実行し、構造変更、導出状態への影響、warning、file digestを保持する。
-4. canonicalizeだけなら原本のdriftとmetadataを再確認し、working fileで置換して`DB applied: no`として終了する。
-5. applyする場合は直前にfile digestと原本のdriftを再確認し、`axon import apply <working-file>`をDB mutationとして単独実行する。
-6. apply出力をcheck結果と比較し、再度checkして差分なしを確認する。変更した全Entity、全Revision、既存Note、関連frontierへの影響を確認する。
+## 準備、検査、反映する
 
-## 競合と結果不明
+`axon-kit:declaration`の手順に従い、各mutationは単独のcommandとして実行する。
 
-stale fileをprepareで上書きしない。stale file、現行DBのfresh export、意図した最終値を三者比較し、競合しない変更だけをfresh exportへ載せ直す。同じfieldまたはrelationが双方で変わった場合や導出状態への影響が変わる場合は、ユーザーの判断を得てから再度checkする。
+1. `axon import prepare <working-file>`でcanonical YAMLを作り、編集対象、新規ID、parent、outgoing dependency、readonly境界、外部snapshotを確認する。
+2. `axon import check <working-file>`で構造変更、導出状態への影響、warning、file digestを確認する。
+3. artifactだけの依頼なら、原本のdriftとmetadataを再確認して必要なfileだけを置き換える。
+4. DBへapplyする場合は、直前にfile digestと原本のdriftを確認し、`axon import apply <working-file>`を単独で実行する。
+5. apply結果をcheck結果と比較し、再度checkして差分がないことを確認する。
+6. 変更Entity、新しいRevision、関係、Control state、関連frontierを検証する。全履歴と全Noteは、その変更や判断に関係する場合だけ再読する。
 
-DB commit後のfile rewrite失敗では同じapply fileを保持し、公式kitの復旧契約に従って同じapplyを再実行する。command出力を失って結果不明の場合もworking fileを変更せず、process終了と現在DBを照合してから、許可された同一fileの再実行だけを行う。
+各phaseは一つのtransactionではない。途中結果を観測して次へ進み、自動rollbackで履歴を隠さない。
 
-途中失敗、競合調査、結果不明、復旧に必要なfileは削除しない。保持するpath、staleか再実行可能か、DBへ反映済みのphase、次に有効なcommandを報告する。成功後は、永続成果物として残す合意がないエージェント所有一時fileだけを削除する。
+## 競合と部分完了を解決する
+
+stale fileをprepareで上書きしない。stale file、現行DBのfresh export、意図した最終値を比較し、競合しない変更はfresh exportへ自律して載せ直す。同じfieldまたはrelationが双方で変わっていても、合意済みの最終値が明確ならその値へ収束させる。
+
+目的、scope、完了条件、Disposition、時期、計画の意味を変える必要がある競合はユーザーへ返す。導出状態への影響が変わっても、合意済み計画内の変化なら影響を再検証して続行できる。
+
+DB commit後のfile rewrite失敗では同じapply fileを保持し、現在DBと照合して公式kitが許す同一fileの再実行を行う。command出力を失った場合もworking fileを変更せず、process終了とDBを照合する。結果不明、重複適用の可能性、rollback、補償操作、別の最終状態が必要な場合は停止する。
+
+途中失敗、競合調査、結果不明、復旧に必要なfileは削除しない。path、staleか再実行可能か、DBへ反映済みのphase、次に有効な操作を報告する。成功後は、永続成果物として残す合意がないエージェント所有一時fileだけを削除する。
