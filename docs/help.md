@@ -95,9 +95,11 @@ Claims record actor, worktree, and start time. axon does not decide that a claim
 
 Successful results and mutation confirmations go to standard output. Errors go to standard error and return a non-zero status. Empty `ready`, `triage`, `claims`, `stale`, and `list` queries keep standard output empty and write only a short note to standard error.
 
-`show` places identity and current state before long-form content and history, so one complete output can be read from the current snapshot into its details. It preserves description and Note bodies. On an attended terminal it uses restrained ANSI styling to reinforce status values; piped and redirected output is plain, `NO_COLOR` disables styling, and text structure never depends on color.
+Human-readable output uses consistent structures for Entity rows, history and index rows, single-record details, and mutation confirmations. Entity rows begin with ID and kind; Note and Revision indexes begin with their Entity-local number. Long-form content and diffs remain separate from one-line records, and mutation confirmations begin with the affected Entity ID.
 
-The first whitespace-separated field in every Entity list row is the Entity ID. The second identifies its kind. Note and Revision lists begin with their Entity-local number. Revision reads use one database snapshot, and optional descriptions label `present` or `absent` separately from their content. Note bodies are stored and displayed without trimming; a body containing only whitespace is rejected.
+On an attended terminal, human-readable output uses restrained ANSI styling to reinforce generated identifiers, labels, states, and diff markers. Piped and redirected output is plain, `NO_COLOR` disables styling, and text structure never depends on color. Stored titles, descriptions, Note bodies, and reasons are preserved without styling. A downstream closed pipe is treated as successful output completion.
+
+Revision reads use one database snapshot, and optional descriptions label `present` or `absent` separately from their content. Note bodies are stored and displayed without trimming; a body containing only whitespace is rejected. `export` and completion output are generated content and never receive human-oriented styling.
 
 ## Storage, worktrees, and identifiers
 

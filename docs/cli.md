@@ -49,7 +49,7 @@ Accepted / Rejected への判断時には declaration 全文を Entity 内連番
 
 ### 一覧
 
-`ready` / `triage` / `claims` / `stale` / `list` は両 kind を同じ一覧に出し、`--kind issue|group` で任意に絞る。各行の第 1 列は ID、第 2 列は kind とする。
+`ready` / `triage` / `claims` / `stale` / `list` は両 kind を同じ一覧に出し、`--kind issue|group` で任意に絞る。1 Entity を1行に出し、各行の第1列はID、第2列はkindとする。`triage` は `Reason:`、`claims` / `stale` は `Claim:`、`Worktree:`、`Started:` をidentityの後に置く。`list` は Progress / Disposition と、該当する例外状態だけを表示する。
 
 `stale` は claim の経過時間やプロセス状態から自動判定せず、`claims` と同じ保存済み事実を返す。解放は人が判断して `release` を明示する。
 
@@ -99,6 +99,10 @@ Ended Group は完了宣言を後から無効にしないため、親変更、su
 
 help、一覧、詳細、成功確認は stdout、エラーは stderr に出す。一覧が空なら stdout を空に保ち、案内だけを stderr に出して成功する。
 
-`show` は identity と現在状態を長文や履歴より先に置き、現在地から詳細へ読み進められる一つの出力にする。description と Note の本文は省略・整形せずに表示する。stdout が対話 terminal なら状態の識別を補助する ANSI style を使う。非対話出力と `NO_COLOR` では同じ文字、空白、改行、順序を無装飾で出し、状態の違いを色だけでは表さない。
+人向け出力は、Entity一覧、履歴と索引、一件の詳細、状態変更の確認という役割ごとに共通の文字構造と語彙を使う。一覧と履歴は1 recordを1行に置き、一件の詳細では短い metadata を長文やdiffより先に置く。状態変更の確認は対象IDから始め、保存されたsnapshot全体を繰り返さない。Note / Revision一覧はEntity-local numberから始める。
+
+`show` を含む人向け出力は、stdout が対話 terminal なら状態の識別を補助する ANSI style を使う。非対話出力と `NO_COLOR` では同じ文字、空白、改行、順序を無装飾で出し、状態の違いを色だけでは表さない。title、description、Note本文、reasonなど利用者が保存した文字列は装飾・省略・整形しない。下流でpipeが閉じた場合は成功として扱う。
+
+`export` と completion は生成内容そのものを標準出力へ書き、人向けの装飾を加えない。
 
 Git 配下では common Git directory の親を管理 root とし、全 worktree で `.axon/axon.db` を共有する。Git 外ではカレントから祖先へ最も近い DB を探す。Issue と Group は同じ `<prefix>-<ランダム 6 文字>` namespace を使い、完全 ID または一意な suffix で解決する。

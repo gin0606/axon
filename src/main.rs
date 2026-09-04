@@ -15,29 +15,29 @@ use domain::*;
 
 const CLI_GUIDE: &str = include_str!("../docs/help.md");
 
-const SHOW_HEADING: Style = Style::new().bold();
-const SHOW_ID: Style = Style::new()
+const OUTPUT_HEADING: Style = Style::new().bold();
+const OUTPUT_ID: Style = Style::new()
     .bold()
     .fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
-const SHOW_ACTIVE: Style = Style::new()
+const OUTPUT_ACTIVE: Style = Style::new()
     .bold()
     .fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
-const SHOW_ACCEPTED: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
-const SHOW_ATTENTION: Style = Style::new()
+const OUTPUT_ACCEPTED: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
+const OUTPUT_ATTENTION: Style = Style::new()
     .bold()
     .fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
-const SHOW_DANGER: Style = Style::new()
+const OUTPUT_DANGER: Style = Style::new()
     .bold()
     .fg_color(Some(Color::Ansi(AnsiColor::Red)));
-const SHOW_MUTED: Style = Style::new().dimmed();
+const OUTPUT_MUTED: Style = Style::new().dimmed();
 
 #[derive(Clone, Copy)]
-enum ShowDecoration {
+enum OutputDecoration {
     Plain,
     Ansi,
 }
 
-impl ShowDecoration {
+impl OutputDecoration {
     fn paint(self, style: Style, value: impl std::fmt::Display) -> String {
         match self {
             Self::Plain => value.to_string(),
@@ -46,25 +46,38 @@ impl ShowDecoration {
     }
 }
 
-fn show_decoration(is_terminal: bool, no_color: bool) -> ShowDecoration {
+fn output_decoration(is_terminal: bool, no_color: bool) -> OutputDecoration {
     if is_terminal && !no_color {
-        ShowDecoration::Ansi
+        OutputDecoration::Ansi
     } else {
-        ShowDecoration::Plain
+        OutputDecoration::Plain
     }
 }
 
-fn write_show(output: &str, decoration: ShowDecoration) -> std::io::Result<()> {
+fn current_output_decoration() -> OutputDecoration {
+    use std::io::IsTerminal;
+
+    output_decoration(
+        std::io::stdout().is_terminal(),
+        std::env::var_os("NO_COLOR").is_some(),
+    )
+}
+
+fn write_output(output: &str, decoration: OutputDecoration) -> std::io::Result<()> {
     match decoration {
-        ShowDecoration::Plain => write_show_to(std::io::stdout(), output),
-        ShowDecoration::Ansi => write_show_to(
+        OutputDecoration::Plain => write_output_to(std::io::stdout(), output),
+        OutputDecoration::Ansi => write_output_to(
             anstream::AutoStream::new(std::io::stdout(), anstream::ColorChoice::Always),
             output,
         ),
     }
 }
 
-fn write_show_to(mut stream: impl std::io::Write, output: &str) -> std::io::Result<()> {
+fn write_plain_output(output: &str) -> std::io::Result<()> {
+    write_output_to(std::io::stdout(), output)
+}
+
+fn write_output_to(mut stream: impl std::io::Write, output: &str) -> std::io::Result<()> {
     match stream.write_all(output.as_bytes()) {
         Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
         result => result,
@@ -516,35 +529,78 @@ fn cmd_export(
     recursive: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = Store::open()?;
-    print!(
-        "{}",
-        declaration::export(&mut store, &ids, &groups, recursive)?
-    );
+    write_plain_output(&declaration::export(&mut store, &ids, &groups, recursive)?)?;
     Ok(())
 }
 
 fn cmd_import(command: ImportCmd) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = Store::open()?;
+    let decoration = current_output_decoration();
     match command {
         ImportCmd::Prepare { file } => {
             declaration::prepare(&mut store, &file)?;
-            println!("Prepared {}", file.display());
+            write_output(
+                &format!(
+                    "{}  {}\n",
+                    decoration.paint(OUTPUT_ACCEPTED, "Prepared"),
+                    file.display()
+                ),
+                decoration,
+            )?;
         }
         ImportCmd::Check { file } => {
-            print!("{}", declaration::check(&mut store, &file)?);
+            write_output(
+                &decorate_import_report(&declaration::check(&mut store, &file)?, decoration),
+                decoration,
+            )?;
         }
         ImportCmd::Apply { file } => {
-            print!("{}", declaration::apply(&mut store, &file)?);
-            println!("Applied {}", file.display());
+            let mut output =
+                decorate_import_report(&declaration::apply(&mut store, &file)?, decoration);
+            output.push_str(&format!(
+                "{}  {}\n",
+                decoration.paint(OUTPUT_ACCEPTED, "Applied"),
+                file.display()
+            ));
+            write_output(&output, decoration)?;
         }
     }
     Ok(())
 }
 
+fn decorate_import_report(report: &str, decoration: OutputDecoration) -> String {
+    report
+        .split_inclusive('\n')
+        .map(|line| {
+            let (body, newline) = line
+                .strip_suffix('\n')
+                .map_or((line, ""), |body| (body, "\n"));
+            let decorated = match body {
+                "Plan is valid." => decoration.paint(OUTPUT_ACCEPTED, body),
+                "Changes:"
+                | "Derived changes (ready, blocked, orphaned, active_scope, group_completable):" => {
+                    decoration.paint(OUTPUT_HEADING, body)
+                }
+                _ if body.starts_with("Warning: ") => decoration.paint(OUTPUT_DANGER, body),
+                _ => body.to_string(),
+            };
+            format!("{decorated}{newline}")
+        })
+        .collect()
+}
+
 fn cmd_init(prefix: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let (path, prefix) = Store::init(prefix.as_deref())?;
-    println!("Initialized axon at {}", path.display());
-    println!("Entity IDs will use the form {prefix}-xxxxxx");
+    let decoration = current_output_decoration();
+    write_output(
+        &format!(
+            "{}  {}\n{}  {prefix}-xxxxxx\n",
+            decoration.paint(OUTPUT_ACCEPTED, "Initialized"),
+            path.display(),
+            decoration.paint(OUTPUT_MUTED, "Entity ID format:"),
+        ),
+        decoration,
+    )?;
     Ok(())
 }
 
@@ -578,13 +634,18 @@ fn cmd_create(
         updated_at: now,
     };
     store.insert(&entity)?;
-    println!(
-        "{}  {}  {}  [{}]",
-        entity.id,
-        kind.label(),
-        entity.title,
-        disposition.label()
-    );
+    let decoration = current_output_decoration();
+    write_output(
+        &format!(
+            "{}  {}  {}  [{}]  {}\n",
+            decoration.paint(OUTPUT_ID, &entity.id),
+            decoration.paint(OUTPUT_ACCEPTED, "Created"),
+            decoration.paint(OUTPUT_MUTED, kind.label()),
+            decoration.paint(disposition_style(disposition), disposition.label()),
+            entity.title,
+        ),
+        decoration,
+    )?;
     Ok(())
 }
 
@@ -621,14 +682,21 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             let id = store.resolve_id(&id)?;
             let parent = store.resolve_id(&parent)?;
             store.apply(&id, Change::SetParent(Some(parent.clone())), &ctx(None))?;
-            println!("{id} parent set to {parent}");
+            write_confirmation(
+                &id,
+                render_inline_fields(
+                    current_output_decoration(),
+                    vec![("Parent", parent.to_string())],
+                ),
+                Style::new(),
+            )?;
             Ok(())
         }
         GroupCmd::Unset { id } => {
             let mut store = Store::open()?;
             let id = store.resolve_id(&id)?;
             store.apply(&id, Change::SetParent(None), &ctx(None))?;
-            println!("{id} parent removed");
+            write_confirmation(&id, "Parent: (none)".to_string(), Style::new())?;
             Ok(())
         }
     }
@@ -644,81 +712,125 @@ fn included(kind: Option<KindFilter>, entity: &Entity) -> bool {
     kind.is_none_or(|filter| filter.matches(entity))
 }
 
+fn render_entity_identity(entity: &Entity, decoration: OutputDecoration) -> String {
+    format!(
+        "{}  {}  {}",
+        decoration.paint(OUTPUT_ID, &entity.id),
+        decoration.paint(OUTPUT_MUTED, entity.kind.label()),
+        entity.title
+    )
+}
+
+fn write_confirmation(id: &EntityId, result: String, style: Style) -> std::io::Result<()> {
+    let decoration = current_output_decoration();
+    write_output(
+        &format!(
+            "{}  {}\n",
+            decoration.paint(OUTPUT_ID, id),
+            decoration.paint(style, result)
+        ),
+        decoration,
+    )
+}
+
 fn cmd_ready(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>> {
     let (_, view) = load()?;
+    let decoration = current_output_decoration();
     let rows = view
         .ready()
         .into_iter()
         .filter(|entity| included(kind, entity))
-        .map(|entity| format!("{}  {}  {}\n", entity.id, entity.kind.label(), entity.title))
+        .map(|entity| format!("{}\n", render_entity_identity(entity, decoration)))
         .collect::<String>();
-    print_rows(&rows, "No ready entities");
+    write_rows(&rows, "No ready entities", decoration)?;
     Ok(())
 }
 
 fn cmd_triage(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>> {
     let (_, view) = load()?;
+    let decoration = current_output_decoration();
     let mut rows = String::new();
     for (entity, reason) in view
         .triage()
         .into_iter()
         .filter(|(entity, _)| included(kind, entity))
     {
-        match reason {
-            TriageReason::Undecided => rows.push_str(&format!(
-                "{}  {}  Undecided  {}\n",
-                entity.id,
-                entity.kind.label(),
-                entity.title
-            )),
-            TriageReason::Orphaned => {
-                let lost = view
-                    .dependency_targets(&entity.id)
-                    .into_iter()
-                    .filter(|target| target.disposition == Disposition::Rejected)
-                    .map(|target| target.id.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                rows.push_str(&format!(
-                    "{}  {}  Orphaned  {} <- {} is Rejected\n",
-                    entity.id,
-                    entity.kind.label(),
-                    entity.title,
-                    lost
-                ));
-            }
-        }
+        rows.push_str(&render_triage_row(&view, entity, reason, decoration));
     }
-    print_rows(&rows, "No entities need triage");
+    write_rows(&rows, "No entities need triage", decoration)?;
     Ok(())
+}
+
+fn render_triage_row(
+    view: &View,
+    entity: &Entity,
+    reason: TriageReason,
+    decoration: OutputDecoration,
+) -> String {
+    let fields = match reason {
+        TriageReason::Undecided => {
+            vec![("Reason", decoration.paint(OUTPUT_ATTENTION, "Undecided"))]
+        }
+        TriageReason::Orphaned => {
+            let rejected = view
+                .dependency_targets(&entity.id)
+                .into_iter()
+                .filter(|target| target.disposition == Disposition::Rejected)
+                .map(|target| decoration.paint(OUTPUT_ID, &target.id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            vec![
+                ("Reason", decoration.paint(OUTPUT_DANGER, "Orphaned")),
+                ("Rejected dependencies", rejected),
+            ]
+        }
+    };
+    format!(
+        "{}  {}\n",
+        render_entity_identity(entity, decoration),
+        render_inline_fields(decoration, fields)
+    )
 }
 
 fn cmd_claims(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>> {
     let (_, view) = load()?;
+    let decoration = current_output_decoration();
     let rows = view
         .claims()
         .into_iter()
         .filter(|(entity, _)| included(kind, entity))
-        .map(|(entity, claim)| {
-            format!(
-                "{}  {}  {}  Claim: {}\n",
-                entity.id,
-                entity.kind.label(),
-                entity.title,
-                claim_details(claim)
-            )
-        })
+        .map(|(entity, claim)| render_claim_row(entity, claim, decoration))
         .collect::<String>();
-    print_rows(&rows, "No active claims");
+    write_rows(&rows, "No active claims", decoration)?;
     Ok(())
 }
 
-fn claim_details(claim: &Claim) -> String {
+fn render_claim_row(entity: &Entity, claim: &Claim, decoration: OutputDecoration) -> String {
     format!(
-        "{}  Worktree: {}  Started: {}",
+        "{}  {}\n",
+        render_entity_identity(entity, decoration),
+        render_inline_fields(
+            decoration,
+            vec![
+                ("Claim", claim.actor.clone()),
+                ("Worktree", claim.worktree.clone()),
+                ("Started", display::timestamp(&claim.at)),
+            ]
+        )
+    )
+}
+
+fn claim_details(claim: &Claim, decoration: OutputDecoration) -> String {
+    format!(
+        "{}  {}",
         claim.actor,
-        claim.worktree,
-        display::timestamp(&claim.at)
+        render_inline_fields(
+            decoration,
+            vec![
+                ("Worktree", claim.worktree.clone()),
+                ("Started", display::timestamp(&claim.at)),
+            ],
+        )
     )
 }
 
@@ -731,9 +843,17 @@ fn cmd_start(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
         at: Utc::now(),
     };
     store.apply(&id, Change::Start(claim.clone()), &ctx(None))?;
-    let entity = store.get(&id)?;
-    println!("Started {id} ({})", claim.actor);
-    println!("{}  {}", entity.kind.label(), entity.title);
+    let decoration = current_output_decoration();
+    write_confirmation(
+        &id,
+        format!(
+            "{}  {} {}",
+            decoration.paint(OUTPUT_ACTIVE, "Started"),
+            decoration.paint(OUTPUT_MUTED, "Claim:"),
+            claim.actor
+        ),
+        Style::new(),
+    )?;
     Ok(())
 }
 
@@ -741,7 +861,7 @@ fn cmd_done(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = Store::open()?;
     let id = store.resolve_id(raw)?;
     store.apply(&id, Change::Done, &ctx(None))?;
-    println!("Ended {id}");
+    write_confirmation(&id, "Ended".to_string(), OUTPUT_MUTED)?;
     Ok(())
 }
 
@@ -749,48 +869,57 @@ fn cmd_release(raw: &str, reason: Option<String>) -> Result<(), Box<dyn std::err
     let mut store = Store::open()?;
     let id = store.resolve_id(raw)?;
     store.apply(&id, Change::Release, &ctx(reason))?;
-    println!("Released {id}");
+    write_confirmation(&id, "Released".to_string(), OUTPUT_ATTENTION)?;
     Ok(())
 }
 
 fn cmd_list(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>> {
     let (_, view) = load()?;
+    let decoration = current_output_decoration();
     let mut rows = String::new();
     for entity in view.iter().filter(|entity| included(kind, entity)) {
-        let mut marks = Vec::new();
-        if view.is_orphaned(&entity.id) {
-            marks.push("orphaned".to_string());
-        } else if view.is_blocked(&entity.id) {
-            marks.push("blocked".to_string());
-        }
-        if !view.is_surfaced(entity) {
-            marks.push(entity.resurface_condition.label());
-        }
-        if let Some(reason) = inactive_scope_reason(&view, &entity.id) {
-            marks.push(format!("inactive: {reason}"));
-        }
-        let marks = if marks.is_empty() {
-            String::new()
-        } else {
-            format!(" {}", marks.join(" "))
-        };
-        rows.push_str(&format!(
-            "{}  {}  [{}/{}]{}  {}\n",
-            entity.id,
-            entity.kind.label(),
-            entity.progress.label(),
-            entity.disposition.label(),
-            marks,
-            entity.title
-        ));
+        rows.push_str(&render_list_row(&view, entity, decoration));
     }
-    print_rows(&rows, "No entities");
+    write_rows(&rows, "No entities", decoration)?;
     Ok(())
 }
 
-fn cmd_show(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::IsTerminal;
+fn render_list_row(view: &View, entity: &Entity, decoration: OutputDecoration) -> String {
+    let mut marks = Vec::new();
+    if view.is_orphaned(&entity.id) {
+        marks.push(decoration.paint(OUTPUT_DANGER, "Orphaned"));
+    } else if view.is_blocked(&entity.id) {
+        marks.push(decoration.paint(OUTPUT_DANGER, "Blocked"));
+    }
+    if !view.is_surfaced(entity) {
+        marks.push(decoration.paint(
+            OUTPUT_ATTENTION,
+            format!("Not surfaced: {}", entity.resurface_condition.label()),
+        ));
+    }
+    if let Some(reason) = inactive_scope_reason(view, &entity.id) {
+        marks.push(decoration.paint(OUTPUT_ATTENTION, format!("Inactive: {reason}")));
+    }
+    let marks = if marks.is_empty() {
+        String::new()
+    } else {
+        format!("  {}", marks.join("  "))
+    };
+    format!(
+        "{}  {}  [{}/{}]  {}{}\n",
+        decoration.paint(OUTPUT_ID, &entity.id),
+        decoration.paint(OUTPUT_MUTED, entity.kind.label()),
+        decoration.paint(progress_style(&entity.progress), entity.progress.label()),
+        decoration.paint(
+            disposition_style(entity.disposition),
+            entity.disposition.label()
+        ),
+        entity.title,
+        marks
+    )
+}
 
+fn cmd_show(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = Store::open()?;
     let db::ShowSnapshot {
         id,
@@ -806,11 +935,8 @@ fn cmd_show(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
     debug_assert_eq!(counts.revisions, revisions.len());
     debug_assert_eq!(counts.notes, notes.len());
     let entity = view.get(&id).ok_or("entity not found")?;
-    let decoration = show_decoration(
-        std::io::stdout().is_terminal(),
-        std::env::var_os("NO_COLOR").is_some(),
-    );
-    write_show(
+    let decoration = current_output_decoration();
+    write_output(
         &render_show(&view, entity, &progress_events, &notes, counts, decoration),
         decoration,
     )?;
@@ -823,14 +949,14 @@ fn render_show(
     progress_events: &[db::ProgressEvent],
     notes: &[Note],
     counts: RecordCounts,
-    decoration: ShowDecoration,
+    decoration: OutputDecoration,
 ) -> String {
     let mut blocks = Vec::<Vec<String>>::new();
     let mut overview = vec![format!(
         "{}  {}  {}",
-        decoration.paint(SHOW_ID, &entity.id),
-        decoration.paint(SHOW_MUTED, entity.kind.label()),
-        decoration.paint(SHOW_HEADING, &entity.title),
+        decoration.paint(OUTPUT_ID, &entity.id),
+        decoration.paint(OUTPUT_MUTED, entity.kind.label()),
+        entity.title,
     )];
 
     let inactive_reason = inactive_scope_reason(view, &entity.id);
@@ -865,7 +991,7 @@ fn render_show(
                 "Active scope",
                 decoration.paint(
                     if inactive_reason.is_some() {
-                        SHOW_ATTENTION
+                        OUTPUT_ATTENTION
                     } else {
                         Style::new()
                     },
@@ -878,7 +1004,7 @@ fn render_show(
                     if surfaced {
                         Style::new()
                     } else {
-                        SHOW_ATTENTION
+                        OUTPUT_ATTENTION
                     },
                     yes_no(surfaced),
                 ),
@@ -886,14 +1012,18 @@ fn render_show(
             (
                 "Blocked",
                 decoration.paint(
-                    if blocked { SHOW_DANGER } else { SHOW_MUTED },
+                    if blocked { OUTPUT_DANGER } else { OUTPUT_MUTED },
                     yes_no(blocked),
                 ),
             ),
             (
                 "Orphaned",
                 decoration.paint(
-                    if orphaned { SHOW_DANGER } else { SHOW_MUTED },
+                    if orphaned {
+                        OUTPUT_DANGER
+                    } else {
+                        OUTPUT_MUTED
+                    },
                     yes_no(orphaned),
                 ),
             ),
@@ -902,20 +1032,20 @@ fn render_show(
     if let Some(claim) = entity.progress.claim() {
         overview.push(render_inline_fields(
             decoration,
-            vec![("Claim", decoration.paint(SHOW_ACTIVE, claim_details(claim)))],
+            vec![("Claim", claim_details(claim, decoration))],
         ));
     }
 
     let (declaration, declaration_style) = match entity.current_revision {
         Some(revision) => (format!("fixed at Revision {revision}"), Style::new()),
-        None => ("draft".to_string(), SHOW_ATTENTION),
+        None => ("draft".to_string(), OUTPUT_ATTENTION),
     };
     let mut plan = vec![(
         "Plan declaration",
         decoration.paint(declaration_style, declaration),
     )];
     if let Some(parent) = &entity.parent {
-        plan.push(("Parent", decoration.paint(SHOW_ID, parent)));
+        plan.push(("Parent", decoration.paint(OUTPUT_ID, parent)));
     }
     overview.push(render_inline_fields(decoration, plan));
     overview.push(render_inline_fields(
@@ -936,7 +1066,7 @@ fn render_show(
             .descendants(&entity.id)
             .into_iter()
             .filter(|descendant| !descendant.is_terminal())
-            .map(|descendant| descendant.id.to_string())
+            .map(|descendant| decoration.paint(OUTPUT_ID, &descendant.id))
             .collect::<Vec<_>>();
         let completable = view.can_complete_group(&entity.id);
         let mut group = vec![format!(
@@ -947,9 +1077,9 @@ fn render_show(
                     "Can complete",
                     decoration.paint(
                         if completable {
-                            SHOW_ACCEPTED
+                            OUTPUT_ACCEPTED
                         } else {
-                            SHOW_MUTED
+                            OUTPUT_MUTED
                         },
                         yes_no(completable),
                     ),
@@ -983,38 +1113,24 @@ fn render_show(
     let mut relations = Vec::<(&str, String)>::new();
     for target in view.dependency_targets(&entity.id) {
         let (label, style) = if target.disposition == Disposition::Rejected {
-            ("Orphaned:", SHOW_DANGER)
+            ("Orphaned:", OUTPUT_DANGER)
         } else if target.is_terminal() {
-            ("Satisfied dependency:", SHOW_MUTED)
+            ("Satisfied dependency:", OUTPUT_MUTED)
         } else {
-            ("Dependency:", SHOW_ATTENTION)
+            ("Dependency:", OUTPUT_ATTENTION)
         };
-        relations.push((
-            label,
-            decoration.paint(
-                style,
-                format!("{}  {}  {}", target.id, target.kind.label(), target.title),
-            ),
-        ));
+        relations.push((label, render_related_entity(target, style, decoration)));
     }
     for dependent in view.direct_dependents(&entity.id) {
         relations.push((
             "Dependent:",
-            format!(
-                "{}  {}  {}",
-                dependent.id,
-                dependent.kind.label(),
-                dependent.title
-            ),
+            render_related_entity(dependent, OUTPUT_ID, decoration),
         ));
     }
     for cause in view.blocking_causes(&entity.id) {
         relations.push((
             "Root cause:",
-            decoration.paint(
-                SHOW_DANGER,
-                format!("{}  {}  {}", cause.id, cause.kind.label(), cause.title),
-            ),
+            render_related_entity(cause, OUTPUT_DANGER, decoration),
         ));
     }
     if !relations.is_empty() {
@@ -1039,14 +1155,11 @@ fn render_show(
             if !rendered_notes.is_empty() {
                 rendered_notes.push(String::new());
             }
-            rendered_notes.push(decoration.paint(
-                SHOW_HEADING,
-                format!(
-                    "Note {}  {}  {}",
-                    note.number,
-                    display::timestamp(&note.created_at),
-                    note.actor
-                ),
+            rendered_notes.push(format!(
+                "{}  {}  {}",
+                decoration.paint(OUTPUT_HEADING, format!("Note {}", note.number)),
+                decoration.paint(OUTPUT_MUTED, display::timestamp(&note.created_at)),
+                note.actor
             ));
             rendered_notes.push(note.body.clone());
         }
@@ -1057,9 +1170,9 @@ fn render_show(
         let mut history = Vec::new();
         for event in progress_events {
             let (action, action_style) = match event.kind {
-                db::ProgressEventKind::Start => ("Started", SHOW_ACTIVE),
-                db::ProgressEventKind::Done => ("Ended", SHOW_MUTED),
-                db::ProgressEventKind::Release => ("Released", SHOW_ATTENTION),
+                db::ProgressEventKind::Start => ("Started", OUTPUT_ACTIVE),
+                db::ProgressEventKind::Done => ("Ended", OUTPUT_MUTED),
+                db::ProgressEventKind::Release => ("Released", OUTPUT_ATTENTION),
             };
             let reason = event
                 .reason
@@ -1087,19 +1200,28 @@ fn render_show(
     )
 }
 
-fn render_section(decoration: ShowDecoration, heading: &str, lines: Vec<String>) -> Vec<String> {
-    std::iter::once(decoration.paint(SHOW_HEADING, heading))
+fn render_related_entity(entity: &Entity, id_style: Style, decoration: OutputDecoration) -> String {
+    format!(
+        "{}  {}  {}",
+        decoration.paint(id_style, &entity.id),
+        decoration.paint(OUTPUT_MUTED, entity.kind.label()),
+        entity.title
+    )
+}
+
+fn render_section(decoration: OutputDecoration, heading: &str, lines: Vec<String>) -> Vec<String> {
+    std::iter::once(decoration.paint(OUTPUT_HEADING, heading))
         .chain(lines)
         .collect()
 }
 
-fn render_inline_fields(decoration: ShowDecoration, fields: Vec<(&str, String)>) -> String {
+fn render_inline_fields(decoration: OutputDecoration, fields: Vec<(&str, String)>) -> String {
     fields
         .into_iter()
         .map(|(label, value)| {
             format!(
                 "{} {value}",
-                decoration.paint(SHOW_MUTED, format!("{label}:"))
+                decoration.paint(OUTPUT_MUTED, format!("{label}:"))
             )
         })
         .collect::<Vec<_>>()
@@ -1107,7 +1229,7 @@ fn render_inline_fields(decoration: ShowDecoration, fields: Vec<(&str, String)>)
 }
 
 fn render_fields(
-    decoration: ShowDecoration,
+    decoration: OutputDecoration,
     indent: &str,
     fields: Vec<(&str, String)>,
 ) -> Vec<String> {
@@ -1119,7 +1241,7 @@ fn render_fields(
     fields
         .into_iter()
         .map(|(label, value)| {
-            let label = decoration.paint(SHOW_MUTED, format!("{label:<width$}"));
+            let label = decoration.paint(OUTPUT_MUTED, format!("{label:<width$}"));
             format!("{indent}{label}  {value}")
         })
         .collect()
@@ -1128,28 +1250,33 @@ fn render_fields(
 fn progress_style(progress: &Progress) -> Style {
     match progress {
         Progress::NotStarted => Style::new(),
-        Progress::InProgress(_) => SHOW_ACTIVE,
-        Progress::Ended => SHOW_MUTED,
+        Progress::InProgress(_) => OUTPUT_ACTIVE,
+        Progress::Ended => OUTPUT_MUTED,
     }
 }
 
 fn disposition_style(disposition: Disposition) -> Style {
     match disposition {
-        Disposition::Undecided => SHOW_ATTENTION,
-        Disposition::Accepted => SHOW_ACCEPTED,
-        Disposition::Rejected => SHOW_MUTED,
+        Disposition::Undecided => OUTPUT_ATTENTION,
+        Disposition::Accepted => OUTPUT_ACCEPTED,
+        Disposition::Rejected => OUTPUT_MUTED,
     }
 }
 
 fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = Store::open()?;
+    let decoration = current_output_decoration();
     match command {
         NoteCmd::Add { id, message, file } => {
             let id = store.resolve_id(&id)?;
             let body = read_description(message, file)?
                 .ok_or("a Note body is required; provide -m or -F")?;
             let note = store.add_note(&id, &body, &actor::actor())?;
-            println!("{id}  Note {} recorded", note.number);
+            write_confirmation(
+                &id,
+                format!("Note {} recorded", note.number),
+                OUTPUT_ACCEPTED,
+            )?;
         }
         NoteCmd::List { id } => {
             let id = store.resolve_id(&id)?;
@@ -1160,29 +1287,36 @@ fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
                     let first_line = note.body.lines().next().unwrap_or_default();
                     format!(
                         "{}  {}  {}  {}\n",
-                        note.number,
-                        display::timestamp(&note.created_at),
+                        decoration.paint(OUTPUT_ACTIVE, note.number),
+                        decoration.paint(OUTPUT_MUTED, display::timestamp(&note.created_at)),
                         note.actor,
                         first_line
                     )
                 })
                 .collect::<String>();
-            print_rows(&rows, "No notes");
+            write_rows(&rows, "No notes", decoration)?;
         }
         NoteCmd::Show { id, number } => {
             let id = store.resolve_id(&id)?;
             let note = store.note(&id, number)?;
-            println!("{id}  Note {}", note.number);
-            println!(
-                "Recorded: {}  {}",
-                display::timestamp(&note.created_at),
-                note.actor
+            let mut output = format!(
+                "{}  {}\n{}\n\n{}\n{}",
+                decoration.paint(OUTPUT_ID, &id),
+                decoration.paint(OUTPUT_HEADING, format!("Note {}", note.number)),
+                render_inline_fields(
+                    decoration,
+                    vec![
+                        ("Recorded", display::timestamp(&note.created_at)),
+                        ("Actor", note.actor),
+                    ],
+                ),
+                decoration.paint(OUTPUT_HEADING, "Body"),
+                note.body,
             );
-            println!();
-            print!("{}", note.body);
             if !note.body.ends_with('\n') {
-                println!();
+                output.push('\n');
             }
+            write_output(&output, decoration)?;
         }
     }
     Ok(())
@@ -1190,6 +1324,7 @@ fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
 
 fn cmd_revision(command: RevisionCmd) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = Store::open()?;
+    let decoration = current_output_decoration();
     match command {
         RevisionCmd::List { id } => {
             let id = store.resolve_id(&id)?;
@@ -1208,37 +1343,48 @@ fn cmd_revision(command: RevisionCmd) -> Result<(), Box<dyn std::error::Error>> 
                     let marks = if marks.is_empty() {
                         String::new()
                     } else {
-                        format!(" [{}]", marks.join(", "))
+                        decoration.paint(OUTPUT_ATTENTION, format!(" [{}]", marks.join(", ")))
                     };
                     format!(
                         "{}  {}{}  {}\n",
-                        revision.number,
-                        display::timestamp(&revision.created_at),
+                        decoration.paint(OUTPUT_ACTIVE, revision.number),
+                        decoration.paint(OUTPUT_MUTED, display::timestamp(&revision.created_at)),
                         marks,
                         revision.title
                     )
                 })
                 .collect::<String>();
-            print_rows(&rows, "No declaration revisions");
+            write_rows(&rows, "No declaration revisions", decoration)?;
         }
         RevisionCmd::Show { id, number } => {
             let id = store.resolve_id(&id)?;
             let snapshot = store.revision_snapshot(&id)?;
             let revision = snapshot.revision(number)?;
-            print!("{}", render_revision(&id, &snapshot.entity, revision));
+            write_output(
+                &render_revision(&id, &snapshot.entity, revision, decoration),
+                decoration,
+            )?;
         }
         RevisionCmd::Diff { id, from, to } => {
             let id = store.resolve_id(&id)?;
             let snapshot = store.revision_snapshot(&id)?;
             let from_revision = snapshot.revision(from)?;
             let to_revision = snapshot.revision(to)?;
-            print!("{}", render_revision_diff(&id, from_revision, to_revision));
+            write_output(
+                &render_revision_diff(&id, from_revision, to_revision, decoration),
+                decoration,
+            )?;
         }
     }
     Ok(())
 }
 
-fn render_revision(id: &EntityId, entity: &Entity, revision: &DeclarationRevision) -> String {
+fn render_revision(
+    id: &EntityId,
+    entity: &Entity,
+    revision: &DeclarationRevision,
+    decoration: OutputDecoration,
+) -> String {
     let mut marks = Vec::new();
     if entity.current_revision == Some(revision.number) {
         marks.push("current");
@@ -1249,7 +1395,7 @@ fn render_revision(id: &EntityId, entity: &Entity, revision: &DeclarationRevisio
     let marks = if marks.is_empty() {
         String::new()
     } else {
-        format!(" [{}]", marks.join(", "))
+        decoration.paint(OUTPUT_ATTENTION, format!("  [{}]", marks.join(", ")))
     };
     let description = match revision.description.as_deref() {
         Some(description) => format!("present\n{description}"),
@@ -1266,15 +1412,29 @@ fn render_revision(id: &EntityId, entity: &Entity, revision: &DeclarationRevisio
         revision
             .dependencies
             .iter()
-            .map(|dependency| format!("  {dependency}"))
+            .map(|dependency| format!("  {}", decoration.paint(OUTPUT_ID, dependency)))
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let metadata = [
+        render_inline_fields(
+            decoration,
+            vec![("Created", display::timestamp(&revision.created_at))],
+        ),
+        render_inline_fields(decoration, vec![("Title", revision.title.clone())]),
+        render_inline_fields(decoration, vec![("Parent", parent)]),
+    ]
+    .join("\n");
     format!(
-        "{id}  Declaration Revision {}{marks}\nCreated: {}\nTitle: {}\nParent: {parent}\n\nDescription:\n{description}\n\nOutgoing dependencies:\n{dependencies}\n",
-        revision.number,
-        display::timestamp(&revision.created_at),
-        revision.title
+        "{}  {}{marks}\n{}\n\n{}\n{description}\n\n{}\n{dependencies}\n",
+        decoration.paint(OUTPUT_ID, id),
+        decoration.paint(
+            OUTPUT_HEADING,
+            format!("Declaration Revision {}", revision.number)
+        ),
+        metadata,
+        decoration.paint(OUTPUT_HEADING, "Description"),
+        decoration.paint(OUTPUT_HEADING, "Outgoing dependencies"),
     )
 }
 
@@ -1282,17 +1442,23 @@ fn render_revision_diff(
     id: &EntityId,
     from: &DeclarationRevision,
     to: &DeclarationRevision,
+    decoration: OutputDecoration,
 ) -> String {
     let mut output = format!(
-        "{id}  Declaration Revision {} -> {}\n\n",
-        from.number, to.number
+        "{}  {}\n\n",
+        decoration.paint(OUTPUT_ID, id),
+        decoration.paint(
+            OUTPUT_HEADING,
+            format!("Declaration Revision {} -> {}", from.number, to.number)
+        )
     );
-    push_value_diff(&mut output, "Title", &from.title, &to.title);
+    push_value_diff(&mut output, "Title", &from.title, &to.title, decoration);
     push_optional_value_diff(
         &mut output,
         "Description",
         from.description.as_deref(),
         to.description.as_deref(),
+        decoration,
     );
     push_value_diff(
         &mut output,
@@ -1306,6 +1472,7 @@ fn render_revision_diff(
             .as_ref()
             .map(ToString::to_string)
             .unwrap_or_else(|| "(none)".to_string()),
+        decoration,
     );
 
     let mut removed = from
@@ -1322,30 +1489,57 @@ fn render_revision_diff(
         .collect::<Vec<_>>();
     removed.sort();
     added.sort();
-    output.push_str("Outgoing dependencies:\n");
+    output.push_str(&format!(
+        "{}\n",
+        decoration.paint(OUTPUT_HEADING, "Outgoing dependencies")
+    ));
     if removed.is_empty() && added.is_empty() {
-        output.push_str("  unchanged\n");
+        output.push_str(&format!(
+            "  {}\n",
+            decoration.paint(OUTPUT_MUTED, "unchanged")
+        ));
     } else {
         for dependency in removed {
-            output.push_str(&format!("- {dependency}\n"));
+            output.push_str(&format!(
+                "{} {dependency}\n",
+                decoration.paint(OUTPUT_DANGER, "-")
+            ));
         }
         for dependency in added {
-            output.push_str(&format!("+ {dependency}\n"));
+            output.push_str(&format!(
+                "{} {dependency}\n",
+                decoration.paint(OUTPUT_ACCEPTED, "+")
+            ));
         }
     }
     output
 }
 
-fn push_value_diff(output: &mut String, label: &str, from: &str, to: &str) {
-    output.push_str(&format!("{label}:\n"));
+fn push_value_diff(
+    output: &mut String,
+    label: &str,
+    from: &str,
+    to: &str,
+    decoration: OutputDecoration,
+) {
+    output.push_str(&format!("{}\n", decoration.paint(OUTPUT_HEADING, label)));
     if from == to {
-        output.push_str("  unchanged\n");
+        output.push_str(&format!(
+            "  {}\n",
+            decoration.paint(OUTPUT_MUTED, "unchanged")
+        ));
     } else {
         for line in from.lines() {
-            output.push_str(&format!("- {line}\n"));
+            output.push_str(&format!(
+                "{} {line}\n",
+                decoration.paint(OUTPUT_DANGER, "-")
+            ));
         }
         for line in to.lines() {
-            output.push_str(&format!("+ {line}\n"));
+            output.push_str(&format!(
+                "{} {line}\n",
+                decoration.paint(OUTPUT_ACCEPTED, "+")
+            ));
         }
     }
 }
@@ -1355,17 +1549,32 @@ fn push_optional_value_diff(
     label: &str,
     from: Option<&str>,
     to: Option<&str>,
+    decoration: OutputDecoration,
 ) {
-    output.push_str(&format!("{label}:\n"));
+    output.push_str(&format!("{}\n", decoration.paint(OUTPUT_HEADING, label)));
     if from == to {
-        output.push_str("  unchanged\n");
+        output.push_str(&format!(
+            "  {}\n",
+            decoration.paint(OUTPUT_MUTED, "unchanged")
+        ));
         return;
     }
-    push_optional_diff_side(output, '-', from);
-    push_optional_diff_side(output, '+', to);
+    push_optional_diff_side(output, '-', from, decoration);
+    push_optional_diff_side(output, '+', to, decoration);
 }
 
-fn push_optional_diff_side(output: &mut String, prefix: char, value: Option<&str>) {
+fn push_optional_diff_side(
+    output: &mut String,
+    prefix: char,
+    value: Option<&str>,
+    decoration: OutputDecoration,
+) {
+    let style = if prefix == '-' {
+        OUTPUT_DANGER
+    } else {
+        OUTPUT_ACCEPTED
+    };
+    let prefix = decoration.paint(style, prefix);
     match value {
         None => output.push_str(&format!("{prefix} absent\n")),
         Some(value) => {
@@ -1380,12 +1589,12 @@ fn push_optional_diff_side(output: &mut String, prefix: char, value: Option<&str
 fn render_entity_counts(
     label: &str,
     counts: &derived::EntityCounts,
-    decoration: ShowDecoration,
+    decoration: OutputDecoration,
 ) -> Vec<String> {
     vec![
         format!(
             "  {}: {}  {}",
-            decoration.paint(SHOW_HEADING, label),
+            decoration.paint(OUTPUT_HEADING, label),
             counts.total,
             render_inline_fields(
                 decoration,
@@ -1461,7 +1670,18 @@ fn cmd_decide(command: DecideCmd) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = Store::open()?;
     let id = store.resolve_id(&args.id)?;
     store.apply(&id, Change::Decide(disposition), &ctx(args.reason))?;
-    println!("{id} Disposition set to {}", disposition.label());
+    let decoration = current_output_decoration();
+    write_confirmation(
+        &id,
+        render_inline_fields(
+            decoration,
+            vec![(
+                "Disposition",
+                decoration.paint(disposition_style(disposition), disposition.label()),
+            )],
+        ),
+        Style::new(),
+    )?;
     Ok(())
 }
 
@@ -1478,7 +1698,11 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
                 Change::SetResurfaceCondition(ResurfaceCondition::AtDate(date)),
                 &ctx(reason),
             )?;
-            println!("{id} resurface condition set to AtDate({date})");
+            write_confirmation(
+                &id,
+                format!("Resurface condition: AtDate({date})"),
+                OUTPUT_ATTENTION,
+            )?;
         }
         WhenCmd::After {
             id,
@@ -1492,7 +1716,11 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
                 Change::SetResurfaceCondition(ResurfaceCondition::AfterEntity(reference.clone())),
                 &ctx(reason),
             )?;
-            println!("{id} resurface condition set to AfterEntity({reference})");
+            write_confirmation(
+                &id,
+                format!("Resurface condition: AfterEntity({reference})"),
+                OUTPUT_ATTENTION,
+            )?;
         }
         WhenCmd::Clear { id, reason } => {
             let id = store.resolve_id(&id)?;
@@ -1501,7 +1729,7 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
                 Change::SetResurfaceCondition(ResurfaceCondition::Always),
                 &ctx(reason),
             )?;
-            println!("{id} resurface condition set to Always");
+            write_confirmation(&id, "Resurface condition: Always".to_string(), Style::new())?;
         }
     }
     Ok(())
@@ -1514,13 +1742,29 @@ fn cmd_dep(command: DepCmd) -> Result<(), Box<dyn std::error::Error>> {
             let id = store.resolve_id(&id)?;
             let needs = store.resolve_id(&needs)?;
             store.add_dep(&id, &needs)?;
-            println!("{id} now depends on {needs}");
+            let decoration = current_output_decoration();
+            write_confirmation(
+                &id,
+                render_inline_fields(
+                    decoration,
+                    vec![("Dependency added", decoration.paint(OUTPUT_ID, &needs))],
+                ),
+                Style::new(),
+            )?;
         }
         DepCmd::Rm { id, needs } => {
             let id = store.resolve_id(&id)?;
             let needs = store.resolve_id(&needs)?;
             store.remove_dep(&id, &needs)?;
-            println!("{id} no longer depends on {needs}");
+            let decoration = current_output_decoration();
+            write_confirmation(
+                &id,
+                render_inline_fields(
+                    decoration,
+                    vec![("Dependency removed", decoration.paint(OUTPUT_ID, &needs))],
+                ),
+                Style::new(),
+            )?;
         }
     }
     Ok(())
@@ -1530,29 +1774,38 @@ fn cmd_log(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
     let store = Store::open()?;
     let id = store.resolve_id(raw)?;
     let events = store.events(&id)?;
+    let decoration = current_output_decoration();
     if events.is_empty() {
-        println!("No decision history");
+        write_output("No decision history\n", decoration)?;
         return Ok(());
     }
+    let mut output = String::new();
     for event in events {
-        print!(
+        output.push_str(&format!(
             "{}  {}  {}",
-            display::timestamp(&event.at),
+            decoration.paint(OUTPUT_MUTED, display::timestamp(&event.at)),
             event.actor,
-            format_decision(&event)
-        );
+            format_decision(&event, decoration)
+        ));
         if let Some(reason) = event.reason {
-            print!("  ({reason})");
+            output.push_str(&format!(
+                "  {} {reason}",
+                decoration.paint(OUTPUT_MUTED, "Reason:")
+            ));
         }
         if let Some(revision) = event.revision {
-            print!("  [Revision {revision}]");
+            output.push_str(&format!(
+                "  {} {revision}",
+                decoration.paint(OUTPUT_MUTED, "Revision:")
+            ));
         }
-        println!();
+        output.push('\n');
     }
+    write_output(&output, decoration)?;
     Ok(())
 }
 
-fn format_decision(event: &db::Event) -> String {
+fn format_decision(event: &db::Event, decoration: OutputDecoration) -> String {
     let label = |value: &Option<String>| match value.as_deref() {
         Some("undecided") => "Undecided".to_string(),
         Some("accepted") => "Accepted".to_string(),
@@ -1560,22 +1813,40 @@ fn format_decision(event: &db::Event) -> String {
         Some(other) => other.to_string(),
         None => "Always".to_string(),
     };
-    match event.field.as_str() {
-        "disposition" => format!(
-            "Disposition: {} -> {}",
-            label(&event.old_value),
-            label(&event.new_value)
-        ),
-        "resurface_condition" => format!(
-            "Resurface condition: {} -> {}",
-            label(&event.old_value),
-            label(&event.new_value)
-        ),
-        field => format!(
-            "{field}: {} -> {}",
-            label(&event.old_value),
-            label(&event.new_value)
-        ),
+    let field = match event.field.as_str() {
+        "disposition" => "Disposition".to_string(),
+        "resurface_condition" => "Resurface condition".to_string(),
+        field => field.to_string(),
+    };
+    let old = label(&event.old_value);
+    let new = label(&event.new_value);
+    let old_style = if event.field == "disposition" {
+        disposition_label_style(&old)
+    } else {
+        OUTPUT_MUTED
+    };
+    let new_style = if event.field == "disposition" {
+        disposition_label_style(&new)
+    } else if new == "Always" {
+        Style::new()
+    } else {
+        OUTPUT_ATTENTION
+    };
+    format!(
+        "{} {} {} {}",
+        decoration.paint(OUTPUT_MUTED, format!("{field}:")),
+        decoration.paint(old_style, old),
+        decoration.paint(OUTPUT_MUTED, "->"),
+        decoration.paint(new_style, new)
+    )
+}
+
+fn disposition_label_style(value: &str) -> Style {
+    match value {
+        "Undecided" => OUTPUT_ATTENTION,
+        "Accepted" => OUTPUT_ACCEPTED,
+        "Rejected" => OUTPUT_MUTED,
+        _ => Style::new(),
     }
 }
 
@@ -1598,7 +1869,7 @@ fn cmd_write(
         let title = normalize_title(&title)?;
         if title != current.title {
             store.apply(&id, Change::SetTitle(title), &ctx(None))?;
-            changed.push("title updated");
+            changed.push("Title updated");
         }
     }
     if let Some(body) = body {
@@ -1607,18 +1878,16 @@ fn cmd_write(
             let removed = body.is_none();
             store.apply(&id, Change::SetDescription(body), &ctx(None))?;
             changed.push(if removed {
-                "description removed"
+                "Description removed"
             } else {
-                "description updated"
+                "Description updated"
             });
         }
     }
     if changed.is_empty() {
-        println!("No changes");
+        write_confirmation(&id, "No changes".to_string(), OUTPUT_MUTED)?;
     } else {
-        for change in changed {
-            println!("{id}: {change}");
-        }
+        write_confirmation(&id, changed.join("  "), OUTPUT_ACCEPTED)?;
     }
     Ok(())
 }
@@ -1661,11 +1930,12 @@ fn ctx(reason: Option<String>) -> Ctx {
     }
 }
 
-fn print_rows(rows: &str, empty_note: &str) {
+fn write_rows(rows: &str, empty_note: &str, decoration: OutputDecoration) -> std::io::Result<()> {
     if rows.is_empty() {
         eprintln!("{empty_note}");
+        Ok(())
     } else {
-        print!("{rows}");
+        write_output(rows, decoration)
     }
 }
 
@@ -1731,6 +2001,12 @@ fn write_completion(shell: Shell) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    fn assert_decoration_pair(plain: String, styled: String) {
+        assert!(!plain.contains('\u{1b}'));
+        assert!(styled.contains("\u{1b}["));
+        assert_eq!(anstream::adapter::strip_str(&styled).to_string(), plain);
+    }
+
     fn entity(id: &str, kind: EntityKind) -> Entity {
         let now = Utc::now();
         Entity {
@@ -1760,7 +2036,7 @@ mod tests {
             &[],
             &[],
             RecordCounts::default(),
-            ShowDecoration::Plain,
+            OutputDecoration::Plain,
         );
         assert!(output.starts_with("g  Group  g title\n"));
         assert!(output.contains("Group\n  Can complete: no\n"));
@@ -1779,7 +2055,7 @@ mod tests {
             &[],
             &[],
             RecordCounts::default(),
-            ShowDecoration::Plain,
+            OutputDecoration::Plain,
         );
         let styled = render_show(
             &view,
@@ -1787,7 +2063,7 @@ mod tests {
             &[],
             &[],
             RecordCounts::default(),
-            ShowDecoration::Ansi,
+            OutputDecoration::Ansi,
         );
 
         assert!(!plain.contains('\u{1b}'));
@@ -1796,17 +2072,24 @@ mod tests {
         assert!(!plain.contains("Plan\n"));
         assert!(styled.contains("\u{1b}["));
         assert!(styled.contains("\u{1b}[32mAccepted\u{1b}[0m"));
+        assert!(styled.contains("\u{1b}[0m  i title\n"));
         assert_eq!(anstream::adapter::strip_str(&styled).to_string(), plain);
     }
 
     #[test]
-    fn show_only_decorates_attended_terminals() {
-        assert!(matches!(show_decoration(true, false), ShowDecoration::Ansi));
+    fn output_only_decorates_attended_terminals() {
         assert!(matches!(
-            show_decoration(false, false),
-            ShowDecoration::Plain
+            output_decoration(true, false),
+            OutputDecoration::Ansi
         ));
-        assert!(matches!(show_decoration(true, true), ShowDecoration::Plain));
+        assert!(matches!(
+            output_decoration(false, false),
+            OutputDecoration::Plain
+        ));
+        assert!(matches!(
+            output_decoration(true, true),
+            OutputDecoration::Plain
+        ));
     }
 
     #[test]
@@ -1822,7 +2105,7 @@ mod tests {
             &[],
             &[],
             RecordCounts::default(),
-            ShowDecoration::Plain,
+            OutputDecoration::Plain,
         );
 
         assert!(waiting.contains("Resurface condition: AfterEntity(target)"));
@@ -1837,7 +2120,7 @@ mod tests {
             &[],
             &[],
             RecordCounts::default(),
-            ShowDecoration::Plain,
+            OutputDecoration::Plain,
         );
 
         assert!(surfaced.contains("Surfaced: yes"));
@@ -1876,19 +2159,162 @@ mod tests {
                 decisions: 0,
                 progressions: 1,
             },
-            ShowDecoration::Plain,
+            OutputDecoration::Plain,
         );
 
         let relationships = output.find("\n\nRelationships\n").unwrap();
         let description = output.find("\n\nDescription\n").unwrap();
-        let notes = output.find("\n\nNotes\n").unwrap();
+        let notes_section = output.find("\n\nNotes\n").unwrap();
         let progress = output.find("\n\nProgress history\n").unwrap();
         assert!(relationships < description);
-        assert!(description < notes);
-        assert!(notes < progress);
+        assert!(description < notes_section);
+        assert!(notes_section < progress);
         assert!(output.contains("Description\ndescription body\nwith two lines"));
         assert!(output.contains("Notes\nNote 1"));
         assert!(output.contains("note body\nwith two lines"));
+
+        let styled = render_show(
+            &view,
+            &issue,
+            &progress_events,
+            &notes,
+            RecordCounts {
+                notes: 1,
+                revisions: 1,
+                decisions: 0,
+                progressions: 1,
+            },
+            OutputDecoration::Ansi,
+        );
+        assert!(styled.contains("\u{1b}[0m  tester\nnote body\nwith two lines"));
+        assert_eq!(anstream::adapter::strip_str(&styled).to_string(), output);
+    }
+
+    #[test]
+    fn human_output_renderers_share_plain_and_ansi_text() {
+        let issue = entity("i", EntityKind::Issue);
+        let mut rejected = entity("rejected", EntityKind::Issue);
+        rejected.disposition = Disposition::Rejected;
+        let view = View::new(
+            vec![issue.clone(), rejected],
+            vec![(issue.id.clone(), EntityId::from_stored("rejected"))],
+        );
+        let claim = Claim {
+            actor: "raw actor".to_string(),
+            worktree: "/raw/worktree".to_string(),
+            at: Utc::now(),
+        };
+        let event = db::Event {
+            field: "disposition".to_string(),
+            old_value: Some("undecided".to_string()),
+            new_value: Some("accepted".to_string()),
+            revision: Some(1),
+            actor: "raw actor".to_string(),
+            reason: Some("raw reason".to_string()),
+            at: Utc::now(),
+        };
+
+        for (plain, styled) in [
+            (
+                render_entity_identity(&issue, OutputDecoration::Plain),
+                render_entity_identity(&issue, OutputDecoration::Ansi),
+            ),
+            (
+                render_triage_row(
+                    &view,
+                    &issue,
+                    TriageReason::Orphaned,
+                    OutputDecoration::Plain,
+                ),
+                render_triage_row(
+                    &view,
+                    &issue,
+                    TriageReason::Orphaned,
+                    OutputDecoration::Ansi,
+                ),
+            ),
+            (
+                render_claim_row(&issue, &claim, OutputDecoration::Plain),
+                render_claim_row(&issue, &claim, OutputDecoration::Ansi),
+            ),
+            (
+                render_list_row(&view, &issue, OutputDecoration::Plain),
+                render_list_row(&view, &issue, OutputDecoration::Ansi),
+            ),
+            (
+                format_decision(&event, OutputDecoration::Plain),
+                format_decision(&event, OutputDecoration::Ansi),
+            ),
+            (
+                decorate_import_report(
+                    "Plan is valid.\nChanges:\n  none\n",
+                    OutputDecoration::Plain,
+                ),
+                decorate_import_report(
+                    "Plan is valid.\nChanges:\n  none\n",
+                    OutputDecoration::Ansi,
+                ),
+            ),
+        ] {
+            assert_decoration_pair(plain, styled);
+        }
+    }
+
+    #[test]
+    fn revision_renderers_style_structure_without_styling_stored_text() {
+        let issue = entity("i", EntityKind::Issue);
+        let at = Utc::now();
+        let from = DeclarationRevision {
+            number: 1,
+            title: "raw old title".to_string(),
+            description: Some("raw old description".to_string()),
+            parent: None,
+            dependencies: vec![],
+            created_at: at,
+            baseline: true,
+        };
+        let to = DeclarationRevision {
+            number: 2,
+            title: "raw new title".to_string(),
+            description: Some("raw new description".to_string()),
+            parent: Some(EntityId::from_stored("parent")),
+            dependencies: vec![EntityId::from_stored("dependency")],
+            created_at: at,
+            baseline: false,
+        };
+        let plain = render_revision(&issue.id, &issue, &from, OutputDecoration::Plain);
+        let styled = render_revision(&issue.id, &issue, &from, OutputDecoration::Ansi);
+        assert!(styled.contains("present\nraw old description\n\n"));
+        assert_decoration_pair(plain, styled);
+
+        let plain = render_revision_diff(&issue.id, &from, &to, OutputDecoration::Plain);
+        let styled = render_revision_diff(&issue.id, &from, &to, OutputDecoration::Ansi);
+        assert!(styled.contains("\u{1b}[0m raw old title\n"));
+        assert!(styled.contains("\u{1b}[0m raw new description\n"));
+        assert_decoration_pair(plain, styled);
+    }
+
+    #[test]
+    fn output_writer_ignores_only_broken_pipes() {
+        struct ErrorWriter(std::io::ErrorKind);
+
+        impl std::io::Write for ErrorWriter {
+            fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(self.0))
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        assert!(write_output_to(ErrorWriter(std::io::ErrorKind::BrokenPipe), "output").is_ok());
+        assert_eq!(
+            write_output_to(ErrorWriter(std::io::ErrorKind::PermissionDenied), "output")
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
     }
 
     #[test]

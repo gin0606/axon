@@ -89,7 +89,7 @@ references:
 
 fn entity_id(list: &str, title: &str) -> String {
     list.lines()
-        .find(|line| line.ends_with(title))
+        .find(|line| line.contains(&format!("  {title}")))
         .and_then(|line| line.split_whitespace().next())
         .unwrap()
         .to_string()

@@ -68,6 +68,79 @@ fn every_creation_command_accepts_an_initial_description() {
 }
 
 #[test]
+fn mutation_confirmations_begin_with_the_affected_entity() {
+    let repo = TestRepo::new();
+    repo.init("test");
+
+    let created = repo.axon(&["capture", "draft task"]);
+    let draft = created_id(&created);
+    assert_eq!(
+        stdout(&created),
+        format!("{draft}  Created  Issue  [Undecided]  draft task\n")
+    );
+
+    let planned = repo.axon(&["plan", "active task"]);
+    let active = created_id(&planned);
+    assert_eq!(
+        stdout(&planned),
+        format!("{active}  Created  Issue  [Accepted]  active task\n")
+    );
+    assert_eq!(
+        stdout(&repo.axon(&["start", &active])),
+        format!("{active}  Started  Claim: test-actor\n")
+    );
+    assert_eq!(
+        stdout(&repo.axon(&["done", &active])),
+        format!("{active}  Ended\n")
+    );
+
+    let releasable = repo.plan("releasable task");
+    assert_success(&repo.axon(&["start", &releasable]));
+    assert_eq!(
+        stdout(&repo.axon(&["release", &releasable])),
+        format!("{releasable}  Released\n")
+    );
+
+    assert_eq!(
+        stdout(&repo.axon(&["decide", "accept", &draft])),
+        format!("{draft}  Disposition: Accepted\n")
+    );
+    repo.undecide(&draft);
+    assert_eq!(
+        stdout(&repo.axon(&["when", "at", &draft, "2099-01-02"])),
+        format!("{draft}  Resurface condition: AtDate(2099-01-02)\n")
+    );
+
+    let prerequisite = repo.plan("prerequisite");
+    assert_eq!(
+        stdout(&repo.axon(&["dep", "add", &draft, "--needs", &prerequisite])),
+        format!("{draft}  Dependency added: {prerequisite}\n")
+    );
+    assert_eq!(
+        stdout(&repo.axon(&["dep", "rm", &draft, "--needs", &prerequisite])),
+        format!("{draft}  Dependency removed: {prerequisite}\n")
+    );
+
+    let parent = repo.group_plan("parent");
+    assert_eq!(
+        stdout(&repo.axon(&["group", "set", &draft, &parent])),
+        format!("{draft}  Parent: {parent}\n")
+    );
+    assert_eq!(
+        stdout(&repo.axon(&["group", "unset", &draft])),
+        format!("{draft}  Parent: (none)\n")
+    );
+    assert_eq!(
+        stdout(&repo.axon(&["note", "add", &draft, "-m", "context"])),
+        format!("{draft}  Note 1 recorded\n")
+    );
+    assert_eq!(
+        stdout(&repo.axon(&["write", &draft, "--title", "draft task"])),
+        format!("{draft}  No changes\n")
+    );
+}
+
+#[test]
 fn creation_description_files_stdin_and_empty_values_match_write() {
     let repo = TestRepo::new();
     repo.init("test");
@@ -153,15 +226,19 @@ fn issues_and_groups_are_visible_as_entities_and_filterable_by_kind() {
     let issue_only = repo.axon(&["list", "--kind", "issue"]);
     assert_success(&issue_only);
     let issue_only = stdout(&issue_only);
-    assert!(issue_only.contains(&issue));
-    assert!(issue_only.contains(&captured));
+    assert!(issue_only.contains(&format!(
+        "{issue}  Issue  [NotStarted/Accepted]  ship the feature"
+    )));
+    assert!(issue_only.contains(&format!(
+        "{captured}  Issue  [NotStarted/Undecided]  investigate the risk"
+    )));
     assert!(!issue_only.contains(&group));
 
     let group_only = repo.axon(&["triage", "--kind", "group"]);
     assert_success(&group_only);
     assert_eq!(
         stdout(&group_only),
-        format!("{captured_group}  Group  Undecided  possible follow-up\n")
+        format!("{captured_group}  Group  possible follow-up  Reason: Undecided\n")
     );
 
     for id in [&issue, &group] {
@@ -174,7 +251,7 @@ fn issues_and_groups_are_visible_as_entities_and_filterable_by_kind() {
 }
 
 #[test]
-fn show_keeps_non_terminal_output_plain() {
+fn human_output_keeps_non_terminal_output_plain() {
     let repo = TestRepo::new();
     repo.init("test");
     let issue = repo.plan("styled output");
@@ -197,20 +274,59 @@ fn show_keeps_non_terminal_output_plain() {
     );
     assert_success(&no_color);
     assert_eq!(stdout(&no_color), plain);
+
+    for args in [
+        &["ready"][..],
+        &["list"][..],
+        &["revision", "list", &issue][..],
+    ] {
+        let output = repo.axon(args);
+        assert_success(&output);
+        assert!(!stdout(&output).contains('\u{1b}'), "{args:?}");
+    }
 }
 
 #[test]
-fn show_preserves_escape_sequences_stored_in_long_form_content() {
+fn human_output_preserves_escape_sequences_stored_in_content() {
     let repo = TestRepo::new();
     repo.init("test");
+    let title = "title \u{1b}[35mmagenta\u{1b}[0m";
     let description = "description \u{1b}[31mred\u{1b}[0m";
     let note = "note \u{1b}[32mgreen\u{1b}[0m";
-    let issue = created_id(&repo.axon(&["plan", "escaped content", "-m", description]));
+    let reason = "reason \u{1b}[34mblue\u{1b}[0m";
+    let created = repo.axon(&["plan", title, "-m", description]);
+    let issue = created_id(&created);
+    assert!(stdout(&created).contains(title));
     assert_success(&repo.axon(&["note", "add", &issue, "-m", note]));
 
     let show = stdout(&repo.axon(&["show", &issue]));
+    assert!(show.contains(title));
     assert!(show.contains(description));
     assert!(show.contains(note));
+    assert!(stdout(&repo.axon(&["list"])).contains(title));
+    assert!(stdout(&repo.axon(&["note", "show", &issue, "1"])).contains(note));
+    assert!(stdout(&repo.axon(&["revision", "show", &issue, "1"])).contains(description));
+
+    assert_success(&repo.axon(&["decide", "undecide", &issue, "-r", reason]));
+    assert!(stdout(&repo.axon(&["log", &issue])).contains(reason));
+}
+
+#[cfg(unix)]
+#[test]
+fn human_output_treats_a_closed_pipe_as_success() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let issue = repo.plan("closed pipe");
+
+    for args in [
+        &["list"][..],
+        &["show", &issue][..],
+        &["write", &issue, "--title", "closed pipe"][..],
+    ] {
+        let output = repo.axon_with_closed_stdout(args);
+        assert_success(&output);
+        assert!(output.stderr.is_empty(), "{args:?}");
+    }
 }
 
 #[test]
@@ -295,7 +411,9 @@ fn dependencies_and_after_conditions_accept_every_kind_combination() {
     repo.add_dependency(&dependent_group, &rejected_group);
     assert_success(&repo.axon(&["decide", "reject", &rejected_group]));
     let triage = stdout(&repo.axon(&["triage"]));
-    assert!(triage.contains(&format!("{dependent_group}  Group  Orphaned")));
+    assert!(triage.contains(&format!(
+        "{dependent_group}  Group  orphaned plan  Reason: Orphaned  Rejected dependencies: {rejected_group}"
+    )));
 }
 
 #[test]
@@ -325,7 +443,7 @@ fn triage_shows_only_the_active_scope_frontier() {
     let triage = stdout(&repo.axon(&["triage"]));
     assert!(triage.contains(&parent));
     assert!(!triage.contains(&child));
-    let inactive = format!("inactive: {parent} (Progress=NotStarted, Disposition=Undecided)");
+    let inactive = format!("Inactive: {parent} (Progress=NotStarted, Disposition=Undecided)");
     assert!(stdout(&repo.axon(&["list"])).contains(&inactive));
     assert_show_field(
         &stdout(&repo.axon(&["show", &child])),
@@ -446,7 +564,7 @@ fn decision_and_progress_history_work_for_groups() {
     assert_success(&repo.axon(&["start", &group]));
     assert_success(&repo.axon(&["release", &group, "--reason", "handoff"]));
     let log = stdout(&repo.axon(&["log", &group]));
-    assert!(log.contains("Disposition: Undecided -> Accepted  (approved)"));
+    assert!(log.contains("Disposition: Undecided -> Accepted  Reason: approved"));
     let show = stdout(&repo.axon(&["show", &group]));
     assert!(show.contains("Started"));
     assert!(show.contains("Released  (handoff)"));
@@ -463,7 +581,7 @@ fn rejecting_in_progress_entity_reports_only_the_saved_disposition() {
     assert_success(&rejected);
     assert_eq!(
         stdout(&rejected),
-        format!("{issue} Disposition set to Rejected\n")
+        format!("{issue}  Disposition: Rejected\n")
     );
 }
 
@@ -506,7 +624,9 @@ fn linked_worktrees_share_entity_state_and_claims() {
     assert_success(&claims);
     let claims = stdout(&claims);
     assert!(claims.contains(&group));
+    assert!(claims.contains(&format!("{group}  Group  shared plan  Claim: test-actor")));
     assert!(claims.contains(&format!("Worktree: {}", worktree.display())));
+    assert_eq!(stdout(&repo.axon(&["stale"])), claims);
 }
 
 #[cfg(unix)]
@@ -546,7 +666,7 @@ fn human_timestamps_use_local_time_with_a_numeric_offset() {
     assert!(run(&repo, &["note", "list", &issue]).contains(&format!("1  {expected}")));
     assert!(
         run(&repo, &["note", "show", &issue, "1"])
-            .contains(&format!("Recorded: {expected}  test-actor"))
+            .contains(&format!("Recorded: {expected}  Actor: test-actor"))
     );
     assert!(run(&repo, &["revision", "list", &issue]).contains(&format!("1  {expected}")));
     assert!(
@@ -708,7 +828,7 @@ fn revision_commands_expose_fixed_declarations_and_structural_diffs() {
     let revision = repo.axon(&["revision", "show", suffix, "2"]);
     assert_success(&revision);
     let revision = stdout(&revision);
-    assert!(revision.contains("Declaration Revision 2 [current]"));
+    assert!(revision.contains("Declaration Revision 2  [current]"));
     assert!(revision.contains("Title: second title"));
     assert!(revision.contains("new description\nwith detail"));
     assert!(revision.contains(&format!("Parent: {parent}")));
@@ -717,24 +837,24 @@ fn revision_commands_expose_fixed_declarations_and_structural_diffs() {
     let diff = repo.axon(&["revision", "diff", suffix, "1", "2"]);
     assert_success(&diff);
     let diff = stdout(&diff);
-    assert!(diff.contains("Title:\n- first title\n+ second title"));
-    assert!(diff.contains("Description:\n- absent\n+ present\n+ new description\n+ with detail"));
-    assert!(diff.contains(&format!("Parent:\n- (none)\n+ {parent}")));
-    assert!(diff.contains(&format!("Outgoing dependencies:\n+ {prerequisite}")));
+    assert!(diff.contains("Title\n- first title\n+ second title"));
+    assert!(diff.contains("Description\n- absent\n+ present\n+ new description\n+ with detail"));
+    assert!(diff.contains(&format!("Parent\n- (none)\n+ {parent}")));
+    assert!(diff.contains(&format!("Outgoing dependencies\n+ {prerequisite}")));
 
     let show = stdout(&repo.axon(&["show", &issue]));
     assert_show_field(&show, "Plan declaration:", "fixed at Revision 2");
     assert!(show.contains("Revisions: 2"));
     assert!(show.contains("Decision history: 3"));
     let log = stdout(&repo.axon(&["log", &issue]));
-    assert!(log.contains("[Revision 1]"));
-    assert!(log.contains("[Revision 2]"));
+    assert!(log.contains("Revision: 1"));
+    assert!(log.contains("Revision: 2"));
 
     repo.undecide(&issue);
     assert_success(&repo.axon(&["write", &issue, "-m", "(none)"]));
     repo.accept(&issue);
     let literal = stdout(&repo.axon(&["revision", "show", &issue, "3"]));
-    assert!(literal.contains("Description:\npresent\n(none)"));
+    assert!(literal.contains("Description\npresent\n(none)"));
     let absence_to_literal = stdout(&repo.axon(&["revision", "diff", &issue, "1", "3"]));
-    assert!(absence_to_literal.contains("Description:\n- absent\n+ present\n+ (none)"));
+    assert!(absence_to_literal.contains("Description\n- absent\n+ present\n+ (none)"));
 }
