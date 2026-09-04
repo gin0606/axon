@@ -31,18 +31,18 @@ Codex の linked worktree から共有 DB を更新する場合は、[Codex の 
 
 ```sh
 codex plugin marketplace add .
-codex plugin add axon-kit@personal
-codex plugin add axon@personal
-codex plugin add axon-workflows@personal
+codex plugin add axon-kit@axon
+codex plugin add axon@axon
+codex plugin add axon-workflows@axon
 ```
 
 ローカルの Claude Code 設定へ追加するときは repository root で次を実行する。
 
 ```sh
 claude plugin marketplace add .
-claude plugin install axon-kit@personal
-claude plugin install axon@personal
-claude plugin install axon-workflows@personal
+claude plugin install axon-kit@axon
+claude plugin install axon@axon
+claude plugin install axon-workflows@axon
 ```
 
 `axon` plugin は `axon-kit` plugin を前提とする。`axon-workflows` plugin は両 plugin、および個人環境の `self-review` と `commit-conventions` skill を前提とする。継承や同名 skill の上書きではなく、workflow から必要な skill を明示的に併用する。

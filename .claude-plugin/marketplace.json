@@ -1,9 +1,9 @@
 {
-  "name": "personal",
+  "name": "axon",
   "owner": {
     "name": "gin0606"
   },
-  "description": "WIP",
+  "description": "Official plugins for Axon",
   "plugins": [
     {
       "name": "axon-kit",
