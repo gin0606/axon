@@ -7,7 +7,6 @@ Read this reference before changing the Axon DB or when reconciling a mutation w
 - Run each state-changing Axon command as a standalone shell call so another command cannot hide its exit status.
 - Keep read-only discovery and unrelated programs out of the same shell call.
 - Use the exact target and payload authorized by the caller. Do not broaden a selector, add relationships, choose another Entity, or continue into a later phase implicitly.
-- If a linked worktree places the shared `.axon` outside the writable sandbox, retry only the rejected mutation command through the host approval mechanism. Do not widen permission for read commands or other programs.
 
 ## Verify observed state
 
@@ -23,6 +22,6 @@ Repeat a mutation only when its capability defines a safe reconciliation rule an
 
 ## Preserve input snapshots
 
-For a mutation sourced from a file or stdin, freeze the exact bytes before the first attempt when later re-reading could change the payload. Keep the snapshot private to the acting agent, record a digest when the operation's retry contract needs one, and reuse only those verified bytes for an allowed retry. Do not silently re-read a user-owned mutable source.
+For a mutation sourced from a file or stdin, preserve the exact bytes before the first attempt when later re-reading could change the payload. Record a digest when the operation's retry contract needs one, and reuse only those verified bytes for an allowed retry. Do not silently re-read a mutable source.
 
-Remove an agent-owned temporary snapshot only after the operation is verified as applied or not applied. Preserve its exact path and digest when it is needed to reconcile an unknown or partial result.
+Remove a temporary snapshot only after the operation is verified as applied or not applied. Preserve its exact path and digest when it is needed to reconcile an unknown or partial result.

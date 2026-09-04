@@ -27,15 +27,15 @@ An Entity's plan declaration consists only of:
 
 Progress, Disposition, Resurface condition, and claim are Control state. Decision and progress reasons belong to their typed history. `ready` and the other derived facts are observations, not declaration or state fields.
 
-An `Undecided` Entity has a draft declaration that can be edited. An `Accepted` or `Rejected` Entity has a fixed declaration. To change a fixed declaration, return it to `Undecided` with a reason, edit and verify the complete draft, then apply the intended final disposition with a separate reason.
+An `Undecided` Entity has a draft declaration that can be edited. An `Accepted` or `Rejected` Entity has a fixed declaration. To change a fixed declaration, return it to `Undecided`, edit and verify the complete draft, then apply the intended final Disposition separately. Preserve any reasons supplied for those transitions in typed history.
 
 Each accepted or rejected declaration is preserved as an immutable Declaration Revision. A Note is append-only supplemental information that does not change the declaration or Control state. Investigation results, implementation results, constraints learned later, and handoff details belong in Notes. Do not use description as an activity log, use a Note to simulate a state change, edit an old Note, or duplicate a state-change reason in a Note.
 
 ## Entity context
 
-Before changing an existing Entity, read the complete `axon show <id>` output, including kind, declaration, Control state, record counts, relationships, Group facts, and every displayed Note. If Declaration Revisions exist, read `axon revision list <id>` and every `axon revision show <id> <number>`. Do not discard older Revisions or Notes merely because they are old.
+Before changing an existing Entity, read `axon show <id>` and inspect the fields relevant to the requested operation. Read Declaration Revisions, Notes, and typed history when the request changes or depends on the information they preserve. Do not infer missing context from a frontier listing.
 
-Inspect related Entities only when their state or declaration can change the requested operation or its consequences. Use `axon list` when all Entities, including inactive ones, are required; `ready` and `triage` are frontiers, not complete inventories.
+Inspect related Entities when their state or declaration can change the operation's validity or a consequence the caller needs to understand. Use `axon list` only when a complete inventory, including inactive Entities, is required; `ready` and `triage` are frontiers, not complete inventories.
 
 ## Relationships and Groups
 

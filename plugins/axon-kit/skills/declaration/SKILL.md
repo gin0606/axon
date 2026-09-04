@@ -1,18 +1,18 @@
 ---
 name: declaration
-description: Entity数を問わずstrict YAML declarationのreview、canonicalize、export、check、applyを安全に扱う。declaration artifactとaxon export/importに使い、通常の単一Entity変更やCLI自体の実装には使わない。
+description: Review, export, canonicalize, check, or apply strict YAML plan declarations for any number of Entities. Use for declaration artifacts and axon export/import; not for ordinary single-Entity changes or implementation of the CLI itself.
 ---
 
 # Operate on Axon declaration files
 
-Use `axon-kit:conventions`. Read its model contract and, before any DB or user-owned artifact mutation, its mutation contract.
+Use `axon-kit:conventions`. Read its model contract and, before any DB or artifact mutation, its mutation contract.
 
-This capability owns the declaration artifact and `axon export` / `axon import prepare|check|apply` mechanics. A declaration can edit only title, description, parent, and outgoing dependencies. It must not create or edit Progress, Disposition, Resurface condition, claim, Declaration Revision, Note, or typed history.
+This capability owns declaration artifacts and the `axon export` / `axon import prepare|check|apply` mechanics. A declaration can edit only title, description, parent, and outgoing dependencies. It cannot edit Progress, Disposition, Resurface condition, claim, Declaration Revision, Note, typed history, incoming relationships, or external references.
 
-The calling request or workflow supplies whether the task is read-only review, canonicalization, export, or DB application, plus any adoption and reconsideration decisions needed for live changes. Artifact editing does not imply permission to mutate the DB, and DB apply does not imply permission to change Control state.
+The calling request or workflow supplies the operation mode and the intended declaration content. Artifact editing does not authorize DB application, and DB application does not authorize a Control-state change.
 
-Read [the declaration workflow](references/workflow.md) completely before canonicalizing, exporting to a file, applying to the DB, combining declaration work with state changes, or handling a conflict or partial result. For a read-only `axon import check <file>` with no rewrite or application, the model and mutation boundaries in this entrypoint are sufficient.
+Read [the declaration workflow](references/workflow.md) completely before exporting to a file, canonicalizing, applying, or recovering from a conflict or uncertain result. A read-only `axon import check <file>` needs only the boundaries in this entrypoint.
 
-When content decisions are unresolved, use `axon-kit:plan` for new accepted Entities, `axon-kit:capture` for new undecided Entities, and `axon-kit:triage` for existing declarations or disposition changes. Use `axon-kit:add-note` only for independently requested supplemental information.
+Use `axon-kit:triage` when a fixed declaration must first return to `Undecided`, and use `axon-kit:plan` or `axon-kit:capture` when content decisions or non-default initial Control state require a staged new Entity. Those capabilities remain separate from artifact mechanics.
 
-Return `DB applied: yes`, `DB applied: no`, or `DB applied: unknown`; list changed IDs and kinds, declaration keys and allocated IDs, structural and derived impact, warnings, artifact replacement status, and retained recovery files. Do not conceal a staged or partial state behind a successful file operation.
+Return the operation mode, `DB applied` classification, changed IDs and kinds, key-to-ID mappings, relevant structural and derived impact, warnings, artifact status, and any recovery file that must be retained.

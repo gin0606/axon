@@ -1,6 +1,6 @@
 {
   "name": "axon-kit",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260904040245",
   "description": "Reusable Axon model and safe tracker-operation capabilities",
   "author": {
     "name": "gin0606"
@@ -13,7 +13,10 @@
     "longDescription": "Provides Axon's state and information contracts plus focused capabilities for creating, triaging, recording, and progressing Entities without imposing an implementation workflow.",
     "developerName": "gin0606",
     "category": "Productivity",
-    "capabilities": ["Interactive", "Write"],
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
     "defaultPrompt": [
       "Capture this concern in Axon without deciding it.",
       "Register this accepted plan in Axon.",

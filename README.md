@@ -23,7 +23,7 @@ Codex の linked worktree から共有 DB を更新する場合は、[Codex の 
 
 [`plugins/axon-kit`](plugins/axon-kit) は、axon の状態・情報モデルと安全な tracker 操作を提供する公式の Axon Skill Kit である。`$axon-kit:conventions`、`capture`、`plan`、`triage`、`work-state`、`add-note`、`declaration` を、利用者固有の実装フローと分けて提供する。
 
-[`plugins/axon`](plugins/axon) は、このリポジトリで開発する個人用 workflow である。`$axon:start <issue-id>` は、公式 kit を使った着手と完了の間に、実装、テスト、self-review、commit を組み込む。
+[`plugins/axon`](plugins/axon) は、このリポジトリで開発する個人用 workflow である。`conventions`、`register`、`triage`、`work-state`、`declaration` で重複確認、ユーザー判断、厳格な artifact 操作、申し送りを公式 kit に重ねる。`$axon:start <issue-id>` は、公式 kit を使った着手と完了の間に、実装、テスト、self-review、commit を組み込む。
 
 両 plugin は [repo-local marketplace](.agents/plugins/marketplace.json) から開発できる。ローカルの Codex 設定へ追加するときは repository root で次を実行する。
 

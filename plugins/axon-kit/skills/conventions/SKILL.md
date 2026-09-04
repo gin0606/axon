@@ -1,11 +1,11 @@
 ---
 name: conventions
-description: Axonの状態・情報モデルと安全なCLI操作の共通契約を提供する。他のaxon-kit skillと利用者workflowの基盤として使い、協業方針、作業選択、実装、commitは定めない。
+description: Provide Axon's shared state and information model plus the safety contract for CLI operations. Use as the foundation for other axon-kit skills and consuming workflows; it does not define collaboration policy, work selection, implementation, or commits.
 ---
 
 # Axon operation contract
 
-Use this skill as the shared foundation for every Axon capability. It defines what Axon data means and how an already-authorized operation is executed without losing history, duplicating effects, or mistaking an uncertain result for success.
+Use this skill as the shared foundation for every Axon capability. It defines what Axon data means and how an authorized operation is executed without losing history, duplicating non-idempotent effects, or mistaking an uncertain result for success.
 
 ## Keep the layers separate
 

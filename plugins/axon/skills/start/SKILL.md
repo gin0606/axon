@@ -7,7 +7,7 @@ description: 指定されたAccepted Issueに着手し、実装、テスト、se
 
 これは、方針を明確に定めた個人用ワークフローである。Axonの機能と、実装・review・commitの方針を組み合わせるものであり、Axonの状態モデルの一部ではない。
 
-`axon-kit:conventions`、`axon-kit:work-state`、`axon-kit:add-note`を必須とする。個人用skillの`self-review`と`commit-conventions`も必須とする。いずれかの依存先が利用できない場合は、Axonまたはgitの状態を変更する前に停止し、利用できないskillを明示する。その規約をこのskill内で再現してはならない。
+`axon:conventions`、`axon-kit:conventions`、`axon-kit:work-state`、`axon-kit:add-note`を必須とする。個人用skillの`self-review`と`commit-conventions`も必須とする。いずれかの依存先が利用できない場合は、Axonまたはgitの状態を変更する前に停止し、利用できないskillを明示する。その規約をこのskill内で再現してはならない。
 
 明示的な`$axon:start <issue-id>`の呼び出し、またはIssue IDを指定したこの完全ワークフローの明示的な依頼は、そのIssueについてcommitとAxon上の完了まで通常経路を進める権限を与える。リポジトリの指示とホスト側の権限制約は引き続き適用し、無関係な外部への作用は対象外とする。
 
@@ -28,13 +28,13 @@ Issueのdeclaration、関連するNotesとRevisions、リポジトリの指示�
 
 実装上の近道として、Issueのdeclaration、Disposition、dependencies、scheduleを変更してはならない。実装中に、後続セッションに必要な重要な結果や制約が判明した場合は、descriptionを編集せず、結果または引き継ぎのNoteに残す。
 
-## Self-reviewを行う
+## セルフレビューを行う
 
 固定した作業範囲に対して`self-review`を使う。すべてのfindingをそのskillの採否判定手順で解決し、採用した範囲内の修正を適用して、必須の検証サイクルを完了する。
 
 self-reviewが未完了、必須の結果を得られていない、または採用した重要なfinding、必須の判断、必須の調査が未解決である間は、commitもIssueのdoneも行ってはならない。
 
-## Commitして完了する
+## コミットして完了する
 
 `git commit`の前に`commit-conventions`を使う。このworkflowの明示的な呼び出しを、そのIssueに対するユーザーからのcommit指示として扱う。これは、通常は明示的なcommit許可を必要とする方針のリポジトリbranchでも同様である。固定した作業範囲に属する変更だけをcommitし、空commitは決して作らない。
 

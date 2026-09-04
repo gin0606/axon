@@ -18,11 +18,19 @@ axon 自体は、誰が着手対象や採否を決め、いつレビューする
 - start / release / done による作業状態の同期: [`axon-kit:work-state`](plugins/axon-kit/skills/work-state/SKILL.md)
 - strict YAML declaration と `axon export` / `axon import`: [`axon-kit:declaration`](plugins/axon-kit/skills/declaration/SKILL.md)
 
-公式 kit は axon の意味論と安全な操作だけを所有し、誰が判断するか、どこまで自動で進めるか、実装、review、commit の方針を決めない。このリポジトリで Issue ID を指定して着手から self-review、commit、done までを依頼された場合は、個人用 [`axon:start`](plugins/axon/skills/start/SKILL.md) を使う。
+公式 kit は axon の意味論と安全な操作だけを所有し、誰が判断するか、どこまで自動で進めるか、実装、review、commit の方針を決めない。
+
+このリポジトリの個人用協業方針を含む操作では、まず [`axon:conventions`](plugins/axon/skills/conventions/SKILL.md) に従い、用途に応じて次を使う。
+
+- 重複と計画の完成度を確認した新規登録: [`axon:register`](plugins/axon/skills/register/SKILL.md)
+- ユーザーとの既存 Entity の判断: [`axon:triage`](plugins/axon/skills/triage/SKILL.md)
+- 申し送りや外部作業の完了条件を含む進行同期: [`axon:work-state`](plugins/axon/skills/work-state/SKILL.md)
+- ユーザー所有 artifact と状態変更を組み合わせる declaration 操作: [`axon:declaration`](plugins/axon/skills/declaration/SKILL.md)
+- Issue ID を指定した着手から self-review、commit、done までの完遂: [`axon:start`](plugins/axon/skills/start/SKILL.md)
 
 ## ドッグフーディング
 
-axon を使う中で、CLI の不足、不自然な往復、分かりにくい出力、手作業による補完、ドキュメントとの不一致を見つけたら、一般化できる問題を `axon-kit:capture` の手順で記録する。
+axon を使う中で、CLI の不足、不自然な往復、分かりにくい出力、手作業による補完、ドキュメントとの不一致を見つけたら、一般化できる問題を `axon:register` から `axon-kit:capture` を使う手順で記録する。
 
 一時的な不慣れや単純な入力ミスは `axon capture` しない。元の作業を不必要に中断せず、記録した改善へ勝手に着手しない。
 

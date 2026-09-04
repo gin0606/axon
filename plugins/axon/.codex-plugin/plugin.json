@@ -1,21 +1,26 @@
 {
   "name": "axon",
-  "version": "0.1.0",
-  "description": "Opinionated personal workflows built from Axon Skill Kit capabilities",
+  "version": "0.1.0+codex.20260904040245",
+  "description": "Axon Skill Kitを組み合わせた個人用ワークフロー",
   "author": {
     "name": "gin0606"
   },
   "repository": "https://github.com/gin0606/axon",
   "skills": "./skills/",
   "interface": {
-    "displayName": "Axon Workflow",
-    "shortDescription": "Finish Axon issues with review and commit.",
-    "longDescription": "Provides gin0606's personal Axon workflow that claims one specified Issue, implements and validates it, completes self-review, commits the result, and synchronizes final tracker state.",
+    "displayName": "Axonワークフロー",
+    "shortDescription": "Axonの判断、進行、実装を個人用方針で扱います。",
+    "longDescription": "公式Axon Skill Kitに、重複確認、ユーザーとの判断、厳格なdeclaration操作、申し送り、実装、セルフレビュー、コミットの個人用ワークフローを組み合わせます。",
     "developerName": "gin0606",
     "category": "Productivity",
-    "capabilities": ["Interactive", "Write"],
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
     "defaultPrompt": [
-      "Start this Axon Issue and finish it through self-review and commit."
+      "このAxon Issueに着手し、セルフレビューとコミットまで完遂してください。",
+      "この作業を重複確認してからAxonへ登録してください。",
+      "このAxon Entityの選択肢を整理し、私が選んだ結論を反映してください。"
     ]
   }
 }
