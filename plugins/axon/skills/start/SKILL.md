@@ -3,54 +3,54 @@ name: start
 description: 指定されたAccepted Issueに着手し、実装、テスト、self-review、commit、doneまで完遂する。明示的な$axon:startまたは完全workflowの依頼に使い、単なる着手・実装依頼、Issueの自律選択、Groupには使わない。
 ---
 
-# Start and finish one Axon Issue
+# Axon Issue 1件に着手して完了する
 
-This is an opinionated personal workflow. It composes Axon capabilities with implementation, review, and commit policy; it is not part of Axon's state model.
+これは、方針を明確に定めた個人用ワークフローである。Axonの機能と、実装・review・commitの方針を組み合わせるものであり、Axonの状態モデルの一部ではない。
 
-Require `axon-kit:conventions`, `axon-kit:work-state`, and `axon-kit:add-note`. Require the personal `self-review` and `commit-conventions` skills. If any dependency is unavailable, stop before changing Axon or git state and name the missing skill; do not reproduce its rules locally.
+`axon-kit:conventions`、`axon-kit:work-state`、`axon-kit:add-note`を必須とする。個人用skillの`self-review`と`commit-conventions`も必須とする。いずれかの依存先が利用できない場合は、Axonまたはgitの状態を変更する前に停止し、利用できないskillを明示する。その規約をこのskill内で再現してはならない。
 
-Explicit `$axon:start <issue-id>` invocation, or an express request for this full workflow with an Issue ID, authorizes the normal path through commit and Axon completion for that Issue. Repository instructions and host permissions still apply, and unrelated external effects remain outside scope.
+明示的な`$axon:start <issue-id>`の呼び出し、またはIssue IDを指定したこの完全ワークフローの明示的な依頼は、そのIssueについてcommitとAxon上の完了まで通常経路を進める権限を与える。リポジトリの指示とホスト側の権限制約は引き続き適用し、無関係な外部への作用は対象外とする。
 
-## Establish scope and claim
+## 対象範囲を確定してclaimを取得する
 
-Use the official Axon conventions to read the complete Issue context and all Declaration Revisions. Do not accept a Group or choose another Issue.
+Axon公式の規約に従って、Issueの全情報とすべてのDeclaration Revisionを読む。Groupを対象にしたり、別のIssueを選んだりしてはならない。
 
-- If it is `ready`, use `axon-kit:work-state` to start it before editing files.
-- If it is already `InProgress` with a compatible claim for the current actor and worktree, resume from its Notes and current repository state without starting it again.
-- If another actor or worktree owns the claim, or the Issue is undecided, rejected, blocked, orphaned, inactive, or ended, stop with the observed state. Do not change Disposition, relationships, schedule, or another claim to make it startable.
-- If the declaration calls for an unresolved product, scope, public-contract, state-model, or hard-to-reverse decision that is not represented as a prerequisite, return the missing decision instead of silently choosing it. Ordinary implementation details are not a reason to stop.
+- `ready`なら、ファイルを編集する前に`axon-kit:work-state`を使ってstartする。
+- すでに`InProgress`で、現在のactorとworktreeに整合するclaimがあるなら、再度startせず、Notesと現在のリポジトリ状態を基に再開する。
+- 別のactorまたはworktreeがclaimを保持している場合、あるいはIssueがundecided、rejected、blocked、orphaned、inactive、endedのいずれかである場合は、観測した状態を示して停止する。start可能にするためにDisposition、relationship、schedule、別のclaimを変更してはならない。
+- declarationが、前提条件として表現されていない未解決のプロダクト、対象範囲、公開契約、状態モデル、または後戻りしにくい判断を要求する場合は、暗黙に判断せず、不足している判断を示して終了する。通常の実装詳細は停止理由にしない。
 
-Freeze the task scope from the Issue declaration, relevant Notes and Revisions, repository instructions, and current code. Preserve unrelated working-tree changes and do not absorb adjacent work merely because it is nearby.
+Issueのdeclaration、関連するNotesとRevisions、リポジトリの指示、現在のコードに基づいて作業範囲を固定する。無関係なworking treeの変更を保持し、近くにあるというだけで周辺作業を取り込んではならない。
 
-## Implement and validate
+## 実装して検証する
 
-Inspect the relevant code and documentation, implement the complete declared outcome, and run validation proportional to the change. Follow repository-specific skills and commands when they apply.
+関連するコードとドキュメントを調査し、declarationで定められた成果を完全に実装して、変更に応じた検証を行う。リポジトリ固有のskillやコマンドが適用される場合は、それらに従う。
 
-Do not alter the Issue declaration, Disposition, dependencies, or schedule as an implementation shortcut. If implementation discovers a material result or constraint that later sessions need, retain it for the result or handoff Note rather than editing description.
+実装上の近道として、Issueのdeclaration、Disposition、dependencies、scheduleを変更してはならない。実装中に、後続セッションに必要な重要な結果や制約が判明した場合は、descriptionを編集せず、結果または引き継ぎのNoteに残す。
 
-## Self-review
+## Self-reviewを行う
 
-Use `self-review` on the fixed task scope. Resolve every finding through that skill's disposition process, apply accepted in-scope fixes, and complete its required verification loop.
+固定した作業範囲に対して`self-review`を使う。すべてのfindingをそのskillの採否判定手順で解決し、採用した範囲内の修正を適用して、必須の検証サイクルを完了する。
 
-Do not commit or mark the Issue done while self-review is incomplete, has failed to produce a required result, or leaves an accepted material finding, a required decision, or required investigation unresolved.
+self-reviewが未完了、必須の結果を得られていない、または採用した重要なfinding、必須の判断、必須の調査が未解決である間は、commitもIssueのdoneも行ってはならない。
 
-## Commit and complete
+## Commitして完了する
 
-Use `commit-conventions` before `git commit`. Treat this explicit workflow invocation as the user's commit instruction for the Issue, including on a repository branch whose policy otherwise requires explicit commit authorization. Commit only changes belonging to the fixed task scope and never create an empty commit.
+`git commit`の前に`commit-conventions`を使う。このworkflowの明示的な呼び出しを、そのIssueに対するユーザーからのcommit指示として扱う。これは、通常は明示的なcommit許可を必要とする方針のリポジトリbranchでも同様である。固定した作業範囲に属する変更だけをcommitし、空commitは決して作らない。
 
-After a successful commit, use `axon-kit:add-note` to record the material implementation result, commit ID, validation, and self-review outcome without duplicating a state-change reason. Then use `axon-kit:work-state` to mark the Issue done. Verify the final Entity state and all affected frontiers.
+commitに成功した後、`axon-kit:add-note`を使い、状態変更のreasonと重複させずに、重要な実装結果、commit ID、検証、self-reviewの結果を記録する。続いて`axon-kit:work-state`を使い、Issueをdoneにする。最終的なEntityの状態と、影響を受けたすべてのfrontierを確認する。
 
-If the Issue was already satisfied and no repository change is required, do not create an empty commit. Record the verified no-change result when it is useful, then mark the Issue done only if its declaration is actually fulfilled.
+Issueがすでに満たされていてリポジトリの変更が不要な場合は、空commitを作らない。役立つ場合は変更不要と検証した結果を記録し、declarationが実際に満たされている場合に限りIssueをdoneにする。
 
-## Failure and handoff
+## 失敗時の引き継ぎ
 
-If the workflow cannot complete after the claim was acquired:
+claimの取得後にワークフローを完了できない場合は、次のようにする。
 
-1. Do not commit an unreviewed or failing result and do not mark the Issue done.
-2. Preserve safe in-scope working-tree changes; do not discard work automatically.
-3. Use `axon-kit:add-note` to record only the material current state, completed work, remaining work, validation, and blocker.
-4. Use `axon-kit:work-state` to release the Issue with a reason after the Note is verified.
+1. reviewしていない結果や検証に失敗している結果をcommitせず、Issueをdoneにしない。
+2. 安全で作業範囲内にあるworking treeの変更を保持し、作業内容を自動的に破棄しない。
+3. `axon-kit:add-note`を使い、重要な現在の状態、完了した作業、残作業、検証結果、blockerだけを記録する。
+4. Noteを確認した後、`axon-kit:work-state`を使い、reasonを付けてIssueをreleaseする。
 
-If Note recording fails or its DB outcome is unknown, do not release; report the current claim and reconciliation data. If release fails, do not append the Note again.
+Noteの記録に失敗した場合、またはDB上の結果が不明な場合はreleaseせず、現在のclaimと照合に必要な情報を報告する。releaseに失敗した場合は、同じNoteを再度追加してはならない。
 
-Return the Issue ID, final Axon state, commit ID when created, validation and self-review results, Note number, and any unresolved blocker.
+Issue ID、Axonの最終状態、作成した場合はcommit ID、検証とself-reviewの結果、Note番号、未解決のblockerを報告する。
