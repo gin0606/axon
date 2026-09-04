@@ -39,7 +39,7 @@ codex plugin add axon-workflows@axon
 ローカルの Claude Code 設定へ追加するときは repository root で次を実行する。
 
 ```sh
-claude plugin marketplace add .
+claude plugin marketplace add ./
 claude plugin install axon-kit@axon
 claude plugin install axon@axon
 claude plugin install axon-workflows@axon
