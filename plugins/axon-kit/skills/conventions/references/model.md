@@ -8,13 +8,15 @@ Axon has two Entity kinds, Issue and Group. Both have a stable ID and the same t
 
 - Progress: `NotStarted`, `InProgress`, or `Ended`
 - Disposition: `Undecided`, `Accepted`, or `Rejected`
-- Resurface condition: `Always`, `AtDate`, `AfterEntity`, or `Command`
+- Resurface condition: `Always`, `AtDate`, `AfterEntity`, `Manual`, or `Command`
 
 Do not use one axis as a proxy for another. A command that changes Progress must not silently change Disposition or Resurface condition, and the reverse also applies.
 
 An Entity is terminal when its Progress is `Ended` or its Disposition is `Rejected`. `ready`, `blocked`, `orphaned`, `surfaced`, `terminal`, active scope, blocking causes, and Group completion facts are derived from stored state and relationships; do not treat them as independently editable data.
 
 `ready` means that an Entity is in active scope, `NotStarted`, `Accepted`, surfaced, not blocked, and not orphaned. `triage` is the active, non-terminal decision frontier: an Entity is there when it is `Undecided` or orphaned. These definitions do not assign the decision or work to a human or an agent.
+
+`Manual` remains unsurfaced until explicitly replaced or cleared with `axon when clear`. It has no payload and changes neither Progress, Disposition, nor claim. A Manual Group closes descendant active scope without changing descendant state.
 
 `Command` stores a shell string, not its observed result. Queries that need derived status can run it: exit 0 satisfies the condition, exit 1 does not, and other exits, signals, or spawn failures fail the Axon command. Results are shared within one invocation and reevaluated next time; satisfaction can revert without changing Progress, Disposition, or claim. Clearing or correcting the condition does not require successful evaluation. See `axon when command --help` for the execution contract.
 

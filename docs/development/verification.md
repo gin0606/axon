@@ -29,7 +29,8 @@ Command のプロセス実行・終了コード・診断は Rust のテストで
 core / Group model は Entity ごとの外部観測入力 `commandSatisfied` を非単調に変え、
 観測と導出の一致、Group gate の閉鎖、保存状態の保持を検査する。この入力は Axon の
 Control state の保存値ではない。情報モデルでは Command を不透明な Control 値として扱い、
-設定変更の所有範囲と履歴を検査する。
+設定変更の所有範囲と履歴を検査する。Manual は各モデルで付随値なしの条件として扱い、
+常に非浮上であること、設定時の軸の独立性と Group gate への作用を検査する。
 
 拡張 model が保存状態として持つのは Entity map、一親の parent map、dependency 集合、clock である。`ready`、`blocked`、`orphaned`、active scope、`triage`、blocking cause、group の完了可能性、2 つの待機グラフは純粋関数で導出する。操作 witness のために使う `observed` は ghost state であり、axon の保存対象ではない。
 
@@ -52,6 +53,8 @@ Control state の保存値ではない。情報モデルでは Command を不透
 | invariant | triage は active scope 内の判断 frontier だけを示す |
 | invariant | Command の導出が外部観測と一致し、観測変更が保存状態を変えない |
 | witness | 進行中の子孫の状態を保ったまま Command で Group gate が閉じる |
+| invariant | Manual は常に非浮上で、設定が Progress / Disposition、包含・依存、他 Entity の状態を変えない |
+| witness | 進行中の子孫の状態を保ったまま Manual で Group gate が閉じる |
 | witness | 列挙した全 action が到達可能である |
 | witness | 全子孫が終端した InProgress group が、Ended へ自動変更されず明示 done を待てる |
 | witness | Rejected の子 group を含む親 group が完了可能になる |
@@ -73,8 +76,8 @@ quint typecheck spec/axon.qnt
 quint run spec/axon.qnt --main axon \
   --invariants invRejectedEndedStillBlocks invReadyExclusive \
     invIssueWaitsAcyclic invBlockedHasCause invCauseIsUnresolved \
-    invCondRefSatisfiedByRejection invCondAndDepDiffer invCommandObservation \
-  --witnesses wCommandFell \
+    invCondRefSatisfiedByRejection invCondAndDepDiffer invCommandObservation invManualNotSurfaced \
+  --witnesses wCommandFell wManual \
   --max-samples 1000 --max-steps 80 --backend rust --n-threads 8 \
   --seed 2026090301
 
@@ -87,13 +90,14 @@ quint run spec/group_plan.qnt --main group_plan \
     invBlockedHasCause invCauseIsUnresolved invCauseStopsAtRoot \
     invAfterRejectedSurfaces invTriageIsCurrentFrontier \
     invCommandObservation invCommandObservationPreservesControl \
+    invManualNotSurfaced invManualPreservesControl \
   --witnesses wDecide wStart wDoneIssue wDoneGroup wReleaseIssue wReleaseGroup \
     wSetDate wSetAfter wClearWhen wSetParent wUnsetParent wAddDependency \
     wRemoveDependency wTick wGroupAwaitingExplicitDone \
     wRejectedChildGroupCanComplete wGroupDependencyOrphaned \
     wGroupDependencyBlocksDescendant wInheritedGroupBlockingCause \
     wGroupAfterGroup wNestedEntityReady wTriageFrontier \
-    wSetCommand wObserveCommand wCommandGateClosed \
+    wSetCommand wObserveCommand wCommandGateClosed wSetManual wManualGroup \
   --max-samples 1000 --max-steps 80 --backend rust --n-threads 8 \
   --seed 2026090302
 

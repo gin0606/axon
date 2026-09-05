@@ -135,6 +135,7 @@ impl Disposition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResurfaceCondition {
     Always,
+    Manual,
     AtDate(NaiveDate),
     AfterEntity(EntityId),
     Command(String),
@@ -144,6 +145,7 @@ impl ResurfaceCondition {
     pub fn kind_db(&self) -> Option<&'static str> {
         match self {
             Self::Always => None,
+            Self::Manual => Some("manual"),
             Self::AtDate(_) => Some("date"),
             Self::AfterEntity(_) => Some("after_entity"),
             Self::Command(_) => Some("command"),
@@ -158,6 +160,7 @@ impl ResurfaceCondition {
     ) -> Result<Self, ParseError> {
         match (kind, date, reference, command) {
             (None, None, None, None) => Ok(Self::Always),
+            (Some("manual"), None, None, None) => Ok(Self::Manual),
             (Some("date"), Some(date), None, None) => date
                 .parse::<NaiveDate>()
                 .map(Self::AtDate)
@@ -176,6 +179,7 @@ impl ResurfaceCondition {
     pub fn label(&self) -> String {
         match self {
             Self::Always => "Always".to_string(),
+            Self::Manual => "Manual".to_string(),
             Self::AtDate(date) => format!("AtDate({date})"),
             Self::AfterEntity(id) => format!("AfterEntity({id})"),
             Self::Command(command) => format!("Command({command})"),
@@ -269,6 +273,21 @@ mod tests {
             actor: "tester".to_string(),
             worktree: "/worktree".to_string(),
             at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn manual_db_boundary_requires_no_payload() {
+        assert_eq!(
+            ResurfaceCondition::from_db(Some("manual"), None, None, None).unwrap(),
+            ResurfaceCondition::Manual
+        );
+        for (date, reference, command) in [
+            (Some("2026-09-05"), None, None),
+            (None, Some("target"), None),
+            (None, None, Some("exit 0")),
+        ] {
+            assert!(ResurfaceCondition::from_db(Some("manual"), date, reference, command).is_err());
         }
     }
 

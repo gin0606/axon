@@ -14,7 +14,7 @@ An Entity is either an `Issue` or a `Group`. Both kinds have the same generated 
 | --- | --- |
 | Progress | `NotStarted`, `InProgress`, or `Ended`. `Ended` means no more work will be performed. |
 | Disposition | `Undecided`, `Accepted`, or `Rejected`. This records whether the work or result should be pursued. |
-| Resurface condition | `Always`, `AtDate`, `AfterEntity`, or `Command`. It controls when the Entity returns to attention without changing another axis. |
+| Resurface condition | `Always`, `AtDate`, `AfterEntity`, `Manual`, or `Command`. It controls when the Entity returns to attention without changing another axis. |
 | Dependency | Any Entity may require any other Entity's result. |
 | Containment | An Issue or Group may have one parent Group. The resulting structure is a tree. |
 
@@ -111,6 +111,20 @@ axon stores `.axon/axon.db` at the management root. In Git, the management root 
 The executable opens only the schema version it implements. It does not rewrite an older database during an ordinary command; an unsupported version fails before Entity data is read or changed.
 
 Every Issue and Group ID uses `<prefix>-<random six characters>`. The prefix comes from `axon init`; kind is not encoded in the ID. A full ID or a unique suffix may be used wherever an Entity ID is accepted. Group slugs do not exist.
+
+## Waiting until an explicit decision to resume
+
+Use Manual when there is no date or script that can tell you when to reconsider:
+
+```sh
+axon when manual <id> -r 'Wait for external preparation'
+axon when clear <id>
+```
+
+Manual keeps the Entity unsurfaced until you change or clear its condition. It remains
+visible in `list` and `show`. Clearing preserves progress, disposition, and claims; it does
+not accept or start work automatically. See the
+[state model](../reference/state-model.md#resurface-condition) for the Group behavior.
 
 ## Waiting for an external condition
 

@@ -94,6 +94,7 @@ struct ClaimRecord {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum ResurfaceRecord {
     Always,
+    Manual,
     Command {
         command: String,
     },
@@ -744,6 +745,7 @@ fn observed_matches(record: &Observed, entity: &Entity, resolver: &Resolver) -> 
     }
     match (&record.resurface, &entity.resurface_condition) {
         (ResurfaceRecord::Always, ResurfaceCondition::Always) => Ok(true),
+        (ResurfaceRecord::Manual, ResurfaceCondition::Manual) => Ok(true),
         (ResurfaceRecord::Command { command }, ResurfaceCondition::Command(expected)) => {
             Ok(command == expected)
         }
@@ -1318,6 +1320,7 @@ fn observed(entity: &Entity) -> Observed {
     };
     let resurface = match &entity.resurface_condition {
         ResurfaceCondition::Always => ResurfaceRecord::Always,
+        ResurfaceCondition::Manual => ResurfaceRecord::Manual,
         ResurfaceCondition::Command(command) => ResurfaceRecord::Command {
             command: command.clone(),
         },
@@ -1389,6 +1392,7 @@ fn fingerprint(view: &View, entity: &Entity) -> String {
     hash_token(&mut hasher, entity.disposition.as_db());
     match &entity.resurface_condition {
         ResurfaceCondition::Always => hash_token(&mut hasher, "always"),
+        ResurfaceCondition::Manual => hash_token(&mut hasher, "manual"),
         ResurfaceCondition::Command(command) => {
             hash_token(&mut hasher, "command");
             hash_token(&mut hasher, command);

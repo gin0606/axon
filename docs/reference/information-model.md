@@ -32,7 +32,8 @@ A / B / C / D の意味や既存の導出規則も、情報の統治に必要な
 
 ### Control state と外部観測
 
-Command のシェル文字列は Resurface condition の Control state に属する。
+Manual は付随情報を持たない条件、Command はシェル文字列を持つ条件として、
+ともに Resurface condition の Control state に属する。
 設定・解除は判断履歴に記録し、plan declaration や Declaration Revision を変えない。
 外部の評価結果・実行時刻・出力は保存情報ではなく、条件の成立だけでは履歴を追加しない。
 条件の意味は [状態モデル](state-model.md#resurface-condition)、評価の実行境界は

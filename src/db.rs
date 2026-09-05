@@ -68,7 +68,7 @@ pub enum DbError {
 
 pub type Result<T> = std::result::Result<T, DbError>;
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 
 #[cfg(test)]
 const SCHEMA_V1: &str = r#"
@@ -246,7 +246,7 @@ CREATE TABLE entities (
   progress TEXT NOT NULL CHECK (progress IN ('not_started','in_progress','ended')),
   disposition TEXT NOT NULL CHECK (disposition IN ('undecided','accepted','rejected')),
   current_revision INTEGER,
-  resurface_kind TEXT CHECK (resurface_kind IN ('date','after_entity','command')),
+  resurface_kind TEXT CHECK (resurface_kind IN ('date','after_entity','manual','command')),
   resurface_date TEXT,
   resurface_ref TEXT,
   resurface_command TEXT,
@@ -266,6 +266,7 @@ CREATE TABLE entities (
   CHECK ((resurface_kind IS NULL AND resurface_date IS NULL AND resurface_ref IS NULL AND resurface_command IS NULL) OR
          (resurface_kind IS NOT NULL AND ((resurface_kind = 'date' AND resurface_date IS NOT NULL AND resurface_ref IS NULL AND resurface_command IS NULL) OR
          (resurface_kind = 'after_entity' AND resurface_ref IS NOT NULL AND resurface_date IS NULL AND resurface_command IS NULL) OR
+         (resurface_kind = 'manual' AND resurface_command IS NULL AND resurface_date IS NULL AND resurface_ref IS NULL) OR
          (resurface_kind = 'command' AND resurface_command IS NOT NULL AND resurface_date IS NULL AND resurface_ref IS NULL)))),
   FOREIGN KEY (id,current_revision)
     REFERENCES declaration_revisions(entity_id,revision) DEFERRABLE INITIALLY DEFERRED
@@ -2074,6 +2075,40 @@ mod tests {
             actor: "tester".to_string(),
             reason: Some("reason".to_string()),
         }
+    }
+
+    #[test]
+    fn manual_storage_requires_no_payload_and_round_trips() {
+        let mut store = Store::in_memory("test").unwrap();
+        store.insert(&entity("m", EntityKind::Issue, None)).unwrap();
+        for payload in [
+            "resurface_date='2026-09-05'",
+            "resurface_ref='m'",
+            "resurface_command='exit 0'",
+        ] {
+            assert!(
+                store
+                    .conn
+                    .execute(
+                        &format!(
+                            "UPDATE entities SET resurface_kind='manual',{payload} WHERE id='m'"
+                        ),
+                        []
+                    )
+                    .is_err()
+            );
+        }
+        store
+            .apply(
+                &id("m"),
+                Change::SetResurfaceCondition(ResurfaceCondition::Manual),
+                &ctx(),
+            )
+            .unwrap();
+        assert_eq!(
+            store.get(&id("m")).unwrap().resurface_condition,
+            ResurfaceCondition::Manual
+        );
     }
 
     #[test]

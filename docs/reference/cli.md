@@ -13,7 +13,7 @@ axon の操作対象は `Issue` と `Group` の 2 kind を持つ Entity であ�
 | Plan management | `write`, `group`, `dep`, `decide`, `when`, `export`, `import` |
 | Setup & utilities | `init`, `completion`, `docs`, `help` |
 
-分類内では、対になる操作と同じ対象を扱う namespace を隣接させる。namespace 内は `group plan|capture|set|unset`、`dep add|rm`、`decide accept|reject|undecide`、`when at|after|command|clear`、`note add|list|show`、`revision list|show|diff`、`import prepare|check|apply` の順とする。
+分類内では、対になる操作と同じ対象を扱う namespace を隣接させる。namespace 内は `group plan|capture|set|unset`、`dep add|rm`、`decide accept|reject|undecide`、`when at|after|manual|command|clear`、`note add|list|show`、`revision list|show|diff`、`import prepare|check|apply` の順とする。
 
 ## コマンド境界
 
@@ -38,7 +38,7 @@ Group は Issue と同じ自動生成 ID で参照し、slug や kind ごとの�
 - `note add|list|show` / `revision list|show|diff`
 - `start` / `done` / `release`
 - `decide accept|reject|undecide`
-- `when at|after|command|clear`
+- `when at|after|manual|command|clear`
 - `dep add|rm`
 
 `when after` の参照先と dependency の両端も kind の全組み合わせを許す。`AfterEntity` は参照先が Ended または Rejected なら浮上する。dependency は Rejected を前提喪失として扱う。
@@ -48,6 +48,13 @@ title、description、parent Group、outgoing dependency は対象 Entity 自身
 Accepted / Rejected への判断時には declaration 全文を Entity 内連番の Declaration Revision として保存する。直前の Revision と同じなら再利用し、判断履歴から対象 Revision を参照できる。`revision list|show|diff` は Entity と Revision を一つの read transaction から読み、`revision diff` は title、description、parent、outgoing dependency を別々に比較する。optional な description は `present` / `absent` を本文と分けて表示する。
 
 `note add` は本文または file から非空の Note を一件追記する追加操作である。Issue / Group、Progress、Disposition を問わず使え、declaration、状態、関係、導出値を変えない。Note は Entity 内連番、本文、actor、保存時刻を持ち、通常操作では編集・削除しない。`show` は declaration の固定状態と記録件数を冒頭に示し、description と全 Note を一つの read transaction から保存順で省略せず表示する。
+
+### 明示解除までの待機
+
+`when manual` は明示解除まで非浮上にする条件を設定し、`when clear` で Always に戻す。
+日付・参照先・シェル文字列は受け取らない。任意の reason は判断履歴に保存する。
+全 Progress / Disposition への適用、軸の独立性と Group への作用は
+[状態モデル](state-model.md#resurface-condition) に従う。
 
 ### 外部条件の評価
 
@@ -135,13 +142,13 @@ Group の `release` は InProgress の子孫が 0 件のときだけ成功する
 | 追加 | `plan` / `capture` / `group plan` / `group capture` | 新規 Entity を追加 |
 | 追記 | `note add` | 新規 Note を追加 |
 
-失敗した遷移と成功 no-op は状態、履歴、`updated_at` を変えない。失敗した遷移は非 0 で終了する。エラーは現在の事実だけを簡潔に示し、次の操作の指示や入力された reason などの自由記述を含めない。`start` と `done` は reason を持たず、`release` の任意 reason は進行履歴、`decide` / `when` の任意 reason は判断履歴に保存する。reason の有無は操作の成否を変えない。作業結果や通常の申し送りは、declaration の description ではなく Note に残す。追加操作に idempotency key は持たない。
+失敗した遷移と成功 no-op は状態、履歴、`updated_at` を変えない。失敗した遷移は非 0 で終了する。エラーは現在の事実だけを簡潔に示し、次の操作の指示や入力された reason などの自由記述を含めない。外部条件の判定失敗では、原因を確認できるよう上記の実行コマンドと外部診断出力を含める。`start` と `done` は reason を持たず、`release` の任意 reason は進行履歴、`decide` / `when` の任意 reason は判断履歴に保存する。reason の有無は操作の成否を変えない。作業結果や通常の申し送りは、declaration の description ではなく Note に残す。追加操作に idempotency key は持たない。
 
 ## 原子性と deadlock 防止
 
 `start` は ready の検査と claim の取得、Group の `done` / `release` は子孫条件の検査と進行更新を、それぞれ同じ write transaction で行う。
 
-dependency、`AfterEntity`、包含を activation wait graph と completion wait graph に射影する。relation の追加・置換は両 graph の非循環と包含の不変条件を同じ transaction 内で検査してから保存する。Group を待機元にした dependency / `AfterEntity` は Group 自身と全子孫へ展開する。既存データの循環を解消できるよう、辺を除く `dep rm` / `when clear` / `when at` / `when command` / `group unset` は他の循環が残っていても実行できる。
+dependency、`AfterEntity`、包含を activation wait graph と completion wait graph に射影する。relation の追加・置換は両 graph の非循環と包含の不変条件を同じ transaction 内で検査してから保存する。Group を待機元にした dependency / `AfterEntity` は Group 自身と全子孫へ展開する。既存データの循環を解消できるよう、辺を除く `dep rm` / `when clear` / `when at` / `when manual` / `when command` / `group unset` は他の循環が残っていても実行できる。
 
 Ended Group は完了宣言を後から無効にしないため、親変更、subtree の出入り、依存元としての dependency 変更を拒否する。Ended Group 配下の terminal Entity を非 terminal に戻す Disposition 変更も拒否する。
 

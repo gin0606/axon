@@ -368,6 +368,14 @@ struct DecisionArgs {
 
 #[derive(Subcommand)]
 enum WhenCmd {
+    /// Keep an Entity unsurfaced until its condition is explicitly changed
+    Manual {
+        /// Entity ID or unique ID suffix
+        id: String,
+        /// Reason recorded in decision history
+        #[arg(short, long)]
+        reason: Option<String>,
+    },
     /// Set an AtDate resurface condition
     At {
         /// Entity ID or unique ID suffix
@@ -1906,6 +1914,19 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
                 OUTPUT_ATTENTION,
             )?;
         }
+        WhenCmd::Manual { id, reason } => {
+            let id = store.resolve_id(&id)?;
+            store.apply(
+                &id,
+                Change::SetResurfaceCondition(ResurfaceCondition::Manual),
+                &ctx(reason),
+            )?;
+            write_confirmation(
+                &id,
+                "Resurface condition: Manual".to_string(),
+                OUTPUT_ATTENTION,
+            )?;
+        }
         WhenCmd::Clear { id, reason } => {
             let id = store.resolve_id(&id)?;
             store.apply(
@@ -2216,7 +2237,7 @@ fn render_docs(decoration: OutputDecoration) -> String {
     .unwrap();
     writeln!(
         output,
-        "  Resurface condition  Always, AtDate, AfterEntity, or Command. This controls when it returns to attention.\n"
+        "  Resurface condition  Always, AtDate, AfterEntity, Manual, or Command. This controls when it returns to attention.\n"
     )
     .unwrap();
 

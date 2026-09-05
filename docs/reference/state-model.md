@@ -14,7 +14,7 @@ Entity は `Issue` または明示的な計画範囲を表す `Group` である�
 | --- | --- |
 | Progress (A) | `NotStarted` / `InProgress` / `Ended`。これ以上作業を進めるか |
 | Disposition (B) | `Undecided` / `Accepted` / `Rejected`。現在の採否判断 |
-| Resurface condition (C) | `Always` / `AtDate` / `AfterEntity` / `Command`。いつ再び意識に上げるか |
+| Resurface condition (C) | `Always` / `AtDate` / `AfterEntity` / `Manual` / `Command`。いつ再び意識に上げるか |
 | Dependency (D) | Entity 間の成果物・計画完了を必要とする前提関係 |
 | 包含 | Group だけを親にできる一親 tree |
 
@@ -39,6 +39,7 @@ Resurface condition の成立は保存状態を書き換えず、浮上時刻の
 | `Always` | なし | 常に成立 |
 | `AtDate` | 日付 | 指定日への到達 |
 | `AfterEntity` | 参照先 Entity | 参照先が terminal |
+| `Manual` | なし | 設定中は常に未成立。明示的な置換・解除を待つ |
 | `Command` | シェル文字列 | 外部コマンドの観測結果が成立を示す |
 
 条件の設定・置換・解除は Issue / Group、すべての Progress / Disposition で同じ規則に従い、
@@ -50,7 +51,7 @@ Command の成立は非単調で、次回の観測で未成立に戻ることが
 実行環境、終了コード、評価の共有と失敗時の操作は [CLI 契約](cli.md#外部条件の評価) で定める。
 
 Group が非浮上になると activation gate が閉じ、子孫は active scope から外れる。
-進行中の子孫を含め、子孫の保存状態と claim は変えない。Command は Entity への参照辺を
+進行中の子孫を含め、子孫の保存状態と claim は変えない。Manual / Command は Entity への参照辺を
 持たず、AfterEntity への置換には既存の待機グラフ制約を適用する。
 再浮上は再検討・着手候補へ戻す意味であり、計画や外部前提の妥当性を保証しない。
 

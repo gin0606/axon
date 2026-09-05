@@ -184,6 +184,7 @@ impl View {
     pub fn is_surfaced(&self, entity: &Entity) -> Result<bool> {
         Ok(match &entity.resurface_condition {
             ResurfaceCondition::Always => true,
+            ResurfaceCondition::Manual => false,
             ResurfaceCondition::Command(script) => self.evaluation.command(entity, script)?,
             ResurfaceCondition::AtDate(date) => *date <= Utc::now().date_naive(),
             ResurfaceCondition::AfterEntity(target) => {

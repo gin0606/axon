@@ -220,11 +220,16 @@ resurface:
 
 ```yaml
 resurface:
+  kind: manual
+```
+
+```yaml
+resurface:
   kind: command
   command: "exit 0"
 ```
 
-`command` はシェル文字列であり、他 kind の付随 field と混在させない。
+`manual` は付随 field を持たない。`command` はシェル文字列であり、他 kind の付随 field と混在させない。
 観測結果・実行時刻・外部出力は observed に含めない。Control state は read-only なので、
 条件の変更は `when` で行う。export と参照照合だけでは外部コマンドを実行しない。
 check / apply が導出差分を作る場合は必要な条件を評価し、変更前後で同じ Entity の結果を共有する。
@@ -267,7 +272,7 @@ fingerprint は `blake3:` に続く lowercase 64 桁の hex string とする。
 8. progress (`not_started` / `in_progress` / `ended`)
 9. claim の presence (`none` / `some`)。`some` なら続けて actor、worktree、canonical UTC timestamp
 10. disposition (`undecided` / `accepted` / `rejected`)
-11. resurface kind (`always` / `at_date` / `after_entity` / `command`)。`at_date` なら続けて canonical date、`after_entity` なら続けて解決済み Entity ID、`command` なら続けてシェル文字列。評価結果は含めない
+11. resurface kind (`always` / `at_date` / `after_entity` / `manual` / `command`)。`at_date` なら続けて canonical date、`after_entity` なら続けて解決済み Entity ID、`command` なら続けてシェル文字列。評価結果は含めない
 12. outgoing dependency の件数を符号なし 64 bit big-endian integer で表した 8 byte
 13. prerequisite の解決済み ID を bytewise UTF-8 昇順に並べた各 token
 

@@ -12,6 +12,7 @@ module group_plan {
     | AtDate(int)
     | AfterEntity(Id)
     | Command
+    | Manual
 
   type Entity = {
     kind: EntityKind,
@@ -45,6 +46,7 @@ module group_plan {
     | AddDependencyOp
     | RemoveDependencyOp
     | TickOp
+    | SetManualOp
     | SetCommandOp
     | ObserveCommandOp
     | CommandGateClosedOp
@@ -153,6 +155,7 @@ module group_plan {
   pure def surfaced(s: State, i: Id): bool =
     match entity(s, i).resurface {
     | Always => true
+    | Manual => false
     | Command => s.commandSatisfied.get(i)
     | AtDate(date) => date <= s.clock
     | AfterEntity(target) => terminal(s, target)
@@ -537,6 +540,15 @@ module group_plan {
     observed' = observed.union(Set(TickOp)),
   }
 
+  action doSetManual: bool = {
+    nondet i = ENTITIES.oneOf()
+    all {
+      entity(state, i).resurface != Manual,
+      state' = applyResurface(state, i, Manual),
+      observed' = observed.union(Set(SetManualOp)),
+    }
+  }
+
   action doSetCommand: bool = {
     nondet i = ENTITIES.oneOf()
     all {
@@ -572,11 +584,29 @@ module group_plan {
         not(opensDescendants(updated, i)),
     }
   })
+  val invManualNotSurfaced = ENTITIES.forall(i =>
+    entity(state, i).resurface == Manual implies not(surfaced(state, i)))
+  val invManualPreservesControl = ENTITIES.forall(i => {
+    val updated = applyResurface(state, i, Manual)
+    and {
+      entity(updated, i).progress == entity(state, i).progress,
+      entity(updated, i).disposition == entity(state, i).disposition,
+      updated.parent == state.parent,
+      updated.dependencies == state.dependencies,
+      ENTITIES.exclude(Set(i)).forall(j => entity(updated, j) == entity(state, j)),
+      isGroup(state, i) implies not(opensDescendants(updated, i)),
+    }
+  })
+  val wSetManual = observed.contains(SetManualOp)
+  val wManualGroup = GROUPS.exists(i =>
+    entity(state, i).resurface == Manual and
+    descendants(state, i).exists(child => entity(state, child).progress == InProgress))
   val wSetCommand = observed.contains(SetCommandOp)
   val wObserveCommand = observed.contains(ObserveCommandOp)
   val wCommandGateClosed = observed.contains(CommandGateClosedOp)
 
   action step: bool = any {
+    doSetManual,
     doSetCommand,
     doObserveCommand,
     doDecide,

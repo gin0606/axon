@@ -10,6 +10,7 @@ module axon {
     | AtDate(int)
     | AfterIssue(int)
     | Command
+    | Manual
 
   type Id = int
 
@@ -73,6 +74,7 @@ module axon {
   def surfaced(i: Id): bool =
     match resurfaceCond.get(i) {
     | Always => true
+    | Manual => false
     | Command => commandSatisfied.get(i)
     | AtDate(d) => d <= clock
     | AfterIssue(x) => isEnded(x) or isRejected(x)
@@ -211,6 +213,16 @@ module axon {
     deps' = deps,
   }
 
+  action doSetManual = {
+    nondet i = ISSUES.oneOf()
+    all {
+      resurfaceCond.get(i) != Manual,
+      resurfaceCond' = resurfaceCond.set(i, Manual),
+      progress' = progress, disposition' = disposition, deps' = deps,
+      clock' = clock, commandSatisfied' = commandSatisfied, commandFell' = commandFell,
+    }
+  }
+
   action doSetCommand = {
     nondet i = ISSUES.oneOf()
     all {
@@ -234,10 +246,13 @@ module axon {
 
   val invCommandObservation = ISSUES.forall(i =>
     resurfaceCond.get(i) == Command implies (surfaced(i) iff commandSatisfied.get(i)))
+  val invManualNotSurfaced = ISSUES.forall(i =>
+    resurfaceCond.get(i) == Manual implies not(surfaced(i)))
+  val wManual = ISSUES.exists(i => resurfaceCond.get(i) == Manual)
   val wCommandFell = commandFell
 
   action step = any {
-    doSetCommand, doObserveCommand,
+    doSetManual, doSetCommand, doObserveCommand,
     doDecide, doStart, doEnd, doRelease, doDeferDate, doDeferAfter, doClearCondition,
     doAddDep, doRemoveDep, doTick,
   }

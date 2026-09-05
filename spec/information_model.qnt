@@ -16,7 +16,7 @@ module information_model {
   // ---- Control state ----
   type Progress = NotStarted | InProgress | Ended
   type Disposition = Undecided | Accepted | Rejected
-  type ResurfaceCondition = Always | AtDate(int) | AfterEntity(Id) | Command(int)
+  type ResurfaceCondition = Always | AtDate(int) | AfterEntity(Id) | Command(int) | Manual
 
   type Control = {
     progress: Progress,
@@ -128,7 +128,7 @@ module information_model {
   pure val DATES = Set(1, 2)
   pure val DISPOSITIONS = Set(Undecided, Accepted, Rejected)
   pure val CONDITIONS: Set[ResurfaceCondition] =
-    Set(Always)
+    Set(Always, Manual)
       .union(DATES.map(d => AtDate(d)))
       .union(Set(Command(0), Command(1)))
       .union(ENTITIES.map(i => AfterEntity(i)))
