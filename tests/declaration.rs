@@ -467,3 +467,80 @@ fn a_hundred_entity_plan_remains_a_single_atomic_edit() {
     assert_success(&repo.axon(&["import", "apply", path.to_str().unwrap()]));
     assert_eq!(stdout(&repo.axon(&["list"])).lines().count(), 100);
 }
+
+#[test]
+fn builtin_example_applies_without_editing_and_preserves_its_plan_structure() {
+    let repo = TestRepo::new();
+    let example = repo.axon(&["docs", "declaration", "--example"]);
+    assert_success(&example);
+    assert!(example.stderr.is_empty());
+    assert!(!repo.root().join(".axon").exists());
+    let yaml = stdout(&example);
+    assert!(yaml.starts_with("schema: axon-plan/v2\n"));
+    assert!(!yaml.contains("\x1b"));
+    assert!(!yaml.contains("```"));
+    assert_eq!(yaml.matches("id: null").count(), 3);
+    assert_eq!(yaml.matches("base: null").count(), 3);
+
+    repo.init("test");
+    let db_path = repo.root().join(".axon/axon.db");
+    let before = fs::read(&db_path).unwrap();
+    for args in [
+        &["docs", "declaration"][..],
+        &["docs", "declaration", "--example"][..],
+    ] {
+        let output = repo.axon(args);
+        assert_success(&output);
+        assert!(output.stderr.is_empty());
+        if args.last() == Some(&"--example") {
+            assert_eq!(output.stdout, example.stdout);
+        }
+    }
+    assert_eq!(fs::read(&db_path).unwrap(), before);
+
+    let path = plan_path(&repo, "example.yml");
+    fs::write(&path, &example.stdout).unwrap();
+    let file = path.to_str().unwrap();
+    assert_success(&repo.axon(&["import", "prepare", file]));
+    assert_eq!(repo.entity_count(), 0);
+    let check = repo.axon(&["import", "check", file]);
+    assert_success(&check);
+    assert_eq!(stdout(&check).matches("create Issue").count(), 2);
+    assert_eq!(stdout(&check).matches("create Group").count(), 1);
+    assert_eq!(repo.entity_count(), 0);
+    assert_success(&repo.axon(&["import", "apply", file]));
+    let check = repo.axon(&["import", "check", file]);
+    assert_success(&check);
+    assert_eq!(
+        stdout(&check),
+        "Plan is valid.\nChanges:\n  none\nDerived changes (ready, blocked, orphaned, active_scope, group_completable):\n  none\n"
+    );
+    assert_eq!(repo.entity_count(), 3);
+    assert_eq!(repo.dep_count(), 1);
+
+    let list = repo.axon(&["list"]);
+    assert_success(&list);
+    let list = stdout(&list);
+    let group = entity_id(&list, "Deliver a feature");
+    let implement = entity_id(&list, "Implement the feature");
+    let verify = entity_id(&list, "Verify the feature");
+    for (id, kind, parent) in [
+        (&group, "group", None),
+        (&implement, "issue", Some(group.clone())),
+        (&verify, "issue", Some(group.clone())),
+    ] {
+        let snapshot = repo.snapshot(id);
+        assert_eq!(snapshot.kind, kind);
+        assert_eq!(snapshot.parent, parent);
+        assert_eq!(snapshot.progress, "not_started");
+        assert_eq!(snapshot.disposition, "accepted");
+        assert_eq!(snapshot.resurface_kind, None);
+        assert_eq!(snapshot.progress_events, 0);
+    }
+    let show = repo.axon(&["show", &verify]);
+    assert_success(&show);
+    assert_show_relation(&stdout(&show), "Dependency:", &implement);
+    let claims = repo.axon(&["claims"]);
+    assert_success(&claims);
+    assert!(claims.stdout.is_empty());
+}

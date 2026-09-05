@@ -150,7 +150,10 @@ enum Command {
         shell: Shell,
     },
     /// Explain Axon's state model and basic workflow
-    Docs,
+    Docs {
+        #[command(subcommand)]
+        topic: Option<DocsCmd>,
+    },
     /// Create an Accepted issue
     Plan {
         /// Parent group ID or unique ID suffix
@@ -267,6 +270,8 @@ enum Command {
     },
     /// Prepare, validate, or atomically apply a plan declaration
     #[command(subcommand)]
+    #[command(after_help = "Use axon docs declaration for the format and workflow.
+Use axon docs declaration --example for a complete new-plan YAML example.")]
     Import(ImportCmd),
     /// Change an Entity Disposition
     #[command(subcommand)]
@@ -329,8 +334,20 @@ enum GroupCmd {
 }
 
 #[derive(Subcommand)]
+enum DocsCmd {
+    /// Explain declaration fields and the prepare/check/apply workflow
+    Declaration {
+        /// Write only a complete new-plan YAML example to stdout
+        #[arg(long)]
+        example: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum ImportCmd {
     /// Assign final IDs and rewrite a declaration into canonical form without changing the DB
+    #[command(after_help = "Use axon docs declaration for the format and workflow.
+Save axon docs declaration --example output to a file, then pass it to prepare.")]
     Prepare {
         /// YAML declaration file to rewrite
         file: std::path::PathBuf,
@@ -597,7 +614,7 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
     match Cli::from_arg_matches_mut(&mut matches)?.command {
         Command::Init { prefix } => cmd_init(prefix),
         Command::Completion { shell } => write_completion(shell).map_err(Into::into),
-        Command::Docs => cmd_docs(),
+        Command::Docs { topic } => cmd_docs(topic),
         Command::Plan {
             title,
             parent,
@@ -2293,7 +2310,16 @@ fn render_root_help(decoration: OutputDecoration) -> String {
     output
 }
 
-fn cmd_docs() -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_docs(topic: Option<DocsCmd>) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(DocsCmd::Declaration { example }) = topic {
+        let output = if example {
+            include_str!("docs/declaration-example.yaml")
+        } else {
+            include_str!("docs/declaration.txt")
+        };
+        write_plain_output(output)?;
+        return Ok(());
+    }
     let decoration = current_output_decoration();
     write_output(&render_docs(decoration), decoration)?;
     Ok(())
@@ -2392,6 +2418,7 @@ fn render_docs(decoration: OutputDecoration) -> String {
         decoration.paint(OUTPUT_HEADING, "axon help <COMMAND PATH>")
     )
     .unwrap();
+    writeln!(output, "\nUse axon docs declaration for declaration fields and the import workflow.\nUse axon docs declaration --example for a complete new-plan YAML example.").unwrap();
     writeln!(output, "\nStorage recovery\n  DB commands automatically migrate known v9/v10 databases to v11, including\n  read commands, export and import check. The first open needs write permission.\n  Migration saves all stored data in .axon/migration-backups before committing;\n  backups are never overwritten or deleted automatically. Success is reported on\n  stderr before the requested operation; a later command failure does not undo it.\n  Current databases create no migration notice or backup. init only creates new DBs.\n  Versions below v9, future versions, and unknown/corrupt schemas are rejected.\n  Future versions require a newer axon build supporting that schema. --version\n  identifies the executable release, not its DB schema.\n  On failure inspect the reported stage, cause, DB path and application state.\n  The requested operation did not run; an unknown migration result requires\n  inspection before retry. Failed backups may be incomplete. Check permissions,\n  disk space and other writers (including linked worktrees) for I/O or lock errors.\n  Before recovery stop all writers and preserve .axon with SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  export also requires a compatible build and is not a complete database backup.\n  In Git, .axon/axon.db is at the parent of the common Git directory; outside Git,\n  axon uses the nearest ancestor containing .axon/axon.db.\n  help, docs, version and completion do not open the DB.\n").unwrap();
     output
 }

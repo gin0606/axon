@@ -47,6 +47,27 @@ Use `--parent <group-id>` on any creation command to create an Entity inside a G
 
 Use a declaration file when several Issues, Groups, containment edges, and dependencies need to be reviewed and changed as one plan. A declaration edits only the Entities listed under `issues` and `groups`; relationships do not expand that edit set.
 
+For offline instructions, run `axon docs declaration`. To start a new plan, save
+the complete example (one Group, two child Issues, and one dependency) and edit it:
+
+```sh
+axon docs declaration --example > plan.yml
+axon import prepare plan.yml
+axon import check plan.yml
+axon import apply plan.yml
+axon import check plan.yml
+```
+
+Review the example's titles and descriptions before preparing and applying it.
+The docs commands do not open a database or register or start work. The import
+commands need an initialized management root. Apply creates the new Entities as
+Accepted/NotStarted/Always; the final check should report no changes.
+See the [declaration format](../reference/declaration-file.md) for the full schema.
+
+For existing Entities, start from an export; never invent IDs, fingerprints, or
+observed snapshots. Return any fixed declaration you intend to change to
+Undecided before exporting it.
+
 1. Export an existing edit set with `axon export <id>...`, `axon export --group <group-id>`, or `axon export --group <group-id> --recursive`. Combine selectors to take their union.
 2. Add or edit Entity records and their owned relationships. New records use `id: null`, a unique `key`, `base: null`, and the initial Accepted/NotStarted observed state.
 3. Run `axon import prepare <file>` to assign final IDs and rewrite canonical YAML. This changes the file but not the database.

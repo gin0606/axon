@@ -1,0 +1,72 @@
+Plan declarations
+
+A declaration edits only the Entities listed under issues and groups. It fully
+declares their titles, descriptions, parents, and outgoing dependencies.
+Omitting an Entity does not delete it or change it in the DB.
+
+Create a new plan
+  axon docs declaration --example > plan.yml
+  Edit the example's titles, descriptions, and relationships for your plan.
+  In an initialized management root (axon init), run:
+  axon import prepare plan.yml
+  axon import check plan.yml
+  axon import apply plan.yml
+  axon import check plan.yml
+
+  prepare assigns final IDs and rewrites the file as canonical YAML without
+  changing Entity data in the DB. check validates and previews the changes.
+  apply repeats validation, commits the plan atomically, and refreshes the file's
+  fingerprints and observed snapshots. The final check should report no changes.
+  New Entities are registered as Accepted / NotStarted / Always without a claim.
+  Starting a Group or Issue is a separate, explicit operation.
+
+  docs and --example do not open a DB, register Entities, or start work. They
+  need no management root, network connection, or source checkout. Import commands
+  do open the DB and can automatically migrate an old supported schema first.
+
+Required fields
+  schema: axon-plan/v2
+  issues and groups: lists of complete Entity records, even when empty.
+  Each record requires id, key, base, title, description, and observed.
+  title is non-empty and single-line; description is text or null.
+
+  id: the public Entity ID; null for a new Entity before prepare.
+  key: a file-local alias, required for a new Entity before prepare. It matches
+       ^[a-z][a-z0-9-]{0,63}$ and is unique across issues and groups.
+       Keys are not saved in the DB. Relations can use { key: alias }.
+  base: null for an unapplied new Entity; an exported fingerprint for an existing
+        Entity. It detects stale snapshots and is not computed from your edits.
+
+  observed is required. For every new Entity it must be exactly:
+    progress: not_started
+    claim: null
+    disposition: accepted
+    resurface:
+      kind: always
+
+  For existing Entities, observed is the exported read-only Control state,
+  not a request to change it. Use ordinary state commands for those changes.
+
+  relations requires editable and readonly mappings, each with parents and
+  dependencies lists. Keep all four lists, using [] when empty.
+  A parent edge has child and parent references; the child owns the edge.
+  A dependency has dependent and prerequisite references; the dependent owns it.
+  Each reference is exactly { key: alias } or { id: public-id }.
+  An omitted editable edge removes that parent or outgoing dependency from its
+  listed owner. readonly edges belong to Entities outside the edit set.
+
+  references requires an entities list, using [] when empty. External Entity
+  snapshots and readonly relations must be preserved from export.
+  Do not omit required fields or empty structures. Unknown fields are rejected.
+
+Edit existing Entities
+  Start from axon export <ID>... or axon export --group <GROUP> --recursive.
+  Never invent existing IDs, base fingerprints, observed state, or reference
+  snapshots. A stale snapshot is rejected instead of merging concurrent changes.
+  Accepted and Rejected declarations are fixed. Before changing one, explicitly
+  use axon decide undecide <ID> -r <reason>, then export a fresh snapshot, edit,
+  prepare, check, apply, and check again. Inspect the full result and make the
+  intended Disposition decision separately; import does not make it for you.
+
+The authoritative schema is docs/reference/declaration-file.md in the axon
+source distribution. This built-in guide and example are available offline.

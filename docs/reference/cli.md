@@ -15,6 +15,20 @@ axon の操作対象は `Issue` と `Group` の 2 kind を持つ Entity であ�
 
 分類内では、対になる操作と同じ対象を扱う namespace を隣接させる。namespace 内は `group plan|capture|set|unset`、`dep add|rm`、`decide accept|reject|undecide`、`when at|after|manual|command|clear`、`note add|list|show`、`revision list|show|diff`、`import prepare|check|apply` の順とする。
 
+## 宣言の説明と新規例
+
+`axon docs declaration` は宣言の必須フィールド、新規と既存の snapshot の違い、
+prepare → check → apply → 再check の手順を端末向け英語で返す。
+`axon docs declaration --example` は新規 Group 1件、その子 Issue 2件、
+子 Issue 間の dependency 1本を含む完全な YAML だけを stdout に返す。
+新規の id/base は null とし、既存 DB の ID や fingerprint を要求しない。
+説明、Markdown fence、ANSI 装飾を含まず、そのまま保存して prepare へ渡せる。
+
+両コマンドは DB を開かず、管理 root、DB の状態、ネット接続、ソース checkout に依存しない。
+取得だけでは登録も着手も行わない。`axon docs` は従来の概念・基本 workflow を維持して
+宣言の説明へ案内し、`import --help` と `import prepare --help` も説明と例へ案内する。
+形式の正本は [宣言ファイル](declaration-file.md) とする。
+
 ## 操作を理解するための案内
 
 利用者の判断を代行せず、axon を正しく操作するための説明を提供する。

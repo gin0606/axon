@@ -137,6 +137,7 @@ fn docs_explains_the_model_in_terminal_text_without_opening_a_database() {
         "Basic workflow",
         "axon plan / axon capture      Create an Issue",
         "axon help <COMMAND PATH>",
+        "axon docs declaration",
     ] {
         assert!(stdout.contains(required), "missing {required:?}");
     }
@@ -176,6 +177,8 @@ fn help_and_completion_do_not_open_a_database() {
         &[][..],
         &["help"][..],
         &["docs"][..],
+        &["docs", "declaration"][..],
+        &["docs", "declaration", "--example"][..],
         &["docs", "--help"][..],
         &["--help"][..],
         &["-h"][..],
@@ -196,6 +199,8 @@ fn generated_output_treats_closed_stdout_as_success() {
 
     for args in [
         &["docs"][..],
+        &["docs", "declaration"][..],
+        &["docs", "declaration", "--example"][..],
         &["--help"][..],
         &["-h"][..],
         &["completion", "bash"][..],
@@ -215,4 +220,59 @@ fn generated_output_treats_closed_stdout_as_success() {
         assert_eq!(output.status.code(), Some(0));
         assert!(output.stderr.is_empty());
     }
+}
+
+#[test]
+fn declaration_help_connects_the_format_and_example() {
+    for args in [
+        &["import", "--help"][..],
+        &["import", "prepare", "--help"][..],
+    ] {
+        let output = help_stdout(args);
+        assert!(output.contains("axon docs declaration"));
+        assert!(output.contains("axon docs declaration --example"));
+    }
+    assert!(help_stdout(&["docs", "--help"]).contains("declaration"));
+    assert!(help_stdout(&["docs", "declaration", "--help"]).contains("--example"));
+    let output = help_stdout(&["docs", "declaration"]);
+    for required in [
+        "axon import prepare plan.yml",
+        "axon import check plan.yml",
+        "axon import apply plan.yml",
+        "id",
+        "key",
+        "base",
+        "observed",
+        "^[a-z][a-z0-9-]{0,63}$",
+        "not_started",
+        "claim: null",
+        "disposition: accepted",
+        "kind: always",
+        "axon export",
+        "axon decide undecide",
+    ] {
+        assert!(output.contains(required), "missing {required:?}");
+    }
+    assert!(!output.contains('`'));
+    assert!(!output.contains('\x1b'));
+}
+
+#[test]
+fn declaration_docs_ignore_a_broken_database() {
+    let dir = TestDir::new("docs-broken-db");
+    let db_dir = dir.path().join(".axon");
+    std::fs::create_dir(&db_dir).unwrap();
+    let db_path = db_dir.join("axon.db");
+    let broken = b"not a SQLite database";
+    std::fs::write(&db_path, broken).unwrap();
+    for args in [
+        &["docs", "declaration"][..],
+        &["docs", "declaration", "--example"][..],
+    ] {
+        let output = dir.axon_command().args(args).output().unwrap();
+        common::assert_success(&output);
+        assert!(output.stderr.is_empty());
+        assert_eq!(std::fs::read(&db_path).unwrap(), broken);
+    }
+    assert_eq!(std::fs::read_dir(db_dir).unwrap().count(), 1);
 }
