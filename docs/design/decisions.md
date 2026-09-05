@@ -510,6 +510,14 @@ A (進行) の `start` / `done` / `release` は、状態遷移に結び付いた
 - Undecided は Revision を持たない draft とする
 - 元 DB と機械可読 snapshot を backup として保持し、件数、各現在値、関係、CLI の主要 query を検証してから切り替える
 
+## v9 以降の保存情報を保つ移行
+
+v9 の情報モデル導入後は fresh DB への切り替えを繰り返さず、版ごとの経路を一つの transaction で適用する。導入時の baseline 作成とは別の契約であり、Revision、Note、判断・進行履歴を一切作り直さない。
+
+書込排他より先に backup すると、その後の通常書き込みを失う backup になりうる。排他取得後の版再確認を省くと、並行起動が成功済みの移行を再適用しうる。このため排他取得、再確認、backup、schema 更新、commit の順を固定する。SQLite backup は書込中の同じ connection を source にできないため、排他取得後の別 connection を使う。WAL を含む確定状態は [SQLite backup API](https://www.sqlite.org/c3ref/backup_finish.html) に委ねる。
+
+制約の変更は [SQLite のテーブル再構築手順](https://sqlite.org/lang_altertable.html) に従い、外部キーを transaction の外で停止し、新規 table への複写、旧 table の削除、rename、foreign_key_check を行う。schema 番号だけの書換えと writable_schema の直接編集は採用しない。移行経路は既知 schema と結び付け、最低対応版から現行版まで経路が途切れないことをテストする。
+
 ## 実装技術と段階的な導入
 
 ### 言語: Rust

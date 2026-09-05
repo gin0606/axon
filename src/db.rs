@@ -1,3 +1,6 @@
+#[allow(dead_code)]
+pub mod migration;
+
 use crate::derived::{Evaluation, EvaluationError, View};
 use crate::domain::*;
 use chrono::{DateTime, Utc};
@@ -62,6 +65,8 @@ pub enum DbError {
     NoSuchRevision { id: String, number: i64 },
     #[error("the plan declaration of {0} is fixed by its Disposition")]
     DeclarationFixed(String),
+    #[error("invalid axon schema: {0}")]
+    InvalidSchema(String),
     #[error("unsupported axon schema version {found}; expected {expected}")]
     UnsupportedSchema { found: i64, expected: i64 },
 }

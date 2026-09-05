@@ -151,3 +151,9 @@ quint run spec/information_model.qnt --main information_model \
 | cross-relation deadlock 防止 | `activationWaitEdges`、`completionWaitEdges`、`invRelationsSafe` |
 
 過去の反例から得た設計判断は [設計判断](../design/decisions.md#モデル検査で見つかった考慮漏れ) を参照する。
+
+## SQLite 移行の検証
+
+基礎状態モデルの意味は変えない。移行の順序は 2 process・旧/新版・データ世代 0/1 に限定した補助検討で、SQLite の排他と commit 原子性を前提に、backup と移行対象の世代一致、成功した移行の最大 1 回適用を確認した（2026-09-05、Quint 0.32.0、Rust backend、seed 2026090501、10,000 sampled traces、max-steps 10、全 6 witness 到達）。全探索ではなく SQL / WAL / filesystem / crash recovery は対象外。
+
+Rust の migration tests は公開履歴の v9 / v10 DDL と合成データを使い、全旧列・全行と backup を比較する。最新 no-op、未知 schema、backup 失敗、途中 SQL エラー、子 process の強制終了、並行移行と通常書き込み、WAL、再実行を検証する。実データを fixture に使わない。

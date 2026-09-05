@@ -52,7 +52,7 @@ Git リポジトリ内では common root を管理境界として常に優先す
 - **Revision と判断は同じ transaction で確定する**。直前と同じ declaration は Revision を再利用し、違う場合だけ Entity 内連番を追加する
 - **Note の追加は immediate transaction で連番を割り当てる**。入力時刻ではなくこの保存順を正にし、空白だけの本文は Store の書き込み境界で拒否する。DB の `NOT NULL` / `CHECK` 制約も NULL、空文字、U+0020 だけの本文を拒否する
 - **複数テーブルの詳細表示は一つの read transaction から作る**。現在 Entity、関係、履歴、Revision、Note、件数を異なる時点から混ぜない
-- **スキーマは `user_version` で版を持つが、通常起動時に migration しない**。実装と一致する fresh schema だけを開き、旧版や未知の版は Entity を読む前に version error として拒否する
+- **スキーマは `user_version` と既知 DDL の両方で識別する**。移行基盤は v9 / v10 から現行版への経路を持ち、未知版・未知構造を変更しない
 
 ## 状態更新と履歴
 
@@ -107,7 +107,13 @@ actor は一覧と調査の手掛かりであり、排他制御や `release` の
 
 ## schema 切り替えの境界
 
-通常起動は対応する schema version だけを開き、旧版を暗黙に migration しない。
+移行基盤 `db::migration::open` は移行済み・移行不要と、対象 DB、移行前後の版、backup 先を返す。失敗には未適用・適用済み・結果不明の区別を持たせる。通常 CLI への接続はこの境界で行う。
+
+旧版は `BEGIN IMMEDIATE` 取得後に版と既知 DDL を再確認し、整合性を検査する。排他取得後に初めて開く別の read connection から SQLite backup API で `.axon/migration-backups` へ保存する。backup は新規ファイルとして排他的に作成し、整合性検査とファイル・directory の同期後に schema 変更を始める。途中の失敗で残った backup も上書き・自動削除しない。
+
+v9→v10 は entities の条件列追加と制約更新、v10→v11 は Manual の制約追加だけを行う。元の列を列名で複写し、他テーブルと履歴は保持する。v9 の新しい `resurface_command` は NULL とし、過去の事実は生成しない。外部キーを connection 単位で一時停止し、テーブル再構築、全経路の適用、整合性検査、版更新を同じ transaction で確定する。commit 前のエラーは rollback し、途中終了は SQLite の recovery に委ねる。commit / rollback が失敗して結果を確定できない場合は結果不明を返す。
+
+DDL 比較は文字列リテラルと token 境界を保持したまま空白・SQL keyword の大小と、手動移行時の `CREATE TABLE "entities"` 表記差だけを正規化する。未知の table / index / trigger / view / 制約を黙って捨てない。
 情報モデル導入時の一回限りの切り替え条件は
 [導入時の記録](../design/decisions.md#情報モデル導入時の-schema-切り替え) に残す。
 通常の open、公開 import、将来の migration としてその処理を残さない。
