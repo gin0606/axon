@@ -1,10 +1,10 @@
-# CLI
+# CLI の振る舞いと入出力
 
 ## 方針
 
 axon の操作対象は `Issue` と `Group` の 2 kind を持つ Entity である。どちらも同じ公開 ID、文面、Progress、Disposition、Resurface condition、claim を持つ。対象 kind を先に選ばせる namespace は作らず、ID を受け取る top-level command が kind を解決する。
 
-英語の利用マニュアルは `docs/help.md`、状態モデルと設計理由の正は `docs/axes.md` に置く。Usage、引数、option、コマンドツリーは Clap の定義から生成する。引数なしの `axon`、`axon help`、`axon -h`、`axon --help` は、次に調べる command をすぐ選べる同一の root help を返す。`axon help <command path>` と各 command の `--help` は Clap による個別の詳細を返す。全 command の help を連結する入口は持たない。`axon docs` は状態モデルと基本 workflow を Markdown ではない端末向け形式で返す。
+英語の操作手順は [利用ガイド](../guide/usage.md)、状態の意味は [状態モデル](state-model.md)、設計理由は [設計判断](../design/decisions.md) に置く。この文書はコマンドの境界、反復、原子性、入出力の契約を定める。Usage、引数、option、コマンドツリーは Clap の定義から生成する。引数なしの `axon`、`axon help`、`axon -h`、`axon --help` は、次に調べる command をすぐ選べる同一の root help を返す。`axon help <command path>` と各 command の `--help` は Clap による個別の詳細を返す。全 command の help を連結する入口は持たない。`axon docs` は状態モデルと基本 workflow を Markdown ではない端末向け形式で返す。
 
 | 分類 | command 順序 |
 | --- | --- |
@@ -28,7 +28,7 @@ axon の操作対象は `Issue` と `Group` の 2 kind を持つ Entity であ�
 
 4 コマンドはいずれも `--parent <group-id>` を受け取り、作成と包含設定を同じ transaction で行う。呼び出すたびに新しい Entity を作る追加操作である。
 
-旧 slug ベースの `group new` / `group list` / `group show` / `group reject` / `group dep` は提供しない。Group は Issue と同じ自動生成 ID で参照する。
+Group は Issue と同じ自動生成 ID で参照し、slug や kind ごとの参照 namespace は持たない。
 
 ### 共通の状態・宣言・関係操作
 
@@ -66,7 +66,7 @@ Accepted / Rejected への判断時には declaration 全文を Entity 内連番
 
 ### Plan 宣言ファイル
 
-複数 Entity と関係を一枚で編集するときは、`axon export` と `axon import prepare|check|apply` を使う。形式の正は `docs/declaration-file.md` とする。
+複数 Entity と関係を一枚で編集するときは、`axon export` と `axon import prepare|check|apply` を使う。形式の正は [宣言ファイル](declaration-file.md) とする。
 
 - `export <id>...` は明示 Entity、`export --group <id>` は Group と直下、`--recursive` 付きは全子孫を編集対象にする。selector の和集合だけを選び、関係から編集対象を広げない
 - `import prepare <file>` は新規 Entity の最終 ID を割り当て、同じ file を canonical YAML へ atomic replace する。DB は変えない
@@ -98,7 +98,7 @@ Group の `release` は InProgress の子孫が 0 件のときだけ成功する
 | 追加 | `plan` / `capture` / `group plan` / `group capture` | 新規 Entity を追加 |
 | 追記 | `note add` | 新規 Note を追加 |
 
-失敗した遷移と成功 no-op は状態、履歴、`updated_at` を変えない。`start` と `done` は reason を持たず、`release` の任意 reason は進行履歴、`decide` / `when` の任意 reason は判断履歴に保存する。作業結果や通常の申し送りは、declaration の description ではなく Note に残す。
+失敗した遷移と成功 no-op は状態、履歴、`updated_at` を変えない。失敗した遷移は非 0 で終了する。エラーは現在の事実だけを簡潔に示し、次の操作の指示や入力された reason などの自由記述を含めない。`start` と `done` は reason を持たず、`release` の任意 reason は進行履歴、`decide` / `when` の任意 reason は判断履歴に保存する。reason の有無は操作の成否を変えない。作業結果や通常の申し送りは、declaration の description ではなく Note に残す。追加操作に idempotency key は持たない。
 
 ## 原子性と deadlock 防止
 
@@ -115,6 +115,8 @@ help、一覧、詳細、成功確認は stdout、エラーは stderr に出す�
 人向け出力は、Entity一覧、履歴と索引、一件の詳細、状態変更の確認という役割ごとに共通の文字構造と語彙を使う。一覧と履歴は1 recordを1行に置き、一件の詳細では短い metadata を長文やdiffより先に置く。状態変更の確認は対象IDから始め、保存されたsnapshot全体を繰り返さない。Note / Revision一覧はEntity-local numberから始める。
 
 `show` を含む人向け出力は、stdout が対話 terminal なら状態の識別を補助する ANSI style を使う。非対話出力と `NO_COLOR` では同じ文字、空白、改行、順序を無装飾で出し、状態の違いを色だけでは表さない。title、description、Note本文、reasonなど利用者が保存した文字列は装飾・省略・整形しない。下流でpipeが閉じた場合は成功として扱う。
+
+非TTY の record 境界、先頭の識別子、標準 stream は安定した外部契約とする。
 
 `export` と completion は生成内容そのものを標準出力へ書き、人向けの装飾を加えない。
 

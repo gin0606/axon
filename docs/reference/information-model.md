@@ -1,63 +1,15 @@
-# Entity 情報の統治
+# 情報モデル
 
 **位置づけ**: Entity が持つ情報の規範契約。
 
 この文書は、Entity の plan declaration と後から得られた追加情報を分離し、
 現在値、判断対象、履歴、観測の意味を一つに定める。実装、CLI、宣言ファイル、
 運用手順はこの契約に従う。契約を変える場合の設計変更とモデル検証は、
-[状態モデルの軸の整理](axes.md#5-quint-models-と検査) の方針に従う。
+[検証方針](../development/verification.md) の方針に従う。
 
 公開名称は、決定時点の declaration 全文を **Declaration Revision**、状態変更と
 独立した追記専用情報を **Note** とする。コマンド構文、出力順、保存形式の詳細は
 それぞれの契約文書で定める。
-
-## 発端
-
-調査結果、申し送り、実装中に判明した制約などを既存 Entity に追加するには、
-現在の description を読み、既存内容を含む全文を組み立て直して書き戻す必要がある。
-この方法では次の意味が混ざる。
-
-- その Entity が何であるか
-- その Entity について後から分かったこと
-
-全文の read-modify-write は、長い本文を読み直すコストだけでなく、読み落としや
-並行更新によって既存内容を失う可能性も持つ。definition の変更履歴だけを追加しても、
-補足情報のたびに definition 自体を変える構造は残る。一方、追加情報の別経路だけを
-用意しても、決定済み definition を同じ意味のまま書き換えられるなら、両者の境界は
-利用者の使い分けだけに依存する。
-
-したがって、追加情報、definition の変更制御、definition の履歴を個別に検討せず、
-axon が持つ情報全体の中で責務を整理する。
-
-## 変更前の実装から引き継いだ区分
-
-この契約を導入する前の実装には、整理の土台として使える次の区分があった。
-
-- Issue と Group は、共通の Entity identity、title、description、Progress、
-  Disposition、Resurface condition、claim を持つ
-- plan declaration の export / import は、title、description、parent Group、
-  outgoing dependency を編集対象にする
-- 同じ declaration では、Progress、Disposition、Resurface condition、claim、
-  incoming relationship を observed な読み取り専用情報として扱う
-- Disposition と Resurface condition の変更理由は判断履歴に残す
-- Progress の遷移は判断履歴と分けた進行履歴に残す
-- ready、blocked、orphaned、active scope などは保存せず、現在の保存情報から導出する
-- declaration の fingerprint は stale な編集の適用を拒否するが、意味的な lock や
-  変更履歴ではない
-- 状態変更に結び付かない自由記述の追加記録はなく、作業結果や通常の申し送りを
-  description に残していた
-
-判断履歴と進行履歴を分けた設計は、記録を一つの汎用イベント列に畳まず、何についての
-情報かによって保存と参照の意味を分ける先例になる。
-
-## 達成したい状態
-
-既存 Entity の definition や状態を変更せず、その Entity に関して後から得られた情報を
-独立して蓄積できる。後から Entity を理解する利用者には、definition、状態、履歴、
-追加情報が意味を混ぜずに観測可能である。
-
-axon が保証するのは、情報が欠落せず観測可能であることまでとする。利用者が情報を読み、
-理解してから操作する責任までは axon が引き受けない。
 
 ## 情報の大分類
 
@@ -73,25 +25,6 @@ axon が保証するのは、情報が欠落せず観測可能であることま
 優先度や表示上の強調など、現在 axon が持たない概念を、この整理だけを理由に追加しない。
 A / B / C / D の意味や既存の導出規則も、情報の統治に必要な矛盾が見つからない限り
 再定義しない。
-
-## 整理のアプローチ
-
-各機能へ個別に revision、lock、追加経路を足すのではなく、情報の分類ごとに次を決める。
-
-- 何のための情報か
-- 現在値と過去の記録のどちらを正とするか
-- 置換、状態遷移、追記のどの操作に属するか
-- 変更履歴、actor、時刻、理由のどれを必要とするか
-- Entity のライフサイクルによる変更制限が必要か
-- axon が保証する範囲と利用者に委ねる範囲
-- 他のどの情報と一緒に観測されるべきか
-
-Plan declaration と observed state を分ける現行の宣言ファイルを出発点にする。一方で、
-すべての変更を一つの汎用イベントとして扱う event sourcing には広げない。判断履歴と
-進行履歴を分けた理由が失われ、既存の状態モデルと永続化を全面的に作り直すためである。
-
-上位の統治契約は一つに揃えるが、保存先、利用者向けの操作、実装する Entity は分割して
-よい。実装が分かれていることと、意味の正が複数箇所に散っていることは区別する。
 
 ## 規範契約
 
@@ -157,10 +90,10 @@ Rejected も固定するのは、不採用も特定の declaration に対する�
 訂正元を指す専用の関係は持たず、安定した識別子を本文から参照できればよい。通常操作での
 編集や削除を許さないことで、definition と同じ変更履歴問題を追加記録側へ持ち込まない。
 
-### 既存履歴との境界
+### 履歴との境界
 
-- Disposition と Resurface condition の理由は、現在どおり判断履歴に残す
-- Progress の操作は、現在どおり進行履歴に残す
+- Disposition と Resurface condition の理由は、判断履歴に残す
+- Progress の操作は、進行履歴に残す
 - Declaration Revision は、両者と異なる意味の記録として扱う
 - Note は、状態変更に結び付かない追加記録としてさらに分ける
 - どの記録も、別の意味を持つ履歴へ無条件に混ぜない
@@ -183,20 +116,12 @@ Rejected も固定するのは、不採用も特定の declaration に対する�
 - Undecided 中の複数利用者による declaration 編集の自動マージ
 - 誤投入した機密情報を履歴全体から削除する redaction
 
-## 別の契約文書で定めるもの
+## 関連する契約
 
-概念と挙動の整理後に決める次の事項は、意図的に記録対象から外した。
+- [状態モデル](state-model.md): 各軸、関係、導出規則
+- [CLI 契約](cli.md): コマンド構文、出力、公開 ID の解決
+- [宣言ファイル](declaration-file.md): export / import の形式と適用
+- [アーキテクチャ](../development/architecture.md): schema、内部型、永続化
+- [設計判断](../design/decisions.md#情報モデルの導入経緯): 発端と代替案
 
-- 追加、一覧、個別参照、差分参照を行うコマンド構文
-- 出力の固定文言、ブロックの位置、並び順
-- 公開識別子の具体的な表記
-- schema、内部型、migration の実装方法
-- 実装作業の分割、依存関係、着手順
-
-## 関連する既存 Entity
-
-- `axon-eq8xys`: definition を変更せず追加情報を蓄積する経路の検討
-- `axon-t5ztjc`: Entity definition の変更を後から検証できない問題
-
-この契約は両者を上位の情報統治として置き換える。個別 Entity の判断履歴は、採用までの
-経緯を参照する記録として残す。
+実装作業の分割・依存関係・着手順は、この契約の対象に含めない。

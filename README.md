@@ -13,11 +13,11 @@ axon docs                       # 状態モデルと基本 workflow
 axon completion zsh > _axon    # シェル補完スクリプトを生成
 ```
 
-個別コマンドの Usage は `axon help <command path>` または `axon <command path> --help` で確認できる。`axon docs` は状態モデルと基本 workflow を端末向けに説明する。より詳しい英語の利用マニュアルは [docs/help.md](docs/help.md)、操作の意味と設計理由を記録する日本語の開発者向け文書は [docs/cli.md](docs/cli.md) に分けている。
+個別コマンドの Usage は `axon help <command path>` または `axon <command path> --help` で確認できる。`axon docs` は状態モデルと基本 workflow を端末向けに説明する。より詳しい英語の利用マニュアルは [利用ガイド](docs/guide/usage.md)、コマンドの振る舞いを定める日本語の開発者向け文書は [CLI 契約](docs/reference/cli.md) に分けている。
 
 `completion` は `bash`、`elvish`、`fish`、`powershell`、`zsh` を受け付ける。生成したスクリプトは各シェルの補完ディレクトリに置くか、そのシェルの方法で読み込む。
 
-Codex の linked worktree から共有 DB を更新する場合は、[Codex の sandbox 設定](docs/codex.md)を一度だけ行う。
+Codex の linked worktree から共有 DB を更新する場合は、[Codex の sandbox 設定](docs/guide/codex.md)を一度だけ行う。
 
 ## Agent skills
 
@@ -51,22 +51,12 @@ title、description、parent、outgoing dependency は Entity の plan declarati
 
 ## ドキュメント
 
-| ファイル | 内容 |
-| --- | --- |
-| [docs/cli.md](docs/cli.md) | CLI の操作意味と設計意図を記録する日本語の開発者向け文書 |
-| [docs/help.md](docs/help.md) | 状態モデルと基本的な操作を説明する英語の利用マニュアル |
-| [docs/axes.md](docs/axes.md) | 状態モデルの軸。**なぜこの設計なのか**の記録。決着した論点が 24 件 |
-| [docs/declaration-file.md](docs/declaration-file.md) | export / import が扱う strict YAML の形式契約 |
-| [docs/information-model.md](docs/information-model.md) | plan declaration、Revision、Note、状態、履歴の規範契約 |
-| [docs/data-model.md](docs/data-model.md) | 永続化とスキーマ。SQLite 単体、git 管理外 |
-| [docs/codex.md](docs/codex.md) | Codex の linked worktree から共有 DB を更新するための sandbox 設定 |
-| [docs/dry-run.md](docs/dry-run.md) | 運用シナリオを通した検証 |
-| [docs/implementation.md](docs/implementation.md) | 実装方針と最小スコープ |
-| [spec/axon.qnt](spec/axon.qnt) | Quint による形式仕様。A / B / C / D の思想的コアだけを状態機械として検査する |
-| [spec/group_plan.qnt](spec/group_plan.qnt) | 明示的な計画 group の拡張仕様。Entity、包含、状態遷移、導出値をコアと分けて検査する |
-| [spec/information_model.qnt](spec/information_model.qnt) | 情報分類、declaration 固定、Revision、Note の変更範囲を検査する |
+[ドキュメントの入口](docs/README.md) から、目的に合う文書を選べる。
 
-設計の議論では、Quint のシミュレーションで考慮漏れが 3 件見つかっている (`orphaned` が推移しない問題、`blocking cause` がグループ依存を辿らない問題、Ended group 自身を親変更できる問題)。いずれも議論だけでは見落としていた。
+- 使う: [利用ガイド](docs/guide/usage.md)
+- 仕様を確かめる: [状態モデル](docs/reference/state-model.md)、[情報モデル](docs/reference/information-model.md)、[CLI](docs/reference/cli.md)、[宣言ファイル](docs/reference/declaration-file.md)
+- 開発する: [アーキテクチャ](docs/development/architecture.md)、[検証方針](docs/development/verification.md)
+- 設計理由を調べる: [設計判断](docs/design/decisions.md)
 
 ## 名前
 

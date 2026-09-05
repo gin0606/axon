@@ -1,4 +1,4 @@
-// docs/axes.md §6 で確定した、明示的な計画 group の拡張モデル。
+// docs/reference/state-model.md で確定した、明示的な計画 group の拡張モデル。
 // ID 文字列、文面、永続化、履歴、claim、CLI 表示はモデルの対象外とする。
 // コア module を拡張せず、A / B / C の型をこの model 内で再掲する。
 module group_plan {

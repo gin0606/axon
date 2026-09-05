@@ -1,4 +1,4 @@
-// docs/axes.md で整理した、axon の思想的なコアとなる状態モデル。
+// docs/reference/state-model.md で整理した、axon の思想的なコアとなる状態モデル。
 // CLI・永続化・再試行などの実装契約は Rust のテストか一時的なモデルで扱う。
 module axon {
   type Progress = NotStarted | InProgress | Ended

@@ -1,4 +1,4 @@
-// docs/information-model.md の規範契約を検査可能にしたモデル。
+// docs/reference/information-model.md の規範契約を検査可能にしたモデル。
 //
 // 検査対象は「どの情報を誰が所有し、どの操作がどこを変えてよいか」に限る。
 // ready / blocked / orphaned / active scope などの導出規則、dependency の待ち graph の

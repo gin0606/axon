@@ -1,6 +1,10 @@
-# axon CLI
+# Using axon
 
 axon is a local-first tracker for issues and explicit plan groups. It stores one SQLite database per management root and shares a Git repository's database across all worktrees.
+
+This guide explains everyday use. For exact contracts, see the Japanese
+[state model](../reference/state-model.md), [information model](../reference/information-model.md),
+[CLI reference](../reference/cli.md), and [declaration format](../reference/declaration-file.md).
 
 ## State model
 

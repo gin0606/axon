@@ -1,6 +1,6 @@
 # 宣言ファイルの契約
 
-この文書は、`axon export` と `axon import prepare/check/apply` が扱う plan 宣言ファイルの形式契約を定める。状態モデルの意味は [axes.md](axes.md) に従い、この形式から新しい状態、関係、永続的な plan entity は導入しない。
+この文書は、`axon export` と `axon import prepare/check/apply` が扱う plan 宣言ファイルの形式契約を定める。状態モデルの意味は [状態モデル](state-model.md) に従い、この形式から新しい状態、関係、永続的な plan entity は導入しない。
 
 宣言ファイルは DB の全量 dump ではない。`issues` と `groups` に列挙した Entity だけを編集対象にし、それ以外の Entity は変更しない。編集対象については title、description、親、outgoing dependency を完全に宣言する。ファイルから Entity 自体を消しても、その Entity の削除、不採用化、所属解除を意味しない。
 

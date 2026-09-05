@@ -6,13 +6,14 @@ Axon 操作には、個人用協業方針として [`axon:conventions`](plugins/
 
 ## 作業時の参照先
 
-変更対象に関係する設計判断と契約を確認する。設計変更とモデル検証は `docs/axes.md` の「5. Quint models と検査」にある方針に従う。
+変更対象に関係する設計判断と契約を確認する。全体の入口は [docs/README.md](docs/README.md)。設計変更とモデル検証は [検証方針](docs/development/verification.md) に従う。
 
-- 状態の意味、設計理由、モデルの保守・検証方針: [docs/axes.md](docs/axes.md)
-- 情報分類と操作範囲: [docs/information-model.md](docs/information-model.md)
-- 永続化と状態更新: [docs/data-model.md](docs/data-model.md)
-- 型境界と実装方針: [docs/implementation.md](docs/implementation.md)
-- CLI の仕様: [docs/cli.md](docs/cli.md)
+- 状態の意味、関係、導出値: [状態モデル](docs/reference/state-model.md)
+- 情報分類と操作範囲: [情報モデル](docs/reference/information-model.md)
+- 永続化、状態更新、型境界: [アーキテクチャ](docs/development/architecture.md)
+- CLI の仕様: [CLI 契約](docs/reference/cli.md)
+- 宣言ファイルの形式と適用: [宣言ファイル](docs/reference/declaration-file.md)
+- 設計理由と代替案: [設計判断](docs/design/decisions.md)
 
 現在の件数やタスク状態など、確認元から取得できる現況を継続的な説明としてドキュメントに転記しない。調査・検証結果を残す場合は、時点と条件を明記する。
 
