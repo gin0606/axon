@@ -232,15 +232,11 @@ fn wait_reasons(
     decoration: OutputDecoration,
 ) -> derived::Result<Vec<String>> {
     let mut reasons = Vec::new();
-    if matches!(entity.progress, Progress::Ended) {
+    if matches!(entity.progress, Progress::Ended)
+        && !(entity.kind == EntityKind::Group && entity.disposition == Disposition::Rejected)
+    {
         if entity.kind == EntityKind::Group {
             view.is_surfaced(entity)?;
-            if entity.disposition == Disposition::Rejected {
-                reasons.push(decoration.paint(
-                    OUTPUT_MUTED,
-                    "Rejected Group: descendant scope is inactive; saved states and claims are unchanged.",
-                ));
-            }
         }
         return Ok(reasons);
     }

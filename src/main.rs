@@ -212,7 +212,7 @@ enum Command {
     },
     /// Summarize plans, saved claims, candidates, and waits
     #[command(
-        long_about = "Summarize root plans and ungrouped Issues whose root is non-terminal or whose subtree has saved claims. --group includes the specified Group and every descendant, even when terminal. Each item combines its candidates, saved claim, and waits; empty sections are omitted. Candidate sets match ready and triage; saved claims do not imply agent activity. Ended and Rejected Groups omit completion and descendant-gate prompts. Use show <ID> for complete details and terminal Group structure."
+        long_about = "Summarize root plans and ungrouped Issues whose root is non-terminal or whose subtree has saved claims. --group includes the specified Group and every descendant, even when terminal. Each item combines its candidates, saved claim, and waits; empty sections are omitted. Candidate sets match ready and triage; saved claims do not imply agent activity. Ended and Rejected Groups omit completion and descendant-gate prompts. Rejected Groups retain their own stored dependency and resurface-condition waits. Use show <ID> for complete details and terminal Group structure."
     )]
     Status {
         /// Group ID or unique ID suffix; include its complete descendant scope

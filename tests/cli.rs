@@ -1621,19 +1621,41 @@ fn ended_plan_summaries_preserve_command_failure_and_rejected_claim_context() {
         &outer,
     ]));
     let child = created_id(&repo.axon(&["plan", "rejected running child", "--parent", &root]));
+    let unresolved = repo.plan("unresolved root prerequisite");
+    let rejected = repo.plan("rejected root prerequisite");
     assert_success(&repo.axon(&["start", &root]));
     assert_success(&repo.axon(&["start", &child]));
     assert_success(&repo.axon(&["decide", "reject", &child]));
+    repo.add_dependency(&root, &unresolved);
+    repo.add_dependency(&root, &rejected);
+    assert_success(&repo.axon(&["decide", "reject", &rejected]));
+    assert_success(&repo.axon(&["when", "manual", &root]));
     assert_success(&repo.axon(&["done", &root]));
     assert_success(&repo.axon(&["decide", "reject", &root]));
     let default_status = stdout(&repo.axon(&["status"]));
     assert!(default_status.contains(&root));
     assert!(default_status.contains(&child));
-    let status = stdout(&repo.axon(&["status", "--group", &root]));
-    assert!(status.contains("Saved claims: 1"));
-    assert!(status.contains("Active scope: no"));
-    assert!(status.contains("Rejected Group: descendant scope is inactive"));
-    assert!(!status.contains("Descendant gate closed:"));
+    for (status, saved_claims, completion_prompts) in [
+        (default_status, 2, 1),
+        (stdout(&repo.axon(&["status", "--group", &root])), 1, 0),
+    ] {
+        assert!(status.contains(&format!("Saved claims: {saved_claims}")));
+        assert!(status.contains("Active scope: no"));
+        assert!(status.contains("Rejected Group: descendant scope is inactive"));
+        assert!(status.contains(&format!(
+            "Unresolved dependency: {unresolved}  unresolved root prerequisite"
+        )));
+        assert!(status.contains(&format!(
+            "Rejected prerequisite (Orphaned): {rejected}  rejected root prerequisite"
+        )));
+        assert!(status.contains("Resurface condition not satisfied: Manual"));
+        assert_eq!(status.matches("Can complete:").count(), completion_prompts);
+        assert!(!status.contains("Descendant gate closed:"), "{status}");
+    }
+    let root_show = stdout(&repo.axon(&["show", &root]));
+    assert!(root_show.contains(&format!("Needs: {unresolved}")));
+    assert!(root_show.contains(&format!("Needs: {rejected}")));
+    assert!(root_show.contains("Resurface condition: Manual"));
     for selected in [&outer, &root, &child] {
         let show = stdout(&repo.axon(&["show", selected]));
         assert!(

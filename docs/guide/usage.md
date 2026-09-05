@@ -189,4 +189,4 @@ The script owns timeouts and caching; Axon waits if it does not finish. See the
 environment, diagnostics, and evaluation sharing, and the
 [state model](../reference/state-model.md#resurface-condition) for resurfacing and Group behavior.
 
-status は所属なし Issue を一つの一覧にまとめ、各項目の候補・claim・待ちを近くに表示する。空セクションは省くが、冒頭の件数はゼロでも確認できる。終了済み計画の構造上の gate や完了不可は show の Details で確認する。Rejected root Group は subtree に保存済み claim がある場合だけ通常表示に残り、その場合は配下の未終了項目と inactive 理由も表示される。
+status は所属なし Issue を一つの一覧にまとめ、各項目の候補・claim・待ちを近くに表示する。空セクションは省くが、冒頭の件数はゼロでも確認できる。Ended または Rejected の Group は完了可否と descendant gate を省き、Rejected Group は自身の保存 dependency と Resurface condition を表示する。Rejected root Group は subtree に保存済み claim がある場合だけ通常表示に残り、その場合は配下の未終了項目と inactive 理由も表示される。
