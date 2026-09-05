@@ -358,7 +358,7 @@ fn export_rejects_stored_titles_outside_the_declaration_contract() {
 }
 
 #[test]
-fn sqlite_failure_rolls_back_every_imported_entity() {
+fn unknown_trigger_prevents_import_before_any_entity_is_written() {
     let repo = TestRepo::new();
     repo.init("test");
     let path = plan_path(&repo, "rollback.yml");
@@ -372,7 +372,8 @@ fn sqlite_failure_rolls_back_every_imported_entity() {
 
     let apply = repo.axon(&["import", "apply", path.to_str().unwrap()]);
     assert_failure(&apply);
-    assert!(stderr(&apply).contains("injected import failure"));
+    assert!(stderr(&apply).contains("unknown structure"));
+    repo.execute_batch("DROP TRIGGER reject_import");
     let list = repo.axon(&["list"]);
     assert_success(&list);
     assert!(stdout(&list).is_empty());

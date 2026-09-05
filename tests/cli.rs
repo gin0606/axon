@@ -1019,7 +1019,7 @@ fn schema_mismatch_explains_recovery_without_changing_the_database() {
         let diagnostic = stderr(&output);
         assert!(diagnostic.contains(&format!("unsupported axon schema version {version}")));
         assert!(diagnostic.contains(&format!("supports DB schema {version}")));
-        assert!(diagnostic.contains("no migration command"));
+        assert!(diagnostic.contains("Migration was not applied"));
         assert!(diagnostic.contains("init cannot upgrade"));
         assert!(diagnostic.contains("axon docs"));
         assert_eq!(fs::read(&path).unwrap(), before);

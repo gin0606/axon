@@ -1,4 +1,3 @@
-#[allow(dead_code)]
 pub mod migration;
 
 use crate::derived::{Evaluation, EvaluationError, View};
@@ -12,6 +11,8 @@ use std::rc::Rc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
+    #[error(transparent)]
+    Migration(#[from] migration::Failure),
     #[error("{0}")]
     Evaluation(#[from] EvaluationError),
     #[error("SQLite: {0}")]
@@ -523,13 +524,15 @@ impl Store {
         Ok((path, prefix))
     }
 
-    pub fn open() -> Result<Self> {
+    pub fn open(report: impl FnOnce(&migration::Outcome)) -> Result<Self> {
         let root = management_root(ResolveFor::Open)?;
         let path = database_path(&root);
         if !path.exists() {
             return Err(DbError::NotInitialized);
         }
-        let mut store = Self::from_conn(Connection::open(path)?)?;
+        let (conn, outcome) = migration::open(&path)?;
+        report(&outcome);
+        let mut store = Self::from_conn(conn)?;
         let output = Command::new("git")
             .args(["rev-parse", "--show-toplevel"])
             .output();
@@ -2080,6 +2083,30 @@ mod tests {
             actor: "tester".to_string(),
             reason: Some("reason".to_string()),
         }
+    }
+
+    #[test]
+    fn sqlite_failure_rolls_back_every_imported_entity() {
+        let mut store = Store::in_memory("test").unwrap();
+        store.conn.execute_batch("CREATE TRIGGER reject_import BEFORE INSERT ON entities WHEN NEW.title = 'second' BEGIN SELECT RAISE(ABORT, 'injected import failure'); END;").unwrap();
+        let result = store.transactional_import(|mut desired| {
+            desired.entities = vec![
+                entity("first", EntityKind::Issue, None),
+                entity("second", EntityKind::Issue, None),
+            ];
+            Ok::<_, DbError>(((), desired))
+        });
+        assert!(
+            matches!(result, Err(DbError::Sqlite(ref error)) if error.to_string().contains("injected import failure"))
+        );
+        assert!(store.all().unwrap().is_empty());
+        let revisions: i64 = store
+            .conn
+            .query_row("SELECT count(*) FROM declaration_revisions", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(revisions, 0);
     }
 
     #[test]

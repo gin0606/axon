@@ -108,11 +108,13 @@ Revision reads use one database snapshot, and optional descriptions label `prese
 
 axon stores `.axon/axon.db` at the management root. In Git, the management root is the parent of the common Git directory, so linked worktrees share the database. Outside Git, commands search ancestors for the nearest database.
 
-The executable opens only the schema version it implements. It does not rewrite an older database during an ordinary command; an unsupported version fails before Entity data is read or changed.
+Ordinary DB commands automatically migrate known v9 and v10 databases to v11, preserving every stored table, including history, Notes, Revisions, claims, and metadata. Read commands such as `list`, `show`, `export`, and `import check` also migrate on first open and need write permission. `import prepare` also opens and can migrate the DB. Help, docs, version, and completion do not open the DB. `init` only creates a new database; it never resets or upgrades an existing one.
 
-For a schema mismatch, use a build that supports the database version reported in the error. This build has no migration command, and `init` cannot upgrade an existing database. `export` also requires a compatible build and is a plan declaration, not a complete database backup. `--version` identifies the executable release, not its supported database schema.
+Before migration, axon saves a consistent SQLite backup under `.axon/migration-backups` while excluding other writers. It never overwrites or automatically deletes backups. Successful migration prints the old/new versions and backup path on stderr, then continues the original command. Current databases produce no migration notice or new backup. A failure in the original command does not undo the committed migration.
 
-Preserve the existing database. Before manual recovery, stop all writers, including those in linked worktrees, and preserve the `.axon` directory with any SQLite journal/WAL files. Deleting the database or changing `user_version` does not migrate its contents. `axon docs` remains available without opening the database and includes this recovery guidance.
+Versions below v9, future versions, and unknown or corrupt schemas are rejected without migration. Future versions require a newer axon build supporting that schema. `--version` identifies the executable release, not its supported database schema. On failure, inspect the reported DB path, stage, cause, backup path and migration application state. The original operation did not run. Check write permissions, disk space, or other writers (including linked worktrees) as appropriate. A failed backup may be incomplete. If application is unknown, preserve and inspect the DB and backup before retrying.
+
+Before recovery, stop all writers and preserve the `.axon` directory with any SQLite journal/WAL files. Deleting the database or changing `user_version` does not migrate its contents. `export` requires a compatible build and is a plan declaration, not a complete database backup. `axon docs` remains available without opening the database.
 
 Every Issue and Group ID uses `<prefix>-<random six characters>`. The prefix comes from `axon init`; kind is not encoded in the ID. A full ID or a unique suffix may be used wherever an Entity ID is accepted. Group slugs do not exist.
 

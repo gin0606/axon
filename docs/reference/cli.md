@@ -184,3 +184,11 @@ help、一覧、詳細、成功確認は stdout、エラーは stderr に出す�
 `export` と completion は生成内容そのものを標準出力へ書き、人向けの装飾を加えない。
 
 Git 配下では common Git directory の親を管理 root とし、全 worktree で `.axon/axon.db` を共有する。Git 外ではカレントから祖先へ最も近い DB を探す。Issue と Group は同じ `<prefix>-<ランダム 6 文字>` namespace を使い、完全 ID または一意な suffix で解決する。
+
+## DB の自動移行
+
+DB を使う全コマンドは共通の open 境界で v9 / v10 を現行 v11 へ自動移行する。`list`、`show`、`export`、`import check` の読取用途も初回 open では書込権限が必要になる。`import prepare` も DB を参照し、自動移行対象である。`init` は新規作成専用で、既存 DB の reset や upgrade をしない。help、docs、version、completion は DB 不要である。
+
+移行成功の版と backup 先は元の処理を始める前に stderr へ通知する。stdout の record / YAML は維持し、最新 DB では通知も backup も増やさない。移行の transaction と元の操作は独立し、元の操作の失敗は成功した移行を取り消さない。
+
+backup は管理 root の `.axon/migration-backups` に移行直前の全保存情報を SQLite backup として残し、自動削除・上書きしない。失敗した backup は不完全な場合がある。診断は DB、版、処理段階、原因、backup 先（作成開始後）、適用状態を示す。未適用では元の操作を実行しない。適用済みなら移行は保持され、結果不明なら再実行前に DB と backup を保全・確認する。v9 未満・未来版・未知構造を変更せず拒否し、未来版には対応する新しい axon を案内する。権限、容量、他 writer の lock は表示した実 path を起点に調べる。

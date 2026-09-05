@@ -107,7 +107,7 @@ actor は一覧と調査の手掛かりであり、排他制御や `release` の
 
 ## schema 切り替えの境界
 
-移行基盤 `db::migration::open` は移行済み・移行不要と、対象 DB、移行前後の版、backup 先を返す。失敗には未適用・適用済み・結果不明の区別を持たせる。通常 CLI への接続はこの境界で行う。
+移行基盤 `db::migration::open` は移行済み・移行不要と、対象 DB、移行前後の版、backup 先を返す。失敗には未適用・適用済み・結果不明の区別を持たせる。`Store::open` がこの境界を使い、CLI は成功 callback で stderr へ移行結果を通知してから元の操作を続ける。元操作の transaction は移行とは独立している。
 
 旧版は `BEGIN IMMEDIATE` 取得後に版と既知 DDL を再確認し、整合性を検査する。排他取得後に初めて開く別の read connection から SQLite backup API で `.axon/migration-backups` へ保存する。backup は新規ファイルとして排他的に作成し、整合性検査とファイル・directory の同期後に schema 変更を始める。途中の失敗で残った backup も上書き・自動削除しない。
 

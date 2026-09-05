@@ -38,10 +38,11 @@ pub enum ApplicationState {
 
 #[derive(Debug, thiserror::Error)]
 #[error(
-    "schema migration for {database} (version {from:?} -> {to}, applied: {applied:?}, backup: {backup:?}): {source}"
+    "schema migration for {database} (stage: {stage}, version {from:?} -> {to}, applied: {applied:?}, backup: {backup:?}): {source}"
 )]
 pub struct Failure {
     pub database: PathBuf,
+    pub stage: &'static str,
     pub from: Option<i64>,
     pub to: i64,
     pub backup: Option<PathBuf>,
@@ -236,6 +237,7 @@ fn open_with_hook(
 ) -> Result<(Connection, Outcome), Failure> {
     let mut failure = Failure {
         database: database.to_owned(),
+        stage: "opening database",
         from: None,
         to: SCHEMA_VERSION,
         backup: None,
@@ -249,6 +251,7 @@ fn open_with_hook(
         let conn = Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         configure(&conn)?;
         // End the initial read snapshot before waiting for the writer lock.
+        failure.stage = "inspecting schema";
         conn.execute_batch("BEGIN")?;
         let found = version(&conn)?;
         failure.from = Some(found);
@@ -264,6 +267,7 @@ fn open_with_hook(
             ));
         }
         hook(Phase::Observed)?;
+        failure.stage = "acquiring migration lock";
         conn.execute_batch("PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE")?;
         let migration = (|| -> super::Result<Outcome> {
             let found = version(&conn)?;
@@ -276,9 +280,12 @@ fn open_with_hook(
                     version: found,
                 });
             }
+            failure.stage = "validating stored data";
             integrity(&conn)?;
+            failure.stage = "saving backup";
             backup(database, found, &mut failure.backup)?;
             hook(Phase::BackedUp)?;
+            failure.stage = "applying schema migration";
             for current in found..SCHEMA_VERSION {
                 step(&conn, current)?;
                 hook(Phase::Step)?;
@@ -302,6 +309,7 @@ fn open_with_hook(
                 return Err(error);
             }
         };
+        failure.stage = "committing migration";
         if let Err(error) = conn.execute_batch("COMMIT") {
             // A failed COMMIT can leave a transaction active, or SQLite can have
             // rolled it back. An I/O error is not evidence of either outcome.
@@ -314,6 +322,7 @@ fn open_with_hook(
         if matches!(outcome, Outcome::Migrated { .. }) {
             failure.applied = ApplicationState::Applied;
         }
+        failure.stage = "configuring connection after commit";
         configure(&conn)?;
         Ok((conn, outcome))
     })();

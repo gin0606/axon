@@ -512,13 +512,57 @@ fn main() {
     }
 }
 
+fn open_store() -> db::Result<Store> {
+    Store::open(|outcome| {
+        if let db::migration::Outcome::Migrated {
+            from, to, backup, ..
+        } = outcome
+        {
+            eprintln!(
+                "Migrated database v{from} -> v{to}; backup: {}. Migration committed; continuing command.",
+                backup.display()
+            );
+        }
+    })
+}
+
+fn migration_guidance(failure: &db::migration::Failure) -> String {
+    use db::migration::ApplicationState;
+    let state = match failure.applied {
+        ApplicationState::NotApplied => {
+            "Migration was not applied; the requested operation did not run."
+        }
+        ApplicationState::Applied => {
+            "Migration was committed; the requested operation did not run. The migration has not been rolled back."
+        }
+        ApplicationState::Unknown => {
+            "Migration application is unknown; the requested operation did not run. Preserve and inspect the database and backup before any retry."
+        }
+    };
+    let cause = match failure.source.as_ref() {
+        db::DbError::UnsupportedSchema { found, expected } if found > expected =>
+            format!("Use a newer axon build that supports DB schema {found}; automatic downgrade is not supported."),
+        db::DbError::UnsupportedSchema { found, .. } =>
+            format!("Automatic migration requires schema v9 or later. Use a build that supports DB schema {found} to inspect this older database."),
+        db::DbError::InvalidSchema(_) => "Preserve the database; its schema or stored data did not pass validation. Inspect the reported structure/integrity error with SQLite tooling.".to_string(),
+        db::DbError::Sqlite(rusqlite::Error::SqliteFailure(error, _))
+            if matches!(error.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) =>
+            "Check for other writers, including linked worktrees, holding the database lock.".to_string(),
+        _ => "Check the reported cause and stage: file/directory write permissions, available disk space, and SQLite database integrity at the displayed paths.".to_string(),
+    };
+    format!(
+        "{state} {cause} Keep any backup (a failed backup may be incomplete). init cannot upgrade an existing DB; do not delete it or change user_version. See `axon docs` for storage recovery guidance."
+    )
+}
+
 fn error_guidance(error: &(dyn std::error::Error + 'static)) -> Option<String> {
     use db::DbError;
 
     if let Some(error) = error.downcast_ref::<DbError>() {
         return Some(match error {
+            DbError::Migration(failure) => migration_guidance(failure),
             DbError::UnsupportedSchema { found, .. } => format!(
-                "Use an axon build that supports DB schema {found}. This build has no migration command; init cannot upgrade an existing DB. Preserve the database and do not change user_version to bypass this check. See `axon docs` for storage recovery guidance."
+                "Use an axon build that supports DB schema {found}. Automatic migration supports v9 and later; init cannot upgrade an existing DB. Preserve the database and do not change user_version to bypass this check. See `axon docs` for storage recovery guidance."
             ),
             DbError::CannotStart { id, .. } | DbError::CannotProgress { id, .. } => format!(
                 "Inspect `axon show {id}` for state, relationships, and Group completion constraints. `axon docs` explains the operation prerequisites."
@@ -615,13 +659,13 @@ fn cmd_export(
     groups: Vec<String>,
     recursive: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = Store::open()?;
+    let mut store = open_store()?;
     write_plain_output(&declaration::export(&mut store, &ids, &groups, recursive)?)?;
     Ok(())
 }
 
 fn cmd_import(command: ImportCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = Store::open()?;
+    let mut store = open_store()?;
     let decoration = current_output_decoration();
     match command {
         ImportCmd::Prepare { file } => {
@@ -701,7 +745,7 @@ fn cmd_create(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let title = normalize_title(&title.join(" "))?;
     let description = read_description(message, file)?.and_then(normalize_description);
-    let mut store = Store::open()?;
+    let mut store = open_store()?;
     let parent = parent
         .as_deref()
         .map(|value| store.resolve_id(value))
@@ -765,7 +809,7 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             file,
         ),
         GroupCmd::Set { id, parent } => {
-            let mut store = Store::open()?;
+            let mut store = open_store()?;
             let id = store.resolve_id(&id)?;
             let parent = store.resolve_id(&parent)?;
             store.apply(&id, Change::SetParent(Some(parent.clone())), &ctx(None))?;
@@ -780,7 +824,7 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         GroupCmd::Unset { id } => {
-            let mut store = Store::open()?;
+            let mut store = open_store()?;
             let id = store.resolve_id(&id)?;
             store.apply(&id, Change::SetParent(None), &ctx(None))?;
             write_confirmation(&id, "Parent: (none)".to_string(), Style::new())?;
@@ -790,7 +834,7 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn load() -> Result<(Store, View), Box<dyn std::error::Error>> {
-    let mut store = Store::open()?;
+    let mut store = open_store()?;
     let view = store.view()?;
     Ok((store, view))
 }
@@ -925,7 +969,7 @@ fn claim_details(claim: &Claim, decoration: OutputDecoration) -> String {
 }
 
 fn cmd_start(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = Store::open()?;
+    let mut store = open_store()?;
     let id = store.resolve_id(raw)?;
     let claim = Claim {
         actor: actor::actor(),
@@ -948,7 +992,7 @@ fn cmd_start(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_done(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = Store::open()?;
+    let mut store = open_store()?;
     let id = store.resolve_id(raw)?;
     store.apply(&id, Change::Done, &ctx(None))?;
     write_confirmation(&id, "Ended".to_string(), OUTPUT_MUTED)?;
@@ -956,7 +1000,7 @@ fn cmd_done(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_release(raw: &str, reason: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = Store::open()?;
+    let mut store = open_store()?;
     let id = store.resolve_id(raw)?;
     store.apply(&id, Change::Release, &ctx(reason))?;
     write_confirmation(&id, "Released".to_string(), OUTPUT_ATTENTION)?;
@@ -1026,7 +1070,7 @@ fn render_entity_marks(
 }
 
 fn cmd_show(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = Store::open()?;
+    let mut store = open_store()?;
     let db::ShowSnapshot {
         id,
         view,
@@ -1484,7 +1528,7 @@ fn disposition_style(disposition: Disposition) -> Style {
 }
 
 fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = Store::open()?;
+    let mut store = open_store()?;
     let decoration = current_output_decoration();
     match command {
         NoteCmd::Add { id, message, file } => {
@@ -1543,7 +1587,7 @@ fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_revision(command: RevisionCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = Store::open()?;
+    let mut store = open_store()?;
     let decoration = current_output_decoration();
     match command {
         RevisionCmd::List { id } => {
@@ -1888,7 +1932,7 @@ fn cmd_decide(command: DecideCmd) -> Result<(), Box<dyn std::error::Error>> {
         DecideCmd::Reject(args) => (args, Disposition::Rejected),
         DecideCmd::Undecide(args) => (args, Disposition::Undecided),
     };
-    let mut store = Store::open()?;
+    let mut store = open_store()?;
     let id = store.resolve_id(&args.id)?;
     store.apply(&id, Change::Decide(disposition), &ctx(args.reason))?;
     let decoration = current_output_decoration();
@@ -1907,7 +1951,7 @@ fn cmd_decide(command: DecideCmd) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = Store::open()?;
+    let mut store = open_store()?;
     match command {
         WhenCmd::Command {
             id,
@@ -1988,7 +2032,7 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_dep(command: DepCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = Store::open()?;
+    let mut store = open_store()?;
     match command {
         DepCmd::Add { id, needs } => {
             let id = store.resolve_id(&id)?;
@@ -2023,7 +2067,7 @@ fn cmd_dep(command: DepCmd) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_log(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let store = Store::open()?;
+    let store = open_store()?;
     let id = store.resolve_id(raw)?;
     let events = store.events(&id)?;
     let decoration = current_output_decoration();
@@ -2113,7 +2157,7 @@ fn cmd_write(
         return Err("nothing to write; provide --title, -m, or -F".into());
     }
 
-    let mut store = Store::open()?;
+    let mut store = open_store()?;
     let id = store.resolve_id(raw)?;
     let current = store.get(&id)?;
     let mut changed = Vec::new();
@@ -2348,7 +2392,7 @@ fn render_docs(decoration: OutputDecoration) -> String {
         decoration.paint(OUTPUT_HEADING, "axon help <COMMAND PATH>")
     )
     .unwrap();
-    writeln!(output, "\nStorage recovery\n  A schema mismatch stops this build before Entity data is read or changed.\n  Use a build supporting the DB schema shown in the error; --version identifies the\n  executable release, not its DB schema. This build provides no migration command.\n  init cannot upgrade an existing DB, and export also requires a compatible build.\n  Keep the existing DB. Before manual recovery, stop all writers (including linked\n  worktrees) and preserve the .axon directory with any SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  In Git, .axon/axon.db is at the parent of the common Git directory; outside Git,\n  axon uses the nearest ancestor containing .axon/axon.db.\n").unwrap();
+    writeln!(output, "\nStorage recovery\n  DB commands automatically migrate known v9/v10 databases to v11, including\n  read commands, export and import check. The first open needs write permission.\n  Migration saves all stored data in .axon/migration-backups before committing;\n  backups are never overwritten or deleted automatically. Success is reported on\n  stderr before the requested operation; a later command failure does not undo it.\n  Current databases create no migration notice or backup. init only creates new DBs.\n  Versions below v9, future versions, and unknown/corrupt schemas are rejected.\n  Future versions require a newer axon build supporting that schema. --version\n  identifies the executable release, not its DB schema.\n  On failure inspect the reported stage, cause, DB path and application state.\n  The requested operation did not run; an unknown migration result requires\n  inspection before retry. Failed backups may be incomplete. Check permissions,\n  disk space and other writers (including linked worktrees) for I/O or lock errors.\n  Before recovery stop all writers and preserve .axon with SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  export also requires a compatible build and is not a complete database backup.\n  In Git, .axon/axon.db is at the parent of the common Git directory; outside Git,\n  axon uses the nearest ancestor containing .axon/axon.db.\n  help, docs, version and completion do not open the DB.\n").unwrap();
     output
 }
 
@@ -2388,6 +2432,32 @@ mod tests {
             parent: None,
             created_at: now,
             updated_at: now,
+        }
+    }
+
+    #[test]
+    fn migration_failure_guidance_preserves_application_uncertainty() {
+        use db::migration::{ApplicationState, Failure};
+        for (applied, expected) in [
+            (ApplicationState::NotApplied, "Migration was not applied"),
+            (ApplicationState::Applied, "Migration was committed"),
+            (ApplicationState::Unknown, "before any retry"),
+        ] {
+            let failure = Failure {
+                database: "/fixture/.axon/axon.db".into(),
+                stage: "committing migration",
+                from: Some(9),
+                to: 11,
+                backup: Some("/fixture/.axon/migration-backups/backup.db".into()),
+                applied,
+                source: Box::new(db::DbError::Io(std::io::Error::other("injected I/O error"))),
+            };
+            let guidance = error_guidance(&db::DbError::Migration(failure)).unwrap();
+            assert!(guidance.contains(expected));
+            assert!(guidance.contains("requested operation did not run"));
+            if applied != ApplicationState::NotApplied {
+                assert!(!guidance.contains("Migration was not applied"));
+            }
         }
     }
 
