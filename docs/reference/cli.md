@@ -221,6 +221,32 @@ help、一覧、詳細、成功確認は stdout、エラーは stderr に出す�
 
 `show` を含む人向け出力は、stdout が対話 terminal なら状態の識別を補助する ANSI style を使う。非対話出力と `NO_COLOR` では同じ文字、空白、改行、順序を無装飾で出し、状態の違いを色だけでは表さない。title、description、Note本文、reasonなど利用者が保存した文字列は装飾・省略・整形しない。下流でpipeが閉じた場合は成功として扱う。
 
+装飾は保存状態の値ごとではなく、その情報が利用者の現在の操作に持つ意味で決める。
+同じ意味は一覧、詳細、履歴、状態変更確認、help、診断で同じ style を使う。
+
+| 意味 | style | 主な対象 |
+| --- | --- | --- |
+| 文書構造 | bold | section heading、record 内の index |
+| identity | cyan + bold | Entity ID |
+| 現在進行中 | cyan + bold | InProgress、Started |
+| 成立・許可・成功 | green | Accepted、Ready、valid、成功を表す確認語 |
+| 通常の待機 | yellow | Blocked、未解決 dependency、未完了 Group |
+| 利用者の注意・介入が必要 | yellow + bold | Undecided、warning、明示的な判断を待つ印 |
+| 前提喪失・失敗 | red + bold | Orphaned、Rejected prerequisite、error |
+| terminal・非 active・補助情報 | dim | Ended、Rejected、not surfaced、inactive scope、kind、label、timestamp、満足済み関係、no-op |
+| 中立 | plain | NotStarted、通常値、保存された自由記述 |
+
+色と太字は組み合わせて意味を狭める。yellowだけは他Entityや条件の状態変化を待てば進める状態、
+yellow + boldは利用者が確認・判断しなければ進まない状態を表す。redは通常の待機には使わず、現在の計画のままでは
+前提が成立しない状態または失敗に限る。Rejected自体は選択済みのterminal状態なのでdimとし、
+別Entityの前提を失わせている文脈だけredにする。diffの `+` / `-` はgreen / redという
+端末上の慣例を使うが、記号を必ず残し、状態の成功・失敗とは解釈しない。
+
+見出しとEntity-local indexはboldで構造を示し、identityを表すcyanとは分ける。背景色、固定RGB、
+blink、invert、hidden、strikethroughは端末theme、対応差、可読性への依存が大きいため使わない。
+underlineはClapの既定styleへ依存させず、Axonの見出しはboldへ統一する。利用者入力のほか、
+actor、worktree、外部command、pathも値全体を意味色で塗らない。
+
 非TTY の record 境界、先頭の識別子、標準 stream は安定した外部契約とする。
 
 `export` と completion は生成内容そのものを標準出力へ書き、人向けの装飾を加えない。

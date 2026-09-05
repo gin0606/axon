@@ -51,10 +51,15 @@ pub(super) fn render(
         .into_iter()
         .filter(|(e, _)| scope.contains(&e.id))
         .count();
+    let count_style = |count, style| if count == 0 { OUTPUT_MUTED } else { style };
     let mut output = format!(
-        "Saved claims: {claims}  Triage candidates: {}  Ready candidates: {}\n",
-        triage.len(),
-        ready.len()
+        "{} {}  {} {}  {} {}\n",
+        decoration.paint(OUTPUT_MUTED, "Saved claims:"),
+        decoration.paint(count_style(claims, OUTPUT_ACTIVE), claims),
+        decoration.paint(OUTPUT_MUTED, "Triage candidates:"),
+        decoration.paint(count_style(triage.len(), OUTPUT_DECISION), triage.len()),
+        decoration.paint(OUTPUT_MUTED, "Ready candidates:"),
+        decoration.paint(count_style(ready.len(), OUTPUT_POSITIVE), ready.len()),
     );
     for root in roots.iter().filter(|e| e.kind == EntityKind::Group) {
         output.push('\n');
@@ -92,9 +97,15 @@ pub(super) fn render(
         let mut ancestors = view.ancestors(&root.id);
         ancestors.sort_by(|a, b| a.id.cmp(&b.id));
         for ancestor in ancestors {
-            let reasons = wait_reasons(view, ancestor, &scope)?;
+            let reasons = wait_reasons(view, ancestor, &scope, decoration)?;
             if !reasons.is_empty() {
-                writeln!(output, "  External ancestor scope: {}", ancestor.id).unwrap();
+                writeln!(
+                    output,
+                    "  {} {}",
+                    decoration.paint(OUTPUT_MUTED, "External ancestor scope:"),
+                    decoration.paint(OUTPUT_ID, &ancestor.id),
+                )
+                .unwrap();
                 for reason in reasons {
                     writeln!(output, "    {reason}").unwrap();
                 }
@@ -106,7 +117,12 @@ pub(super) fn render(
         .filter(|e| e.kind == EntityKind::Issue)
         .collect::<Vec<_>>();
     if !ungrouped.is_empty() {
-        output.push_str("\nUngrouped Issues\n");
+        writeln!(
+            output,
+            "\n{}",
+            decoration.paint(OUTPUT_HEADING, "Ungrouped Issues")
+        )
+        .unwrap();
         for entity in ungrouped {
             render_item(
                 &mut output,
@@ -120,9 +136,15 @@ pub(super) fn render(
             )?;
         }
     }
-    output.push_str(
-        "\nUse `axon show <ID>` for the complete subtree, description, notes, and history.\n",
-    );
+    writeln!(
+        output,
+        "\n{}",
+        decoration.paint(
+            OUTPUT_MUTED,
+            "Use `axon show <ID>` for the complete subtree, description, notes, and history."
+        )
+    )
+    .unwrap();
     Ok(output)
 }
 
@@ -139,42 +161,64 @@ fn render_item(
 ) -> derived::Result<()> {
     write!(output, "{indent}{}", state_row(entity, decoration)).unwrap();
     if ready.iter().any(|e| e.id == entity.id) {
-        writeln!(output, "{indent}  Ready candidate").unwrap();
-    }
-    if let Some((_, reason)) = triage.iter().find(|(e, _)| e.id == entity.id) {
         writeln!(
             output,
-            "{indent}  Triage candidate: {}",
-            match reason {
-                TriageReason::Undecided => "Undecided",
-                TriageReason::Orphaned => "Orphaned",
-            }
+            "{indent}  {}",
+            decoration.paint(OUTPUT_POSITIVE, "Ready candidate")
+        )
+        .unwrap();
+    }
+    if let Some((_, reason)) = triage.iter().find(|(e, _)| e.id == entity.id) {
+        let (reason, style) = match reason {
+            TriageReason::Undecided => ("Undecided", OUTPUT_DECISION),
+            TriageReason::Orphaned => ("Orphaned", OUTPUT_FAILURE),
+        };
+        writeln!(
+            output,
+            "{indent}  {} {}",
+            decoration.paint(OUTPUT_MUTED, "Triage candidate:"),
+            decoration.paint(style, reason),
         )
         .unwrap();
     }
     if entity.kind == EntityKind::Group && !matches!(entity.progress, Progress::Ended) {
+        let can_complete = view.can_complete_group(&entity.id);
         writeln!(
             output,
-            "{indent}  Can complete: {}",
-            yes_no(view.can_complete_group(&entity.id))
+            "{indent}  {} {}",
+            decoration.paint(OUTPUT_MUTED, "Can complete:"),
+            decoration.paint(
+                if can_complete {
+                    OUTPUT_POSITIVE
+                } else {
+                    OUTPUT_WAITING
+                },
+                yes_no(can_complete)
+            ),
         )
         .unwrap();
     }
     if let Some(claim) = entity.progress.claim() {
         writeln!(
             output,
-            "{indent}  Claim: {}",
+            "{indent}  {} {}",
+            decoration.paint(OUTPUT_MUTED, "Claim:"),
             claim_details(claim, decoration)
         )
         .unwrap();
+        let active = view.within_active_scope(&entity.id)?;
         writeln!(
             output,
-            "{indent}  Active scope: {}",
-            yes_no(view.within_active_scope(&entity.id)?)
+            "{indent}  {} {}",
+            decoration.paint(OUTPUT_MUTED, "Active scope:"),
+            decoration.paint(
+                if active { OUTPUT_ACTIVE } else { OUTPUT_MUTED },
+                yes_no(active)
+            ),
         )
         .unwrap();
     }
-    for reason in wait_reasons(view, entity, scope)? {
+    for reason in wait_reasons(view, entity, scope, decoration)? {
         writeln!(output, "{indent}  {reason}").unwrap();
     }
     Ok(())
@@ -184,22 +228,30 @@ fn wait_reasons(
     view: &View,
     entity: &Entity,
     scope: &HashSet<EntityId>,
+    decoration: OutputDecoration,
 ) -> derived::Result<Vec<String>> {
     let mut reasons = Vec::new();
     if matches!(entity.progress, Progress::Ended) {
         if entity.kind == EntityKind::Group {
             view.is_surfaced(entity)?;
             if entity.disposition == Disposition::Rejected {
-                reasons.push("Rejected Group: descendant scope is inactive; saved states and claims are unchanged.".to_string());
+                reasons.push(decoration.paint(
+                    OUTPUT_MUTED,
+                    "Rejected Group: descendant scope is inactive; saved states and claims are unchanged.",
+                ));
             }
         }
         return Ok(reasons);
     }
     if has_local_descendant_gate(view, entity)? {
         reasons.push(format!(
-            "Descendant gate closed: Progress={}, Disposition={}",
-            entity.progress.label(),
-            entity.disposition.label()
+            "{} Progress={}, Disposition={}",
+            decoration.paint(OUTPUT_WAITING, "Descendant gate closed:"),
+            decoration.paint(progress_style(&entity.progress), entity.progress.label()),
+            decoration.paint(
+                disposition_style(entity.disposition),
+                entity.disposition.label()
+            )
         ));
     }
     if !entity.is_terminal()
@@ -207,14 +259,17 @@ fn wait_reasons(
         || entity.kind == EntityKind::Group
     {
         if !view.is_surfaced(entity)? {
-            let mut condition = format!(
-                "Resurface condition not satisfied: {}",
-                entity.resurface_condition.label()
+            let mut condition = decoration.paint(
+                OUTPUT_MUTED,
+                format!(
+                    "Resurface condition not satisfied: {}",
+                    entity.resurface_condition.label()
+                ),
             );
             if let ResurfaceCondition::AfterEntity(id) = &entity.resurface_condition
                 && let Some(target) = view.get(id)
             {
-                condition.push_str(&format!("; {}", reference(target, scope)));
+                condition.push_str(&format!("; {}", reference(target, scope, decoration)));
             }
             reasons.push(condition);
         }
@@ -223,13 +278,15 @@ fn wait_reasons(
         for target in targets {
             if target.disposition == Disposition::Rejected {
                 reasons.push(format!(
-                    "Rejected prerequisite (Orphaned): {}",
-                    reference(target, scope)
+                    "{} {}",
+                    decoration.paint(OUTPUT_FAILURE, "Rejected prerequisite (Orphaned):"),
+                    reference(target, scope, decoration)
                 ));
             } else if !target.is_terminal() {
                 reasons.push(format!(
-                    "Unresolved dependency: {}",
-                    reference(target, scope)
+                    "{} {}",
+                    decoration.paint(OUTPUT_WAITING, "Unresolved dependency:"),
+                    reference(target, scope, decoration)
                 ));
             }
         }
@@ -237,11 +294,17 @@ fn wait_reasons(
     Ok(reasons)
 }
 
-fn parent_field(entity: &Entity) -> String {
+fn parent_field(entity: &Entity, decoration: OutputDecoration) -> String {
     entity
         .parent
         .as_ref()
-        .map(|id| format!("  Parent: {id}"))
+        .map(|id| {
+            format!(
+                "  {} {}",
+                decoration.paint(OUTPUT_MUTED, "Parent:"),
+                decoration.paint(OUTPUT_ID, id)
+            )
+        })
         .unwrap_or_default()
 }
 
@@ -249,21 +312,24 @@ fn state_row(entity: &Entity, decoration: OutputDecoration) -> String {
     format!(
         "{}  [{}/{}]{}\n",
         render_entity_identity(entity, decoration),
-        entity.progress.label(),
-        entity.disposition.label(),
-        parent_field(entity)
+        decoration.paint(progress_style(&entity.progress), entity.progress.label()),
+        decoration.paint(
+            disposition_style(entity.disposition),
+            entity.disposition.label()
+        ),
+        parent_field(entity, decoration)
     )
 }
 
-fn reference(entity: &Entity, scope: &HashSet<EntityId>) -> String {
+fn reference(entity: &Entity, scope: &HashSet<EntityId>, decoration: OutputDecoration) -> String {
     format!(
         "{}  {}{}",
-        entity.id,
+        decoration.paint(OUTPUT_ID, &entity.id),
         entity.title,
         if scope.contains(&entity.id) {
-            ""
+            String::new()
         } else {
-            "  External"
+            format!("  {}", decoration.paint(OUTPUT_MUTED, "External"))
         }
     )
 }

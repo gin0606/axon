@@ -51,13 +51,15 @@ const OUTPUT_ID: Style = Style::new()
 const OUTPUT_ACTIVE: Style = Style::new()
     .bold()
     .fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
-const OUTPUT_ACCEPTED: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
-const OUTPUT_ATTENTION: Style = Style::new()
+const OUTPUT_POSITIVE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
+const OUTPUT_WAITING: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
+const OUTPUT_DECISION: Style = Style::new()
     .bold()
     .fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
-const OUTPUT_DANGER: Style = Style::new()
+const OUTPUT_FAILURE: Style = Style::new()
     .bold()
     .fg_color(Some(Color::Ansi(AnsiColor::Red)));
+const OUTPUT_INDEX: Style = Style::new().bold();
 const OUTPUT_MUTED: Style = Style::new().dimmed();
 
 #[derive(Clone, Copy)]
@@ -88,6 +90,15 @@ fn current_output_decoration() -> OutputDecoration {
 
     output_decoration(
         std::io::stdout().is_terminal(),
+        std::env::var_os("NO_COLOR").is_some(),
+    )
+}
+
+fn current_error_decoration() -> OutputDecoration {
+    use std::io::IsTerminal;
+
+    output_decoration(
+        std::io::stderr().is_terminal(),
         std::env::var_os("NO_COLOR").is_some(),
     )
 }
@@ -527,15 +538,17 @@ fn main() {
             if error.kind() == std::io::ErrorKind::BrokenPipe {
                 return;
             }
-            eprintln!("Error: {error}");
+            let decoration = current_error_decoration();
+            eprintln!("{} {error}", decoration.paint(OUTPUT_FAILURE, "Error:"));
             std::process::exit(1);
         }
         return;
     }
     if let Err(error) = run(args) {
-        eprintln!("Error: {error}");
+        let decoration = current_error_decoration();
+        eprintln!("{} {error}", decoration.paint(OUTPUT_FAILURE, "Error:"));
         if let Some(guidance) = error_guidance(error.as_ref()) {
-            eprintln!("Help: {guidance}");
+            eprintln!("{} {guidance}", decoration.paint(OUTPUT_HEADING, "Help:"));
         }
         std::process::exit(1);
     }
@@ -547,8 +560,10 @@ fn open_store() -> db::Result<Store> {
             from, to, backup, ..
         } = outcome
         {
+            let decoration = current_error_decoration();
             eprintln!(
-                "Migrated database v{from} -> v{to}; backup: {}. Migration committed; continuing command.",
+                "{} database v{from} -> v{to}; backup: {}. Migration committed; continuing command.",
+                decoration.paint(OUTPUT_POSITIVE, "Migrated"),
                 backup.display()
             );
         }
@@ -703,7 +718,7 @@ fn cmd_import(command: ImportCmd) -> Result<(), Box<dyn std::error::Error>> {
             write_output(
                 &format!(
                     "{}  {}\n",
-                    decoration.paint(OUTPUT_ACCEPTED, "Prepared"),
+                    decoration.paint(OUTPUT_POSITIVE, "Prepared"),
                     file.display()
                 ),
                 decoration,
@@ -720,7 +735,7 @@ fn cmd_import(command: ImportCmd) -> Result<(), Box<dyn std::error::Error>> {
                 decorate_import_report(&declaration::apply(&mut store, &file)?, decoration);
             output.push_str(&format!(
                 "{}  {}\n",
-                decoration.paint(OUTPUT_ACCEPTED, "Applied"),
+                decoration.paint(OUTPUT_POSITIVE, "Applied"),
                 file.display()
             ));
             write_output(&output, decoration)?;
@@ -737,12 +752,12 @@ fn decorate_import_report(report: &str, decoration: OutputDecoration) -> String 
                 .strip_suffix('\n')
                 .map_or((line, ""), |body| (body, "\n"));
             let decorated = match body {
-                "Plan is valid." => decoration.paint(OUTPUT_ACCEPTED, body),
+                "Plan is valid." => decoration.paint(OUTPUT_POSITIVE, body),
                 "Changes:"
                 | "Derived changes (ready, blocked, orphaned, active_scope, group_completable):" => {
                     decoration.paint(OUTPUT_HEADING, body)
                 }
-                _ if body.starts_with("Warning: ") => decoration.paint(OUTPUT_DANGER, body),
+                _ if body.starts_with("Warning: ") => decoration.paint(OUTPUT_DECISION, body),
                 _ => body.to_string(),
             };
             format!("{decorated}{newline}")
@@ -756,7 +771,7 @@ fn cmd_init(prefix: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     write_output(
         &format!(
             "{}  {}\n{}  {prefix}-xxxxxx\n",
-            decoration.paint(OUTPUT_ACCEPTED, "Initialized"),
+            decoration.paint(OUTPUT_POSITIVE, "Initialized"),
             path.display(),
             decoration.paint(OUTPUT_MUTED, "Entity ID format:"),
         ),
@@ -800,7 +815,7 @@ fn cmd_create(
         &format!(
             "{}  {}  {}  [{}]  {}\n",
             decoration.paint(OUTPUT_ID, &entity.id),
-            decoration.paint(OUTPUT_ACCEPTED, "Created"),
+            decoration.paint(OUTPUT_POSITIVE, "Created"),
             decoration.paint(OUTPUT_MUTED, kind.label()),
             decoration.paint(disposition_style(disposition), disposition.label()),
             entity.title,
@@ -933,7 +948,7 @@ fn render_triage_row(
 ) -> String {
     let fields = match reason {
         TriageReason::Undecided => {
-            vec![("Reason", decoration.paint(OUTPUT_ATTENTION, "Undecided"))]
+            vec![("Reason", decoration.paint(OUTPUT_DECISION, "Undecided"))]
         }
         TriageReason::Orphaned => {
             let rejected = view
@@ -944,7 +959,7 @@ fn render_triage_row(
                 .collect::<Vec<_>>()
                 .join(", ");
             vec![
-                ("Reason", decoration.paint(OUTPUT_DANGER, "Orphaned")),
+                ("Reason", decoration.paint(OUTPUT_FAILURE, "Orphaned")),
                 ("Rejected dependencies", rejected),
             ]
         }
@@ -1033,7 +1048,7 @@ fn cmd_release(raw: &str, reason: Option<String>) -> Result<(), Box<dyn std::err
     let mut store = open_store()?;
     let id = store.resolve_id(raw)?;
     store.apply(&id, Change::Release, &ctx(reason))?;
-    write_confirmation(&id, "Released".to_string(), OUTPUT_ATTENTION)?;
+    write_confirmation(&id, "Released".to_string(), Style::new())?;
     Ok(())
 }
 
@@ -1076,21 +1091,21 @@ fn render_entity_marks(
 ) -> derived::Result<String> {
     let mut marks = Vec::new();
     if include_ready && view.is_ready(entity)? {
-        marks.push(decoration.paint(OUTPUT_ACCEPTED, "Ready"));
+        marks.push(decoration.paint(OUTPUT_POSITIVE, "Ready"));
     }
     if view.is_orphaned(&entity.id) {
-        marks.push(decoration.paint(OUTPUT_DANGER, "Orphaned"));
+        marks.push(decoration.paint(OUTPUT_FAILURE, "Orphaned"));
     } else if view.is_blocked(&entity.id) {
-        marks.push(decoration.paint(OUTPUT_DANGER, "Blocked"));
+        marks.push(decoration.paint(OUTPUT_WAITING, "Blocked"));
     }
     if !view.is_surfaced(entity)? {
         marks.push(decoration.paint(
-            OUTPUT_ATTENTION,
+            OUTPUT_MUTED,
             format!("Not surfaced: {}", entity.resurface_condition.label()),
         ));
     }
     if let Some(reason) = inactive_scope_reason(view, &entity.id)? {
-        marks.push(decoration.paint(OUTPUT_ATTENTION, format!("Inactive: {reason}")));
+        marks.push(decoration.paint(OUTPUT_MUTED, format!("Inactive: {reason}")));
     }
     Ok(if marks.is_empty() {
         String::new()
@@ -1139,21 +1154,26 @@ fn render_show(
         entity.title,
     )];
 
-    overview.push(format!("Situation: {}", show_situation(view, entity)?));
+    overview.push(format!(
+        "{} {}",
+        decoration.paint(OUTPUT_MUTED, "Situation:"),
+        show_situation(view, entity, decoration)?,
+    ));
     if entity.kind == EntityKind::Group
         && matches!(entity.progress, Progress::Ended)
         && entity.disposition == Disposition::Rejected
     {
-        overview.push(
-            "Rejected Group: descendant scope is inactive; saved states and claims are unchanged."
-                .to_string(),
-        );
+        overview.push(decoration.paint(
+            OUTPUT_MUTED,
+            "Rejected Group: descendant scope is inactive; saved states and claims are unchanged.",
+        ));
     }
     let mut structural_details = Vec::new();
     if matches!(entity.progress, Progress::Ended) {
         structural_details.extend(show_waits(view, entity, "", decoration)?);
         if entity.kind == EntityKind::Group {
-            structural_details.push("Can complete: no (Group has ended).".to_string());
+            structural_details
+                .push(decoration.paint(OUTPUT_MUTED, "Can complete: no (Group has ended)."));
         }
     } else {
         overview.extend(show_waits(view, entity, "", decoration)?);
@@ -1163,7 +1183,15 @@ fn render_show(
             && ancestor.disposition == Disposition::Rejected
             && !matches!(entity.progress, Progress::Ended)
         {
-            overview.push(format!("Rejected ancestor scope: {}; descendant scope is inactive; saved states and claims are unchanged.", ancestor.id));
+            overview.push(format!(
+                "{} {}; {}",
+                decoration.paint(OUTPUT_MUTED, "Rejected ancestor scope:"),
+                decoration.paint(OUTPUT_ID, &ancestor.id),
+                decoration.paint(
+                    OUTPUT_MUTED,
+                    "descendant scope is inactive; saved states and claims are unchanged."
+                )
+            ));
         }
         if has_local_descendant_gate(view, ancestor)? {
             let target = if matches!(entity.progress, Progress::Ended)
@@ -1173,7 +1201,11 @@ fn render_show(
             } else {
                 &mut overview
             };
-            target.push(format!("Ancestor scope: {}", ancestor.id));
+            target.push(format!(
+                "{} {}",
+                decoration.paint(OUTPUT_MUTED, "Ancestor scope:"),
+                decoration.paint(OUTPUT_ID, &ancestor.id)
+            ));
             target.extend(show_waits(view, ancestor, "  ", decoration)?);
         }
     }
@@ -1211,7 +1243,7 @@ fn render_show(
                 "Active scope",
                 decoration.paint(
                     if inactive_reason.is_some() {
-                        OUTPUT_ATTENTION
+                        OUTPUT_MUTED
                     } else {
                         Style::new()
                     },
@@ -1221,18 +1253,18 @@ fn render_show(
             (
                 "Surfaced",
                 decoration.paint(
-                    if surfaced {
-                        Style::new()
-                    } else {
-                        OUTPUT_ATTENTION
-                    },
+                    if surfaced { Style::new() } else { OUTPUT_MUTED },
                     yes_no(surfaced),
                 ),
             ),
             (
                 "Blocked",
                 decoration.paint(
-                    if blocked { OUTPUT_DANGER } else { OUTPUT_MUTED },
+                    if blocked {
+                        OUTPUT_WAITING
+                    } else {
+                        OUTPUT_MUTED
+                    },
                     yes_no(blocked),
                 ),
             ),
@@ -1240,7 +1272,7 @@ fn render_show(
                 "Orphaned",
                 decoration.paint(
                     if orphaned {
-                        OUTPUT_DANGER
+                        OUTPUT_FAILURE
                     } else {
                         OUTPUT_MUTED
                     },
@@ -1258,7 +1290,7 @@ fn render_show(
 
     let (declaration, declaration_style) = match entity.current_revision {
         Some(revision) => (format!("fixed at Revision {revision}"), Style::new()),
-        None => ("draft".to_string(), OUTPUT_ATTENTION),
+        None => ("draft".to_string(), OUTPUT_DECISION),
     };
     let mut plan = vec![(
         "Plan declaration",
@@ -1287,32 +1319,69 @@ fn render_show(
         let summary = view.group_summary(&entity.id);
         let counts = &summary.descendants;
         let overlap = counts.ended + counts.rejected - counts.terminal;
+        let unfinished = counts.total - counts.terminal;
         let mut group = vec![
             format!(
-                "  Descendants: Ended: {}  Rejected: {}  Unfinished: {}",
-                counts.ended,
-                counts.rejected,
-                counts.total - counts.terminal
+                "  {} {}  {} {}  {} {}",
+                decoration.paint(OUTPUT_MUTED, "Descendants: Ended:"),
+                decoration.paint(OUTPUT_MUTED, counts.ended),
+                decoration.paint(OUTPUT_MUTED, "Rejected:"),
+                decoration.paint(OUTPUT_MUTED, counts.rejected),
+                decoration.paint(OUTPUT_MUTED, "Unfinished:"),
+                decoration.paint(
+                    if unfinished == 0 { OUTPUT_MUTED } else { OUTPUT_WAITING },
+                    unfinished
+                )
             ),
-            format!(
-                "  Ended and Rejected overlap: {overlap}; Unfinished excludes both (not a commitment)."
+            decoration.paint(
+                OUTPUT_MUTED,
+                format!(
+                    "  Ended and Rejected overlap: {overlap}; Unfinished excludes both (not a commitment)."
+                ),
             ),
         ];
         if !matches!(entity.progress, Progress::Ended) {
+            let can_complete = view.can_complete_group(&entity.id);
             group.push(format!(
-                "  Can complete: {}",
-                yes_no(view.can_complete_group(&entity.id))
+                "  {} {}",
+                decoration.paint(OUTPUT_MUTED, "Can complete:"),
+                decoration.paint(
+                    if can_complete {
+                        OUTPUT_POSITIVE
+                    } else {
+                        OUTPUT_WAITING
+                    },
+                    yes_no(can_complete)
+                )
             ));
             if !matches!(entity.progress, Progress::InProgress(_)) {
-                group.push("  Completion requires Group Progress=InProgress.".to_string());
+                group.push(format!(
+                    "  {}",
+                    decoration.paint(
+                        OUTPUT_WAITING,
+                        "Completion requires Group Progress=InProgress."
+                    )
+                ));
             }
             if counts.total > counts.terminal {
                 group.push(format!(
-                    "  Completion requires {} unfinished descendants to become terminal.",
-                    counts.total - counts.terminal
+                    "  {}",
+                    decoration.paint(
+                        OUTPUT_WAITING,
+                        format!(
+                            "Completion requires {} unfinished descendants to become terminal.",
+                            counts.total - counts.terminal
+                        )
+                    )
                 ));
-            } else if view.can_complete_group(&entity.id) {
-                group.push("  All descendants are terminal; awaiting explicit done.".to_string());
+            } else if can_complete {
+                group.push(format!(
+                    "  {}",
+                    decoration.paint(
+                        OUTPUT_POSITIVE,
+                        "All descendants are terminal; awaiting explicit done."
+                    )
+                ));
             }
         }
         blocks.push(render_section(decoration, "Group", group));
@@ -1335,7 +1404,11 @@ fn render_show(
             if matches!(descendant.progress, Progress::Ended) {
                 let waits = show_waits(view, descendant, "    ", decoration)?;
                 if !waits.is_empty() {
-                    group_details.push(format!("  Ended descendant structure: {}", descendant.id));
+                    group_details.push(format!(
+                        "  {} {}",
+                        decoration.paint(OUTPUT_MUTED, "Ended descendant structure:"),
+                        decoration.paint(OUTPUT_ID, &descendant.id)
+                    ));
                     group_details.extend(waits);
                 }
             }
@@ -1357,7 +1430,7 @@ fn render_show(
         blocks.push(render_section(decoration, "Dependencies", dependencies));
     }
 
-    let mut relations = Vec::<(&str, String)>::new();
+    let mut relations = Vec::<(&str, String, Style)>::new();
     let direct_group_dependencies = if entity.kind == EntityKind::Group {
         view.direct_dependencies(&entity.id)
             .into_iter()
@@ -1371,18 +1444,19 @@ fn render_show(
             continue;
         }
         let (label, style) = if target.disposition == Disposition::Rejected {
-            ("Orphaned:", OUTPUT_DANGER)
+            ("Orphaned:", OUTPUT_FAILURE)
         } else if target.is_terminal() {
             ("Satisfied dependency:", OUTPUT_MUTED)
         } else {
-            ("Dependency:", OUTPUT_ATTENTION)
+            ("Dependency:", OUTPUT_WAITING)
         };
-        relations.push((label, render_related_entity(target, style, decoration)));
+        relations.push((label, render_related_entity(target, decoration), style));
     }
     for dependent in view.direct_dependents(&entity.id) {
         relations.push((
             "Dependent:",
-            render_related_entity(dependent, OUTPUT_ID, decoration),
+            render_related_entity(dependent, decoration),
+            OUTPUT_MUTED,
         ));
     }
     for cause in view.blocking_causes(&entity.id)? {
@@ -1391,7 +1465,8 @@ fn render_show(
         }
         relations.push((
             "Root cause:",
-            render_related_entity(cause, OUTPUT_DANGER, decoration),
+            render_related_entity(cause, decoration),
+            OUTPUT_FAILURE,
         ));
     }
     if !relations.is_empty() {
@@ -1433,7 +1508,7 @@ fn render_show(
             let (action, action_style) = match event.kind {
                 db::ProgressEventKind::Start => ("Started", OUTPUT_ACTIVE),
                 db::ProgressEventKind::Done => ("Ended", OUTPUT_MUTED),
-                db::ProgressEventKind::Release => ("Released", OUTPUT_ATTENTION),
+                db::ProgressEventKind::Release => ("Released", Style::new()),
             };
             let reason = event
                 .reason
@@ -1481,32 +1556,36 @@ fn ordered_subtree<'a>(view: &'a View, root: &EntityId) -> Vec<(usize, &'a Entit
     result
 }
 
-fn show_situation(view: &View, entity: &Entity) -> derived::Result<String> {
+fn show_situation(
+    view: &View,
+    entity: &Entity,
+    decoration: OutputDecoration,
+) -> derived::Result<String> {
     let mut facts = Vec::new();
     if matches!(entity.progress, Progress::Ended) {
-        facts.push("Ended");
+        facts.push(decoration.paint(OUTPUT_MUTED, "Ended"));
     }
     if entity.disposition == Disposition::Rejected {
-        facts.push("Rejected");
+        facts.push(decoration.paint(OUTPUT_MUTED, "Rejected"));
     }
     if facts.is_empty() {
         if matches!(entity.progress, Progress::InProgress(_)) {
-            facts.push("InProgress (saved claim)");
+            facts.push(decoration.paint(OUTPUT_ACTIVE, "InProgress (saved claim)"));
         } else if view.is_ready(entity)? {
-            facts.push("Ready to start");
+            facts.push(decoration.paint(OUTPUT_POSITIVE, "Ready to start"));
         } else {
-            facts.push("Not started");
+            facts.push("Not started".to_string());
         }
         if entity.disposition == Disposition::Undecided {
-            facts.push("Undecided");
+            facts.push(decoration.paint(OUTPUT_DECISION, "Undecided"));
         }
         if view.is_orphaned(&entity.id) {
-            facts.push("Orphaned");
+            facts.push(decoration.paint(OUTPUT_FAILURE, "Orphaned"));
         } else if view.is_blocked(&entity.id) {
-            facts.push("Blocked");
+            facts.push(decoration.paint(OUTPUT_WAITING, "Blocked"));
         }
         if !view.within_active_scope(&entity.id)? {
-            facts.push("outside active scope (see ancestor gates)");
+            facts.push(decoration.paint(OUTPUT_MUTED, "outside active scope (see ancestor gates)"));
         }
     }
     Ok(facts.join("; "))
@@ -1531,42 +1610,56 @@ fn show_waits(
     let mut lines = Vec::new();
     if has_local_descendant_gate(view, entity)? {
         lines.push(format!(
-            "{indent}Descendant gate closed: {} (Progress={}, Disposition={})",
-            entity.id,
-            entity.progress.label(),
-            entity.disposition.label()
+            "{indent}{} {} (Progress={}, Disposition={})",
+            decoration.paint(OUTPUT_WAITING, "Descendant gate closed:"),
+            decoration.paint(OUTPUT_ID, &entity.id),
+            decoration.paint(progress_style(&entity.progress), entity.progress.label()),
+            decoration.paint(
+                disposition_style(entity.disposition),
+                entity.disposition.label()
+            )
         ));
         if entity.disposition == Disposition::Rejected {
             lines.push(format!(
-                "{indent}Rejected Group leaves descendant saved states unchanged."
+                "{indent}{}",
+                decoration.paint(
+                    OUTPUT_MUTED,
+                    "Rejected Group leaves descendant saved states unchanged."
+                )
             ));
         }
     }
     if !view.is_surfaced(entity)? {
         lines.push(format!(
-            "{indent}Not surfaced: {}",
-            entity.resurface_condition.label()
+            "{indent}{}",
+            decoration.paint(
+                OUTPUT_MUTED,
+                format!("Not surfaced: {}", entity.resurface_condition.label())
+            )
         ));
     }
     if let ResurfaceCondition::AfterEntity(id) = &entity.resurface_condition {
         lines.push(format!(
-            "{indent}AfterEntity: {id}; satisfied by Ended or Rejected ({}).",
+            "{indent}{} {}; satisfied by Ended or Rejected ({}).",
+            decoration.paint(OUTPUT_MUTED, "AfterEntity:"),
+            decoration.paint(OUTPUT_ID, id),
             yes_no(view.is_surfaced(entity)?)
         ));
     }
     let mut targets = view.direct_dependencies(&entity.id);
     targets.sort_by(|a, b| a.id.cmp(&b.id));
     for target in targets {
-        let label = if target.disposition == Disposition::Rejected {
-            "Rejected prerequisite (Orphaned)"
+        let (label, style) = if target.disposition == Disposition::Rejected {
+            ("Rejected prerequisite (Orphaned)", OUTPUT_FAILURE)
         } else if !target.is_terminal() {
-            "Unresolved dependency (Blocked)"
+            ("Unresolved dependency (Blocked)", OUTPUT_WAITING)
         } else {
             continue;
         };
         lines.push(format!(
-            "{indent}{label}: {}",
-            render_related_entity(target, OUTPUT_ATTENTION, decoration)
+            "{indent}{} {}",
+            decoration.paint(style, format!("{label}:")),
+            render_related_entity(target, decoration)
         ));
     }
     Ok(lines)
@@ -1588,9 +1681,9 @@ fn render_subtree(
     for (depth, entity) in subtree {
         let indent = "  ".repeat(*depth);
         let candidate = if view.is_ready(entity)? {
-            "  Ready"
+            format!("  {}", decoration.paint(OUTPUT_POSITIVE, "Ready"))
         } else {
-            ""
+            String::new()
         };
         lines.push(format!(
             "{indent}{}  {}  [{}/{}]  {}{candidate}",
@@ -1607,7 +1700,13 @@ fn render_subtree(
             && entity.kind == EntityKind::Group
             && entity.disposition == Disposition::Rejected
         {
-            lines.push(format!("{indent}  Rejected Group: descendant scope is inactive; saved states and claims are unchanged."));
+            lines.push(format!(
+                "{indent}  {}",
+                decoration.paint(
+                    OUTPUT_MUTED,
+                    "Rejected Group: descendant scope is inactive; saved states and claims are unchanged."
+                )
+            ));
         }
         if !matches!(entity.progress, Progress::Ended) {
             lines.extend(show_waits(
@@ -1646,11 +1745,11 @@ fn render_subtree_dependencies(
         lines.push(format!("  {}", decoration.paint(OUTPUT_ID, &owner.id)));
         for target in targets {
             let (state, style) = if target.disposition == Disposition::Rejected {
-                ("Rejected", OUTPUT_DANGER)
+                ("Rejected", OUTPUT_FAILURE)
             } else if target.is_terminal() {
                 ("Satisfied", OUTPUT_MUTED)
             } else {
-                ("Unresolved", OUTPUT_ATTENTION)
+                ("Unresolved", OUTPUT_WAITING)
             };
             let external = if scope.contains(&target.id) {
                 String::new()
@@ -1673,10 +1772,10 @@ fn render_subtree_dependencies(
     lines
 }
 
-fn render_related_entity(entity: &Entity, id_style: Style, decoration: OutputDecoration) -> String {
+fn render_related_entity(entity: &Entity, decoration: OutputDecoration) -> String {
     format!(
         "{}  {}  {}",
-        decoration.paint(id_style, &entity.id),
+        decoration.paint(OUTPUT_ID, &entity.id),
         decoration.paint(OUTPUT_MUTED, entity.kind.label()),
         entity.title
     )
@@ -1704,17 +1803,17 @@ fn render_inline_fields(decoration: OutputDecoration, fields: Vec<(&str, String)
 fn render_fields(
     decoration: OutputDecoration,
     indent: &str,
-    fields: Vec<(&str, String)>,
+    fields: Vec<(&str, String, Style)>,
 ) -> Vec<String> {
     let width = fields
         .iter()
-        .map(|(label, _)| label.chars().count())
+        .map(|(label, _, _)| label.chars().count())
         .max()
         .unwrap_or_default();
     fields
         .into_iter()
-        .map(|(label, value)| {
-            let label = decoration.paint(OUTPUT_MUTED, format!("{label:<width$}"));
+        .map(|(label, value, style)| {
+            let label = decoration.paint(style, format!("{label:<width$}"));
             format!("{indent}{label}  {value}")
         })
         .collect()
@@ -1730,8 +1829,8 @@ fn progress_style(progress: &Progress) -> Style {
 
 fn disposition_style(disposition: Disposition) -> Style {
     match disposition {
-        Disposition::Undecided => OUTPUT_ATTENTION,
-        Disposition::Accepted => OUTPUT_ACCEPTED,
+        Disposition::Undecided => OUTPUT_DECISION,
+        Disposition::Accepted => OUTPUT_POSITIVE,
         Disposition::Rejected => OUTPUT_MUTED,
     }
 }
@@ -1748,7 +1847,7 @@ fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
             write_confirmation(
                 &id,
                 format!("Note {} recorded", note.number),
-                OUTPUT_ACCEPTED,
+                OUTPUT_POSITIVE,
             )?;
         }
         NoteCmd::List { id } => {
@@ -1760,7 +1859,7 @@ fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
                     let first_line = note.body.lines().next().unwrap_or_default();
                     format!(
                         "{}  {}  {}  {}\n",
-                        decoration.paint(OUTPUT_ACTIVE, note.number),
+                        decoration.paint(OUTPUT_INDEX, note.number),
                         decoration.paint(OUTPUT_MUTED, display::timestamp(&note.created_at)),
                         note.actor,
                         first_line
@@ -1806,21 +1905,15 @@ fn cmd_revision(command: RevisionCmd) -> Result<(), Box<dyn std::error::Error>> 
                 .revisions
                 .into_iter()
                 .map(|revision| {
-                    let mut marks = Vec::new();
-                    if snapshot.entity.current_revision == Some(revision.number) {
-                        marks.push("current");
-                    }
-                    if revision.baseline {
-                        marks.push("baseline");
-                    }
-                    let marks = if marks.is_empty() {
-                        String::new()
-                    } else {
-                        decoration.paint(OUTPUT_ATTENTION, format!(" [{}]", marks.join(", ")))
-                    };
+                    let marks = render_revision_marks(
+                        snapshot.entity.current_revision == Some(revision.number),
+                        revision.baseline,
+                        " ",
+                        decoration,
+                    );
                     format!(
                         "{}  {}{}  {}\n",
-                        decoration.paint(OUTPUT_ACTIVE, revision.number),
+                        decoration.paint(OUTPUT_INDEX, revision.number),
                         decoration.paint(OUTPUT_MUTED, display::timestamp(&revision.created_at)),
                         marks,
                         revision.title
@@ -1858,18 +1951,12 @@ fn render_revision(
     revision: &DeclarationRevision,
     decoration: OutputDecoration,
 ) -> String {
-    let mut marks = Vec::new();
-    if entity.current_revision == Some(revision.number) {
-        marks.push("current");
-    }
-    if revision.baseline {
-        marks.push("baseline");
-    }
-    let marks = if marks.is_empty() {
-        String::new()
-    } else {
-        decoration.paint(OUTPUT_ATTENTION, format!("  [{}]", marks.join(", ")))
-    };
+    let marks = render_revision_marks(
+        entity.current_revision == Some(revision.number),
+        revision.baseline,
+        "  ",
+        decoration,
+    );
     let description = match revision.description.as_deref() {
         Some(description) => format!("present\n{description}"),
         None => "absent".to_string(),
@@ -1909,6 +1996,26 @@ fn render_revision(
         decoration.paint(OUTPUT_HEADING, "Description"),
         decoration.paint(OUTPUT_HEADING, "Outgoing dependencies"),
     )
+}
+
+fn render_revision_marks(
+    current: bool,
+    baseline: bool,
+    leading: &str,
+    decoration: OutputDecoration,
+) -> String {
+    let mut marks = Vec::new();
+    if current {
+        marks.push(decoration.paint(OUTPUT_INDEX, "current"));
+    }
+    if baseline {
+        marks.push(decoration.paint(OUTPUT_MUTED, "baseline"));
+    }
+    if marks.is_empty() {
+        String::new()
+    } else {
+        format!("{leading}[{}]", marks.join(", "))
+    }
 }
 
 fn render_revision_diff(
@@ -1975,13 +2082,13 @@ fn render_revision_diff(
         for dependency in removed {
             output.push_str(&format!(
                 "{} {dependency}\n",
-                decoration.paint(OUTPUT_DANGER, "-")
+                decoration.paint(OUTPUT_FAILURE, "-")
             ));
         }
         for dependency in added {
             output.push_str(&format!(
                 "{} {dependency}\n",
-                decoration.paint(OUTPUT_ACCEPTED, "+")
+                decoration.paint(OUTPUT_POSITIVE, "+")
             ));
         }
     }
@@ -2005,13 +2112,13 @@ fn push_value_diff(
         for line in from.lines() {
             output.push_str(&format!(
                 "{} {line}\n",
-                decoration.paint(OUTPUT_DANGER, "-")
+                decoration.paint(OUTPUT_FAILURE, "-")
             ));
         }
         for line in to.lines() {
             output.push_str(&format!(
                 "{} {line}\n",
-                decoration.paint(OUTPUT_ACCEPTED, "+")
+                decoration.paint(OUTPUT_POSITIVE, "+")
             ));
         }
     }
@@ -2043,9 +2150,9 @@ fn push_optional_diff_side(
     decoration: OutputDecoration,
 ) {
     let style = if prefix == '-' {
-        OUTPUT_DANGER
+        OUTPUT_FAILURE
     } else {
-        OUTPUT_ACCEPTED
+        OUTPUT_POSITIVE
     };
     let prefix = decoration.paint(style, prefix);
     match value {
@@ -2084,8 +2191,11 @@ fn render_entity_counts(
                 decoration,
                 vec![
                     ("Progress", format!("NotStarted: {}", counts.not_started)),
-                    ("InProgress", counts.in_progress.to_string()),
-                    ("Ended", counts.ended.to_string()),
+                    (
+                        "InProgress",
+                        decoration.paint(OUTPUT_ACTIVE, counts.in_progress),
+                    ),
+                    ("Ended", decoration.paint(OUTPUT_MUTED, counts.ended)),
                 ],
             )
         ),
@@ -2094,9 +2204,18 @@ fn render_entity_counts(
             render_inline_fields(
                 decoration,
                 vec![
-                    ("Disposition", format!("Undecided: {}", counts.undecided),),
-                    ("Accepted", counts.accepted.to_string()),
-                    ("Rejected", counts.rejected.to_string()),
+                    (
+                        "Disposition",
+                        format!(
+                            "Undecided: {}",
+                            decoration.paint(OUTPUT_DECISION, counts.undecided)
+                        ),
+                    ),
+                    (
+                        "Accepted",
+                        decoration.paint(OUTPUT_POSITIVE, counts.accepted),
+                    ),
+                    ("Rejected", decoration.paint(OUTPUT_MUTED, counts.rejected)),
                 ],
             )
         ),
@@ -2177,7 +2296,7 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
             write_confirmation(
                 &id,
                 format!("Resurface condition: {}", condition.label()),
-                OUTPUT_ATTENTION,
+                Style::new(),
             )?;
         }
         WhenCmd::At { id, date, reason } => {
@@ -2193,7 +2312,7 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
             write_confirmation(
                 &id,
                 format!("Resurface condition: AtDate({date})"),
-                OUTPUT_ATTENTION,
+                Style::new(),
             )?;
         }
         WhenCmd::After {
@@ -2211,7 +2330,7 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
             write_confirmation(
                 &id,
                 format!("Resurface condition: AfterEntity({reference})"),
-                OUTPUT_ATTENTION,
+                Style::new(),
             )?;
         }
         WhenCmd::Manual { id, reason } => {
@@ -2221,11 +2340,7 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
                 Change::SetResurfaceCondition(ResurfaceCondition::Manual),
                 &ctx(reason),
             )?;
-            write_confirmation(
-                &id,
-                "Resurface condition: Manual".to_string(),
-                OUTPUT_ATTENTION,
-            )?;
+            write_confirmation(&id, "Resurface condition: Manual".to_string(), Style::new())?;
         }
         WhenCmd::Clear { id, reason } => {
             let id = store.resolve_id(&id)?;
@@ -2335,7 +2450,7 @@ fn format_decision(event: &db::Event, decoration: OutputDecoration) -> String {
     } else if new == "Always" {
         Style::new()
     } else {
-        OUTPUT_ATTENTION
+        OUTPUT_MUTED
     };
     format!(
         "{} {} {} {}",
@@ -2348,8 +2463,8 @@ fn format_decision(event: &db::Event, decoration: OutputDecoration) -> String {
 
 fn disposition_label_style(value: &str) -> Style {
     match value {
-        "Undecided" => OUTPUT_ATTENTION,
-        "Accepted" => OUTPUT_ACCEPTED,
+        "Undecided" => OUTPUT_DECISION,
+        "Accepted" => OUTPUT_POSITIVE,
         "Rejected" => OUTPUT_MUTED,
         _ => Style::new(),
     }
@@ -2392,7 +2507,7 @@ fn cmd_write(
     if changed.is_empty() {
         write_confirmation(&id, "No changes".to_string(), OUTPUT_MUTED)?;
     } else {
-        write_confirmation(&id, changed.join("  "), OUTPUT_ACCEPTED)?;
+        write_confirmation(&id, changed.join("  "), OUTPUT_POSITIVE)?;
     }
     Ok(())
 }
@@ -2437,7 +2552,10 @@ fn ctx(reason: Option<String>) -> Ctx {
 
 fn write_rows(rows: &str, empty_note: &str, decoration: OutputDecoration) -> std::io::Result<()> {
     if rows.is_empty() {
-        eprintln!("{empty_note}");
+        eprintln!(
+            "{}",
+            current_error_decoration().paint(OUTPUT_MUTED, empty_note)
+        );
         Ok(())
     } else {
         write_output(rows, decoration)
@@ -2445,13 +2563,28 @@ fn write_rows(rows: &str, empty_note: &str, decoration: OutputDecoration) -> std
 }
 
 fn cli_command() -> clap::Command {
-    Cli::command().override_help(render_root_help(OutputDecoration::Ansi))
+    Cli::command()
+        .styles(cli_styles())
+        .override_help(render_root_help(OutputDecoration::Ansi))
+}
+
+fn cli_styles() -> clap::builder::Styles {
+    clap::builder::Styles::styled()
+        .header(OUTPUT_HEADING)
+        .error(OUTPUT_FAILURE)
+        .usage(OUTPUT_HEADING)
+        .literal(OUTPUT_INDEX)
+        .placeholder(Style::new())
+        .valid(OUTPUT_POSITIVE)
+        .invalid(OUTPUT_DECISION)
+        .context(OUTPUT_MUTED)
+        .context_value(Style::new())
 }
 
 fn render_root_help(decoration: OutputDecoration) -> String {
     use std::fmt::Write;
 
-    let mut command = Cli::command().term_width(0);
+    let mut command = Cli::command().styles(cli_styles()).term_width(0);
     command.build();
     let standard = command.render_help().to_string();
     let (preamble, remainder) = standard
@@ -2675,6 +2808,56 @@ mod tests {
         assert_eq!(plain, anstream::adapter::strip_str(&ansi).to_string());
         assert!(plain.contains(" 計画\n  continued "));
         assert!(plain.contains("Claim:  actor   Worktree:  /tmp/my worktree "));
+    }
+
+    #[test]
+    fn status_styles_actions_waits_failures_and_inactive_state_by_meaning() {
+        let group = entity("t-group", EntityKind::Group);
+        let ready = entity("t-ready", EntityKind::Issue);
+
+        let mut undecided = entity("t-undecided", EntityKind::Issue);
+        undecided.disposition = Disposition::Undecided;
+        undecided.current_revision = None;
+
+        let blocked = entity("t-blocked", EntityKind::Issue);
+        let prerequisite = entity("t-prerequisite", EntityKind::Issue);
+
+        let orphaned = entity("t-orphaned", EntityKind::Issue);
+        let mut rejected = entity("t-rejected", EntityKind::Issue);
+        rejected.disposition = Disposition::Rejected;
+
+        let mut hidden = entity("t-hidden", EntityKind::Issue);
+        hidden.resurface_condition = ResurfaceCondition::Manual;
+
+        let view = View::new(
+            vec![
+                group,
+                ready,
+                undecided,
+                blocked.clone(),
+                prerequisite.clone(),
+                orphaned.clone(),
+                rejected.clone(),
+                hidden,
+            ],
+            vec![(blocked.id, prerequisite.id), (orphaned.id, rejected.id)],
+        );
+        let ansi = status::render(&view, None, OutputDecoration::Ansi).unwrap();
+
+        for expected in [
+            OutputDecoration::Ansi.paint(OUTPUT_ID, "t-ready"),
+            OutputDecoration::Ansi.paint(OUTPUT_POSITIVE, "Ready candidate"),
+            OutputDecoration::Ansi.paint(OUTPUT_WAITING, "Descendant gate closed:"),
+            OutputDecoration::Ansi.paint(OUTPUT_WAITING, "Unresolved dependency:"),
+            OutputDecoration::Ansi.paint(OUTPUT_DECISION, "Undecided"),
+            OutputDecoration::Ansi.paint(OUTPUT_FAILURE, "Orphaned"),
+            OutputDecoration::Ansi.paint(OUTPUT_MUTED, "Resurface condition not satisfied: Manual"),
+        ] {
+            assert!(
+                ansi.contains(&expected),
+                "missing semantic style: {expected:?}"
+            );
+        }
     }
 
     #[test]
@@ -3009,6 +3192,7 @@ mod tests {
             let plain = render(OutputDecoration::Plain);
             let styled = render(OutputDecoration::Ansi);
             assert!(styled.contains("\u{1b}["));
+            assert!(!styled.contains("\u{1b}[4m"));
             assert_eq!(anstream::adapter::strip_str(&styled).to_string(), plain);
         }
     }
