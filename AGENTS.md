@@ -20,7 +20,7 @@ axon 自体は、誰が着手対象や採否を決め、いつレビューする
 
 公式 kit は axon の意味論と安全な操作だけを所有し、誰が判断するか、どこまで自動で進めるか、実装、review、commit の方針を決めない。
 
-このリポジトリの個人用協業方針を含む操作では、まず [`axon:conventions`](plugins/axon/skills/conventions/SKILL.md) に従い、用途に応じて次を使う。
+このリポジトリでの Axon 操作には、個人用協業方針として [`axon:conventions`](plugins/axon/skills/conventions/SKILL.md) を適用し、用途に応じて次を使う。
 
 - 重複と計画の完成度を確認した新規登録: [`axon:register`](plugins/axon/skills/register/SKILL.md)
 - ユーザーとの既存 Entity の判断: [`axon:triage`](plugins/axon/skills/triage/SKILL.md)
@@ -32,14 +32,6 @@ axon 自体は、誰が着手対象や採否を決め、いつレビューする
 axon を使う中で、CLI の不足、不自然な往復、分かりにくい出力、手作業による補完、ドキュメントとの不一致を見つけたら、一般化できる問題を `axon:register` から `axon-kit:capture` を使う手順で記録する。
 
 一時的な不慣れや単純な入力ミスは `axon capture` しない。元の作業を不必要に中断せず、記録した改善へ勝手に着手しない。
-
-## このリポジトリの協業方針
-
-`axon ready` または `axon triage` の候補整理では、優先候補、重複候補、判断材料を提案してよい。ただし、ユーザーの確認前に対象の選択、着手、採否変更を行わない。ユーザーが対象を指定した場合、または明示的な workflow が対象選択の範囲を与えた場合は、その範囲内で進めてよい。この制約は axon の一般仕様ではなく、このリポジトリで人間とエージェントが協業するための方針である。
-
-判断や作業の保留理由を状態変更へ結び付けるときは、必ず reason を残す (`axon decide` / `axon when` / `axon release` の `-r`)。「なぜやるのか」「なぜやらないのか」「なぜ今やらないのか」は `axon log <id>` で辿れる形にする。
-
-明示された Note 追加と、着手中 Entity で確定した重要情報は、エージェントが本文を構成して追加してよい。情報分類または対象 Entity が不明な場合と、Note 本文がユーザーの判断を代弁する場合だけ、追加前にユーザーへ確認する。単なる進捗実況、定型的な開始・完了報告、reason と同じ内容の重複 Note は作らない。
 
 ## ビルド
 
