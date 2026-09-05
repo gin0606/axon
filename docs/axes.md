@@ -344,6 +344,22 @@ reason は状態からだけでは意図を復元できない操作に限って�
 
 ## 5. Quint models と検査
 
+### モデルの位置付けと保守方針
+
+`spec/axon.qnt` は必須の基礎状態モデルとして維持する。その対象となる A / B / C / D の意味や満足条件を変える場合は、モデルを更新・検証する。
+
+`spec/group_plan.qnt` と `spec/information_model.qnt` は、操作間の相互作用や考慮漏れを調べる補助モデルとして保持する。モデルの新設や検証範囲の拡張は一律に必須とせず、設計上の不確実性に応じて判断する。
+
+現行仕様を表すモデルは、その対象の意味が変わったときに追随させる。共有する意味を変更する場合は、該当する既存モデルも更新・検証する。モデルの対象外の変更について、既存モデルへの追加や全モデルの検査を必須にはしない。補助モデルの保守を終える場合は、過去の検討資料であることをモデルと参照元に明示するか削除する。
+
+### 設計変更の進め方
+
+モデルで検証する場合は、まず確かめたい性質と前提を整理し、spec を更新・検証する。検証後に確定した設計と理由を関連する docs に反映してから実装する。モデルを使わない設計変更では、判断と理由を docs に反映してから実装する。
+
+実装中に設計の不足や矛盾が見つかった場合も、この手順に戻る。検証結果は対象モデルと実行条件を明記して残す。モデルの検査はモデル内の性質を調べるものであり、Rust 実装の適合性は実装のテストで確認する。
+
+### 各モデルの対象範囲
+
 `spec/axon.qnt` は axon の思想的コアである A / B / C / D の直交性、dependency と Resurface condition の差、ready / blocked / orphaned / blocking cause だけを扱う。group の identity、包含、状態、依存は持ち込まない。
 
 `spec/group_plan.qnt` は今回の設計だけを扱う拡張 model で、3 issue と 3 group からなる固定 Entity 集合を共有状態にする。実装上の DB transaction に対応して、各操作は 1 action で原子的に実行する。時刻は `AtDate` の評価に必要な小さい整数 clock だけを持つ。通信、障害、複数 actor、wall-clock、永続化はこの状態機械の関心ではない。
@@ -382,7 +398,9 @@ description の内容、actor の本人性、wall-clock、SQLite、CLI 構文は
 | witness | 親 group の start 後に入れ子の Entity が ready になる |
 | witness | 親 group が判断対象なら、その子孫は triage に出ない |
 
-検査は Quint 0.32.0 で次の順で行う。先頭の version 出力が異なる場合は、この再現条件の成功として扱わない。`quint run` は bounded random simulation であり、反例が見つからなかったことは全状態についての証明ではない。
+### 検査方法
+
+検査対象のモデルについて、以下の Quint 0.32.0 の再現条件を使う。先頭の version 出力が異なる場合は、この再現条件の成功として扱わない。`quint run` は bounded random simulation であり、反例が見つからなかったことは全状態についての証明ではない。
 
 ```sh
 quint --version
@@ -562,7 +580,7 @@ issue 作成は `axon plan` / `axon capture`、group 作成は `axon group plan`
 
 `spec/group_plan.qnt` は共有 Entity 状態、包含、dependency、Resurface condition、原子的な状態操作と導出値を対象にする。ID の文字列表現、title / description、SQLite migration、履歴、時刻の実装、actor / session claim、CLI の構文・表示、宣言ファイルと fingerprint は対象外である。
 
-この拡張 model は Rust 実装より先に更新する。実装中に遷移、禁止操作、導出値の不足や矛盾が見つかった場合、コードだけで補わず、この文書と `spec/group_plan.qnt` の意味を揃えてシミュレーションしてから実装へ反映する。A / B / C / D のコア自体を変える場合だけ `spec/axon.qnt` も更新する。
+モデルの保守と設計変更の手順は §5 に従う。
 
 | 要求 | Quint 上の対応 |
 | --- | --- |

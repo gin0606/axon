@@ -8,8 +8,6 @@
 //
 // 対象外: claim、actor の本人性、DB 直接編集、複数利用者の並行編集の merge、redaction、
 // 公開名称・コマンド構文・出力文言。AtDate は clock を持たない不透明な control 値として扱う。
-//
-// 情報統治を変えるときは、Rust 実装より先に規範文書とこのモデルを更新して検査を通す。
 module information_model {
   // ---- Identity ----
   type Id = int
