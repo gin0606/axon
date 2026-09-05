@@ -46,7 +46,10 @@ fn root_help_groups_commands_in_workflow_order() {
         ),
         (
             "Inspect:",
-            ["show", "list", "claims", "log", "note", "revision"].as_slice(),
+            [
+                "status", "show", "list", "claims", "log", "note", "revision",
+            ]
+            .as_slice(),
         ),
         (
             "Plan management:",

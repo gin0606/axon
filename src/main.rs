@@ -4,6 +4,7 @@ mod declaration;
 mod derived;
 mod display;
 mod domain;
+mod status;
 
 use anstyle::{AnsiColor, Color, Style};
 use chrono::{NaiveDate, Utc};
@@ -27,7 +28,9 @@ const HELP_SECTIONS: &[HelpSection] = &[
     },
     HelpSection {
         heading: "Inspect",
-        commands: &["show", "list", "claims", "log", "note", "revision"],
+        commands: &[
+            "status", "show", "list", "claims", "log", "note", "revision",
+        ],
     },
     HelpSection {
         heading: "Plan management",
@@ -195,6 +198,15 @@ enum Command {
         /// Include only one Entity kind
         #[arg(long, value_enum)]
         kind: Option<KindFilter>,
+    },
+    /// Summarize plans, saved claims, candidates, and waits
+    #[command(
+        long_about = "Summarize root plans and ungrouped Issues with unfinished Entities or saved claims. --group includes the specified Group and every descendant, even when terminal. Candidate sets match ready and triage; saved claims do not imply agent activity. Use show <ID> for complete details."
+    )]
+    Status {
+        /// Group ID or unique ID suffix; include its complete descendant scope
+        #[arg(long)]
+        group: Option<String>,
     },
     /// List every active claim
     Claims {
@@ -644,6 +656,7 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
         Command::Ready { kind } => cmd_ready(kind),
         Command::Triage { kind } => cmd_triage(kind),
         Command::Claims { kind } => cmd_claims(kind),
+        Command::Status { group } => status::run(group.as_deref()),
         Command::Start { id } => cmd_start(&id),
         Command::Done { id } => cmd_done(&id),
         Command::Release { id, reason } => cmd_release(&id, reason),
@@ -2406,6 +2419,10 @@ fn render_docs(decoration: OutputDecoration) -> String {
             "axon done / axon release",
             "End the work or release its claim",
         ),
+        (
+            "axon status",
+            "Compare plans, candidates, saved claims, and waits",
+        ),
         ("axon show", "Inspect one Entity and its current context"),
     ] {
         let styled_command = decoration.paint(OUTPUT_HEADING, command);
@@ -2460,6 +2477,25 @@ mod tests {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    #[test]
+    fn status_styles_preserve_text_and_stored_strings() {
+        let mut group = entity("t-g", EntityKind::Group);
+        group.title = " 計画\n  continued ".into();
+        let mut issue = entity("t-i", EntityKind::Issue);
+        issue.parent = Some(group.id.clone());
+        issue.progress = Progress::InProgress(Claim {
+            actor: " actor ".into(),
+            worktree: " /tmp/my worktree ".into(),
+            at: Utc::now(),
+        });
+        let view = View::new(vec![group, issue], vec![]);
+        let plain = status::render(&view, None, OutputDecoration::Plain).unwrap();
+        let ansi = status::render(&view, None, OutputDecoration::Ansi).unwrap();
+        assert_eq!(plain, anstream::adapter::strip_str(&ansi).to_string());
+        assert!(plain.contains(" 計画\n  continued "));
+        assert!(plain.contains("Claim:  actor   Worktree:  /tmp/my worktree "));
     }
 
     #[test]

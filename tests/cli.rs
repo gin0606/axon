@@ -1058,3 +1058,148 @@ fn failed_operations_offer_inspection_without_changing_state() {
     assert_failure(&output);
     assert!(stderr(&output).contains(&format!("axon note list {id}")));
 }
+
+fn status_candidates(output: &str, heading: &str) -> std::collections::BTreeSet<String> {
+    let mut active = false;
+    let mut ids = std::collections::BTreeSet::new();
+    for line in output.lines() {
+        if line.starts_with("  ") && !line.starts_with("    ") {
+            active = line == format!("  {heading}:");
+        }
+        if active && line.starts_with("    test-") {
+            assert!(ids.insert(line.split_whitespace().next().unwrap().to_string()));
+        }
+    }
+    ids
+}
+
+#[test]
+fn status_groups_candidates_waits_and_saved_claims_without_double_counting() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let group = created_id(&repo.axon(&["group", "plan", "main plan"]));
+    let nested = created_id(&repo.axon(&["group", "plan", "nested", "--parent", &group]));
+    let dormant = created_id(&repo.axon(&["capture", "inactive draft", "--parent", &nested]));
+    let child = created_id(&repo.axon(&["plan", "running child", "--parent", &group]));
+    assert_success(&repo.axon(&["start", &group]));
+    assert_success(&repo.axon(&["start", &child]));
+    let ready = created_id(&repo.axon(&["plan", "standalone ready"]));
+    let decision = created_id(&repo.axon(&["capture", "standalone decision"]));
+    let prerequisite = created_id(&repo.axon(&["plan", "external prerequisite"]));
+    let blocked = created_id(&repo.axon(&["capture", "blocked", "--parent", &group]));
+    assert_success(&repo.axon(&["dep", "add", &blocked, "--needs", &prerequisite]));
+    assert_success(&repo.axon(&["decide", "accept", &blocked]));
+    let after = created_id(&repo.axon(&["plan", "after", "--parent", &group]));
+    assert_success(&repo.axon(&["when", "after", &after, &prerequisite]));
+    let output = repo.axon(&["status"]);
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(
+        text.starts_with("Saved claims: 2  Triage candidates: 1  Ready candidates: 3\n"),
+        "{text}"
+    );
+    assert!(text.contains(&format!("Scope: {nested}")));
+    assert!(text.contains("Descendants: 5  Issue: 4  Group: 1  Terminal: 0"));
+    assert!(!status_candidates(&text, "Triage candidates").contains(&dormant));
+    for (command, heading) in [
+        ("ready", "Ready candidates"),
+        ("triage", "Triage candidates"),
+    ] {
+        let expected = stdout(&repo.axon(&[command]))
+            .lines()
+            .map(|l| l.split_whitespace().next().unwrap().to_string())
+            .collect();
+        assert_eq!(status_candidates(&text, heading), expected);
+    }
+    let selected = stdout(&repo.axon(&["status", "--group", &group]));
+    assert!(selected.starts_with("Saved claims: 2  Triage candidates: 0  Ready candidates: 1\n"));
+    assert!(!selected.contains(&ready));
+    assert!(!selected.contains(&decision));
+    assert!(selected.contains(&format!(
+        "Unresolved dependency: {prerequisite}  external prerequisite  External"
+    )));
+    assert!(selected.contains("Resurface condition not satisfied: AfterEntity"));
+    assert_success(&repo.axon(&["decide", "reject", &prerequisite]));
+    let selected = stdout(&repo.axon(&["status", "--group", &group]));
+    assert!(selected.starts_with("Saved claims: 2  Triage candidates: 1  Ready candidates: 2\n"));
+    assert!(selected.contains("Rejected prerequisite (Orphaned)"));
+    assert!(!selected.contains("Resurface condition not satisfied: AfterEntity"));
+    assert_success(&repo.axon(&["when", "manual", &group]));
+    let selected = stdout(&repo.axon(&["status", "--group", &group]));
+    assert!(selected.starts_with("Saved claims: 2  Triage candidates: 0  Ready candidates: 0\n"));
+    assert!(selected.contains("Active scope: no"));
+    assert!(selected.contains("Claim: test-actor"));
+    assert_eq!(
+        selected
+            .matches("Resurface condition not satisfied: Manual")
+            .count(),
+        1
+    );
+    let nested_scope = stdout(&repo.axon(&["status", "--group", &nested]));
+    assert!(
+        nested_scope.starts_with("Saved claims: 0  Triage candidates: 0  Ready candidates: 0\n")
+    );
+    assert!(nested_scope.contains("External ancestor scope"));
+    assert!(nested_scope.contains("Descendants: 1"));
+    assert_success(&repo.axon(&["decide", "reject", &group]));
+    let rejected = stdout(&repo.axon(&["status"]));
+    assert!(rejected.contains(&format!("{group}  Group  main plan  [InProgress/Rejected]")));
+    assert!(rejected.contains("Disposition=Rejected"));
+    assert!(rejected.contains(&child));
+}
+
+#[test]
+fn status_empty_terminal_scope_resolution_and_help() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let empty = repo.axon(&["status"]);
+    assert_success(&empty);
+    assert!(empty.stdout.is_empty());
+    assert!(stderr(&empty).contains("No plans"));
+    let group = created_id(&repo.axon(&["group", "plan", "finished"]));
+    assert_success(&repo.axon(&["start", &group]));
+    let awaiting = stdout(&repo.axon(&["status"]));
+    assert!(awaiting.contains("Can complete: yes"));
+    assert_success(&repo.axon(&["done", &group]));
+    assert!(repo.axon(&["status"]).stdout.is_empty());
+    let suffix = group.rsplit('-').next().unwrap();
+    let selected = repo.axon(&["status", "--group", suffix]);
+    assert_success(&selected);
+    assert!(stdout(&selected).contains("[Ended/Accepted]"));
+    let issue = created_id(&repo.axon(&["plan", "issue"]));
+    for reference in [&issue, "missing", "test-%"] {
+        assert_failure(&repo.axon(&["status", "--group", reference]));
+    }
+    for args in [
+        vec!["--help"],
+        vec!["status", "--help"],
+        vec!["completion", "bash"],
+        vec!["completion", "zsh"],
+    ] {
+        let output = repo.axon(&args);
+        assert_success(&output);
+        assert!(stdout(&output).contains("status"));
+    }
+}
+
+#[test]
+fn status_shares_command_evaluation_and_propagates_errors_with_no_partial_output() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let group = created_id(&repo.axon(&["group", "plan", "observed"]));
+    assert_success(&repo.axon(&["start", &group]));
+    created_id(&repo.axon(&["plan", "child", "--parent", &group]));
+    assert_success(&repo.axon(&["when", "command", &group, "echo x >> observations; exit 1"]));
+    assert_success(&repo.axon(&["status"]));
+    assert_eq!(
+        fs::read_to_string(repo.root().join("observations")).unwrap(),
+        "x\n"
+    );
+    assert_success(&repo.axon(&["when", "command", &group, "echo bad >&2; exit 7"]));
+    let output = repo.axon(&["status"]);
+    assert_failure(&output);
+    assert!(output.stdout.is_empty());
+    assert!(stderr(&output).contains("bad"));
+    let other = created_id(&repo.axon(&["group", "plan", "unrelated"]));
+    assert_success(&repo.axon(&["status", "--group", &other]));
+}

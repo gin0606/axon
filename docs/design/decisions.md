@@ -594,3 +594,15 @@ Entity がないとき、関係のない Group の AfterEntity で代用する�
 案内の有無ではなく、利用者の判断を代行するかどうかを境界にする。
 成立条件、確認先、選択肢と効果は説明し、採否や計画変更の選択は利用者に残す。
 現在の規範は [CLI 契約](../reference/cli.md#操作を理解するための案内) に置く。
+
+## 計画を横断する status
+
+2026-09-05、用途別一覧を手で結合せずに計画の文脈で候補と待ちを読める入口として
+`status` を追加する。root Group と所属なし Issue を独立したブロックにし、nested Group は
+所属 scope として示す。Ended と Rejected は別軸の件数を保持し、達成率には変換しない。
+共通の待ちは所有する Group の scope に一度だけ示し、inactive 配下の保存済み claim も残す。
+対象選択は利用者に委ね、安定した ID 順は優先順位を意味しない。
+
+ID 解決と状態・関係を一つの read transaction で取得し、候補と説明は同じ View と
+条件評価 context を使う。状態意味論は変更せず、Rust の CLI fixture で既存の
+ready / triage との一致を検証するため、新規 Quint モデルは追加しない。

@@ -82,6 +82,8 @@ Treat an exported declaration as a working snapshot. After a successful apply, k
 
 | Command | Question answered |
 | --- | --- |
+| `axon status` | How do plans compare in saved claims, current candidates, and waits? |
+| `axon status --group <id>` | What is the summary for this Group and every descendant, including a finished plan? |
 | `axon ready` | Which active Entities can start now? |
 | `axon triage` | Which Entities are on the active decision frontier? |
 | `axon claims` | Which Entities are claimed, by whom, where, and since when? |
@@ -90,6 +92,18 @@ Treat an exported declaration as a working snapshot. After a successful apply, k
 | `axon log <id>` | Why did its Disposition or resurface condition change? |
 | `axon note list|show` | What supplemental information has been appended to this Entity? |
 | `axon revision list|show|diff` | Which declaration was decided, and how did decided declarations differ? |
+
+`status` keeps root plans separate and shows nested Group membership. It omits plans
+whose entire scope is terminal and has no saved claims unless explicitly selected.
+Rejected plans may still contain unfinished descendants. Progress and Disposition
+counts stay separate; unfinished does not mean promised work.
+
+Candidates match `ready` and `triage`. A ready Group opens its descendants only
+after `start`. Shared waits appear at the owning Group scope; external references
+explain a wait without entering the selected counts. Claims remain visible under
+inactive scopes and describe saved actor, worktree, and start time, not agent health.
+Use `show <id>` for the complete subtree and long-form records. Output order is
+stable by ID within the containment hierarchy and does not assign priority.
 
 ## Commands that change data
 

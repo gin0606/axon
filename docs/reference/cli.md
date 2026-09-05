@@ -9,7 +9,7 @@ axon の操作対象は `Issue` と `Group` の 2 kind を持つ Entity であ�
 | 分類 | command 順序 |
 | --- | --- |
 | Workflow | `plan`, `capture`, `ready`, `triage`, `start`, `done`, `release` |
-| Inspect | `show`, `list`, `claims`, `log`, `note`, `revision` |
+| Inspect | `status`, `show`, `list`, `claims`, `log`, `note`, `revision` |
 | Plan management | `write`, `group`, `dep`, `decide`, `when`, `export`, `import` |
 | Setup & utilities | `init`, `completion`, `docs`, `help` |
 
@@ -140,6 +140,31 @@ Group などの評価は行う。履歴・Note・Revision の参照、claims、e
 `ready` / `triage` / `claims` / `list` は両 kind を同じ一覧に出し、`--kind issue|group` で任意に絞る。1 Entity を1行に出し、各行の第1列はID、第2列はkindとする。`triage` は `Reason:`、`claims` は `Claim:`、`Worktree:`、`Started:` をidentityの後に置く。`list` は Progress / Disposition と、該当する例外状態だけを表示する。
 
 `claims` は claim の経過時間やプロセス状態から staleness を推定しない。表示された保存済み事実を基に人が判断し、必要な claim だけ `release` で明示的に解放する。
+
+### 計画の横断表示
+
+`status` は root Group ごとの計画と所属なし Issue を ID 順に要約する。Group 自身または
+全子孫に非 terminal Entity か保存済み claim があれば表示する。Rejected Group 配下の
+非 terminal 子孫も保持して表示し、全体が terminal で claim がない計画は省く。
+`status --group <id>` は ID / 一意 suffix を解決し、指定 Group 自身と全子孫を対象にする。
+指定時は terminal だけでも表示する。存在しない参照、曖昧参照、Issue 指定はエラーになる。
+
+冒頭は対象の保存済み claim / triage 候補 / ready 候補の件数、続くブロックは Group 自身の
+Progress / Disposition、完了可能性、全子孫の軸別内訳、nested Group の所属、claim、候補、
+待ちを示す。候補集合は同じ条件下の ready / triage を対象範囲へ絞ったものと一致する。
+未終了を実施の約束とはせず、Ended と Rejected を達成率へ合算しない。
+
+待ちは所有する scope ごとにまとめ、未解決 dependency、Rejected prerequisite、未成立の
+Resurface condition、Group の descendant gate を区別する。nested scope の外にある祖先、
+dependency / AfterEntity 参照先は External として説明するだけで構成員や集計には加えない。
+NotStarted Group の ready は Group 自身の着手候補であり、子孫は gate が開くまで候補にしない。
+inactive な scope 内も保存された claim の actor / worktree / 開始時刻を表示し、実際の
+プロセス稼働、健全性、停止、staleness を推測しない。詳細な全 subtree、本文、Note、履歴は
+`show <id>` に委ねる。空結果は他の一覧と同じ stdout / stderr 契約に従う。
+
+ID 解決と Entity / 関係を一回の整合した read snapshot から取得する。候補と説明で同じ
+条件評価 context を共有し、必要な Command の判定失敗はエラーとして返す。対象外の独立した
+計画は評価しない。NO_COLOR / 非対話出力でも同じ意味と順序、保存文字列を保つ。
 
 ### Plan 宣言ファイル
 
