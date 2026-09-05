@@ -505,8 +505,47 @@ fn main() {
     }
     if let Err(error) = run(args) {
         eprintln!("Error: {error}");
+        if let Some(guidance) = error_guidance(error.as_ref()) {
+            eprintln!("Help: {guidance}");
+        }
         std::process::exit(1);
     }
+}
+
+fn error_guidance(error: &(dyn std::error::Error + 'static)) -> Option<String> {
+    use db::DbError;
+
+    if let Some(error) = error.downcast_ref::<DbError>() {
+        return Some(match error {
+            DbError::UnsupportedSchema { found, .. } => format!(
+                "Use an axon build that supports DB schema {found}. This build has no migration command; init cannot upgrade an existing DB. Preserve the database and do not change user_version to bypass this check. See `axon docs` for storage recovery guidance."
+            ),
+            DbError::CannotStart { id, .. } | DbError::CannotProgress { id, .. } => format!(
+                "Inspect `axon show {id}` for state, relationships, and Group completion constraints. `axon docs` explains the operation prerequisites."
+            ),
+            DbError::DeclarationFixed(id) => format!(
+                "Inspect `axon show {id}`. If changing the plan is intended, `axon decide undecide {id}` makes its declaration editable and withdraws its current disposition; edit, review the full declaration, then decide separately. Supplemental information can be appended with `axon note add {id}` without changing the plan."
+            ),
+            DbError::NoSuchEntity(_) => "Use `axon list` to inspect Entity IDs in this management root; linked worktrees share their main repository's DB.".to_string(),
+            DbError::AmbiguousId { .. } => "Use one of the full candidate IDs to identify the intended Entity.".to_string(),
+            DbError::NotGroup(_) => "Use `axon list --kind group` to inspect Group IDs. A parent must be a Group.".to_string(),
+            DbError::NoSuchNote { id, .. } => format!("Use `axon note list {id}` to inspect this Entity's Note numbers."),
+            DbError::NoSuchRevision { id, .. } => format!("Use `axon revision list {id}` to inspect this Entity's Revision numbers."),
+            DbError::Unchanged { id, .. } => format!("No transition was applied. Use `axon show {id}` to inspect the current state; repeating the same transition is an error."),
+            DbError::Cycle { .. } | DbError::Containment(_) => "Inspect the involved Entities with `axon show <ID>` and use `axon docs` for relationship constraints. Changing a relationship changes the plan; select any revision according to the intended plan.".to_string(),
+            DbError::AlreadyInitialized(_) => "init creates a new database; it does not reset or upgrade an existing one. Use `axon list` to inspect it, or `axon docs` for storage recovery guidance.".to_string(),
+            DbError::Evaluation(_) => evaluation_guidance().to_string(),
+            _ => return None,
+        });
+    }
+    if error.is::<derived::EvaluationError>() {
+        return Some(evaluation_guidance().to_string());
+    }
+    error.source().and_then(error_guidance)
+}
+
+fn evaluation_guidance() -> &'static str {
+    "See `axon when command --help` for the exit-status contract. Correcting a Command condition, or explicitly replacing or clearing it, does not evaluate the failing condition; replacing or clearing it changes when the Entity surfaces."
 }
 
 fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> {
@@ -789,7 +828,11 @@ fn cmd_ready(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>>
         .into_iter()
         .map(|entity| format!("{}\n", render_entity_identity(entity, decoration)))
         .collect::<String>();
-    write_rows(&rows, "No ready entities", decoration)?;
+    write_rows(
+        &rows,
+        "No ready entities match the current scope and filter. Use `axon list` to inspect stored Entities and `axon docs` for readiness conditions.",
+        decoration,
+    )?;
     Ok(())
 }
 
@@ -800,7 +843,11 @@ fn cmd_triage(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>
     for (entity, reason) in view.triage(|entity| included(kind, entity))? {
         rows.push_str(&render_triage_row(&view, entity, reason, decoration));
     }
-    write_rows(&rows, "No entities need triage", decoration)?;
+    write_rows(
+        &rows,
+        "No entities match the active decision frontier and filter. Use `axon list` to inspect Entities outside this frontier.",
+        decoration,
+    )?;
     Ok(())
 }
 
@@ -2301,6 +2348,7 @@ fn render_docs(decoration: OutputDecoration) -> String {
         decoration.paint(OUTPUT_HEADING, "axon help <COMMAND PATH>")
     )
     .unwrap();
+    writeln!(output, "\nStorage recovery\n  A schema mismatch stops this build before Entity data is read or changed.\n  Use a build supporting the DB schema shown in the error; --version identifies the\n  executable release, not its DB schema. This build provides no migration command.\n  init cannot upgrade an existing DB, and export also requires a compatible build.\n  Keep the existing DB. Before manual recovery, stop all writers (including linked\n  worktrees) and preserve the .axon directory with any SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  In Git, .axon/axon.db is at the parent of the common Git directory; outside Git,\n  axon uses the nearest ancestor containing .axon/axon.db.\n").unwrap();
     output
 }
 

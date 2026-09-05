@@ -110,6 +110,10 @@ axon stores `.axon/axon.db` at the management root. In Git, the management root 
 
 The executable opens only the schema version it implements. It does not rewrite an older database during an ordinary command; an unsupported version fails before Entity data is read or changed.
 
+For a schema mismatch, use a build that supports the database version reported in the error. This build has no migration command, and `init` cannot upgrade an existing database. `export` also requires a compatible build and is a plan declaration, not a complete database backup. `--version` identifies the executable release, not its supported database schema.
+
+Preserve the existing database. Before manual recovery, stop all writers, including those in linked worktrees, and preserve the `.axon` directory with any SQLite journal/WAL files. Deleting the database or changing `user_version` does not migrate its contents. `axon docs` remains available without opening the database and includes this recovery guidance.
+
 Every Issue and Group ID uses `<prefix>-<random six characters>`. The prefix comes from `axon init`; kind is not encoded in the ID. A full ID or a unique suffix may be used wherever an Entity ID is accepted. Group slugs do not exist.
 
 ## Waiting until an explicit decision to resume

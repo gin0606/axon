@@ -1002,3 +1002,59 @@ fn revision_commands_expose_fixed_declarations_and_structural_diffs() {
     let absence_to_literal = stdout(&repo.axon(&["revision", "diff", &issue, "1", "3"]));
     assert!(absence_to_literal.contains("Description\n- absent\n+ present\n+ (none)"));
 }
+
+#[test]
+fn schema_mismatch_explains_recovery_without_changing_the_database() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let id = repo.plan("preserved task");
+    let snapshot = repo.snapshot(&id);
+    for version in [0, 7, 999] {
+        repo.execute_batch(&format!("PRAGMA user_version = {version}"));
+        let path = repo.root().join(".axon/axon.db");
+        let before = fs::read(&path).unwrap();
+        let output = repo.axon(&["list"]);
+        assert_failure(&output);
+        assert!(output.stdout.is_empty());
+        let diagnostic = stderr(&output);
+        assert!(diagnostic.contains(&format!("unsupported axon schema version {version}")));
+        assert!(diagnostic.contains(&format!("supports DB schema {version}")));
+        assert!(diagnostic.contains("no migration command"));
+        assert!(diagnostic.contains("init cannot upgrade"));
+        assert!(diagnostic.contains("axon docs"));
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(repo.snapshot(&id), snapshot);
+        for args in [&["docs"][..], &["--help"][..], &["--version"][..]] {
+            assert_success(&repo.axon(args));
+        }
+        let docs = stdout(&repo.axon(&["docs"]));
+        assert!(docs.contains("Storage recovery"));
+        assert!(docs.contains("export also requires a compatible build"));
+    }
+}
+
+#[test]
+fn failed_operations_offer_inspection_without_changing_state() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let id = repo.capture("unadopted task");
+    let before = repo.snapshot(&id);
+    let output = repo.axon(&["start", &id]);
+    assert_failure(&output);
+    assert!(output.stdout.is_empty());
+    assert!(stderr(&output).contains(&format!("axon show {id}")));
+    assert!(!stderr(&output).contains("decide accept"));
+    assert_eq!(repo.snapshot(&id), before);
+
+    repo.accept(&id);
+    let before = repo.snapshot(&id);
+    let output = repo.axon(&["write", &id, "--title", "changed"]);
+    assert_failure(&output);
+    assert!(stderr(&output).contains("If changing the plan is intended"));
+    assert!(stderr(&output).contains("decide separately"));
+    assert_eq!(repo.snapshot(&id), before);
+
+    let output = repo.axon(&["note", "show", &id, "999"]);
+    assert_failure(&output);
+    assert!(stderr(&output).contains(&format!("axon note list {id}")));
+}
