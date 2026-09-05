@@ -7,25 +7,7 @@ axon 自体は、誰が着手対象や採否を決め、いつレビューする
 
 **タスクの正は axon の DB (`.axon/`) にある。** git 管理外なので、着手候補は `axon ready`、採否または前提喪失について判断が必要なものは `axon triage` で確認する。`ready` にも `triage` にも出ない状態を含め、全件を確認する必要があるときは `axon list` を使う。変動する情報はドキュメントに書かない (二重管理しないため)。
 
-## Entity の操作
-
-すべての axon 操作は、まず [`axon-kit:conventions`](plugins/axon-kit/skills/conventions/SKILL.md) の共通契約に従う。操作ごとの公式 skill は次を使う。
-
-- 未判断の新しい Issue / Group: [`axon-kit:capture`](plugins/axon-kit/skills/capture/SKILL.md)
-- 採用済みの新しい Issue / Group: [`axon-kit:plan`](plugins/axon-kit/skills/plan/SKILL.md)
-- 既存 Entity の判断、declaration、時期、関係の変更: [`axon-kit:triage`](plugins/axon-kit/skills/triage/SKILL.md)
-- 既存 Entity への独立した追加情報: [`axon-kit:add-note`](plugins/axon-kit/skills/add-note/SKILL.md)
-- start / release / done による作業状態の同期: [`axon-kit:work-state`](plugins/axon-kit/skills/work-state/SKILL.md)
-- strict YAML declaration と `axon export` / `axon import`: [`axon-kit:declaration`](plugins/axon-kit/skills/declaration/SKILL.md)
-
-公式 kit は axon の意味論と安全な操作だけを所有し、誰が判断するか、どこまで自動で進めるか、実装、review、commit の方針を決めない。
-
-このリポジトリでの Axon 操作には、個人用協業方針として [`axon:conventions`](plugins/axon/skills/conventions/SKILL.md) を適用し、用途に応じて次を使う。
-
-- 重複と計画の完成度を確認した新規登録: [`axon:register`](plugins/axon/skills/register/SKILL.md)
-- ユーザーとの既存 Entity の判断: [`axon:triage`](plugins/axon/skills/triage/SKILL.md)
-- 申し送りや外部作業の完了条件を含む進行同期: [`axon:work-state`](plugins/axon/skills/work-state/SKILL.md)
-- ユーザー所有 artifact と状態変更を組み合わせる declaration 操作: [`axon:declaration`](plugins/axon/skills/declaration/SKILL.md)
+このリポジトリでの Axon 操作には、個人用協業方針として [`axon:conventions`](plugins/axon/skills/conventions/SKILL.md) を適用する。
 
 ## ドッグフーディング
 
