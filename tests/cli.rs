@@ -1310,19 +1310,72 @@ fn show_distinguishes_explicit_completion_from_an_ended_group() {
 }
 
 #[test]
-fn show_keeps_inherited_dependency_gates_at_the_owning_scope() {
+fn plan_views_keep_inherited_dependency_gates_at_the_owning_scope() {
     let repo = TestRepo::new();
     repo.init("test");
     let root = repo.group_plan("root");
     let nested = created_id(&repo.axon(&["group", "plan", "nested", "--parent", &root]));
     let child = created_id(&repo.axon(&["plan", "child", "--parent", &nested]));
+    created_id(&repo.axon(&["plan", "waiting child", "--parent", &nested]));
+    created_id(&repo.axon(&["capture", "draft child", "--parent", &nested]));
     let target = repo.plan("prerequisite");
     assert_success(&repo.axon(&["start", &root]));
     assert_success(&repo.axon(&["start", &nested]));
+    assert_success(&repo.axon(&["start", &child]));
+    let claims = stdout(&repo.axon(&["claims"]));
     repo.add_dependency(&root, &target);
     for rejected in [false, true] {
         if rejected {
             assert_success(&repo.axon(&["decide", "reject", &target]));
+        }
+        for selected in [&root, &nested] {
+            let output = repo.axon(&["status", "--group", selected]);
+            assert_success(&output);
+            let status = stdout(&output);
+            assert_eq!(
+                status.matches("Descendant gate closed:").count(),
+                1,
+                "{status}"
+            );
+            let waits = status
+                .split_once("  Waits and gates (by owning scope):\n")
+                .unwrap()
+                .1;
+            assert!(waits.contains(&format!("{root}  Group")));
+            assert!(!waits.contains(&format!("{nested}  Group")));
+            assert!(waits.contains(&format!("{target}  prerequisite  External")));
+            assert!(status_candidates(&status, "Ready candidates").is_empty());
+            let expected = if rejected && selected == &root {
+                std::collections::BTreeSet::from([root.clone()])
+            } else {
+                std::collections::BTreeSet::new()
+            };
+            assert_eq!(status_candidates(&status, "Triage candidates"), expected);
+            assert_eq!(status.matches("Active scope: no").count(), 2);
+            assert_eq!(
+                status.matches("Claim: test-actor").count(),
+                if selected == &root { 3 } else { 2 }
+            );
+            if selected == &nested {
+                assert!(waits.contains("External ancestor scope"));
+            }
+            let show = stdout(&repo.axon(&["show", selected]));
+            for counts in [
+                if selected == &root {
+                    "Descendants: 4  Issue: 3  Group: 1  Terminal: 0"
+                } else {
+                    "Descendants: 3  Issue: 3  Group: 0  Terminal: 0"
+                },
+                if selected == &root {
+                    "Progress: NotStarted: 2  InProgress: 2  Ended: 0"
+                } else {
+                    "Progress: NotStarted: 2  InProgress: 1  Ended: 0"
+                },
+            ] {
+                assert!(status.contains(counts), "{status}");
+                assert!(show.contains(counts), "{show}");
+            }
+            assert!(!show.contains("  Ready"));
         }
         for selected in [&root, &nested, &child] {
             let show = stdout(&repo.axon(&["show", selected]));
@@ -1342,5 +1395,49 @@ fn show_keeps_inherited_dependency_gates_at_the_owning_scope() {
                 }
             )));
         }
+        assert_eq!(stdout(&repo.axon(&["claims"])), claims);
+    }
+    let local_target = repo.plan("nested prerequisite");
+    for local_gate in ["manual", "dependency", "rejected dependency"] {
+        match local_gate {
+            "manual" => assert_success(&repo.axon(&["when", "manual", &nested])),
+            "dependency" => {
+                assert_success(&repo.axon(&["when", "clear", &nested]));
+                repo.add_dependency(&nested, &local_target);
+            }
+            _ => assert_success(&repo.axon(&["decide", "reject", &local_target])),
+        }
+        for selected in [&root, &nested] {
+            let output = repo.axon(&["status", "--group", selected]);
+            assert_success(&output);
+            let status = stdout(&output);
+            let waits = status
+                .split_once("  Waits and gates (by owning scope):\n")
+                .unwrap()
+                .1;
+            assert_eq!(
+                waits.matches("Descendant gate closed:").count(),
+                2,
+                "{status}"
+            );
+            assert!(waits.contains(&format!("{root}  Group")));
+            assert!(waits.contains(&format!("{nested}  Group")));
+            let show = stdout(&repo.axon(&["show", selected]));
+            let summary = show.split_once("\n\nDetails\n").unwrap().0;
+            assert_eq!(
+                summary.matches("Descendant gate closed:").count(),
+                2,
+                "{show}"
+            );
+            assert!(summary.contains(&format!("Descendant gate closed: {nested}")));
+            if local_gate == "manual" {
+                assert!(waits.contains("Resurface condition not satisfied: Manual"));
+                assert!(summary.contains("Not surfaced: Manual"));
+            } else {
+                assert!(waits.contains(&format!("{local_target}  nested prerequisite  External")));
+                assert!(summary.contains(&local_target));
+            }
+        }
+        assert_eq!(stdout(&repo.axon(&["claims"])), claims);
     }
 }

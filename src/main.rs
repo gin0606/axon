@@ -1142,7 +1142,7 @@ fn render_show(
     overview.push(format!("Situation: {}", show_situation(view, entity)?));
     overview.extend(show_waits(view, entity, "", decoration)?);
     for ancestor in view.ancestors(&entity.id) {
-        if show_has_local_gate(view, ancestor)? {
+        if has_local_descendant_gate(view, ancestor)? {
             overview.push(format!("Ancestor scope: {}", ancestor.id));
             overview.extend(show_waits(view, ancestor, "  ", decoration)?);
         }
@@ -1472,7 +1472,7 @@ fn show_situation(view: &View, entity: &Entity) -> derived::Result<String> {
     Ok(facts.join("; "))
 }
 
-fn show_has_local_gate(view: &View, entity: &Entity) -> derived::Result<bool> {
+fn has_local_descendant_gate(view: &View, entity: &Entity) -> derived::Result<bool> {
     Ok(entity.kind == EntityKind::Group
         && (!matches!(entity.progress, Progress::InProgress(_))
             || entity.disposition != Disposition::Accepted
@@ -1489,7 +1489,7 @@ fn show_waits(
     decoration: OutputDecoration,
 ) -> derived::Result<Vec<String>> {
     let mut lines = Vec::new();
-    if show_has_local_gate(view, entity)? {
+    if has_local_descendant_gate(view, entity)? {
         lines.push(format!(
             "{indent}Descendant gate closed: {} (Progress={}, Disposition={})",
             entity.id,

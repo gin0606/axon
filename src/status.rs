@@ -144,7 +144,7 @@ pub(super) fn render(
         let mut any = false;
         for entity in owners {
             let mut reasons = Vec::new();
-            if entity.kind == EntityKind::Group && !view.opens_descendants(entity)? {
+            if has_local_descendant_gate(view, entity)? {
                 reasons.push(format!(
                     "Descendant gate closed: Progress={}, Disposition={}",
                     entity.progress.label(),

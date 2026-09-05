@@ -155,7 +155,10 @@ Progress / Disposition、完了可能性、全子孫の軸別内訳、nested Gro
 未終了を実施の約束とはせず、Ended と Rejected を達成率へ合算しない。
 
 待ちは所有する scope ごとにまとめ、未解決 dependency、Rejected prerequisite、未成立の
-Resurface condition、Group の descendant gate を区別する。nested scope の外にある祖先、
+Resurface condition、Group の descendant gate を区別する。gate の表示は `show` と同じく、
+Group 自身の Progress、Disposition、Resurface condition、direct dependency に基づく。
+祖先由来の共通理由は所有祖先 scope に一度だけ示し、nested Group 固有の失敗条件は残す。
+nested scope の外にある祖先、
 dependency / AfterEntity 参照先は External として説明するだけで構成員や集計には加えない。
 NotStarted Group の ready は Group 自身の着手候補であり、子孫は gate が開くまで候補にしない。
 inactive な scope 内も保存された claim の actor / worktree / 開始時刻を表示し、実際の
