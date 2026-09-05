@@ -6,7 +6,10 @@ set -eu
 # 新規ブランチの起点になる origin/<default> とローカルの
 # default branch を同期する
 default_branch="$(git rev-parse --abbrev-ref origin/HEAD | sed 's|^origin/||')"
-git pull --rebase origin "$default_branch"
+if ! git pull --rebase origin "$default_branch"; then
+  git fetch origin "refs/heads/$default_branch:refs/remotes/origin/$default_branch"
+  exit 0
+fi
 
 # worktree から共有 DB を操作する canonical binary を、同期後の main から作る
 ./scripts/build-canonical-axon
