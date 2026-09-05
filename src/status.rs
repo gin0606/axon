@@ -56,152 +56,185 @@ pub(super) fn render(
         triage.len(),
         ready.len()
     );
-    for root in roots {
-        write!(output, "\n{}", state_row(root, decoration)).unwrap();
-        if root.kind == EntityKind::Group {
-            let summary = view.group_summary(&root.id);
-            writeln!(
-                output,
-                "  Can complete: {}",
-                yes_no(view.can_complete_group(&root.id))
-            )
-            .unwrap();
-            for line in render_entity_counts("Descendants", &summary.descendants, decoration) {
-                writeln!(output, "{line}").unwrap();
-            }
+    for root in roots.iter().filter(|e| e.kind == EntityKind::Group) {
+        output.push('\n');
+        render_item(
+            &mut output,
+            view,
+            root,
+            &scope,
+            &ready,
+            &triage,
+            decoration,
+            "",
+        )?;
+        let summary = view.group_summary(&root.id);
+        for line in render_entity_counts("Descendants", &summary.descendants, decoration) {
+            writeln!(output, "{line}").unwrap();
         }
-        let block = members(view, root);
-        for entity in &block {
-            if entity.id != root.id && entity.kind == EntityKind::Group {
-                write!(output, "  Scope: {}", state_row(entity, decoration)).unwrap();
-                writeln!(
-                    output,
-                    "    Can complete: {}",
-                    yes_no(view.can_complete_group(&entity.id))
-                )
-                .unwrap();
-            }
-        }
-        output.push_str("  Saved claims (InProgress):\n");
-        let mut any = false;
-        for entity in &block {
-            if let Some(claim) = entity.progress.claim() {
-                write!(
-                    output,
-                    "    {}",
-                    render_claim_row(entity, claim, decoration)
-                )
-                .unwrap();
-                writeln!(
-                    output,
-                    "      Active scope: {}{}",
-                    yes_no(view.within_active_scope(&entity.id)?),
-                    parent_field(entity)
-                )
-                .unwrap();
-                any = true;
-            }
-        }
-        if !any {
-            output.push_str("    (none)\n");
-        }
-        for (label, candidates) in [
-            (
-                "Triage candidates",
-                triage.iter().map(|(e, _)| *e).collect::<Vec<_>>(),
-            ),
-            ("Ready candidates", ready.clone()),
-        ] {
-            writeln!(output, "  {label}:").unwrap();
-            let mut any = false;
-            for entity in &block {
-                if candidates.iter().any(|e| e.id == entity.id) {
-                    write!(output, "    {}", state_row(entity, decoration)).unwrap();
-                    if label == "Triage candidates" {
-                        let reason = triage.iter().find(|(e, _)| e.id == entity.id).unwrap().1;
-                        writeln!(
-                            output,
-                            "      Reason: {}",
-                            match reason {
-                                TriageReason::Undecided => "Undecided",
-                                TriageReason::Orphaned => "Orphaned",
-                            }
-                        )
-                        .unwrap();
-                    }
-                    any = true;
-                }
-            }
-            if !any {
-                output.push_str("    (none)\n");
-            }
-        }
-        output.push_str("  Waits and gates (by owning scope):\n");
-        let mut owners = block.clone();
-        // Ancestors explain a selected nested scope without entering its counts.
-        owners.extend(view.ancestors(&root.id));
-        owners.sort_by(|a, b| a.id.cmp(&b.id));
-        let mut any = false;
-        for entity in owners {
-            let mut reasons = Vec::new();
-            if has_local_descendant_gate(view, entity)? {
-                reasons.push(format!(
-                    "Descendant gate closed: Progress={}, Disposition={}",
-                    entity.progress.label(),
-                    entity.disposition.label()
-                ));
-            }
-            if !entity.is_terminal()
+        for (_, entity) in ordered_subtree(view, &root.id) {
+            if entity.kind == EntityKind::Group
+                || !entity.is_terminal()
                 || entity.progress.claim().is_some()
-                || entity.kind == EntityKind::Group
             {
-                if !view.is_surfaced(entity)? {
-                    let mut condition = format!(
-                        "Resurface condition not satisfied: {}",
-                        entity.resurface_condition.label()
-                    );
-                    if let ResurfaceCondition::AfterEntity(id) = &entity.resurface_condition
-                        && let Some(target) = view.get(id)
-                    {
-                        condition.push_str(&format!("; {}", reference(target, &scope)));
-                    }
-                    reasons.push(condition);
-                }
-                let mut targets = view.direct_dependencies(&entity.id);
-                targets.sort_by(|a, b| a.id.cmp(&b.id));
-                for target in targets {
-                    if target.disposition == Disposition::Rejected {
-                        reasons.push(format!(
-                            "Rejected prerequisite (Orphaned): {}",
-                            reference(target, &scope)
-                        ));
-                    } else if !target.is_terminal() {
-                        reasons.push(format!(
-                            "Unresolved dependency: {}",
-                            reference(target, &scope)
-                        ));
-                    }
-                }
-            }
-            if !reasons.is_empty() {
-                write!(output, "    {}", state_row(entity, decoration)).unwrap();
-                if !scope.contains(&entity.id) {
-                    output.push_str("      External ancestor scope\n");
-                }
-                for reason in reasons {
-                    writeln!(output, "      {reason}").unwrap();
-                }
-                any = true;
+                render_item(
+                    &mut output,
+                    view,
+                    entity,
+                    &scope,
+                    &ready,
+                    &triage,
+                    decoration,
+                    "  ",
+                )?;
             }
         }
-        if !any {
-            output.push_str("    (none)\n");
+        let mut ancestors = view.ancestors(&root.id);
+        ancestors.sort_by(|a, b| a.id.cmp(&b.id));
+        for ancestor in ancestors {
+            let reasons = wait_reasons(view, ancestor, &scope)?;
+            if !reasons.is_empty() {
+                writeln!(output, "  External ancestor scope: {}", ancestor.id).unwrap();
+                for reason in reasons {
+                    writeln!(output, "    {reason}").unwrap();
+                }
+            }
+        }
+    }
+    let ungrouped = roots
+        .iter()
+        .filter(|e| e.kind == EntityKind::Issue)
+        .collect::<Vec<_>>();
+    if !ungrouped.is_empty() {
+        output.push_str("\nUngrouped Issues\n");
+        for entity in ungrouped {
+            render_item(
+                &mut output,
+                view,
+                entity,
+                &scope,
+                &ready,
+                &triage,
+                decoration,
+                "  ",
+            )?;
         }
     }
     output.push_str(
         "\nUse `axon show <ID>` for the complete subtree, description, notes, and history.\n",
     );
     Ok(output)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_item(
+    output: &mut String,
+    view: &View,
+    entity: &Entity,
+    scope: &HashSet<EntityId>,
+    ready: &[&Entity],
+    triage: &[(&Entity, TriageReason)],
+    decoration: OutputDecoration,
+    indent: &str,
+) -> derived::Result<()> {
+    write!(output, "{indent}{}", state_row(entity, decoration)).unwrap();
+    if ready.iter().any(|e| e.id == entity.id) {
+        writeln!(output, "{indent}  Ready candidate").unwrap();
+    }
+    if let Some((_, reason)) = triage.iter().find(|(e, _)| e.id == entity.id) {
+        writeln!(
+            output,
+            "{indent}  Triage candidate: {}",
+            match reason {
+                TriageReason::Undecided => "Undecided",
+                TriageReason::Orphaned => "Orphaned",
+            }
+        )
+        .unwrap();
+    }
+    if entity.kind == EntityKind::Group && !matches!(entity.progress, Progress::Ended) {
+        writeln!(
+            output,
+            "{indent}  Can complete: {}",
+            yes_no(view.can_complete_group(&entity.id))
+        )
+        .unwrap();
+    }
+    if let Some(claim) = entity.progress.claim() {
+        writeln!(
+            output,
+            "{indent}  Claim: {}",
+            claim_details(claim, decoration)
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "{indent}  Active scope: {}",
+            yes_no(view.within_active_scope(&entity.id)?)
+        )
+        .unwrap();
+    }
+    for reason in wait_reasons(view, entity, scope)? {
+        writeln!(output, "{indent}  {reason}").unwrap();
+    }
+    Ok(())
+}
+
+fn wait_reasons(
+    view: &View,
+    entity: &Entity,
+    scope: &HashSet<EntityId>,
+) -> derived::Result<Vec<String>> {
+    let mut reasons = Vec::new();
+    if matches!(entity.progress, Progress::Ended) {
+        if entity.kind == EntityKind::Group {
+            view.is_surfaced(entity)?;
+            if entity.disposition == Disposition::Rejected {
+                reasons.push("Rejected Group: descendant scope is inactive; saved states and claims are unchanged.".to_string());
+            }
+        }
+        return Ok(reasons);
+    }
+    if has_local_descendant_gate(view, entity)? {
+        reasons.push(format!(
+            "Descendant gate closed: Progress={}, Disposition={}",
+            entity.progress.label(),
+            entity.disposition.label()
+        ));
+    }
+    if !entity.is_terminal()
+        || entity.progress.claim().is_some()
+        || entity.kind == EntityKind::Group
+    {
+        if !view.is_surfaced(entity)? {
+            let mut condition = format!(
+                "Resurface condition not satisfied: {}",
+                entity.resurface_condition.label()
+            );
+            if let ResurfaceCondition::AfterEntity(id) = &entity.resurface_condition
+                && let Some(target) = view.get(id)
+            {
+                condition.push_str(&format!("; {}", reference(target, scope)));
+            }
+            reasons.push(condition);
+        }
+        let mut targets = view.direct_dependencies(&entity.id);
+        targets.sort_by(|a, b| a.id.cmp(&b.id));
+        for target in targets {
+            if target.disposition == Disposition::Rejected {
+                reasons.push(format!(
+                    "Rejected prerequisite (Orphaned): {}",
+                    reference(target, scope)
+                ));
+            } else if !target.is_terminal() {
+                reasons.push(format!(
+                    "Unresolved dependency: {}",
+                    reference(target, scope)
+                ));
+            }
+        }
+    }
+    Ok(reasons)
 }
 
 fn parent_field(entity: &Entity) -> String {

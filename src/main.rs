@@ -201,7 +201,7 @@ enum Command {
     },
     /// Summarize plans, saved claims, candidates, and waits
     #[command(
-        long_about = "Summarize root plans and ungrouped Issues with unfinished Entities or saved claims. --group includes the specified Group and every descendant, even when terminal. Candidate sets match ready and triage; saved claims do not imply agent activity. Use show <ID> for complete details."
+        long_about = "Summarize root plans and ungrouped Issues with unfinished Entities or saved claims. --group includes the specified Group and every descendant, even when terminal. Each item combines its candidates, saved claim, and waits; empty sections are omitted. Candidate sets match ready and triage; saved claims do not imply agent activity. Use show <ID> for complete details and ended Group structure."
     )]
     Status {
         /// Group ID or unique ID suffix; include its complete descendant scope
@@ -1140,11 +1140,41 @@ fn render_show(
     )];
 
     overview.push(format!("Situation: {}", show_situation(view, entity)?));
-    overview.extend(show_waits(view, entity, "", decoration)?);
+    if entity.kind == EntityKind::Group
+        && matches!(entity.progress, Progress::Ended)
+        && entity.disposition == Disposition::Rejected
+    {
+        overview.push(
+            "Rejected Group: descendant scope is inactive; saved states and claims are unchanged."
+                .to_string(),
+        );
+    }
+    let mut structural_details = Vec::new();
+    if matches!(entity.progress, Progress::Ended) {
+        structural_details.extend(show_waits(view, entity, "", decoration)?);
+        if entity.kind == EntityKind::Group {
+            structural_details.push("Can complete: no (Group has ended).".to_string());
+        }
+    } else {
+        overview.extend(show_waits(view, entity, "", decoration)?);
+    }
     for ancestor in view.ancestors(&entity.id) {
+        if matches!(ancestor.progress, Progress::Ended)
+            && ancestor.disposition == Disposition::Rejected
+            && !matches!(entity.progress, Progress::Ended)
+        {
+            overview.push(format!("Rejected ancestor scope: {}; descendant scope is inactive; saved states and claims are unchanged.", ancestor.id));
+        }
         if has_local_descendant_gate(view, ancestor)? {
-            overview.push(format!("Ancestor scope: {}", ancestor.id));
-            overview.extend(show_waits(view, ancestor, "  ", decoration)?);
+            let target = if matches!(entity.progress, Progress::Ended)
+                || matches!(ancestor.progress, Progress::Ended)
+            {
+                &mut structural_details
+            } else {
+                &mut overview
+            };
+            target.push(format!("Ancestor scope: {}", ancestor.id));
+            target.extend(show_waits(view, ancestor, "  ", decoration)?);
         }
     }
     blocks.push(overview);
@@ -1248,6 +1278,7 @@ fn render_show(
             ),
         )],
     ));
+    overview.extend(structural_details);
     let details = render_section(decoration, "Details", overview);
     let mut group_details = Vec::new();
     let mut dependencies = Vec::new();
@@ -1300,6 +1331,15 @@ fn render_show(
         group_details = group;
 
         let subtree = ordered_subtree(view, &entity.id);
+        for (_, descendant) in &subtree {
+            if matches!(descendant.progress, Progress::Ended) {
+                let waits = show_waits(view, descendant, "    ", decoration)?;
+                if !waits.is_empty() {
+                    group_details.push(format!("  Ended descendant structure: {}", descendant.id));
+                    group_details.extend(waits);
+                }
+            }
+        }
         blocks.push(render_section(
             decoration,
             "Subtree",
@@ -1563,12 +1603,20 @@ fn render_subtree(
             ),
             entity.title,
         ));
-        lines.extend(show_waits(
-            view,
-            entity,
-            &format!("{indent}  "),
-            decoration,
-        )?);
+        if matches!(entity.progress, Progress::Ended)
+            && entity.kind == EntityKind::Group
+            && entity.disposition == Disposition::Rejected
+        {
+            lines.push(format!("{indent}  Rejected Group: descendant scope is inactive; saved states and claims are unchanged."));
+        }
+        if !matches!(entity.progress, Progress::Ended) {
+            lines.extend(show_waits(
+                view,
+                entity,
+                &format!("{indent}  "),
+                decoration,
+            )?);
+        }
     }
     Ok(lines)
 }

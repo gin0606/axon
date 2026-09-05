@@ -143,7 +143,7 @@ Group などの評価は行う。履歴・Note・Revision の参照、claims、e
 
 ### 計画の横断表示
 
-`status` は root Group ごとの計画と所属なし Issue を ID 順に要約する。Group 自身または
+`status` は root Group ごとの計画を ID 順に要約し、その後に所属なし Issue の一覧を ID 順で示す。Group 自身または
 全子孫に非 terminal Entity か保存済み claim があれば表示する。Rejected Group 配下の
 非 terminal 子孫も保持して表示し、全体が terminal で claim がない計画は省く。
 `status --group <id>` は ID / 一意 suffix を解決し、指定 Group 自身と全子孫を対象にする。
@@ -234,3 +234,7 @@ DB を使う全コマンドは共通の open 境界で v9 / v10 を現行 v11 �
 移行成功の版と backup 先は元の処理を始める前に stderr へ通知する。stdout の record / YAML は維持し、最新 DB では通知も backup も増やさない。移行の transaction と元の操作は独立し、元の操作の失敗は成功した移行を取り消さない。
 
 backup は管理 root の `.axon/migration-backups` に移行直前の全保存情報を SQLite backup として残し、自動削除・上書きしない。失敗した backup は不完全な場合がある。診断は DB、版、処理段階、原因、backup 先（作成開始後）、適用状態を示す。未適用では元の操作を実行しない。適用済みなら移行は保持され、結果不明なら再実行前に DB と backup を保全・確認する。v9 未満・未来版・未知構造を変更せず拒否し、未来版には対応する新しい axon を案内する。権限、容量、他 writer の lock は表示した実 path を起点に調べる。
+
+### 計画表示の情報密度
+
+status は各項目の identity を一度だけ表示し、Ready / Triage、保存 claim と待ち理由をその項目に添える。所属なし Issue は Ungrouped Issues にまとめ、空セクションは省く。冒頭の件数はゼロでも表示する（対象全体が空の場合は既存の空表示案内）。Ended Group の完了不可と終了由来 gate は要約から外し、show の Details で確認できる。Rejected 配下の未終了項目・保存 claim・inactive 理由は引き続き表示する。

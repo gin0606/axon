@@ -1074,14 +1074,20 @@ fn failed_operations_offer_inspection_without_changing_state() {
 }
 
 fn status_candidates(output: &str, heading: &str) -> std::collections::BTreeSet<String> {
-    let mut active = false;
+    let mut current = None;
     let mut ids = std::collections::BTreeSet::new();
     for line in output.lines() {
-        if line.starts_with("  ") && !line.starts_with("    ") {
-            active = line == format!("  {heading}:");
+        let line = line.trim_start();
+        if line.starts_with("test-") {
+            current = line.split_whitespace().next();
         }
-        if active && line.starts_with("    test-") {
-            assert!(ids.insert(line.split_whitespace().next().unwrap().to_string()));
+        let marker = if heading == "Ready candidates" {
+            "Ready candidate"
+        } else {
+            "Triage candidate:"
+        };
+        if line.starts_with(marker) {
+            assert!(ids.insert(current.unwrap().to_string()));
         }
     }
     ids
@@ -1112,7 +1118,7 @@ fn status_groups_candidates_waits_and_saved_claims_without_double_counting() {
         text.starts_with("Saved claims: 2  Triage candidates: 1  Ready candidates: 3\n"),
         "{text}"
     );
-    assert!(text.contains(&format!("Scope: {nested}")));
+    assert!(text.contains(&format!("{nested}  Group  nested")));
     assert!(text.contains("Descendants: 5  Issue: 4  Group: 1  Terminal: 0"));
     assert!(!status_candidates(&text, "Triage candidates").contains(&dormant));
     for (command, heading) in [
@@ -1305,7 +1311,13 @@ fn show_distinguishes_explicit_completion_from_an_ended_group() {
     assert_success(&repo.axon(&["decide", "reject", &group]));
     let ended = stdout(&repo.axon(&["show", &group]));
     assert!(ended.contains("Situation: Ended; Rejected"));
-    assert!(!ended.contains("Can complete:"));
+    assert!(
+        !ended
+            .split_once("\n\nDetails\n")
+            .unwrap()
+            .0
+            .contains("Can complete:")
+    );
     assert!(!ended.contains("Inactive:"));
 }
 
@@ -1337,12 +1349,8 @@ fn plan_views_keep_inherited_dependency_gates_at_the_owning_scope() {
                 1,
                 "{status}"
             );
-            let waits = status
-                .split_once("  Waits and gates (by owning scope):\n")
-                .unwrap()
-                .1;
-            assert!(waits.contains(&format!("{root}  Group")));
-            assert!(!waits.contains(&format!("{nested}  Group")));
+            let waits = status.as_str();
+            assert!(waits.contains(&root));
             assert!(waits.contains(&format!("{target}  prerequisite  External")));
             assert!(status_candidates(&status, "Ready candidates").is_empty());
             let expected = if rejected && selected == &root {
@@ -1411,16 +1419,13 @@ fn plan_views_keep_inherited_dependency_gates_at_the_owning_scope() {
             let output = repo.axon(&["status", "--group", selected]);
             assert_success(&output);
             let status = stdout(&output);
-            let waits = status
-                .split_once("  Waits and gates (by owning scope):\n")
-                .unwrap()
-                .1;
+            let waits = status.as_str();
             assert_eq!(
                 waits.matches("Descendant gate closed:").count(),
                 2,
                 "{status}"
             );
-            assert!(waits.contains(&format!("{root}  Group")));
+            assert!(waits.contains(&root));
             assert!(waits.contains(&format!("{nested}  Group")));
             let show = stdout(&repo.axon(&["show", selected]));
             let summary = show.split_once("\n\nDetails\n").unwrap().0;
@@ -1440,4 +1445,108 @@ fn plan_views_keep_inherited_dependency_gates_at_the_owning_scope() {
         }
         assert_eq!(stdout(&repo.axon(&["claims"])), claims);
     }
+}
+
+#[test]
+fn plan_summaries_omit_empty_sections_and_keep_ended_structure_in_details() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let ready = repo.plan("unique standalone ready title");
+    let draft = created_id(&repo.axon(&["capture", "unique standalone draft title"]));
+    let running = repo.plan("unique standalone running title");
+    assert_success(&repo.axon(&["start", &running]));
+    let output = stdout(&repo.axon(&["status"]));
+    assert_eq!(output.matches("Ungrouped Issues").count(), 1);
+    for title in [
+        "unique standalone ready title",
+        "unique standalone draft title",
+        "unique standalone running title",
+    ] {
+        assert_eq!(output.matches(title).count(), 1, "{output}");
+    }
+    assert!(!output.contains("(none)"));
+    assert!(!output.contains("Waits and gates"));
+    assert_eq!(
+        status_candidates(&output, "Ready candidates"),
+        std::collections::BTreeSet::from([ready])
+    );
+    assert_eq!(
+        status_candidates(&output, "Triage candidates"),
+        std::collections::BTreeSet::from([draft])
+    );
+    assert!(output.contains("Claim: test-actor"));
+
+    let root = repo.group_plan("completed root");
+    let nested = created_id(&repo.axon(&["group", "plan", "completed nested", "--parent", &root]));
+    assert_success(&repo.axon(&["start", &root]));
+    assert_success(&repo.axon(&["start", &nested]));
+    assert_success(&repo.axon(&["done", &nested]));
+    assert_success(&repo.axon(&["done", &root]));
+    for selected in [&root, &nested] {
+        let status = stdout(&repo.axon(&["status", "--group", selected]));
+        assert!(status.starts_with("Saved claims: 0  Triage candidates: 0  Ready candidates: 0"));
+        assert!(!status.contains("Can complete:"), "{status}");
+        assert!(!status.contains("Descendant gate closed:"), "{status}");
+        let show = stdout(&repo.axon(&["show", selected]));
+        let (summary, details) = show.split_once("\n\nDetails\n").unwrap();
+        assert!(!summary.contains("Descendant gate closed:"), "{show}");
+        assert!(!summary.contains("Can complete:"));
+        assert!(details.contains("Descendant gate closed:"));
+        assert!(details.contains("Can complete: no"));
+    }
+}
+
+#[test]
+fn ended_plan_summaries_preserve_command_failure_and_rejected_claim_context() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let outer = repo.group_plan("active outer plan");
+    assert_success(&repo.axon(&["start", &outer]));
+    let root = created_id(&repo.axon(&[
+        "group",
+        "plan",
+        "ended with saved claim",
+        "--parent",
+        &outer,
+    ]));
+    let child = created_id(&repo.axon(&["plan", "rejected running child", "--parent", &root]));
+    assert_success(&repo.axon(&["start", &root]));
+    assert_success(&repo.axon(&["start", &child]));
+    assert_success(&repo.axon(&["decide", "reject", &child]));
+    assert_success(&repo.axon(&["done", &root]));
+    assert_success(&repo.axon(&["decide", "reject", &root]));
+    let status = stdout(&repo.axon(&["status", "--group", &root]));
+    assert!(status.contains("Saved claims: 1"));
+    assert!(status.contains("Active scope: no"));
+    assert!(status.contains("Rejected Group: descendant scope is inactive"));
+    assert!(!status.contains("Descendant gate closed:"));
+    for selected in [&outer, &root, &child] {
+        let show = stdout(&repo.axon(&["show", selected]));
+        assert!(
+            show.split_once("\n\nDetails\n")
+                .unwrap()
+                .0
+                .contains("descendant scope is inactive"),
+            "{show}"
+        );
+    }
+    assert_success(&repo.axon(&["when", "command", &root, "echo diagnostic >&2; exit 7"]));
+    let failure = repo.axon(&["status", "--group", &root]);
+    assert_failure(&failure);
+    assert!(stdout(&failure).is_empty());
+    assert!(stderr(&failure).contains("diagnostic"));
+    assert_success(&repo.axon(&[
+        "when",
+        "command",
+        &root,
+        "echo observed >> observations; exit 0",
+    ]));
+    assert_success(&repo.axon(&["status", "--group", &root]));
+    assert_eq!(
+        fs::read_to_string(repo.root().join("observations"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
 }

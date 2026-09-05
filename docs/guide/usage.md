@@ -186,3 +186,5 @@ The script owns timeouts and caching; Axon waits if it does not finish. See the
 [CLI execution contract](../reference/cli.md#外部条件の評価) for the working directory,
 environment, diagnostics, and evaluation sharing, and the
 [state model](../reference/state-model.md#resurface-condition) for resurfacing and Group behavior.
+
+status は所属なし Issue を一つの一覧にまとめ、各項目の候補・claim・待ちを近くに表示する。空セクションは省くが、冒頭の件数はゼロでも確認できる。終了済み計画の構造上の gate や完了不可は show の Details で確認する。Rejected 配下の未終了項目・claim は引き続き表示される。
