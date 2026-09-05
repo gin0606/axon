@@ -7,7 +7,7 @@
 // parent の循環だけを最小限に拒否する。
 //
 // 対象外: claim、actor の本人性、DB 直接編集、複数利用者の並行編集の merge、redaction、
-// 公開名称・コマンド構文・出力文言。AtDate は clock を持たない不透明な control 値として扱う。
+// 公開名称・コマンド構文・出力文言。AtDate と Command は評価を持たない不透明な control 値として扱う。
 module information_model {
   // ---- Identity ----
   type Id = int
@@ -16,7 +16,7 @@ module information_model {
   // ---- Control state ----
   type Progress = NotStarted | InProgress | Ended
   type Disposition = Undecided | Accepted | Rejected
-  type ResurfaceCondition = Always | AtDate(int) | AfterEntity(Id)
+  type ResurfaceCondition = Always | AtDate(int) | AfterEntity(Id) | Command(int)
 
   type Control = {
     progress: Progress,
@@ -130,6 +130,7 @@ module information_model {
   pure val CONDITIONS: Set[ResurfaceCondition] =
     Set(Always)
       .union(DATES.map(d => AtDate(d)))
+      .union(Set(Command(0), Command(1)))
       .union(ENTITIES.map(i => AfterEntity(i)))
 
   pure val BASELINE_ENTITY: Id = 1

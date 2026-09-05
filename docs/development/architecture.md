@@ -66,6 +66,16 @@ start は対象を明示して ready の検査と claim の取得を同じ write
 候補選択と着手をまとめる操作は持たない。並行して先に着手された場合は更新が失敗し、
 競合後の扱いは呼び出し側の workflow が決める。
 
+## 外部条件の評価 context
+
+Store が保持する評価 context を View と StoreSnapshot に共有し、同じ Entity の評価結果と
+失敗を 1 invocation 内で再利用する。DB の読み取り transaction が別でも context は共有する。
+この結果はメモリ内だけに置き、条件のシェル文字列と区別する。
+
+条件の置換では付随列をまとめて更新し、旧条件の日付・参照・シェル文字列を残さない。
+SQL 制約と RawEntity の型変換境界で、選択した条件に不要な付随値を拒否する。
+外部プロセスの実行契約は [CLI 契約](../reference/cli.md#外部条件の評価) に置く。
+
 ## 公開 ID の生成
 
 ID は `<prefix>-<ランダム 6 文字>`。ランダム部分は Crockford Base32

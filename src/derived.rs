@@ -1,22 +1,102 @@
 use crate::domain::*;
 use chrono::Utc;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::rc::Rc;
+
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{0}")]
+pub struct EvaluationError(String);
+
+pub type Result<T> = std::result::Result<T, EvaluationError>;
+
+pub struct Evaluation {
+    root: PathBuf,
+    results: RefCell<HashMap<EntityId, Result<bool>>>,
+}
+
+impl Evaluation {
+    pub fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            results: RefCell::new(HashMap::new()),
+        }
+    }
+
+    fn command(&self, entity: &Entity, script: &str) -> Result<bool> {
+        if let Some(result) = self.results.borrow().get(&entity.id) {
+            return result.clone();
+        }
+        let result = self.run_command(entity, script);
+        self.results
+            .borrow_mut()
+            .insert(entity.id.clone(), result.clone());
+        result
+    }
+
+    fn run_command(&self, entity: &Entity, script: &str) -> Result<bool> {
+        let output = Command::new("/bin/sh")
+            .args(["-c", script])
+            .current_dir(&self.root)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|error| {
+                EvaluationError(format!(
+                    "{}: Command({script:?}) could not start in {}: {error}",
+                    entity.id,
+                    self.root.display()
+                ))
+            })?;
+        match output.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(EvaluationError(format!(
+                "{}: Command({script:?}) failed: {}\nstdout:\n{}\nstderr:\n{}",
+                entity.id,
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ))),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct View {
     by_id: HashMap<EntityId, Entity>,
     order: Vec<EntityId>,
     deps: Vec<(EntityId, EntityId)>,
+    evaluation: Rc<Evaluation>,
 }
 
 impl View {
+    #[cfg(test)]
     pub fn new(entities: Vec<Entity>, deps: Vec<(EntityId, EntityId)>) -> Self {
+        Self::with_evaluation(
+            entities,
+            deps,
+            Rc::new(Evaluation::new(std::env::current_dir().unwrap())),
+        )
+    }
+
+    pub fn with_evaluation(
+        entities: Vec<Entity>,
+        deps: Vec<(EntityId, EntityId)>,
+        evaluation: Rc<Evaluation>,
+    ) -> Self {
         let order = entities.iter().map(|entity| entity.id.clone()).collect();
         let by_id = entities
             .into_iter()
             .map(|entity| (entity.id.clone(), entity))
             .collect();
-        Self { by_id, order, deps }
+        Self {
+            by_id,
+            order,
+            deps,
+            evaluation,
+        }
     }
 
     pub fn get(&self, id: &EntityId) -> Option<&Entity> {
@@ -101,14 +181,15 @@ impl View {
             .collect()
     }
 
-    pub fn is_surfaced(&self, entity: &Entity) -> bool {
-        match &entity.resurface_condition {
+    pub fn is_surfaced(&self, entity: &Entity) -> Result<bool> {
+        Ok(match &entity.resurface_condition {
             ResurfaceCondition::Always => true,
+            ResurfaceCondition::Command(script) => self.evaluation.command(entity, script)?,
             ResurfaceCondition::AtDate(date) => *date <= Utc::now().date_naive(),
             ResurfaceCondition::AfterEntity(target) => {
                 self.get(target).is_none_or(Entity::is_terminal)
             }
-        }
+        })
     }
 
     pub fn is_blocked(&self, id: &EntityId) -> bool {
@@ -123,51 +204,64 @@ impl View {
             .any(|target| target.disposition == Disposition::Rejected)
     }
 
-    pub fn opens_descendants(&self, group: &Entity) -> bool {
-        group.kind == EntityKind::Group
+    pub fn opens_descendants(&self, group: &Entity) -> Result<bool> {
+        Ok(group.kind == EntityKind::Group
             && matches!(group.progress, Progress::InProgress(_))
             && group.disposition == Disposition::Accepted
-            && self.is_surfaced(group)
+            && self.is_surfaced(group)?
             && !self.is_blocked(&group.id)
-            && !self.is_orphaned(&group.id)
+            && !self.is_orphaned(&group.id))
     }
 
-    pub fn within_active_scope(&self, id: &EntityId) -> bool {
-        self.ancestors(id)
-            .into_iter()
-            .all(|group| self.opens_descendants(group))
+    pub fn within_active_scope(&self, id: &EntityId) -> Result<bool> {
+        for group in self.ancestors(id) {
+            if !self.opens_descendants(group)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
-    pub fn is_ready(&self, entity: &Entity) -> bool {
-        matches!(entity.progress, Progress::NotStarted)
+    pub fn is_ready(&self, entity: &Entity) -> Result<bool> {
+        Ok(matches!(entity.progress, Progress::NotStarted)
             && entity.disposition == Disposition::Accepted
-            && self.is_surfaced(entity)
-            && self.within_active_scope(&entity.id)
+            && self.is_surfaced(entity)?
+            && self.within_active_scope(&entity.id)?
             && !self.is_blocked(&entity.id)
-            && !self.is_orphaned(&entity.id)
+            && !self.is_orphaned(&entity.id))
     }
 
-    pub fn ready(&self) -> Vec<&Entity> {
-        self.iter().filter(|entity| self.is_ready(entity)).collect()
+    pub fn ready(&self, include: impl Fn(&Entity) -> bool) -> Result<Vec<&Entity>> {
+        let mut result = Vec::new();
+        for entity in self.iter().filter(|entity| include(entity)) {
+            if self.is_ready(entity)? {
+                result.push(entity);
+            }
+        }
+        Ok(result)
     }
 
-    pub fn triage(&self) -> Vec<(&Entity, TriageReason)> {
-        self.iter()
-            .filter(|entity| {
-                !entity.is_terminal()
-                    && self.is_surfaced(entity)
-                    && self.within_active_scope(&entity.id)
-            })
-            .filter_map(|entity| {
-                if entity.disposition == Disposition::Undecided {
-                    Some((entity, TriageReason::Undecided))
-                } else if self.is_orphaned(&entity.id) {
-                    Some((entity, TriageReason::Orphaned))
-                } else {
-                    None
-                }
-            })
-            .collect()
+    pub fn triage(
+        &self,
+        include: impl Fn(&Entity) -> bool,
+    ) -> Result<Vec<(&Entity, TriageReason)>> {
+        let mut result = Vec::new();
+        for entity in self
+            .iter()
+            .filter(|entity| include(entity) && !entity.is_terminal())
+        {
+            let reason = if entity.disposition == Disposition::Undecided {
+                TriageReason::Undecided
+            } else if self.is_orphaned(&entity.id) {
+                TriageReason::Orphaned
+            } else {
+                continue;
+            };
+            if self.is_surfaced(entity)? && self.within_active_scope(&entity.id)? {
+                result.push((entity, reason));
+            }
+        }
+        Ok(result)
     }
 
     pub fn claims(&self) -> Vec<(&Entity, &Claim)> {
@@ -204,21 +298,21 @@ impl View {
         }
     }
 
-    fn is_blocking_root_cause(&self, entity: &Entity) -> bool {
-        self.is_orphaned(&entity.id)
-            || !self.is_surfaced(entity)
-            || !self.within_active_scope(&entity.id)
+    fn is_blocking_root_cause(&self, entity: &Entity) -> Result<bool> {
+        Ok(self.is_orphaned(&entity.id)
+            || !self.is_surfaced(entity)?
+            || !self.within_active_scope(&entity.id)?
             || self
                 .dependency_targets(&entity.id)
                 .into_iter()
-                .all(Entity::is_terminal)
+                .all(Entity::is_terminal))
     }
 
-    pub fn blocking_causes(&self, id: &EntityId) -> Vec<&Entity> {
+    pub fn blocking_causes(&self, id: &EntityId) -> Result<Vec<&Entity>> {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        self.walk_causes(id, &mut seen, &mut result);
-        result
+        self.walk_causes(id, &mut seen, &mut result)?;
+        Ok(result)
     }
 
     fn walk_causes<'a>(
@@ -226,17 +320,18 @@ impl View {
         id: &EntityId,
         seen: &mut HashSet<EntityId>,
         result: &mut Vec<&'a Entity>,
-    ) {
+    ) -> Result<()> {
         for target in self.dependency_targets(id) {
             if target.is_terminal() || !seen.insert(target.id.clone()) {
                 continue;
             }
-            if self.is_blocking_root_cause(target) {
+            if self.is_blocking_root_cause(target)? {
                 result.push(target);
             } else {
-                self.walk_causes(&target.id, seen, result);
+                self.walk_causes(&target.id, seen, result)?;
             }
         }
+        Ok(())
     }
 }
 
@@ -331,6 +426,35 @@ mod tests {
     }
 
     #[test]
+    fn command_spawn_failure_is_an_error_and_is_shared() {
+        let entity = entity(
+            "command",
+            EntityKind::Issue,
+            Progress::NotStarted,
+            Disposition::Accepted,
+            None,
+        );
+        let evaluation = Evaluation::new(
+            std::env::temp_dir().join(format!("axon-missing-command-root-{}", std::process::id())),
+        );
+        let first = evaluation
+            .command(&entity, "exit 0")
+            .unwrap_err()
+            .to_string();
+        assert!(first.contains("command"));
+        assert!(first.contains("could not start"));
+        assert!(first.contains("exit 0"));
+        assert_eq!(
+            evaluation
+                .command(&entity, "exit 0")
+                .unwrap_err()
+                .to_string(),
+            first
+        );
+        assert_eq!(evaluation.results.borrow().len(), 1);
+    }
+
+    #[test]
     fn group_gate_exposes_only_the_current_frontier() {
         let closed = View::new(
             vec![
@@ -353,7 +477,8 @@ mod tests {
         );
         assert_eq!(
             closed
-                .ready()
+                .ready(|_| true)
+                .unwrap()
                 .iter()
                 .map(|e| e.id.as_str())
                 .collect::<Vec<_>>(),
@@ -380,7 +505,8 @@ mod tests {
             vec![],
         );
         assert_eq!(
-            open.ready()
+            open.ready(|_| true)
+                .unwrap()
                 .iter()
                 .map(|e| e.id.as_str())
                 .collect::<Vec<_>>(),
@@ -418,7 +544,7 @@ mod tests {
         );
         assert!(view.is_blocked(&id("g")));
         assert!(view.is_blocked(&id("i")));
-        assert!(!view.is_ready(view.get(&id("i")).unwrap()));
+        assert!(!view.is_ready(view.get(&id("i")).unwrap()).unwrap());
     }
 
     #[test]
@@ -474,7 +600,8 @@ mod tests {
             vec![],
         );
         assert_eq!(
-            view.triage()
+            view.triage(|_| true)
+                .unwrap()
                 .iter()
                 .map(|(e, _)| e.id.as_str())
                 .collect::<Vec<_>>(),

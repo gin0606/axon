@@ -11,6 +11,7 @@ module group_plan {
     | Always
     | AtDate(int)
     | AfterEntity(Id)
+    | Command
 
   type Entity = {
     kind: EntityKind,
@@ -24,6 +25,8 @@ module group_plan {
     parent: Id -> Id,
     dependencies: Set[(Id, Id)],
     clock: int,
+    // 外部観測入力。Entity の Control state ではない。
+    commandSatisfied: Id -> bool,
   }
 
   // Witness の action coverage だけに使う ghost state。axon が保存する状態ではない。
@@ -42,6 +45,9 @@ module group_plan {
     | AddDependencyOp
     | RemoveDependencyOp
     | TickOp
+    | SetCommandOp
+    | ObserveCommandOp
+    | CommandGateClosedOp
 
   pure val ISSUES: Set[Id] = Set(0, 1, 2)
   pure val GROUPS: Set[Id] = Set(3, 4, 5)
@@ -76,6 +82,7 @@ module group_plan {
     parent: INITIAL_PARENT,
     dependencies: Set(),
     clock: 0,
+    commandSatisfied: ENTITIES.mapBy(_ => false),
   }
 
   // ---- Pure domain logic ----
@@ -146,6 +153,7 @@ module group_plan {
   pure def surfaced(s: State, i: Id): bool =
     match entity(s, i).resurface {
     | Always => true
+    | Command => s.commandSatisfied.get(i)
     | AtDate(date) => date <= s.clock
     | AfterEntity(target) => terminal(s, target)
     }
@@ -529,7 +537,48 @@ module group_plan {
     observed' = observed.union(Set(TickOp)),
   }
 
+  action doSetCommand: bool = {
+    nondet i = ENTITIES.oneOf()
+    all {
+      entity(state, i).resurface != Command,
+      state' = applyResurface(state, i, Command),
+      observed' = observed.union(Set(SetCommandOp)),
+    }
+  }
+
+  action doObserveCommand: bool = {
+    nondet i = ENTITIES.oneOf()
+    val updated = {...state, commandSatisfied: state.commandSatisfied.set(i, not(state.commandSatisfied.get(i)))}
+    all {
+      entity(state, i).resurface == Command,
+      state' = updated,
+      observed' = observed.union(Set(ObserveCommandOp)).union(
+        if (isGroup(state, i) and opensDescendants(state, i) and
+            descendants(state, i).exists(child => entity(state, child).progress == InProgress))
+          Set(CommandGateClosedOp) else Set()),
+    }
+  }
+
+  val invCommandObservation: bool = ENTITIES.forall(i =>
+    entity(state, i).resurface == Command implies
+      (surfaced(state, i) iff state.commandSatisfied.get(i)))
+  val invCommandObservationPreservesControl: bool = ENTITIES.forall(i => {
+    val updated = {...state, commandSatisfied: state.commandSatisfied.set(i, false)}
+    and {
+      updated.entities == state.entities,
+      updated.parent == state.parent,
+      updated.dependencies == state.dependencies,
+      (isGroup(state, i) and entity(state, i).resurface == Command) implies
+        not(opensDescendants(updated, i)),
+    }
+  })
+  val wSetCommand = observed.contains(SetCommandOp)
+  val wObserveCommand = observed.contains(ObserveCommandOp)
+  val wCommandGateClosed = observed.contains(CommandGateClosedOp)
+
   action step: bool = any {
+    doSetCommand,
+    doObserveCommand,
     doDecide,
     doStart,
     doDoneIssue,

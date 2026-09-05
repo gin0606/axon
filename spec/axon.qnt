@@ -4,11 +4,12 @@ module axon {
   type Progress = NotStarted | InProgress | Ended
   type Disposition = Undecided | Accepted | Rejected
 
-  // C-1 (差し替え後): 再浮上条件は直和型。将来 3 種類目 (外部コマンド) を足せる形にしておく
+  // Command の文字列は抽象化し、外部の観測値を入力として扱う。
   type ResurfaceCondition =
     | Always
     | AtDate(int)
     | AfterIssue(int)
+    | Command
 
   type Id = int
 
@@ -23,6 +24,10 @@ module axon {
   var resurfaceCond: Id -> ResurfaceCondition
   var deps: Set[(Id, Id)]      // (y, x) = y は x に依存する
   var clock: int
+
+  // 外部入力と到達性の ghost state。DB には保存しない。
+  var commandSatisfied: Id -> bool
+  var commandFell: bool
 
   // ---- 導出値 ----
   def depsOf(y: Id): Set[Id] = ISSUES.filter(x => deps.contains((y, x)))
@@ -68,6 +73,7 @@ module axon {
   def surfaced(i: Id): bool =
     match resurfaceCond.get(i) {
     | Always => true
+    | Command => commandSatisfied.get(i)
     | AtDate(d) => d <= clock
     | AfterIssue(x) => isEnded(x) or isRejected(x)
     }
@@ -93,7 +99,7 @@ module axon {
     disposition' = ISSUES.mapBy(_ => Undecided),
     resurfaceCond' = ISSUES.mapBy(_ => Always),
     deps' = Set(),
-    clock' = 0,
+    clock' = 0, commandSatisfied' = ISSUES.mapBy(_ => false), commandFell' = false,
   }
 
   action doDecide = {
@@ -103,7 +109,7 @@ module axon {
       disposition.get(i) != c,
       disposition' = disposition.set(i, c),
       progress' = progress, resurfaceCond' = resurfaceCond, deps' = deps,
-      clock' = clock,
+      clock' = clock, commandSatisfied' = commandSatisfied, commandFell' = commandFell,
     }
   }
 
@@ -113,7 +119,7 @@ module axon {
       ready(i),
       progress' = progress.set(i, InProgress),
       disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps,
-      clock' = clock,
+      clock' = clock, commandSatisfied' = commandSatisfied, commandFell' = commandFell,
     }
   }
 
@@ -123,7 +129,7 @@ module axon {
       progress.get(i) == InProgress,
       progress' = progress.set(i, Ended),
       disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps,
-      clock' = clock,
+      clock' = clock, commandSatisfied' = commandSatisfied, commandFell' = commandFell,
     }
   }
 
@@ -133,7 +139,7 @@ module axon {
       progress.get(i) == InProgress,
       progress' = progress.set(i, NotStarted),
       disposition' = disposition, resurfaceCond' = resurfaceCond, deps' = deps,
-      clock' = clock,
+      clock' = clock, commandSatisfied' = commandSatisfied, commandFell' = commandFell,
     }
   }
 
@@ -145,7 +151,7 @@ module axon {
       resurfaceCond.get(i) != target,
       resurfaceCond' = resurfaceCond.set(i, target),
       progress' = progress, disposition' = disposition, deps' = deps,
-      clock' = clock,
+      clock' = clock, commandSatisfied' = commandSatisfied, commandFell' = commandFell,
     }
   }
 
@@ -160,7 +166,7 @@ module axon {
       resurfaceCond.get(i) != target,
       resurfaceCond' = resurfaceCond.set(i, target),
       progress' = progress, disposition' = disposition, deps' = deps,
-      clock' = clock,
+      clock' = clock, commandSatisfied' = commandSatisfied, commandFell' = commandFell,
     }
   }
 
@@ -170,7 +176,7 @@ module axon {
       resurfaceCond.get(i) != Always,
       resurfaceCond' = resurfaceCond.set(i, Always),
       progress' = progress, disposition' = disposition, deps' = deps,
-      clock' = clock,
+      clock' = clock, commandSatisfied' = commandSatisfied, commandFell' = commandFell,
     }
   }
 
@@ -183,7 +189,7 @@ module axon {
       not(deps.contains((y, x))),
       deps' = deps.union(Set((y, x))),
       progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond,
-      clock' = clock,
+      clock' = clock, commandSatisfied' = commandSatisfied, commandFell' = commandFell,
     }
   }
 
@@ -194,18 +200,44 @@ module axon {
       deps.contains((y, x)),
       deps' = deps.exclude(Set((y, x))),
       progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond,
-      clock' = clock,
+      clock' = clock, commandSatisfied' = commandSatisfied, commandFell' = commandFell,
     }
   }
 
   action doTick = all {
     clock < CLOCK_MAX,
-    clock' = clock + 1,
+    clock' = clock + 1, commandSatisfied' = commandSatisfied, commandFell' = commandFell,
     progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond,
     deps' = deps,
   }
 
+  action doSetCommand = {
+    nondet i = ISSUES.oneOf()
+    all {
+      resurfaceCond.get(i) != Command,
+      resurfaceCond' = resurfaceCond.set(i, Command),
+      progress' = progress, disposition' = disposition, deps' = deps,
+      clock' = clock, commandSatisfied' = commandSatisfied, commandFell' = commandFell,
+    }
+  }
+
+  action doObserveCommand = {
+    nondet i = ISSUES.oneOf()
+    all {
+      resurfaceCond.get(i) == Command,
+      commandSatisfied' = commandSatisfied.set(i, not(commandSatisfied.get(i))),
+      commandFell' = (commandFell or commandSatisfied.get(i)),
+      progress' = progress, disposition' = disposition, resurfaceCond' = resurfaceCond,
+      deps' = deps, clock' = clock,
+    }
+  }
+
+  val invCommandObservation = ISSUES.forall(i =>
+    resurfaceCond.get(i) == Command implies (surfaced(i) iff commandSatisfied.get(i)))
+  val wCommandFell = commandFell
+
   action step = any {
+    doSetCommand, doObserveCommand,
     doDecide, doStart, doEnd, doRelease, doDeferDate, doDeferAfter, doClearCondition,
     doAddDep, doRemoveDep, doTick,
   }

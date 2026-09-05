@@ -137,6 +137,7 @@ pub enum ResurfaceCondition {
     Always,
     AtDate(NaiveDate),
     AfterEntity(EntityId),
+    Command(String),
 }
 
 impl ResurfaceCondition {
@@ -145,6 +146,7 @@ impl ResurfaceCondition {
             Self::Always => None,
             Self::AtDate(_) => Some("date"),
             Self::AfterEntity(_) => Some("after_entity"),
+            Self::Command(_) => Some("command"),
         }
     }
 
@@ -152,19 +154,21 @@ impl ResurfaceCondition {
         kind: Option<&str>,
         date: Option<&str>,
         reference: Option<&str>,
+        command: Option<&str>,
     ) -> Result<Self, ParseError> {
-        match (kind, date, reference) {
-            (None, None, None) => Ok(Self::Always),
-            (Some("date"), Some(date), None) => date
+        match (kind, date, reference, command) {
+            (None, None, None, None) => Ok(Self::Always),
+            (Some("date"), Some(date), None, None) => date
                 .parse::<NaiveDate>()
                 .map(Self::AtDate)
                 .map_err(|_| ParseError::ResurfaceCondition(format!("invalid date: {date}"))),
-            (Some("after_entity"), None, Some(reference)) => {
+            (Some("after_entity"), None, Some(reference), None) => {
                 Ok(Self::AfterEntity(EntityId::from_stored(reference)))
             }
+            (Some("command"), None, None, Some(command)) => Ok(Self::Command(command.to_owned())),
             values => Err(ParseError::ResurfaceCondition(format!(
-                "kind={:?} date={:?} ref={:?}",
-                values.0, values.1, values.2
+                "kind={:?} date={:?} ref={:?} command={:?}",
+                values.0, values.1, values.2, values.3
             ))),
         }
     }
@@ -174,6 +178,7 @@ impl ResurfaceCondition {
             Self::Always => "Always".to_string(),
             Self::AtDate(date) => format!("AtDate({date})"),
             Self::AfterEntity(id) => format!("AfterEntity({id})"),
+            Self::Command(command) => format!("Command({command})"),
         }
     }
 }
@@ -268,6 +273,23 @@ mod tests {
     }
 
     #[test]
+    fn command_db_boundary_rejects_mixed_or_missing_payloads() {
+        assert_eq!(
+            ResurfaceCondition::from_db(Some("command"), None, None, Some("exit 0")).unwrap(),
+            ResurfaceCondition::Command("exit 0".into())
+        );
+        for (kind, date, reference, command) in [
+            (Some("command"), None, None, None),
+            (None, None, None, Some("exit 0")),
+            (Some("command"), Some("2026-09-05"), None, Some("exit 0")),
+            (Some("command"), None, Some("target"), Some("exit 0")),
+            (Some("after_entity"), None, Some("target"), Some("exit 0")),
+        ] {
+            assert!(ResurfaceCondition::from_db(kind, date, reference, command).is_err());
+        }
+    }
+
+    #[test]
     fn progress_requires_claim_to_match_state() {
         assert!(matches!(
             Progress::from_db("not_started", None),
@@ -299,12 +321,13 @@ mod tests {
 
     #[test]
     fn resurface_condition_round_trips() {
-        let after = ResurfaceCondition::from_db(Some("after_entity"), None, Some("t-1")).unwrap();
+        let after =
+            ResurfaceCondition::from_db(Some("after_entity"), None, Some("t-1"), None).unwrap();
         assert_eq!(
             after,
             ResurfaceCondition::AfterEntity(EntityId::from_stored("t-1"))
         );
         assert_eq!(after.kind_db(), Some("after_entity"));
-        assert!(ResurfaceCondition::from_db(Some("date"), None, None).is_err());
+        assert!(ResurfaceCondition::from_db(Some("date"), None, None, None).is_err());
     }
 }

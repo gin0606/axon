@@ -218,7 +218,20 @@ resurface:
   entity: { id: demo-7g8h9j }
 ```
 
-`date` は quote した `YYYY-MM-DD` string とする。`after_entity` の参照先は issue / group のどちらでもよい。ready、blocked、orphaned、surfaced、active scope、blocking cause、group 集計などの導出値はファイルに保存しない。時刻や別 Entity の変更だけで snapshot が古くなるのを避け、`check` が実行時の DB から適用前後の導出差分を表示する。
+```yaml
+resurface:
+  kind: command
+  command: "exit 0"
+```
+
+`command` はシェル文字列であり、他 kind の付随 field と混在させない。
+観測結果・実行時刻・外部出力は observed に含めない。Control state は read-only なので、
+条件の変更は `when` で行う。export と参照照合だけでは外部コマンドを実行しない。
+check / apply が導出差分を作る場合は必要な条件を評価し、変更前後で同じ Entity の結果を共有する。
+評価失敗時は書き込みを確定せず、commit 後の出力や再 export で追加評価しない。
+共通の実行契約は [CLI 契約](cli.md#外部条件の評価) を参照する。
+
+`date` は quote した `YYYY-MM-DD` string とする。`after_entity` の参照先は issue / group のどちらでもよい。ready、blocked、orphaned、surfaced、active scope、blocking cause、group 集計などの導出値はファイルに保存しない。時刻、別 Entity、外部観測の変更だけで snapshot が古くなるのを避け、`check` が実行時の DB から適用前後の導出差分を表示する。
 
 新規 Entity の observed は必ず `not_started`、claim null、`accepted`、`always` とする。import から状態操作は行わず、異なる値は拒否する。
 
@@ -254,7 +267,7 @@ fingerprint は `blake3:` に続く lowercase 64 桁の hex string とする。
 8. progress (`not_started` / `in_progress` / `ended`)
 9. claim の presence (`none` / `some`)。`some` なら続けて actor、worktree、canonical UTC timestamp
 10. disposition (`undecided` / `accepted` / `rejected`)
-11. resurface kind (`always` / `at_date` / `after_entity`)。`at_date` なら続けて canonical date、`after_entity` なら続けて解決済み Entity ID
+11. resurface kind (`always` / `at_date` / `after_entity` / `command`)。`at_date` なら続けて canonical date、`after_entity` なら続けて解決済み Entity ID、`command` なら続けてシェル文字列。評価結果は含めない
 12. outgoing dependency の件数を符号なし 64 bit big-endian integer で表した 8 byte
 13. prerequisite の解決済み ID を bytewise UTF-8 昇順に並べた各 token
 
@@ -499,7 +512,7 @@ base が現在 DB と一致するのに observed / references / readonly relatio
 - issue→issue、issue→group、group→issue、group→group dependency
 - editable owner から外部 endpoint への outgoing relation
 - 外部 owner から編集対象 endpoint への readonly incoming relation
-- observed の三つの resurface shape と progress / claim 整合
+- observed の各 resurface shape と progress / claim 整合
 - duplicate key、id/key 併記、解決後 duplicate relation の拒否
 - unknown field、duplicate YAML key、anchor、alias、merge key、tag の拒否
 - observed、references、readonly relation の変更拒否

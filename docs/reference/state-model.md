@@ -14,7 +14,7 @@ Entity は `Issue` または明示的な計画範囲を表す `Group` である�
 | --- | --- |
 | Progress (A) | `NotStarted` / `InProgress` / `Ended`。これ以上作業を進めるか |
 | Disposition (B) | `Undecided` / `Accepted` / `Rejected`。現在の採否判断 |
-| Resurface condition (C) | `Always` / `AtDate` / `AfterEntity`。いつ再び意識に上げるか |
+| Resurface condition (C) | `Always` / `AtDate` / `AfterEntity` / `Command`。いつ再び意識に上げるか |
 | Dependency (D) | Entity 間の成果物・計画完了を必要とする前提関係 |
 | 包含 | Group だけを親にできる一親 tree |
 
@@ -26,13 +26,33 @@ Ended × Rejected は打ち切り、Ended × Undecided は調査終了後の判�
 Rejected から Accepted への再判断にも特別な経路は設けない。
 一つの状態操作が Progress と Disposition を暗黙に同時変更することはない。
 
-Resurface condition は保存した条件を読み取り・操作時に評価する。`Always` は常に満たされ、
-`AtDate` は指定日への到達、`AfterEntity` は参照先の terminal で満たされる。
-条件の成立は保存状態を書き換えず、浮上時刻の履歴や通知フックも作らない。
-外部イベントを直接判定する条件は持たない。
+Resurface condition の成立は保存状態を書き換えず、浮上時刻の履歴や通知フックも作らない。
+各条件の意味は [Resurface condition](#resurface-condition) で定める。
 
 優先度、pin、色、表示順を状態モデルの保存値として持たない。
 表示方法は導出値を消費する側の関心であり、導出値の定義はカスタマイズしない。
+
+## Resurface condition
+
+| 条件 | 保存する付随情報 | 成立条件 |
+| --- | --- | --- |
+| `Always` | なし | 常に成立 |
+| `AtDate` | 日付 | 指定日への到達 |
+| `AfterEntity` | 参照先 Entity | 参照先が terminal |
+| `Command` | シェル文字列 | 外部コマンドの観測結果が成立を示す |
+
+条件の設定・置換・解除は Issue / Group、すべての Progress / Disposition で同じ規則に従い、
+Progress、Disposition、claim を変更しない。解除は `Always` への変更であり、自動採用や
+自動 start を意味しない。候補への復帰は ready / triage の他の要件にも従う。
+
+Command の成立は非単調で、次回の観測で未成立に戻ることがある。成功しても `Always` に
+書き戻さず、評価結果を保存しない。判定失敗は未成立と区別し、triage の第三分類にしない。
+実行環境、終了コード、評価の共有と失敗時の操作は [CLI 契約](cli.md#外部条件の評価) で定める。
+
+Group が非浮上になると activation gate が閉じ、子孫は active scope から外れる。
+進行中の子孫を含め、子孫の保存状態と claim は変えない。Command は Entity への参照辺を
+持たず、AfterEntity への置換には既存の待機グラフ制約を適用する。
+再浮上は再検討・着手候補へ戻す意味であり、計画や外部前提の妥当性を保証しない。
 
 ## Identity と claim
 
@@ -122,7 +142,7 @@ group を依存元または when の主体にした論理辺は group の全子�
 
 ## 導出値
 
-次の値は保存せず、読み取り時に保存済み状態と関係から計算する。
+次の値は保存せず、読み取り時に保存済み状態・関係と、必要な Command の外部観測から計算する。
 
 | 名前 | 定義 |
 | --- | --- |

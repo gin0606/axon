@@ -388,6 +388,19 @@ enum WhenCmd {
         #[arg(short, long)]
         reason: Option<String>,
     },
+    /// Evaluate a shell command when derived status is needed
+    #[command(
+        long_about = "Store a Command condition for an Issue or Group. Run /bin/sh -c in the current worktree root (Axon management root outside Git), inheriting the caller's environment without interactive or login startup. Exit 0 satisfies the condition, 1 does not; other exits, signals, and spawn failures fail Axon. Adapt other tools' exit codes in your script. Each Entity is evaluated at most once per invocation; the next invocation reevaluates, and satisfaction can revert. Results are not stored. Normal stdout/stderr is suppressed; failures include diagnostics. Timeouts, persistent caches, intervals, and replay are the script's responsibility: Axon waits indefinitely for it to finish. Setting or clearing a condition does not evaluate it."
+    )]
+    Command {
+        /// Entity ID or unique ID suffix
+        id: String,
+        /// Shell string passed as one argument to /bin/sh -c
+        command: String,
+        /// Reason recorded in decision history
+        #[arg(short, long)]
+        reason: Option<String>,
+    },
     /// Set the resurface condition to Always
     Clear {
         /// Entity ID or unique ID suffix
@@ -764,9 +777,8 @@ fn cmd_ready(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>>
     let (_, view) = load()?;
     let decoration = current_output_decoration();
     let rows = view
-        .ready()
+        .ready(|entity| included(kind, entity))?
         .into_iter()
-        .filter(|entity| included(kind, entity))
         .map(|entity| format!("{}\n", render_entity_identity(entity, decoration)))
         .collect::<String>();
     write_rows(&rows, "No ready entities", decoration)?;
@@ -777,11 +789,7 @@ fn cmd_triage(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>
     let (_, view) = load()?;
     let decoration = current_output_decoration();
     let mut rows = String::new();
-    for (entity, reason) in view
-        .triage()
-        .into_iter()
-        .filter(|(entity, _)| included(kind, entity))
-    {
+    for (entity, reason) in view.triage(|entity| included(kind, entity))? {
         rows.push_str(&render_triage_row(&view, entity, reason, decoration));
     }
     write_rows(&rows, "No entities need triage", decoration)?;
@@ -905,15 +913,19 @@ fn cmd_list(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>> 
     let decoration = current_output_decoration();
     let mut rows = String::new();
     for entity in view.iter().filter(|entity| included(kind, entity)) {
-        rows.push_str(&render_list_row(&view, entity, decoration));
+        rows.push_str(&render_list_row(&view, entity, decoration)?);
     }
     write_rows(&rows, "No entities", decoration)?;
     Ok(())
 }
 
-fn render_list_row(view: &View, entity: &Entity, decoration: OutputDecoration) -> String {
-    let marks = render_entity_marks(view, entity, false, decoration);
-    format!(
+fn render_list_row(
+    view: &View,
+    entity: &Entity,
+    decoration: OutputDecoration,
+) -> derived::Result<String> {
+    let marks = render_entity_marks(view, entity, false, decoration)?;
+    Ok(format!(
         "{}  {}  [{}/{}]  {}{}\n",
         decoration.paint(OUTPUT_ID, &entity.id),
         decoration.paint(OUTPUT_MUTED, entity.kind.label()),
@@ -924,7 +936,7 @@ fn render_list_row(view: &View, entity: &Entity, decoration: OutputDecoration) -
         ),
         entity.title,
         marks
-    )
+    ))
 }
 
 fn render_entity_marks(
@@ -932,9 +944,9 @@ fn render_entity_marks(
     entity: &Entity,
     include_ready: bool,
     decoration: OutputDecoration,
-) -> String {
+) -> derived::Result<String> {
     let mut marks = Vec::new();
-    if include_ready && view.is_ready(entity) {
+    if include_ready && view.is_ready(entity)? {
         marks.push(decoration.paint(OUTPUT_ACCEPTED, "Ready"));
     }
     if view.is_orphaned(&entity.id) {
@@ -942,20 +954,20 @@ fn render_entity_marks(
     } else if view.is_blocked(&entity.id) {
         marks.push(decoration.paint(OUTPUT_DANGER, "Blocked"));
     }
-    if !view.is_surfaced(entity) {
+    if !view.is_surfaced(entity)? {
         marks.push(decoration.paint(
             OUTPUT_ATTENTION,
             format!("Not surfaced: {}", entity.resurface_condition.label()),
         ));
     }
-    if let Some(reason) = inactive_scope_reason(view, &entity.id) {
+    if let Some(reason) = inactive_scope_reason(view, &entity.id)? {
         marks.push(decoration.paint(OUTPUT_ATTENTION, format!("Inactive: {reason}")));
     }
-    if marks.is_empty() {
+    Ok(if marks.is_empty() {
         String::new()
     } else {
         format!("  {}", marks.join("  "))
-    }
+    })
 }
 
 fn cmd_show(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -976,7 +988,7 @@ fn cmd_show(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
     let entity = view.get(&id).ok_or("entity not found")?;
     let decoration = current_output_decoration();
     write_output(
-        &render_show(&view, entity, &progress_events, &notes, counts, decoration),
+        &render_show(&view, entity, &progress_events, &notes, counts, decoration)?,
         decoration,
     )?;
     Ok(())
@@ -989,7 +1001,7 @@ fn render_show(
     notes: &[Note],
     counts: RecordCounts,
     decoration: OutputDecoration,
-) -> String {
+) -> derived::Result<String> {
     let mut blocks = Vec::<Vec<String>>::new();
     let mut overview = vec![format!(
         "{}  {}  {}",
@@ -998,14 +1010,14 @@ fn render_show(
         entity.title,
     )];
 
-    let inactive_reason = inactive_scope_reason(view, &entity.id);
+    let inactive_reason = inactive_scope_reason(view, &entity.id)?;
     let active_scope = inactive_reason
         .as_ref()
         .map(|reason| format!("no ({reason})"))
         .unwrap_or_else(|| "yes".to_string());
     let blocked = view.is_blocked(&entity.id);
     let orphaned = view.is_orphaned(&entity.id);
-    let surfaced = view.is_surfaced(entity);
+    let surfaced = view.is_surfaced(entity)?;
     overview.push(render_inline_fields(
         decoration,
         vec![
@@ -1137,7 +1149,7 @@ fn render_show(
         blocks.push(render_section(
             decoration,
             "Subtree",
-            render_subtree(view, &subtree, decoration),
+            render_subtree(view, &subtree, decoration)?,
         ));
         let dependencies = render_subtree_dependencies(view, entity, &subtree, decoration);
         if !dependencies.is_empty() {
@@ -1173,7 +1185,7 @@ fn render_show(
             render_related_entity(dependent, OUTPUT_ID, decoration),
         ));
     }
-    for cause in view.blocking_causes(&entity.id) {
+    for cause in view.blocking_causes(&entity.id)? {
         if direct_group_dependencies.contains(&cause.id) {
             continue;
         }
@@ -1238,7 +1250,7 @@ fn render_show(
         blocks.push(render_section(decoration, "Progress history", history));
     }
 
-    format!(
+    Ok(format!(
         "{}\n",
         blocks
             .into_iter()
@@ -1246,7 +1258,7 @@ fn render_show(
             .map(|block| block.join("\n"))
             .collect::<Vec<_>>()
             .join("\n\n")
-    )
+    ))
 }
 
 fn ordered_subtree<'a>(view: &'a View, root: &EntityId) -> Vec<(usize, &'a Entity)> {
@@ -1273,18 +1285,18 @@ fn render_subtree(
     view: &View,
     subtree: &[(usize, &Entity)],
     decoration: OutputDecoration,
-) -> Vec<String> {
+) -> derived::Result<Vec<String>> {
     if subtree.is_empty() {
-        return vec![format!(
+        return Ok(vec![format!(
             "  {}",
             decoration.paint(OUTPUT_MUTED, "No descendants")
-        )];
+        )]);
     }
 
     subtree
         .iter()
         .map(|(depth, entity)| {
-            format!(
+            Ok(format!(
                 "{}{}  {}  [{}/{}]  {}{}",
                 "  ".repeat(*depth),
                 decoration.paint(OUTPUT_ID, &entity.id),
@@ -1295,8 +1307,8 @@ fn render_subtree(
                     entity.disposition.label()
                 ),
                 entity.title,
-                render_entity_marks(view, entity, true, decoration),
-            )
+                render_entity_marks(view, entity, true, decoration)?,
+            ))
         })
         .collect()
 }
@@ -1783,10 +1795,10 @@ fn render_entity_counts(
     ]
 }
 
-fn inactive_scope_reason(view: &View, id: &EntityId) -> Option<String> {
-    view.ancestors(id).into_iter().find_map(|group| {
-        if view.opens_descendants(group) {
-            return None;
+fn inactive_scope_reason(view: &View, id: &EntityId) -> derived::Result<Option<String>> {
+    for group in view.ancestors(id) {
+        if view.opens_descendants(group)? {
+            continue;
         }
         let mut reasons = Vec::new();
         if !matches!(group.progress, Progress::InProgress(_)) {
@@ -1795,7 +1807,7 @@ fn inactive_scope_reason(view: &View, id: &EntityId) -> Option<String> {
         if group.disposition != Disposition::Accepted {
             reasons.push(format!("Disposition={}", group.disposition.label()));
         }
-        if !view.is_surfaced(group) {
+        if !view.is_surfaced(group)? {
             reasons.push(format!(
                 "not surfaced: {}",
                 group.resurface_condition.label()
@@ -1806,8 +1818,9 @@ fn inactive_scope_reason(view: &View, id: &EntityId) -> Option<String> {
         } else if view.is_blocked(&group.id) {
             reasons.push("blocked".to_string());
         }
-        Some(format!("{} ({})", group.id, reasons.join(", ")))
-    })
+        return Ok(Some(format!("{} ({})", group.id, reasons.join(", "))));
+    }
+    Ok(None)
 }
 
 fn yes_no(value: bool) -> &'static str {
@@ -1841,6 +1854,24 @@ fn cmd_decide(command: DecideCmd) -> Result<(), Box<dyn std::error::Error>> {
 fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = Store::open()?;
     match command {
+        WhenCmd::Command {
+            id,
+            command,
+            reason,
+        } => {
+            let id = store.resolve_id(&id)?;
+            let condition = ResurfaceCondition::Command(command);
+            store.apply(
+                &id,
+                Change::SetResurfaceCondition(condition.clone()),
+                &ctx(reason),
+            )?;
+            write_confirmation(
+                &id,
+                format!("Resurface condition: {}", condition.label()),
+                OUTPUT_ATTENTION,
+            )?;
+        }
         WhenCmd::At { id, date, reason } => {
             let id = store.resolve_id(&id)?;
             let date: NaiveDate = date
@@ -2185,7 +2216,7 @@ fn render_docs(decoration: OutputDecoration) -> String {
     .unwrap();
     writeln!(
         output,
-        "  Resurface condition  Always, AtDate, or AfterEntity. This controls when it returns to attention.\n"
+        "  Resurface condition  Always, AtDate, AfterEntity, or Command. This controls when it returns to attention.\n"
     )
     .unwrap();
 
@@ -2304,7 +2335,8 @@ mod tests {
             &[],
             RecordCounts::default(),
             OutputDecoration::Plain,
-        );
+        )
+        .unwrap();
         assert!(output.starts_with("g  Group  g title\n"));
         assert!(output.contains("Group\n  Can complete: no\n"));
         assert!(output.contains("  Descendants: 1  Issue: 1  Group: 0  Terminal: 0"));
@@ -2323,7 +2355,8 @@ mod tests {
             &[],
             RecordCounts::default(),
             OutputDecoration::Plain,
-        );
+        )
+        .unwrap();
         let styled = render_show(
             &view,
             &issue,
@@ -2331,7 +2364,8 @@ mod tests {
             &[],
             RecordCounts::default(),
             OutputDecoration::Ansi,
-        );
+        )
+        .unwrap();
 
         assert!(!plain.contains('\u{1b}'));
         assert_eq!(plain.lines().count(), 5);
@@ -2373,7 +2407,8 @@ mod tests {
             &[],
             RecordCounts::default(),
             OutputDecoration::Plain,
-        );
+        )
+        .unwrap();
 
         assert!(waiting.contains("Resurface condition: AfterEntity(target)"));
         assert!(waiting.contains("Surfaced: no"));
@@ -2388,7 +2423,8 @@ mod tests {
             &[],
             RecordCounts::default(),
             OutputDecoration::Plain,
-        );
+        )
+        .unwrap();
 
         assert!(surfaced.contains("Surfaced: yes"));
     }
@@ -2427,7 +2463,8 @@ mod tests {
                 progressions: 1,
             },
             OutputDecoration::Plain,
-        );
+        )
+        .unwrap();
 
         let relationships = output.find("\n\nRelationships\n").unwrap();
         let description = output.find("\n\nDescription\n").unwrap();
@@ -2452,7 +2489,8 @@ mod tests {
                 progressions: 1,
             },
             OutputDecoration::Ansi,
-        );
+        )
+        .unwrap();
         assert!(styled.contains("\u{1b}[0m  tester\nnote body\nwith two lines"));
         assert_eq!(anstream::adapter::strip_str(&styled).to_string(), output);
     }
@@ -2505,8 +2543,8 @@ mod tests {
                 render_claim_row(&issue, &claim, OutputDecoration::Ansi),
             ),
             (
-                render_list_row(&view, &issue, OutputDecoration::Plain),
-                render_list_row(&view, &issue, OutputDecoration::Ansi),
+                render_list_row(&view, &issue, OutputDecoration::Plain).unwrap(),
+                render_list_row(&view, &issue, OutputDecoration::Ansi).unwrap(),
             ),
             (
                 format_decision(&event, OutputDecoration::Plain),

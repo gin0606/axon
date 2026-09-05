@@ -18,7 +18,7 @@
 | Identity | ID と Issue / Group の kind。対象の同一性を表す |
 | Plan declaration | Entity が何で、どこに属し、何を前提とするかを宣言する |
 | Control state | Progress、Disposition、Resurface condition、claim により現在の扱いを表す |
-| Derived facts | ready、blocked、orphaned、active scope など、保存情報から機械的に計算する |
+| Derived facts | ready、blocked、orphaned、active scope など、保存情報と必要な外部観測から計算する |
 | Typed history | 判断または進行という特定の操作について、過去の事実と理由を残す |
 | Supplemental information | 状態変更に結び付かず、Entity について後から得られた情報を蓄積する |
 
@@ -29,6 +29,14 @@ A / B / C / D の意味や既存の導出規則も、情報の統治に必要な
 ## 規範契約
 
 以下を実装が満たす情報契約とする。
+
+### Control state と外部観測
+
+Command のシェル文字列は Resurface condition の Control state に属する。
+設定・解除は判断履歴に記録し、plan declaration や Declaration Revision を変えない。
+外部の評価結果・実行時刻・出力は保存情報ではなく、条件の成立だけでは履歴を追加しない。
+条件の意味は [状態モデル](state-model.md#resurface-condition)、評価の実行境界は
+[CLI 契約](cli.md#外部条件の評価) で定める。
 
 ### Plan declaration の所有範囲
 

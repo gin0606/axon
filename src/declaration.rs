@@ -1,5 +1,5 @@
 use crate::db::{DbError, Store, StoreSnapshot};
-use crate::derived::View;
+use crate::derived::{EvaluationError, View};
 use crate::domain::*;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize, Serializer};
@@ -15,6 +15,8 @@ const FINGERPRINT_VERSION: &str = "axon-entity-fingerprint/v2";
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeclarationError {
+    #[error("{0}")]
+    Evaluation(#[from] EvaluationError),
     #[error("{0}")]
     Invalid(String),
     #[error("{0}")]
@@ -92,6 +94,9 @@ struct ClaimRecord {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum ResurfaceRecord {
     Always,
+    Command {
+        command: String,
+    },
     AtDate {
         #[serde(serialize_with = "quoted_string")]
         date: String,
@@ -678,6 +683,7 @@ fn validate_against(
         .collect::<Vec<_>>();
     desired_dependencies.sort();
     let desired = StoreSnapshot {
+        evaluation: snapshot.evaluation.clone(),
         entities: desired_entities,
         dependencies: desired_dependencies,
     };
@@ -701,7 +707,11 @@ fn validate_against(
     }
 
     crate::db::validate_import_snapshot(snapshot, &desired)?;
-    let report = render_report(snapshot, &desired, &selected);
+    let report = if mode == ValidationMode::Prepare {
+        String::new()
+    } else {
+        render_report(snapshot, &desired, &selected)?
+    };
     Ok(ValidatedPlan { desired, report })
 }
 
@@ -734,6 +744,9 @@ fn observed_matches(record: &Observed, entity: &Entity, resolver: &Resolver) -> 
     }
     match (&record.resurface, &entity.resurface_condition) {
         (ResurfaceRecord::Always, ResurfaceCondition::Always) => Ok(true),
+        (ResurfaceRecord::Command { command }, ResurfaceCondition::Command(expected)) => {
+            Ok(command == expected)
+        }
         (ResurfaceRecord::AtDate { date: record }, ResurfaceCondition::AtDate(expected)) => {
             Ok(record == &expected.to_string())
         }
@@ -1305,6 +1318,9 @@ fn observed(entity: &Entity) -> Observed {
     };
     let resurface = match &entity.resurface_condition {
         ResurfaceCondition::Always => ResurfaceRecord::Always,
+        ResurfaceCondition::Command(command) => ResurfaceRecord::Command {
+            command: command.clone(),
+        },
         ResurfaceCondition::AtDate(date) => ResurfaceRecord::AtDate {
             date: date.to_string(),
         },
@@ -1373,6 +1389,10 @@ fn fingerprint(view: &View, entity: &Entity) -> String {
     hash_token(&mut hasher, entity.disposition.as_db());
     match &entity.resurface_condition {
         ResurfaceCondition::Always => hash_token(&mut hasher, "always"),
+        ResurfaceCondition::Command(command) => {
+            hash_token(&mut hasher, "command");
+            hash_token(&mut hasher, command);
+        }
         ResurfaceCondition::AtDate(date) => {
             hash_token(&mut hasher, "at_date");
             hash_token(&mut hasher, &date.to_string());
@@ -1404,7 +1424,7 @@ fn render_report(
     before: &StoreSnapshot,
     after: &StoreSnapshot,
     selected: &BTreeSet<EntityId>,
-) -> String {
+) -> Result<String> {
     let before_view = before.view();
     let after_view = after.view();
     let mut changes = Vec::new();
@@ -1456,8 +1476,12 @@ fn render_report(
     for id in all_ids {
         let before_flags = before_view
             .get(&id)
-            .map(|entity| flags(&before_view, entity));
-        let after_flags = after_view.get(&id).map(|entity| flags(&after_view, entity));
+            .map(|entity| flags(&before_view, entity))
+            .transpose()?;
+        let after_flags = after_view
+            .get(&id)
+            .map(|entity| flags(&after_view, entity))
+            .transpose()?;
         if before_flags != after_flags {
             derived.push(format!(
                 "  {id}: {} -> {}",
@@ -1497,7 +1521,7 @@ fn render_report(
             output.push_str(&format!("Warning: {} becomes orphaned.\n", entity.id));
         }
     }
-    output
+    Ok(output)
 }
 
 #[derive(PartialEq, Eq)]
@@ -1525,15 +1549,15 @@ impl std::fmt::Display for DerivedFlags {
     }
 }
 
-fn flags(view: &View, entity: &Entity) -> DerivedFlags {
-    DerivedFlags {
-        ready: view.is_ready(entity),
+fn flags(view: &View, entity: &Entity) -> Result<DerivedFlags> {
+    Ok(DerivedFlags {
+        ready: view.is_ready(entity)?,
         blocked: view.is_blocked(&entity.id),
         orphaned: view.is_orphaned(&entity.id),
-        active_scope: view.within_active_scope(&entity.id),
+        active_scope: view.within_active_scope(&entity.id)?,
         group_completable: (entity.kind == EntityKind::Group)
             .then(|| view.can_complete_group(&entity.id)),
-    }
+    })
 }
 
 fn direct_dependency_set(snapshot: &StoreSnapshot, source: &EntityId) -> BTreeSet<EntityId> {

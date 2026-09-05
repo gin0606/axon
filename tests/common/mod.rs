@@ -82,6 +82,7 @@ pub struct EntitySnapshot {
     pub resurface_kind: Option<String>,
     pub resurface_date: Option<String>,
     pub resurface_ref: Option<String>,
+    pub resurface_command: Option<String>,
     pub parent: Option<String>,
     pub updated_at: String,
     pub decision_events: i64,
@@ -210,7 +211,7 @@ impl TestRepo {
         let mut snapshot = connection
             .query_row(
                 "SELECT kind,title,description,progress,disposition,
-                 resurface_kind,resurface_date,resurface_ref,parent_id,updated_at
+                 resurface_kind,resurface_date,resurface_ref,parent_id,updated_at,resurface_command
                  FROM entities WHERE id=?1",
                 params![id],
                 |row| {
@@ -225,6 +226,7 @@ impl TestRepo {
                         resurface_ref: row.get(7)?,
                         parent: row.get(8)?,
                         updated_at: row.get(9)?,
+                        resurface_command: row.get(10)?,
                         decision_events: 0,
                         progress_events: 0,
                     })

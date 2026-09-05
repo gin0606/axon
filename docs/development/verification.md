@@ -25,6 +25,12 @@ Declaration Revision、Note、判断履歴、進行履歴を共有状態とし�
 description の内容、actor の本人性、wall-clock、SQLite、CLI 構文は抽象化し、
 情報の所有範囲、固定、Revision の現在参照、追記専用性、操作ごとの変更範囲を検査する。
 
+Command のプロセス実行・終了コード・診断は Rust のテストで検証する。
+core / Group model は Entity ごとの外部観測入力 `commandSatisfied` を非単調に変え、
+観測と導出の一致、Group gate の閉鎖、保存状態の保持を検査する。この入力は Axon の
+Control state の保存値ではない。情報モデルでは Command を不透明な Control 値として扱い、
+設定変更の所有範囲と履歴を検査する。
+
 拡張 model が保存状態として持つのは Entity map、一親の parent map、dependency 集合、clock である。`ready`、`blocked`、`orphaned`、active scope、`triage`、blocking cause、group の完了可能性、2 つの待機グラフは純粋関数で導出する。操作 witness のために使う `observed` は ghost state であり、axon の保存対象ではない。
 
 ## Group 拡張で検査する性質
@@ -44,7 +50,9 @@ description の内容、actor の本人性、wall-clock、SQLite、CLI 構文は
 | invariant | blocking cause は未終端で、依存を遡る停止条件を満たす Entity だけである |
 | invariant | Rejected を参照する `AfterEntity` は surfaced になる |
 | invariant | triage は active scope 内の判断 frontier だけを示す |
-| witness | 全 14 action が到達可能である |
+| invariant | Command の導出が外部観測と一致し、観測変更が保存状態を変えない |
+| witness | 進行中の子孫の状態を保ったまま Command で Group gate が閉じる |
+| witness | 列挙した全 action が到達可能である |
 | witness | 全子孫が終端した InProgress group が、Ended へ自動変更されず明示 done を待てる |
 | witness | Rejected の子 group を含む親 group が完了可能になる |
 | witness | Rejected の group を依存先にすると依存元が orphaned になる |
@@ -65,7 +73,8 @@ quint typecheck spec/axon.qnt
 quint run spec/axon.qnt --main axon \
   --invariants invRejectedEndedStillBlocks invReadyExclusive \
     invIssueWaitsAcyclic invBlockedHasCause invCauseIsUnresolved \
-    invCondRefSatisfiedByRejection invCondAndDepDiffer \
+    invCondRefSatisfiedByRejection invCondAndDepDiffer invCommandObservation \
+  --witnesses wCommandFell \
   --max-samples 1000 --max-steps 80 --backend rust --n-threads 8 \
   --seed 2026090301
 
@@ -77,12 +86,14 @@ quint run spec/group_plan.qnt --main group_plan \
     invReleasedGroupHasNoInProgressDescendant invEndedGroupsCannotMove \
     invBlockedHasCause invCauseIsUnresolved invCauseStopsAtRoot \
     invAfterRejectedSurfaces invTriageIsCurrentFrontier \
+    invCommandObservation invCommandObservationPreservesControl \
   --witnesses wDecide wStart wDoneIssue wDoneGroup wReleaseIssue wReleaseGroup \
     wSetDate wSetAfter wClearWhen wSetParent wUnsetParent wAddDependency \
     wRemoveDependency wTick wGroupAwaitingExplicitDone \
     wRejectedChildGroupCanComplete wGroupDependencyOrphaned \
     wGroupDependencyBlocksDescendant wInheritedGroupBlockingCause \
     wGroupAfterGroup wNestedEntityReady wTriageFrontier \
+    wSetCommand wObserveCommand wCommandGateClosed \
   --max-samples 1000 --max-steps 80 --backend rust --n-threads 8 \
   --seed 2026090302
 

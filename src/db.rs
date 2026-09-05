@@ -1,13 +1,16 @@
-use crate::derived::View;
+use crate::derived::{Evaluation, EvaluationError, View};
 use crate::domain::*;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::rc::Rc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
+    #[error("{0}")]
+    Evaluation(#[from] EvaluationError),
     #[error("SQLite: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("I/O: {0}")]
@@ -65,7 +68,7 @@ pub enum DbError {
 
 pub type Result<T> = std::result::Result<T, DbError>;
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 #[cfg(test)]
 const SCHEMA_V1: &str = r#"
@@ -243,9 +246,10 @@ CREATE TABLE entities (
   progress TEXT NOT NULL CHECK (progress IN ('not_started','in_progress','ended')),
   disposition TEXT NOT NULL CHECK (disposition IN ('undecided','accepted','rejected')),
   current_revision INTEGER,
-  resurface_kind TEXT CHECK (resurface_kind IN ('date','after_entity')),
+  resurface_kind TEXT CHECK (resurface_kind IN ('date','after_entity','command')),
   resurface_date TEXT,
   resurface_ref TEXT,
+  resurface_command TEXT,
   parent_id TEXT REFERENCES entities(id),
   claimed_actor TEXT,
   claimed_worktree TEXT,
@@ -259,9 +263,10 @@ CREATE TABLE entities (
           claimed_worktree IS NOT NULL AND claimed_at IS NOT NULL) OR
          (progress <> 'in_progress' AND claimed_actor IS NULL AND
           claimed_worktree IS NULL AND claimed_at IS NULL)),
-  CHECK ((resurface_kind IS NULL AND resurface_date IS NULL AND resurface_ref IS NULL) OR
-         (resurface_kind = 'date' AND resurface_date IS NOT NULL AND resurface_ref IS NULL) OR
-         (resurface_kind = 'after_entity' AND resurface_ref IS NOT NULL AND resurface_date IS NULL)),
+  CHECK ((resurface_kind IS NULL AND resurface_date IS NULL AND resurface_ref IS NULL AND resurface_command IS NULL) OR
+         (resurface_kind IS NOT NULL AND ((resurface_kind = 'date' AND resurface_date IS NOT NULL AND resurface_ref IS NULL AND resurface_command IS NULL) OR
+         (resurface_kind = 'after_entity' AND resurface_ref IS NOT NULL AND resurface_date IS NULL AND resurface_command IS NULL) OR
+         (resurface_kind = 'command' AND resurface_command IS NOT NULL AND resurface_date IS NULL AND resurface_ref IS NULL)))),
   FOREIGN KEY (id,current_revision)
     REFERENCES declaration_revisions(entity_id,revision) DEFERRABLE INITIALLY DEFERRED
 );
@@ -430,6 +435,7 @@ fn database_path(root: &Path) -> PathBuf {
 
 pub struct Store {
     conn: Connection,
+    evaluation: Rc<Evaluation>,
 }
 
 pub struct ShowSnapshot {
@@ -461,13 +467,18 @@ impl RevisionSnapshot {
 
 #[derive(Clone)]
 pub struct StoreSnapshot {
+    pub evaluation: Rc<Evaluation>,
     pub entities: Vec<Entity>,
     pub dependencies: Vec<(EntityId, EntityId)>,
 }
 
 impl StoreSnapshot {
     pub fn view(&self) -> View {
-        View::new(self.entities.clone(), self.dependencies.clone())
+        View::with_evaluation(
+            self.entities.clone(),
+            self.dependencies.clone(),
+            self.evaluation.clone(),
+        )
     }
 }
 
@@ -479,7 +490,10 @@ impl Store {
                 .ok(),
             Some(SCHEMA_VERSION)
         );
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            evaluation: Rc::new(Evaluation::new(std::env::current_dir()?)),
+        })
     }
 
     pub fn init(prefix: Option<&str>) -> Result<(PathBuf, String)> {
@@ -509,7 +523,18 @@ impl Store {
         if !path.exists() {
             return Err(DbError::NotInitialized);
         }
-        Self::from_conn(Connection::open(path)?)
+        let mut store = Self::from_conn(Connection::open(path)?)?;
+        let output = Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .output();
+        let command_root = match output {
+            Ok(output) if output.status.success() => {
+                PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
+            }
+            _ => root,
+        };
+        store.evaluation = Rc::new(Evaluation::new(command_root));
+        Ok(store)
     }
 
     #[cfg(test)]
@@ -544,14 +569,14 @@ impl Store {
 
     pub fn view(&mut self) -> Result<View> {
         let tx = self.conn.transaction()?;
-        let view = read_view(&tx)?;
+        let view = read_view(&tx, self.evaluation.clone())?;
         tx.commit()?;
         Ok(view)
     }
 
     pub fn snapshot(&mut self) -> Result<StoreSnapshot> {
         let tx = self.conn.transaction()?;
-        let snapshot = read_snapshot(&tx)?;
+        let snapshot = read_snapshot(&tx, self.evaluation.clone())?;
         tx.commit()?;
         Ok(snapshot)
     }
@@ -568,10 +593,10 @@ impl Store {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(DbError::from)?;
-        let before = read_snapshot(&tx).map_err(E::from)?;
+        let before = read_snapshot(&tx, self.evaluation.clone()).map_err(E::from)?;
         let (value, desired) = build(before.clone())?;
         apply_import_snapshot(&tx, &before, &desired).map_err(E::from)?;
-        let after = read_snapshot(&tx).map_err(E::from)?;
+        let after = read_snapshot(&tx, self.evaluation.clone()).map_err(E::from)?;
         tx.commit().map_err(DbError::from)?;
         Ok((value, after))
     }
@@ -641,7 +666,7 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         validate_parent_target(&tx, entity.parent.as_ref())?;
         if let Some(parent) = &entity.parent {
-            let current = read_view(&tx)?;
+            let current = read_view(&tx, self.evaluation.clone())?;
             let target = current.get(parent).expect("validated parent exists");
             if matches!(target.progress, Progress::Ended)
                 || current
@@ -656,7 +681,7 @@ impl Store {
             }
         }
         write_entity(&tx, entity)?;
-        let view = read_view(&tx)?;
+        let view = read_view(&tx, self.evaluation.clone())?;
         validate_structure(&view)?;
         validate_relations(&view)?;
         tx.commit()?;
@@ -689,7 +714,7 @@ impl Store {
             return Err(DbError::DeclarationFixed(source.to_string()));
         }
         write_dependency(&tx, source, target, true)?;
-        validate_relations(&read_view(&tx)?)?;
+        validate_relations(&read_view(&tx, self.evaluation.clone())?)?;
         tx.commit()?;
         Ok(ApplyOutcome::Changed)
     }
@@ -755,13 +780,13 @@ impl Store {
         }
 
         let now = Utc::now();
-        let view = read_view(&tx)?;
+        let view = read_view(&tx, self.evaluation.clone())?;
         match &change {
             Change::Start(claim) => {
-                if !view.is_ready(&before) {
+                if !view.is_ready(&before)? {
                     return Err(DbError::CannotStart {
                         id: id.to_string(),
-                        fact: not_ready_fact(&view, &before),
+                        fact: not_ready_fact(&view, &before)?,
                     });
                 }
                 tx.execute(
@@ -835,7 +860,7 @@ impl Store {
                         now.to_rfc3339()
                     ],
                 )?;
-                let updated = read_view(&tx)?;
+                let updated = read_view(&tx, self.evaluation.clone())?;
                 if updated
                     .ancestors(id)
                     .into_iter()
@@ -856,17 +881,18 @@ impl Store {
                 }
                 tx.execute(
                     "UPDATE entities SET resurface_kind=?2, resurface_date=?3,
-                     resurface_ref=?4, updated_at=?5 WHERE id=?1",
+                     resurface_ref=?4, updated_at=?5, resurface_command=?6 WHERE id=?1",
                     params![
                         id.as_str(),
                         condition.kind_db(),
                         resurface_date(condition),
                         resurface_ref(condition),
-                        now.to_rfc3339()
+                        now.to_rfc3339(),
+                        resurface_command(condition)
                     ],
                 )?;
                 if matches!(condition, ResurfaceCondition::AfterEntity(_)) {
-                    validate_relations(&read_view(&tx)?)?;
+                    validate_relations(&read_view(&tx, self.evaluation.clone())?)?;
                 }
             }
             Change::SetTitle(title) => {
@@ -906,7 +932,7 @@ impl Store {
                 }
                 write_entity_setting(&tx, id, &Change::SetParent(parent.clone()), &now)?;
                 if parent.is_some() {
-                    let updated = read_view(&tx)?;
+                    let updated = read_view(&tx, self.evaluation.clone())?;
                     validate_structure(&updated)?;
                     validate_relations(&updated)?;
                 }
@@ -964,7 +990,7 @@ impl Store {
 
     pub fn show_snapshot(&mut self, input: &str) -> Result<ShowSnapshot> {
         let tx = self.conn.transaction()?;
-        let snapshot = read_show_snapshot(&tx, input)?;
+        let snapshot = read_show_snapshot(&tx, input, self.evaluation.clone())?;
         tx.commit()?;
         Ok(snapshot)
     }
@@ -1149,14 +1175,14 @@ fn path_between(
     None
 }
 
-fn not_ready_fact(view: &View, entity: &Entity) -> String {
-    if !matches!(entity.progress, Progress::NotStarted) {
+fn not_ready_fact(view: &View, entity: &Entity) -> Result<String> {
+    Ok(if !matches!(entity.progress, Progress::NotStarted) {
         format!("Progress is {}", entity.progress.label())
     } else if entity.disposition != Disposition::Accepted {
         format!("Disposition is {}", entity.disposition.label())
-    } else if !view.is_surfaced(entity) {
+    } else if !view.is_surfaced(entity)? {
         "resurface condition is not satisfied".to_string()
-    } else if !view.within_active_scope(&entity.id) {
+    } else if !view.within_active_scope(&entity.id)? {
         "outside active scope".to_string()
     } else if view.is_orphaned(&entity.id) {
         "a dependency is Rejected".to_string()
@@ -1164,7 +1190,7 @@ fn not_ready_fact(view: &View, entity: &Entity) -> String {
         "an unresolved dependency exists".to_string()
     } else {
         "not ready".to_string()
-    }
+    })
 }
 
 fn write_entity(conn: &Connection, entity: &Entity) -> Result<()> {
@@ -1173,8 +1199,8 @@ fn write_entity(conn: &Connection, entity: &Entity) -> Result<()> {
         "INSERT INTO entities (
           id,kind,title,description,progress,disposition,current_revision,
           resurface_kind,resurface_date,resurface_ref,parent_id,
-          claimed_actor,claimed_worktree,claimed_at,created_at,updated_at
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+          claimed_actor,claimed_worktree,claimed_at,created_at,updated_at,resurface_command
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
         params![
             entity.id.as_str(),
             entity.kind.as_db(),
@@ -1192,6 +1218,7 @@ fn write_entity(conn: &Connection, entity: &Entity) -> Result<()> {
             claim.map(|claim| claim.at.to_rfc3339()),
             entity.created_at.to_rfc3339(),
             entity.updated_at.to_rfc3339(),
+            resurface_command(&entity.resurface_condition),
         ],
     )?;
     if let Some(revision) = entity.current_revision {
@@ -1263,8 +1290,9 @@ fn ensure_current_revision(
     Ok(number)
 }
 
-fn read_snapshot(conn: &Connection) -> Result<StoreSnapshot> {
+fn read_snapshot(conn: &Connection, evaluation: Rc<Evaluation>) -> Result<StoreSnapshot> {
     Ok(StoreSnapshot {
+        evaluation,
         entities: read_all(conn)?,
         dependencies: read_deps(conn)?,
     })
@@ -1512,15 +1540,19 @@ fn direct_dependency_ids(view: &View, id: &EntityId) -> Vec<EntityId> {
     ids
 }
 
-fn read_view(conn: &Connection) -> Result<View> {
-    Ok(View::new(read_all(conn)?, read_deps(conn)?))
+fn read_view(conn: &Connection, evaluation: Rc<Evaluation>) -> Result<View> {
+    Ok(View::with_evaluation(
+        read_all(conn)?,
+        read_deps(conn)?,
+        evaluation,
+    ))
 }
 
 fn read_all(conn: &Connection) -> Result<Vec<Entity>> {
     let mut statement = conn.prepare(
         "SELECT id,kind,title,description,progress,disposition,current_revision,
          resurface_kind,resurface_date,resurface_ref,parent_id,
-         claimed_actor,claimed_worktree,claimed_at,created_at,updated_at
+         claimed_actor,claimed_worktree,claimed_at,created_at,updated_at,resurface_command
          FROM entities ORDER BY created_at,id",
     )?;
     let rows = statement.query_map([], RawEntity::from_row)?;
@@ -1532,7 +1564,7 @@ fn read_entity(conn: &Connection, id: &EntityId) -> Result<Entity> {
         .query_row(
             "SELECT id,kind,title,description,progress,disposition,current_revision,
              resurface_kind,resurface_date,resurface_ref,parent_id,
-             claimed_actor,claimed_worktree,claimed_at,created_at,updated_at
+             claimed_actor,claimed_worktree,claimed_at,created_at,updated_at,resurface_command
              FROM entities WHERE id=?1",
             params![id.as_str()],
             RawEntity::from_row,
@@ -1697,6 +1729,7 @@ struct RawEntity {
     resurface_kind: Option<String>,
     resurface_date: Option<String>,
     resurface_ref: Option<String>,
+    resurface_command: Option<String>,
     parent: Option<String>,
     claimed_actor: Option<String>,
     claimed_worktree: Option<String>,
@@ -1724,6 +1757,7 @@ impl RawEntity {
             claimed_at: row.get(13)?,
             created_at: row.get(14)?,
             updated_at: row.get(15)?,
+            resurface_command: row.get(16)?,
         })
     }
 
@@ -1758,6 +1792,7 @@ impl RawEntity {
                 self.resurface_kind.as_deref(),
                 self.resurface_date.as_deref(),
                 self.resurface_ref.as_deref(),
+                self.resurface_command.as_deref(),
             )?,
             parent: self.parent.as_deref().map(EntityId::from_stored),
             created_at: parse_time(&self.created_at)?,
@@ -1775,6 +1810,13 @@ fn parse_time(value: &str) -> Result<DateTime<Utc>> {
 fn resurface_date(condition: &ResurfaceCondition) -> Option<String> {
     match condition {
         ResurfaceCondition::AtDate(date) => Some(date.to_string()),
+        _ => None,
+    }
+}
+
+fn resurface_command(condition: &ResurfaceCondition) -> Option<&str> {
+    match condition {
+        ResurfaceCondition::Command(script) => Some(script),
         _ => None,
     }
 }
@@ -1962,7 +2004,11 @@ fn read_progress_events(conn: &Connection, id: &EntityId) -> Result<Vec<Progress
     .collect()
 }
 
-fn read_show_snapshot(conn: &Connection, input: &str) -> Result<ShowSnapshot> {
+fn read_show_snapshot(
+    conn: &Connection,
+    input: &str,
+    evaluation: Rc<Evaluation>,
+) -> Result<ShowSnapshot> {
     let id = resolve_id(conn, input)?;
     let decision_events = read_events(conn, &id)?;
     let progress_events = read_progress_events(conn, &id)?;
@@ -1975,7 +2021,7 @@ fn read_show_snapshot(conn: &Connection, input: &str) -> Result<ShowSnapshot> {
         progressions: progress_events.len(),
     };
     Ok(ShowSnapshot {
-        view: read_view(conn)?,
+        view: read_view(conn, evaluation)?,
         decision_events,
         progress_events,
         revisions,
@@ -2028,6 +2074,36 @@ mod tests {
             actor: "tester".to_string(),
             reason: Some("reason".to_string()),
         }
+    }
+
+    #[test]
+    fn command_storage_rejects_mixed_fields_and_round_trips() {
+        let mut store = Store::in_memory("test").unwrap();
+        store.insert(&entity("c", EntityKind::Issue, None)).unwrap();
+        for update in [
+            "resurface_command='exit 0'",
+            "resurface_kind='command'",
+            "resurface_kind='command',resurface_command='exit 0',resurface_ref='c'",
+            "resurface_kind='date',resurface_date='2026-09-05',resurface_command='exit 0'",
+        ] {
+            assert!(
+                store
+                    .conn
+                    .execute(&format!("UPDATE entities SET {update} WHERE id='c'"), [])
+                    .is_err()
+            );
+        }
+        store
+            .apply(
+                &id("c"),
+                Change::SetResurfaceCondition(ResurfaceCondition::Command("exit 0".into())),
+                &ctx(),
+            )
+            .unwrap();
+        assert_eq!(
+            store.get(&id("c")).unwrap().resurface_condition,
+            ResurfaceCondition::Command("exit 0".into())
+        );
     }
 
     #[test]
@@ -2349,7 +2425,7 @@ mod tests {
         writer
             .apply(&id("t-1"), Change::Start(claim()), &ctx())
             .unwrap();
-        let snapshot = read_show_snapshot(&tx, "t-1").unwrap();
+        let snapshot = read_show_snapshot(&tx, "t-1", reader.evaluation.clone()).unwrap();
         assert_eq!(
             snapshot.view.get(&snapshot.id).unwrap().progress,
             Progress::NotStarted

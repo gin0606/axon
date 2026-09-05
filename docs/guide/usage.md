@@ -14,7 +14,7 @@ An Entity is either an `Issue` or a `Group`. Both kinds have the same generated 
 | --- | --- |
 | Progress | `NotStarted`, `InProgress`, or `Ended`. `Ended` means no more work will be performed. |
 | Disposition | `Undecided`, `Accepted`, or `Rejected`. This records whether the work or result should be pursued. |
-| Resurface condition | `Always`, `AtDate`, or `AfterEntity`. It controls when the Entity returns to attention without changing another axis. |
+| Resurface condition | `Always`, `AtDate`, `AfterEntity`, or `Command`. It controls when the Entity returns to attention without changing another axis. |
 | Dependency | Any Entity may require any other Entity's result. |
 | Containment | An Issue or Group may have one parent Group. The resulting structure is a tree. |
 
@@ -111,3 +111,23 @@ axon stores `.axon/axon.db` at the management root. In Git, the management root 
 The executable opens only the schema version it implements. It does not rewrite an older database during an ordinary command; an unsupported version fails before Entity data is read or changed.
 
 Every Issue and Group ID uses `<prefix>-<random six characters>`. The prefix comes from `axon init`; kind is not encoded in the ID. A full ID or a unique suffix may be used wherever an Entity ID is accepted. Group slugs do not exist.
+
+## Waiting for an external condition
+
+Use a Command condition when a script can observe the event you are waiting for:
+
+```sh
+axon when command <id> './check-release.sh' -r 'Wait for the library release'
+axon show <id>
+axon when clear <id>
+```
+
+The script must return 0 when satisfied, 1 while waiting, and another status on failure.
+Axon can run it when a query needs derived status, and checks again on the next invocation.
+Correct or clear a failing condition with `when`; no successful evaluation is required.
+These commands work for Issues and Groups and preserve progress, disposition, and claims.
+
+The script owns timeouts and caching; Axon waits if it does not finish. See the
+[CLI execution contract](../reference/cli.md#外部条件の評価) for the working directory,
+environment, diagnostics, and evaluation sharing, and the
+[state model](../reference/state-model.md#resurface-condition) for resurfacing and Group behavior.
