@@ -182,7 +182,7 @@ fn render_item(
         )
         .unwrap();
     }
-    if entity.kind == EntityKind::Group && !matches!(entity.progress, Progress::Ended) {
+    if entity.kind == EntityKind::Group && !entity.is_terminal() {
         let can_complete = view.can_complete_group(&entity.id);
         writeln!(
             output,
@@ -244,7 +244,12 @@ fn wait_reasons(
         }
         return Ok(reasons);
     }
-    if has_local_descendant_gate(view, entity)? {
+    if entity.kind == EntityKind::Group && entity.disposition == Disposition::Rejected {
+        reasons.push(decoration.paint(
+            OUTPUT_MUTED,
+            "Rejected Group: descendant scope is inactive; saved states and claims are unchanged.",
+        ));
+    } else if has_local_descendant_gate(view, entity)? {
         reasons.push(format!(
             "{} Progress={}, Disposition={}",
             decoration.paint(OUTPUT_WAITING, "Descendant gate closed:"),

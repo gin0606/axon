@@ -97,6 +97,8 @@ Treat an exported declaration as a working snapshot. After a successful apply, k
 plan when its root is non-terminal or its subtree has a saved claim. A rejected root
 with only unfinished saved descendants is omitted unless explicitly selected.
 Progress and Disposition counts stay separate; unfinished does not mean promised work.
+Ended and Rejected Groups omit completion and descendant-gate prompts. Explicit selection
+and saved claims still expose a Rejected Group's saved state, dependencies, and schedule.
 
 Candidates match `ready` and `triage`. A ready Group opens its descendants only
 after `start`. Shared waits appear at the owning Group scope; external references

@@ -154,6 +154,8 @@ Rejected root Group は、配下に非 terminal な保存状態だけが残る�
 Progress / Disposition、完了可能性、全子孫の軸別内訳、nested Group の所属、claim、候補、
 待ちを示す。候補集合は同じ条件下の ready / triage を対象範囲へ絞ったものと一致する。
 未終了を実施の約束とはせず、Ended と Rejected を達成率へ合算しない。
+Ended または Rejected の Group はすでに terminal なので、完了可否と descendant gate を
+表示しない。Rejected Group の保存状態、claim、dependency、Resurface condition は維持する。
 
 待ちは所有する scope ごとにまとめ、未解決 dependency、Rejected prerequisite、未成立の
 Resurface condition、Group の descendant gate を区別する。gate の表示は `show` と同じく、

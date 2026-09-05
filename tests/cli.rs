@@ -1164,7 +1164,7 @@ fn status_groups_candidates_waits_and_saved_claims_without_double_counting() {
     assert_success(&repo.axon(&["decide", "reject", &group]));
     let rejected = stdout(&repo.axon(&["status"]));
     assert!(rejected.contains(&format!("{group}  Group  main plan  [InProgress/Rejected]")));
-    assert!(rejected.contains("Disposition=Rejected"));
+    assert!(rejected.contains("Rejected Group: descendant scope is inactive"));
     assert!(rejected.contains(&child));
 }
 
@@ -1663,4 +1663,55 @@ fn ended_plan_summaries_preserve_command_failure_and_rejected_claim_context() {
             .count(),
         1
     );
+}
+
+#[test]
+fn status_treats_rejected_groups_as_terminal_without_hiding_saved_context() {
+    let repo = TestRepo::new();
+    repo.init("test");
+
+    let not_started = repo.group_plan("rejected before start");
+    let saved_child = created_id(&repo.axon(&[
+        "plan",
+        "saved child with dependency",
+        "--parent",
+        &not_started,
+    ]));
+    let dependency = repo.plan("external prerequisite for saved child");
+    repo.add_dependency(&saved_child, &dependency);
+    assert_success(&repo.axon(&["when", "manual", &not_started]));
+    assert_success(&repo.axon(&["decide", "reject", &not_started]));
+
+    let explicit = stdout(&repo.axon(&["status", "--group", &not_started]));
+    assert!(explicit.contains(&format!("{not_started}  Group")));
+    assert!(explicit.contains("[NotStarted/Rejected]"));
+    assert!(explicit.contains(&saved_child));
+    assert!(explicit.contains(&dependency));
+    assert!(explicit.contains("Unresolved dependency:"));
+    assert!(explicit.contains("Resurface condition not satisfied: Manual"));
+    assert!(explicit.contains("Rejected Group: descendant scope is inactive"));
+    assert!(!explicit.contains("Can complete:"), "{explicit}");
+    assert!(!explicit.contains("Descendant gate closed:"), "{explicit}");
+
+    let in_progress = repo.group_plan("rejected after start");
+    let claimed_child =
+        created_id(&repo.axon(&["plan", "claimed saved child", "--parent", &in_progress]));
+    assert_success(&repo.axon(&["start", &in_progress]));
+    assert_success(&repo.axon(&["start", &claimed_child]));
+    assert_success(&repo.axon(&["decide", "reject", &in_progress]));
+
+    for status in [
+        stdout(&repo.axon(&["status", "--group", &in_progress])),
+        stdout(&repo.axon(&["status"])),
+    ] {
+        assert!(status.contains(&format!("{in_progress}  Group")));
+        assert!(status.contains("[InProgress/Rejected]"));
+        assert!(status.contains(&claimed_child));
+        assert!(status.contains("Saved claims: 2"));
+        assert!(status.contains("Claim: test-actor"));
+        assert!(status.contains("Active scope: no"));
+        assert!(status.contains("Rejected Group: descendant scope is inactive"));
+        assert!(!status.contains("Can complete:"), "{status}");
+        assert!(!status.contains("Descendant gate closed:"), "{status}");
+    }
 }
