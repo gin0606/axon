@@ -103,7 +103,7 @@ group の完了は子孫から自動導出しない。最後の子が terminal �
 
 ## Rejected と Ended の境界
 
-group を Rejected にしても子孫の Disposition / Progress は変更しない。Rejected の祖先 group 配下は active scope 外になり、保存状態を保ったまま ready と triage から外れる。これは dependency の前提喪失ではないため、包含だけを理由に orphaned とは呼ばない。
+group は Rejected になった時点で Progress にかかわらず terminal であり、group 自身を完了させる追加操作は必要ない。子孫の Disposition / Progress は変更せず、Rejected の祖先 group 配下は active scope 外になり、保存状態を保ったまま ready と triage から外れる。非 terminal な子孫はそれだけで将来作業や後片付けを要求せず、Accepted の祖先 Group の完了条件や保存済み claim・外部作業に処遇が必要な場合だけ個別に判断する。これは dependency の前提喪失ではないため、包含だけを理由に orphaned とは呼ばない。
 
 一方、dependency の依存先 group が Rejected なら、その成果または計画単位が得られないため依存元は orphaned になる。依存元が group なら group 自身と全子孫に作用するが、triage は判断 frontier の group だけを表示し、配下を一件ずつ並べない。
 

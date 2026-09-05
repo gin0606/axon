@@ -1295,7 +1295,7 @@ fn show_leads_with_situation_remaining_and_owned_waits() {
         )
     );
     assert!(show.contains("Completion requires 3 unfinished descendants to become terminal."));
-    assert!(show.contains("Rejected Group leaves descendant saved states unchanged."));
+    assert!(show.contains("Rejected Group: already terminal"));
     assert!(show.contains(&format!("{child}  Issue  [NotStarted/Accepted]  preserved child\n      AfterEntity: {prerequisite}; satisfied by Ended or Rejected (yes).\n      Rejected prerequisite (Orphaned): {prerequisite}")));
     assert!(show.contains(&format!("Descendant gate closed: {manual} (Progress=NotStarted, Disposition=Accepted)\n    Not surfaced: Manual")));
     assert!(!show.contains("  Inactive:"));
@@ -1350,6 +1350,86 @@ fn show_distinguishes_explicit_completion_from_an_ended_group() {
             .contains("Can complete:")
     );
     assert!(!ended.contains("Inactive:"));
+}
+
+#[test]
+fn show_treats_rejected_groups_as_terminal_without_hiding_saved_state() {
+    let repo = TestRepo::new();
+    repo.init("test");
+
+    let not_started = repo.group_plan("rejected before start");
+    let saved_child = created_id(&repo.axon(&["plan", "saved child", "--parent", &not_started]));
+    let dependency = repo.plan("external prerequisite");
+    repo.add_dependency(&saved_child, &dependency);
+    let nested = created_id(&repo.axon(&[
+        "group",
+        "plan",
+        "rejected nested condition",
+        "--parent",
+        &not_started,
+    ]));
+    assert_success(&repo.axon(&["when", "after", &nested, &dependency]));
+    assert_success(&repo.axon(&["decide", "reject", &nested]));
+    assert_success(&repo.axon(&["decide", "reject", &not_started]));
+
+    let rejected = stdout(&repo.axon(&["show", &not_started]));
+    assert!(rejected.contains("Situation: Rejected"));
+    assert!(rejected.contains("Rejected Group: already terminal"));
+    assert!(rejected.contains(
+        "Unfinished descendants are saved states and do not require follow-up by themselves."
+    ));
+    assert!(!rejected.contains("Can complete:"));
+    assert!(!rejected.contains("Completion requires"));
+    assert!(rejected.contains(&format!(
+        "{saved_child}  Issue  [NotStarted/Accepted]  saved child"
+    )));
+    assert!(rejected.contains(&format!("Needs: {dependency}")));
+    assert!(rejected.contains("Unresolved"));
+    assert!(rejected.contains(&format!(
+        "{nested}  Group  [NotStarted/Rejected]  rejected nested condition"
+    )));
+    assert!(rejected.contains(&format!(
+        "AfterEntity: {dependency}; satisfied by Ended or Rejected (no)."
+    )));
+
+    let in_progress = repo.group_plan("rejected after start");
+    let claimed_child =
+        created_id(&repo.axon(&["plan", "claimed child", "--parent", &in_progress]));
+    assert_success(&repo.axon(&["start", &in_progress]));
+    assert_success(&repo.axon(&["start", &claimed_child]));
+    assert_success(&repo.axon(&["decide", "reject", &in_progress]));
+
+    let claimed = stdout(&repo.axon(&["show", &in_progress]));
+    assert!(claimed.contains("Situation: Rejected"));
+    assert!(claimed.contains("Saved claims remain: 2."));
+    assert!(claimed.contains(
+        "decide separately whether its external work should end, be released, or continue outside this Group."
+    ));
+    assert!(claimed.contains("Claim: test-actor"));
+    assert!(claimed.contains(&format!(
+        "{claimed_child}  Issue  [InProgress/Accepted]  claimed child"
+    )));
+    assert!(!claimed.contains("Can complete:"));
+    assert!(!claimed.contains("Completion requires"));
+
+    let ended = repo.group_plan("ended accepted");
+    assert_success(&repo.axon(&["start", &ended]));
+    assert_success(&repo.axon(&["done", &ended]));
+    let ended = stdout(&repo.axon(&["show", &ended]));
+    assert!(ended.contains("Situation: Ended"));
+    assert!(
+        !ended
+            .split_once("\n\nDetails\n")
+            .unwrap()
+            .0
+            .contains("Can complete:")
+    );
+
+    let unfinished = repo.group_plan("unfinished accepted");
+    let unfinished = stdout(&repo.axon(&["show", &unfinished]));
+    assert!(unfinished.contains("Situation: Ready to start"));
+    assert!(unfinished.contains("Can complete: no"));
+    assert!(unfinished.contains("Completion requires Group Progress=InProgress."));
 }
 
 #[test]

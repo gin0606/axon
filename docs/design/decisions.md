@@ -611,7 +611,7 @@ ready / triage との一致を検証するため、新規 Quint モデルは追�
 
 既知の計画を把握する際、独立した状態軸を最初に列挙すると、残りと待ち先を利用者が再構成する必要がある。Situation、終了・却下・未終了の内訳、包含階層と待ち、Details の順にする。Ended と Rejected は重なりを明示して保持し、未終了は実施の約束でも terminal の補数による達成率でもない。
 
-共通の activation gate は所有Groupに一度示し、個別の dependency とスケジュール条件から区別する。Rejected Group の子孫は元の保存状態で残る。終了済みGroupでは Can complete: no や子孫ごとの Inactive を主表示に繰り返さない。単一read snapshot、既存条件評価、全description・Note・進行履歴の保存文字列と色なし出力の契約を維持する。状態意味論を変えない表示変更のため新しいQuintモデルは追加しない。
+共通の activation gate は所有Groupに一度示し、個別の dependency とスケジュール条件から区別する。Rejected Group は Progress にかかわらずすでに terminal として完了可否を示さず、子孫は将来作業を要求しない inactive な保存状態として残す。保存済み claim がある場合だけ、外部作業の処遇を Entity ごとに判断する必要を示す。Ended Groupでも Can complete: no や子孫ごとの Inactive を主表示に繰り返さない。単一read snapshot、既存条件評価、全description・Note・進行履歴の保存文字列と色なし出力の契約を維持する。状態意味論を変えない表示変更のため新しいQuintモデルは追加しない。
 
 ## 計画表示の密度と終了済み構造
 

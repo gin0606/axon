@@ -1159,28 +1159,43 @@ fn render_show(
         decoration.paint(OUTPUT_MUTED, "Situation:"),
         show_situation(view, entity, decoration)?,
     ));
-    if entity.kind == EntityKind::Group
-        && matches!(entity.progress, Progress::Ended)
-        && entity.disposition == Disposition::Rejected
-    {
+    let rejected_group =
+        entity.kind == EntityKind::Group && entity.disposition == Disposition::Rejected;
+    if rejected_group {
         overview.push(decoration.paint(
             OUTPUT_MUTED,
-            "Rejected Group: descendant scope is inactive; saved states and claims are unchanged.",
+            "Rejected Group: already terminal; descendant scope is inactive. Unfinished descendants are saved states and do not require follow-up by themselves.",
         ));
+        let saved_claims = std::iter::once(entity)
+            .chain(view.descendants(&entity.id))
+            .filter(|member| member.progress.claim().is_some())
+            .count();
+        if saved_claims > 0 {
+            overview.push(format!(
+                "{} Inspect each claimed Entity and decide separately whether its external work should end, be released, or continue outside this Group.",
+                decoration.paint(
+                    OUTPUT_WAITING,
+                    format!("Saved claims remain: {saved_claims}.")
+                )
+            ));
+        }
     }
     let mut structural_details = Vec::new();
-    if matches!(entity.progress, Progress::Ended) {
-        structural_details.extend(show_waits(view, entity, "", decoration)?);
-        if entity.kind == EntityKind::Group {
-            structural_details
-                .push(decoration.paint(OUTPUT_MUTED, "Can complete: no (Group has ended)."));
-        }
+    if rejected_group {
+        overview.extend(show_waits(view, entity, "", decoration, false)?);
     } else {
-        overview.extend(show_waits(view, entity, "", decoration)?);
+        if matches!(entity.progress, Progress::Ended) {
+            structural_details.extend(show_waits(view, entity, "", decoration, true)?);
+            if entity.kind == EntityKind::Group {
+                structural_details
+                    .push(decoration.paint(OUTPUT_MUTED, "Can complete: no (Group has ended)."));
+            }
+        } else {
+            overview.extend(show_waits(view, entity, "", decoration, true)?);
+        }
     }
     for ancestor in view.ancestors(&entity.id) {
-        if matches!(ancestor.progress, Progress::Ended)
-            && ancestor.disposition == Disposition::Rejected
+        if ancestor.disposition == Disposition::Rejected
             && !matches!(entity.progress, Progress::Ended)
         {
             overview.push(format!(
@@ -1192,8 +1207,19 @@ fn render_show(
                     "descendant scope is inactive; saved states and claims are unchanged."
                 )
             ));
+            let saved_conditions = show_waits(view, ancestor, "  ", decoration, false)?;
+            if !saved_conditions.is_empty() {
+                overview.push(format!(
+                    "{} {}",
+                    decoration.paint(OUTPUT_MUTED, "Ancestor conditions:"),
+                    decoration.paint(OUTPUT_ID, &ancestor.id)
+                ));
+                overview.extend(saved_conditions);
+            }
         }
-        if has_local_descendant_gate(view, ancestor)? {
+        if ancestor.disposition != Disposition::Rejected
+            && has_local_descendant_gate(view, ancestor)?
+        {
             let target = if matches!(entity.progress, Progress::Ended)
                 || matches!(ancestor.progress, Progress::Ended)
             {
@@ -1206,7 +1232,7 @@ fn render_show(
                 decoration.paint(OUTPUT_MUTED, "Ancestor scope:"),
                 decoration.paint(OUTPUT_ID, &ancestor.id)
             ));
-            target.extend(show_waits(view, ancestor, "  ", decoration)?);
+            target.extend(show_waits(view, ancestor, "  ", decoration, true)?);
         }
     }
     blocks.push(overview);
@@ -1340,7 +1366,7 @@ fn render_show(
                 ),
             ),
         ];
-        if !matches!(entity.progress, Progress::Ended) {
+        if !entity.is_terminal() {
             let can_complete = view.can_complete_group(&entity.id);
             group.push(format!(
                 "  {} {}",
@@ -1402,7 +1428,13 @@ fn render_show(
         let subtree = ordered_subtree(view, &entity.id);
         for (_, descendant) in &subtree {
             if matches!(descendant.progress, Progress::Ended) {
-                let waits = show_waits(view, descendant, "    ", decoration)?;
+                let waits = show_waits(
+                    view,
+                    descendant,
+                    "    ",
+                    decoration,
+                    descendant.disposition != Disposition::Rejected,
+                )?;
                 if !waits.is_empty() {
                     group_details.push(format!(
                         "  {} {}",
@@ -1606,9 +1638,10 @@ fn show_waits(
     entity: &Entity,
     indent: &str,
     decoration: OutputDecoration,
+    show_descendant_gate: bool,
 ) -> derived::Result<Vec<String>> {
     let mut lines = Vec::new();
-    if has_local_descendant_gate(view, entity)? {
+    if show_descendant_gate && has_local_descendant_gate(view, entity)? {
         lines.push(format!(
             "{indent}{} {} (Progress={}, Disposition={})",
             decoration.paint(OUTPUT_WAITING, "Descendant gate closed:"),
@@ -1696,24 +1729,24 @@ fn render_subtree(
             ),
             entity.title,
         ));
-        if matches!(entity.progress, Progress::Ended)
-            && entity.kind == EntityKind::Group
-            && entity.disposition == Disposition::Rejected
-        {
+        let rejected_group =
+            entity.kind == EntityKind::Group && entity.disposition == Disposition::Rejected;
+        if rejected_group {
             lines.push(format!(
                 "{indent}  {}",
                 decoration.paint(
                     OUTPUT_MUTED,
-                    "Rejected Group: descendant scope is inactive; saved states and claims are unchanged."
+                    "Rejected Group: already terminal; descendant scope is inactive. Unfinished descendants are saved states and do not require follow-up by themselves."
                 )
             ));
         }
-        if !matches!(entity.progress, Progress::Ended) {
+        if !matches!(entity.progress, Progress::Ended) || rejected_group {
             lines.extend(show_waits(
                 view,
                 entity,
                 &format!("{indent}  "),
                 decoration,
+                !rejected_group,
             )?);
         }
     }
@@ -2698,7 +2731,7 @@ fn render_docs(decoration: OutputDecoration) -> String {
     writeln!(output, "{}", decoration.paint(OUTPUT_HEADING, "Groups")).unwrap();
     writeln!(
         output,
-        "  An InProgress Group opens its descendants only while it is Accepted, surfaced, and\n  neither blocked nor orphaned. Starting a Group does not start its descendants. A Group\n  can end only after every descendant is terminal, and can be released only when no\n  descendant is InProgress.\n"
+        "  An InProgress Group opens its descendants only while it is Accepted, surfaced, and\n  neither blocked nor orphaned. Starting a Group does not start its descendants. A Group\n  can end only after every descendant is terminal, and can be released only when no\n  descendant is InProgress. A Rejected Group is already terminal; unfinished descendants\n  remain inactive saved states and do not require follow-up by themselves.\n"
     )
     .unwrap();
 

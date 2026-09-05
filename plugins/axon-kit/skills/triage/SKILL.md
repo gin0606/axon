@@ -48,7 +48,7 @@ When decomposing an accepted plan, use `axon-kit:plan` for decided children and 
 
 Changing Disposition does not change Progress or claim. Preserve both unless the caller separately requests a lifecycle change, in which case route that effect to `axon-kit:work-state`. Do not silently clear a claim during triage.
 
-A Group decision does not rewrite descendant state. Report effects on descendant active scope. Lifecycle preconditions for releasing or ending a Group belong to `axon-kit:work-state`.
+A Group decision does not rewrite descendant state. Report effects on descendant active scope. A Rejected Group is already terminal, and visible non-terminal descendants can remain as stable inactive saved state; do not infer that they need rejection, release, or completion. If a saved claim or external work actually needs a disposition, report that fact and the per-Entity choices without changing descendants automatically. Lifecycle preconditions for releasing or ending an Entity belong to `axon-kit:work-state`.
 
 ## Verify and return
 
