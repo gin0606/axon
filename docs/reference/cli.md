@@ -143,9 +143,10 @@ Group などの評価は行う。履歴・Note・Revision の参照、claims、e
 
 ### 計画の横断表示
 
-`status` は root Group ごとの計画を ID 順に要約し、その後に所属なし Issue の一覧を ID 順で示す。Group 自身または
-全子孫に非 terminal Entity か保存済み claim があれば表示する。Rejected Group 配下の
-非 terminal 子孫も保持して表示し、全体が terminal で claim がない計画は省く。
+`status` は root Group ごとの計画を ID 順に要約し、その後に所属なし Issue の一覧を ID 順で示す。
+root Entity 自身が非 terminal、またはその subtree に保存済み claim があれば表示する。
+Rejected root Group は、配下に非 terminal な保存状態だけが残る場合は省き、Group 自身または
+配下に保存済み claim がある場合は観測と解消のため表示する。
 `status --group <id>` は ID / 一意 suffix を解決し、指定 Group 自身と全子孫を対象にする。
 指定時は terminal だけでも表示する。存在しない参照、曖昧参照、Issue 指定はエラーになる。
 
@@ -263,4 +264,4 @@ backup は管理 root の `.axon/migration-backups` に移行直前の全保存�
 
 ### 計画表示の情報密度
 
-status は各項目の identity を一度だけ表示し、Ready / Triage、保存 claim と待ち理由をその項目に添える。所属なし Issue は Ungrouped Issues にまとめ、空セクションは省く。冒頭の件数はゼロでも表示する（対象全体が空の場合は既存の空表示案内）。Ended Group の完了不可と終了由来 gate は要約から外し、show の Details で確認できる。Rejected 配下の未終了項目・保存 claim・inactive 理由は引き続き表示する。
+status は各項目の identity を一度だけ表示し、Ready / Triage、保存 claim と待ち理由をその項目に添える。所属なし Issue は Ungrouped Issues にまとめ、空セクションは省く。冒頭の件数はゼロでも表示する（対象全体が空の場合は既存の空表示案内）。Ended Group の完了不可と終了由来 gate は要約から外し、show の Details で確認できる。Rejected root Group は保存済み claim がある場合だけ通常表示に残し、その場合は配下の未終了項目・保存 claim・inactive 理由も表示する。

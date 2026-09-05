@@ -212,7 +212,7 @@ enum Command {
     },
     /// Summarize plans, saved claims, candidates, and waits
     #[command(
-        long_about = "Summarize root plans and ungrouped Issues with unfinished Entities or saved claims. --group includes the specified Group and every descendant, even when terminal. Each item combines its candidates, saved claim, and waits; empty sections are omitted. Candidate sets match ready and triage; saved claims do not imply agent activity. Use show <ID> for complete details and ended Group structure."
+        long_about = "Summarize root plans and ungrouped Issues whose root is non-terminal or whose subtree has saved claims. --group includes the specified Group and every descendant, even when terminal. Each item combines its candidates, saved claim, and waits; empty sections are omitted. Candidate sets match ready and triage; saved claims do not imply agent activity. Use show <ID> for complete details and ended Group structure."
     )]
     Status {
         /// Group ID or unique ID suffix; include its complete descendant scope

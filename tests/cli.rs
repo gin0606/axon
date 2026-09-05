@@ -1203,6 +1203,37 @@ fn status_empty_terminal_scope_resolution_and_help() {
 }
 
 #[test]
+fn status_omits_rejected_root_with_only_unfinished_saved_descendants() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let root = repo.group_plan("rejected root");
+    let child = created_id(&repo.axon(&["plan", "saved child", "--parent", &root]));
+    assert_success(&repo.axon(&["decide", "reject", &root]));
+
+    let status = repo.axon(&["status"]);
+    assert_success(&status);
+    assert!(status.stdout.is_empty());
+    assert!(stderr(&status).contains("No plans"));
+
+    let selected = stdout(&repo.axon(&["status", "--group", &root]));
+    assert!(selected.contains(&format!("{root}  Group  rejected root")));
+    assert!(selected.contains(&format!("{child}  Issue  saved child")));
+
+    let claimed_root = repo.group_plan("rejected root with descendant claim");
+    let claimed_child =
+        created_id(&repo.axon(&["plan", "claimed child", "--parent", &claimed_root]));
+    assert_success(&repo.axon(&["start", &claimed_root]));
+    assert_success(&repo.axon(&["start", &claimed_child]));
+    assert_success(&repo.axon(&["decide", "reject", &claimed_child]));
+    assert_success(&repo.axon(&["done", &claimed_root]));
+    assert_success(&repo.axon(&["decide", "reject", &claimed_root]));
+
+    let status = stdout(&repo.axon(&["status"]));
+    assert!(status.contains(&format!("{claimed_root}  Group")));
+    assert!(status.contains(&format!("{claimed_child}  Issue")));
+}
+
+#[test]
 fn status_shares_command_evaluation_and_propagates_errors_with_no_partial_output() {
     let repo = TestRepo::new();
     repo.init("test");
@@ -1515,6 +1546,9 @@ fn ended_plan_summaries_preserve_command_failure_and_rejected_claim_context() {
     assert_success(&repo.axon(&["decide", "reject", &child]));
     assert_success(&repo.axon(&["done", &root]));
     assert_success(&repo.axon(&["decide", "reject", &root]));
+    let default_status = stdout(&repo.axon(&["status"]));
+    assert!(default_status.contains(&root));
+    assert!(default_status.contains(&child));
     let status = stdout(&repo.axon(&["status", "--group", &root]));
     assert!(status.contains("Saved claims: 1"));
     assert!(status.contains("Active scope: no"));

@@ -8,7 +8,7 @@ pub fn run(group: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     let output = render(&view, id.as_ref(), decoration)?;
     write_rows(
         &output,
-        "No plans or ungrouped Issues have unfinished Entities or saved claims. Use `axon list` for all stored Entities.",
+        "No plans or ungrouped Issues have a non-terminal root or saved claims. Use `axon list` for all stored Entities.",
         decoration,
     )?;
     Ok(())
@@ -30,9 +30,10 @@ pub(super) fn render(
         .filter(|e| selected.map_or(e.parent.is_none(), |id| &e.id == id))
         .filter(|root| {
             selected.is_some()
+                || !root.is_terminal()
                 || members(view, root)
                     .iter()
-                    .any(|e| !e.is_terminal() || e.progress.claim().is_some())
+                    .any(|e| e.progress.claim().is_some())
         })
         .collect::<Vec<_>>();
     roots.sort_by(|a, b| a.id.cmp(&b.id));
