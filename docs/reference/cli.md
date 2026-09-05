@@ -80,7 +80,7 @@ title、description、parent Group、outgoing dependency は対象 Entity 自身
 
 Accepted / Rejected への判断時には declaration 全文を Entity 内連番の Declaration Revision として保存する。直前の Revision と同じなら再利用し、判断履歴から対象 Revision を参照できる。`revision list|show|diff` は Entity と Revision を一つの read transaction から読み、`revision diff` は title、description、parent、outgoing dependency を別々に比較する。optional な description は `present` / `absent` を本文と分けて表示する。
 
-`note add` は本文または file から非空の Note を一件追記する追加操作である。Issue / Group、Progress、Disposition を問わず使え、declaration、状態、関係、導出値を変えない。Note は Entity 内連番、本文、actor、保存時刻を持ち、通常操作では編集・削除しない。`show` は declaration の固定状態と記録件数を冒頭に示し、description と全 Note を一つの read transaction から保存順で省略せず表示する。
+`note add` は本文または file から非空の Note を一件追記する追加操作である。Issue / Group、Progress、Disposition を問わず使え、declaration、状態、関係、導出値を変えない。Note は Entity 内連番、本文、actor、保存時刻を持ち、通常操作では編集・削除しない。`show` は状況と計画の見通しを先に、declaration の固定状態と記録件数を Details に示し、description と全 Note を一つの read transaction から保存順で省略せず表示する。
 
 ### 明示解除までの待機
 
@@ -187,7 +187,7 @@ Group は計画範囲を明示的に進める Entity であり、子孫から自
 
 Group の `release` は InProgress の子孫が 0 件のときだけ成功する。Group の claim は子孫を lock せず、Group と子孫を別 actor が同時に claim できる。
 
-`show` は Group 自身の保存済み状態と、直下・全子孫の kind / Progress / terminal 集計、現在 done できるかを分けて表示する。続く `Subtree` は terminal を含む全子孫を包含階層どおりに並べ、各 Entity の ID、kind、Progress / Disposition、title、ready / blocked / orphaned / surfaced / active scope に関する例外状態を簡潔に示す。子孫の description、Note、Revision、履歴、claim 詳細は展開せず、必要な Entity を個別に `show` する。
+`show` は Issue / Group とも Situation を先に表示する。Group は全子孫の Ended、Rejected、未終了かつ非却下の Unfinished を示す。Ended と Rejected の重なりを明記し、terminal 件数を達成率や将来実施の約束に読み替えない。未終了 Group は Can complete と未充足条件を示し、終了済み Group には完了可否を重ねない。続く `Subtree` は terminal を含む全子孫を包含階層どおりに並べ、各 Entity の ID、kind、Progress / Disposition、title と現在の候補を示す。祖先の activation gate は所有 scope にまとめ、子孫の固有の未解決 dependency / Rejected prerequisite / Resurface condition を項目の近くに示す。Rejected Group は子孫の保存状態を変更しないことを明記する。AfterEntity は Ended または Rejected で成立し、dependency と区別する。選択範囲外の祖先gateもIDとともに示す。Details には保存状態、導出値、claim、declaration と記録件数、直下・全子孫の詳細集計を配置し、その後に関係・長文・履歴を続ける。子孫の description、Note、Revision、履歴、claim 詳細は展開せず、必要な Entity を個別に `show` する。
 
 `Dependencies` は選択した Group と全子孫が所有する direct outgoing dependency を owner ごとに表示する。Group 由来の dependency を子孫へ重複表示せず、target は `Satisfied` / `Unresolved` / `Rejected` を区別する。subtree 外の target は `External` と title を示すが、その先の subtree は展開しない。subtree の sibling、dependency owner、target は ID 順とし、状態変化で表示順を変えない。空 Group も `Subtree` に明示し、件数による省略は行わない。
 

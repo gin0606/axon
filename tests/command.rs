@@ -159,7 +159,8 @@ fn group_observation_is_shared_and_closing_gate_preserves_claims() {
     fs::remove_file(repo.root().join("satisfied")).unwrap();
     let closed = repo.axon(&["show", &group]);
     assert_success(&closed);
-    assert!(stdout(&closed).contains("Inactive:"));
+    assert!(stdout(&closed).contains(&format!("Descendant gate closed: {group}")));
+    assert!(stdout(&closed).contains("Not surfaced: Command"));
     assert_eq!(calls(&repo), 4);
     assert_eq!(repo.snapshot(&first), before);
     assert_eq!(stdout(&repo.axon(&["claims"])), claims);

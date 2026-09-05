@@ -419,7 +419,7 @@ fn group_show_renders_the_complete_subtree_and_direct_dependencies() {
         .split_once("\n\nSubtree\n")
         .unwrap()
         .1
-        .split_once("\n\nDependencies\n")
+        .split_once("\n\nDetails\n")
         .unwrap()
         .0;
     for (id, title) in [
@@ -460,10 +460,17 @@ fn group_show_renders_the_complete_subtree_and_direct_dependencies() {
             .find(|line| line.contains(id))
             .unwrap_or_else(|| panic!("missing subtree line for {id}:\n{show}"))
     };
-    assert!(subtree_line(&blocked).contains("Blocked"));
-    assert!(subtree_line(&orphaned).contains("Orphaned"));
-    assert!(subtree_line(&deferred).contains("Not surfaced"));
-    assert!(subtree_line(&nested_draft).contains("Inactive"));
+    assert!(subtree.contains(&format!(
+        "{}\n    Unresolved dependency (Blocked): {external_unresolved}",
+        subtree_line(&blocked)
+    )));
+    assert!(subtree.contains(&format!(
+        "{}\n    Rejected prerequisite (Orphaned): {external_rejected}",
+        subtree_line(&orphaned)
+    )));
+    assert!(subtree.contains(&format!("{}\n    Not surfaced", subtree_line(&deferred))));
+    assert!(subtree.contains(&format!("Descendant gate closed: {nested}")));
+    assert!(!subtree_line(&nested_draft).contains("Inactive"));
     assert!(!show.contains("Non-terminal descendants"));
 
     let mut direct = [
@@ -472,7 +479,14 @@ fn group_show_renders_the_complete_subtree_and_direct_dependencies() {
     direct.sort();
     for pair in direct.windows(2) {
         assert!(
-            subtree.find(pair[0]).unwrap() < subtree.find(pair[1]).unwrap(),
+            subtree
+                .lines()
+                .position(|line| line.starts_with(&format!("  {}  ", pair[0])))
+                .unwrap()
+                < subtree
+                    .lines()
+                    .position(|line| line.starts_with(&format!("  {}  ", pair[1])))
+                    .unwrap(),
             "siblings must be ID ordered:\n{subtree}"
         );
     }
@@ -498,7 +512,7 @@ fn group_show_renders_the_complete_subtree_and_direct_dependencies() {
     let waiting_group = repo.group_plan("waiting delivery");
     repo.add_dependency(&waiting_group, &external_unresolved);
     let waiting_show = stdout(&repo.axon(&["show", &waiting_group]));
-    assert_eq!(waiting_show.matches(&external_unresolved).count(), 1);
+    assert_eq!(waiting_show.matches(&external_unresolved).count(), 2);
     assert!(!waiting_show.contains("Root cause:"));
 }
 
@@ -1202,4 +1216,131 @@ fn status_shares_command_evaluation_and_propagates_errors_with_no_partial_output
     assert!(stderr(&output).contains("bad"));
     let other = created_id(&repo.axon(&["group", "plan", "unrelated"]));
     assert_success(&repo.axon(&["status", "--group", &other]));
+}
+
+#[test]
+fn show_leads_with_situation_remaining_and_owned_waits() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let root = created_id(&repo.axon(&["group", "plan", "delivery", "-m", "full\n  description"]));
+    let nested = created_id(&repo.axon(&["group", "plan", "abandoned scope", "--parent", &root]));
+    let child = created_id(&repo.axon(&["plan", "preserved child", "--parent", &nested]));
+    let overlap = created_id(&repo.axon(&["plan", "ended and rejected", "--parent", &root]));
+    let manual = created_id(&repo.axon(&["group", "plan", "manual scope", "--parent", &root]));
+    let manual_child = created_id(&repo.axon(&["plan", "manual child", "--parent", &manual]));
+    let prerequisite = repo.plan("lost prerequisite");
+    repo.add_dependency(&child, &prerequisite);
+    assert_success(&repo.axon(&["decide", "reject", &prerequisite]));
+    assert_success(&repo.axon(&["when", "after", &child, &prerequisite]));
+    assert_success(&repo.axon(&["when", "manual", &manual]));
+    assert_success(&repo.axon(&["note", "add", &root, "-m", "note one\n  untouched"]));
+    assert_success(&repo.axon(&["note", "add", &root, "-m", "note two"]));
+    let before = stdout(&repo.axon(&["show", &root]));
+    assert!(before.contains("Situation: Ready to start"));
+    assert!(before.contains("Completion requires Group Progress=InProgress."));
+    assert_eq!(
+        before
+            .matches(&format!("Descendant gate closed: {root}"))
+            .count(),
+        1
+    );
+    assert_success(&repo.axon(&["start", &root]));
+    assert_success(&repo.axon(&["start", &overlap]));
+    assert_success(&repo.axon(&["done", &overlap]));
+    assert_success(&repo.axon(&["decide", "reject", &overlap]));
+    assert_success(&repo.axon(&["decide", "reject", &nested]));
+    let show = stdout(&repo.axon(&["show", &root]));
+    assert!(show.contains("Situation: InProgress (saved claim)"));
+    assert!(show.contains("Descendants: Ended: 1  Rejected: 2  Unfinished: 3"));
+    assert!(
+        show.contains(
+            "Ended and Rejected overlap: 1; Unfinished excludes both (not a commitment)."
+        )
+    );
+    assert!(show.contains("Completion requires 3 unfinished descendants to become terminal."));
+    assert!(show.contains("Rejected Group leaves descendant saved states unchanged."));
+    assert!(show.contains(&format!("{child}  Issue  [NotStarted/Accepted]  preserved child\n      AfterEntity: {prerequisite}; satisfied by Ended or Rejected (yes).\n      Rejected prerequisite (Orphaned): {prerequisite}")));
+    assert!(show.contains(&format!("Descendant gate closed: {manual} (Progress=NotStarted, Disposition=Accepted)\n    Not surfaced: Manual")));
+    assert!(!show.contains("  Inactive:"));
+    for (a, b) in [
+        ("Situation:", "Group\n"),
+        ("Group\n", "Subtree\n"),
+        ("Subtree\n", "Details\n"),
+        ("Details\n", "Description\n"),
+        ("Description\n", "Notes\n"),
+        ("Notes\n", "Progress history\n"),
+    ] {
+        assert!(show.find(a).unwrap() < show.find(b).unwrap(), "{show}");
+    }
+    assert!(show.contains("Description\nfull\n  description"));
+    assert!(show.contains("note one\n  untouched"));
+    assert!(show.contains("note two"));
+    assert!(show.contains("Plan declaration: fixed at Revision 1"));
+    assert!(show.contains("Records: Notes: 2"));
+    assert!(show.contains("Claim: test-actor"));
+    let child_show = stdout(&repo.axon(&["show", &manual_child]));
+    assert!(child_show.contains("Situation: Not started; outside active scope"));
+    assert_eq!(
+        child_show
+            .matches(&format!("Descendant gate closed: {manual}"))
+            .count(),
+        1
+    );
+    assert!(child_show.contains("Not surfaced: Manual"));
+    assert!(child_show.find("Ancestor scope:").unwrap() < child_show.find("Details\n").unwrap());
+}
+
+#[test]
+fn show_distinguishes_explicit_completion_from_an_ended_group() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let group = repo.group_plan("empty plan");
+    assert_success(&repo.axon(&["start", &group]));
+    let awaiting = stdout(&repo.axon(&["show", &group]));
+    assert!(awaiting.contains("Descendants: Ended: 0  Rejected: 0  Unfinished: 0"));
+    assert!(awaiting.contains("Can complete: yes"));
+    assert!(awaiting.contains("All descendants are terminal; awaiting explicit done."));
+    assert!(awaiting.contains("No descendants"));
+    assert_success(&repo.axon(&["done", &group]));
+    assert_success(&repo.axon(&["decide", "reject", &group]));
+    let ended = stdout(&repo.axon(&["show", &group]));
+    assert!(ended.contains("Situation: Ended; Rejected"));
+    assert!(!ended.contains("Can complete:"));
+    assert!(!ended.contains("Inactive:"));
+}
+
+#[test]
+fn show_keeps_inherited_dependency_gates_at_the_owning_scope() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let root = repo.group_plan("root");
+    let nested = created_id(&repo.axon(&["group", "plan", "nested", "--parent", &root]));
+    let child = created_id(&repo.axon(&["plan", "child", "--parent", &nested]));
+    let target = repo.plan("prerequisite");
+    assert_success(&repo.axon(&["start", &root]));
+    assert_success(&repo.axon(&["start", &nested]));
+    repo.add_dependency(&root, &target);
+    for rejected in [false, true] {
+        if rejected {
+            assert_success(&repo.axon(&["decide", "reject", &target]));
+        }
+        for selected in [&root, &nested, &child] {
+            let show = stdout(&repo.axon(&["show", selected]));
+            let summary = show.split_once("\n\nDetails\n").unwrap().0;
+            assert_eq!(
+                summary.matches("Descendant gate closed:").count(),
+                1,
+                "{show}"
+            );
+            assert!(summary.contains(&format!("Descendant gate closed: {root}")));
+            assert!(summary.contains(&format!(
+                "{}: {target}",
+                if rejected {
+                    "Rejected prerequisite (Orphaned)"
+                } else {
+                    "Unresolved dependency (Blocked)"
+                }
+            )));
+        }
+    }
 }

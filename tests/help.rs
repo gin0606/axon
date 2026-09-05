@@ -113,7 +113,7 @@ fn leaf_help_documents_common_entity_inputs_and_kind_filters() {
     let set = help_stdout(&["group", "set", "--help"]);
     assert!(set.contains("Parent group ID"));
     let show = help_stdout(&["show", "--help"]);
-    assert!(show.contains("complete subtree overview"), "{show}");
+    assert!(show.contains("situation and waits"), "{show}");
 }
 
 #[test]

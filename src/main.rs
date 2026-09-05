@@ -257,7 +257,7 @@ enum Command {
         #[arg(long, value_enum)]
         kind: Option<KindFilter>,
     },
-    /// Show one Entity; Groups include their complete subtree overview
+    /// Inspect one Entity from situation and waits to its full details
     Show {
         /// Entity ID or unique ID suffix
         id: String,
@@ -1139,6 +1139,16 @@ fn render_show(
         entity.title,
     )];
 
+    overview.push(format!("Situation: {}", show_situation(view, entity)?));
+    overview.extend(show_waits(view, entity, "", decoration)?);
+    for ancestor in view.ancestors(&entity.id) {
+        if show_has_local_gate(view, ancestor)? {
+            overview.push(format!("Ancestor scope: {}", ancestor.id));
+            overview.extend(show_waits(view, ancestor, "  ", decoration)?);
+        }
+    }
+    blocks.push(overview);
+    let mut overview = Vec::new();
     let inactive_reason = inactive_scope_reason(view, &entity.id)?;
     let active_scope = inactive_reason
         .as_ref()
@@ -1238,29 +1248,44 @@ fn render_show(
             ),
         )],
     ));
-    blocks.push(overview);
+    let details = render_section(decoration, "Details", overview);
+    let mut group_details = Vec::new();
+    let mut dependencies = Vec::new();
 
     if entity.kind == EntityKind::Group {
         let summary = view.group_summary(&entity.id);
-        let completable = view.can_complete_group(&entity.id);
-        let mut group = vec![format!(
-            "  {}",
-            render_inline_fields(
-                decoration,
-                vec![(
-                    "Can complete",
-                    decoration.paint(
-                        if completable {
-                            OUTPUT_ACCEPTED
-                        } else {
-                            OUTPUT_MUTED
-                        },
-                        yes_no(completable),
-                    ),
-                )],
-            )
-        )];
-        group.push(String::new());
+        let counts = &summary.descendants;
+        let overlap = counts.ended + counts.rejected - counts.terminal;
+        let mut group = vec![
+            format!(
+                "  Descendants: Ended: {}  Rejected: {}  Unfinished: {}",
+                counts.ended,
+                counts.rejected,
+                counts.total - counts.terminal
+            ),
+            format!(
+                "  Ended and Rejected overlap: {overlap}; Unfinished excludes both (not a commitment)."
+            ),
+        ];
+        if !matches!(entity.progress, Progress::Ended) {
+            group.push(format!(
+                "  Can complete: {}",
+                yes_no(view.can_complete_group(&entity.id))
+            ));
+            if !matches!(entity.progress, Progress::InProgress(_)) {
+                group.push("  Completion requires Group Progress=InProgress.".to_string());
+            }
+            if counts.total > counts.terminal {
+                group.push(format!(
+                    "  Completion requires {} unfinished descendants to become terminal.",
+                    counts.total - counts.terminal
+                ));
+            } else if view.can_complete_group(&entity.id) {
+                group.push("  All descendants are terminal; awaiting explicit done.".to_string());
+            }
+        }
+        blocks.push(render_section(decoration, "Group", group));
+        let mut group = Vec::new();
         group.extend(render_entity_counts(
             "Direct children",
             &summary.direct,
@@ -1272,7 +1297,7 @@ fn render_show(
             &summary.descendants,
             decoration,
         ));
-        blocks.push(render_section(decoration, "Group", group));
+        group_details = group;
 
         let subtree = ordered_subtree(view, &entity.id);
         blocks.push(render_section(
@@ -1280,10 +1305,16 @@ fn render_show(
             "Subtree",
             render_subtree(view, &subtree, decoration)?,
         ));
-        let dependencies = render_subtree_dependencies(view, entity, &subtree, decoration);
-        if !dependencies.is_empty() {
-            blocks.push(render_section(decoration, "Dependencies", dependencies));
-        }
+        dependencies = render_subtree_dependencies(view, entity, &subtree, decoration);
+    }
+
+    blocks.push(details);
+    if !group_details.is_empty() {
+        blocks.push(render_section(decoration, "Group counts", group_details));
+    }
+
+    if !dependencies.is_empty() {
+        blocks.push(render_section(decoration, "Dependencies", dependencies));
     }
 
     let mut relations = Vec::<(&str, String)>::new();
@@ -1410,6 +1441,97 @@ fn ordered_subtree<'a>(view: &'a View, root: &EntityId) -> Vec<(usize, &'a Entit
     result
 }
 
+fn show_situation(view: &View, entity: &Entity) -> derived::Result<String> {
+    let mut facts = Vec::new();
+    if matches!(entity.progress, Progress::Ended) {
+        facts.push("Ended");
+    }
+    if entity.disposition == Disposition::Rejected {
+        facts.push("Rejected");
+    }
+    if facts.is_empty() {
+        if matches!(entity.progress, Progress::InProgress(_)) {
+            facts.push("InProgress (saved claim)");
+        } else if view.is_ready(entity)? {
+            facts.push("Ready to start");
+        } else {
+            facts.push("Not started");
+        }
+        if entity.disposition == Disposition::Undecided {
+            facts.push("Undecided");
+        }
+        if view.is_orphaned(&entity.id) {
+            facts.push("Orphaned");
+        } else if view.is_blocked(&entity.id) {
+            facts.push("Blocked");
+        }
+        if !view.within_active_scope(&entity.id)? {
+            facts.push("outside active scope (see ancestor gates)");
+        }
+    }
+    Ok(facts.join("; "))
+}
+
+fn show_has_local_gate(view: &View, entity: &Entity) -> derived::Result<bool> {
+    Ok(entity.kind == EntityKind::Group
+        && (!matches!(entity.progress, Progress::InProgress(_))
+            || entity.disposition != Disposition::Accepted
+            || !view.is_surfaced(entity)?
+            || view.direct_dependencies(&entity.id).iter().any(|target| {
+                target.disposition == Disposition::Rejected || !target.is_terminal()
+            })))
+}
+
+fn show_waits(
+    view: &View,
+    entity: &Entity,
+    indent: &str,
+    decoration: OutputDecoration,
+) -> derived::Result<Vec<String>> {
+    let mut lines = Vec::new();
+    if show_has_local_gate(view, entity)? {
+        lines.push(format!(
+            "{indent}Descendant gate closed: {} (Progress={}, Disposition={})",
+            entity.id,
+            entity.progress.label(),
+            entity.disposition.label()
+        ));
+        if entity.disposition == Disposition::Rejected {
+            lines.push(format!(
+                "{indent}Rejected Group leaves descendant saved states unchanged."
+            ));
+        }
+    }
+    if !view.is_surfaced(entity)? {
+        lines.push(format!(
+            "{indent}Not surfaced: {}",
+            entity.resurface_condition.label()
+        ));
+    }
+    if let ResurfaceCondition::AfterEntity(id) = &entity.resurface_condition {
+        lines.push(format!(
+            "{indent}AfterEntity: {id}; satisfied by Ended or Rejected ({}).",
+            yes_no(view.is_surfaced(entity)?)
+        ));
+    }
+    let mut targets = view.direct_dependencies(&entity.id);
+    targets.sort_by(|a, b| a.id.cmp(&b.id));
+    for target in targets {
+        let label = if target.disposition == Disposition::Rejected {
+            "Rejected prerequisite (Orphaned)"
+        } else if !target.is_terminal() {
+            "Unresolved dependency (Blocked)"
+        } else {
+            continue;
+        };
+        lines.push(format!(
+            "{indent}{label}: {}",
+            render_related_entity(target, OUTPUT_ATTENTION, decoration)
+        ));
+    }
+    Ok(lines)
+}
+
 fn render_subtree(
     view: &View,
     subtree: &[(usize, &Entity)],
@@ -1422,24 +1544,33 @@ fn render_subtree(
         )]);
     }
 
-    subtree
-        .iter()
-        .map(|(depth, entity)| {
-            Ok(format!(
-                "{}{}  {}  [{}/{}]  {}{}",
-                "  ".repeat(*depth),
-                decoration.paint(OUTPUT_ID, &entity.id),
-                decoration.paint(OUTPUT_MUTED, entity.kind.label()),
-                decoration.paint(progress_style(&entity.progress), entity.progress.label()),
-                decoration.paint(
-                    disposition_style(entity.disposition),
-                    entity.disposition.label()
-                ),
-                entity.title,
-                render_entity_marks(view, entity, true, decoration)?,
-            ))
-        })
-        .collect()
+    let mut lines = Vec::new();
+    for (depth, entity) in subtree {
+        let indent = "  ".repeat(*depth);
+        let candidate = if view.is_ready(entity)? {
+            "  Ready"
+        } else {
+            ""
+        };
+        lines.push(format!(
+            "{indent}{}  {}  [{}/{}]  {}{candidate}",
+            decoration.paint(OUTPUT_ID, &entity.id),
+            decoration.paint(OUTPUT_MUTED, entity.kind.label()),
+            decoration.paint(progress_style(&entity.progress), entity.progress.label()),
+            decoration.paint(
+                disposition_style(entity.disposition),
+                entity.disposition.label()
+            ),
+            entity.title,
+        ));
+        lines.extend(show_waits(
+            view,
+            entity,
+            &format!("{indent}  "),
+            decoration,
+        )?);
+    }
+    Ok(lines)
 }
 
 fn render_subtree_dependencies(
@@ -2540,7 +2671,7 @@ mod tests {
         )
         .unwrap();
         assert!(output.starts_with("g  Group  g title\n"));
-        assert!(output.contains("Group\n  Can complete: no\n"));
+        assert!(output.contains("  Can complete: no\n"));
         assert!(output.contains("  Descendants: 1  Issue: 1  Group: 0  Terminal: 0"));
         assert!(output.contains("    Progress: NotStarted: 1  InProgress: 0  Ended: 0"));
         assert!(output.contains("    Disposition: Undecided: 0  Accepted: 1  Rejected: 0"));
@@ -2570,7 +2701,7 @@ mod tests {
         .unwrap();
 
         assert!(!plain.contains('\u{1b}'));
-        assert_eq!(plain.lines().count(), 5);
+        assert!(plain.find("Situation:").unwrap() < plain.find("Details\n").unwrap());
         assert!(!plain.contains("Status\n"));
         assert!(!plain.contains("Plan\n"));
         assert!(styled.contains("\u{1b}["));

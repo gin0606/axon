@@ -88,7 +88,7 @@ Treat an exported declaration as a working snapshot. After a successful apply, k
 | `axon triage` | Which Entities are on the active decision frontier? |
 | `axon claims` | Which Entities are claimed, by whom, where, and since when? |
 | `axon list` | Which Entities exist, including inactive, blocked, deferred, ended, and rejected ones? |
-| `axon show <id>` | What is this Entity's state, plan scope, relationships, claim, history, and derived status? For a Group, what are the complete subtree and its direct dependencies? |
+| `axon show <id>` | What has ended, what remains unfinished, and what is waiting? What are this Entity's full details? |
 | `axon log <id>` | Why did its Disposition or resurface condition change? |
 | `axon note list|show` | What supplemental information has been appended to this Entity? |
 | `axon revision list|show|diff` | Which declaration was decided, and how did decided declarations differ? |
@@ -115,7 +115,7 @@ stable by ID within the containment hierarchy and does not assign priority.
 - `group set` moves either kind below a Group; `group unset` removes its parent.
 - `import prepare` changes only its YAML file; `import apply` is the only declaration command that changes Entity data.
 
-`show` obtains its current state, declaration metadata, relationships, description, Notes, and history from one database read transaction. For a Group it also prints every descendant, including terminal Entities, as an ID-ordered containment tree with compact state markers. A following dependency section lists direct outgoing dependencies owned by the Group or its descendants, distinguishes satisfied, unresolved, and rejected targets, and labels targets outside the subtree without expanding them. Child descriptions, Notes, Revisions, histories, and claim details remain available through an individual `show` instead of being expanded into the Group view.
+`show` starts with the situation, descendant Ended / Rejected / Unfinished counts (with overlap stated), and the complete tree with waits beside their owning scope. Unfinished does not promise future work. Closed ancestor gates are explained once per scope; rejecting a Group preserves its descendants' saved states. AfterEntity accepts either Ended or Rejected, unlike a dependency. Details follow the overview. `show` obtains its current state, declaration metadata, relationships, description, Notes, and history from one database read transaction. For a Group it also prints every descendant, including terminal Entities, as an ID-ordered containment tree with compact state markers. A following dependency section lists direct outgoing dependencies owned by the Group or its descendants, distinguishes satisfied, unresolved, and rejected targets, and labels targets outside the subtree without expanding them. Child descriptions, Notes, Revisions, histories, and claim details remain available through an individual `show` instead of being expanded into the Group view.
 
 An Ended Group cannot be moved, gain or lose descendants, or change its outgoing dependencies. A terminal descendant below an Ended Group cannot be made non-terminal. New follow-up work belongs outside that completed scope.
 

@@ -606,3 +606,9 @@ Entity がないとき、関係のない Group の AfterEntity で代用する�
 ID 解決と状態・関係を一つの read transaction で取得し、候補と説明は同じ View と
 条件評価 context を使う。状態意味論は変更せず、Rust の CLI fixture で既存の
 ready / triage との一致を検証するため、新規 Quint モデルは追加しない。
+
+## show は計画の状況から詳細へ読む
+
+既知の計画を把握する際、独立した状態軸を最初に列挙すると、残りと待ち先を利用者が再構成する必要がある。Situation、終了・却下・未終了の内訳、包含階層と待ち、Details の順にする。Ended と Rejected は重なりを明示して保持し、未終了は実施の約束でも terminal の補数による達成率でもない。
+
+共通の activation gate は所有Groupに一度示し、個別の dependency とスケジュール条件から区別する。Rejected Group の子孫は元の保存状態で残る。終了済みGroupでは Can complete: no や子孫ごとの Inactive を主表示に繰り返さない。単一read snapshot、既存条件評価、全description・Note・進行履歴の保存文字列と色なし出力の契約を維持する。状態意味論を変えない表示変更のため新しいQuintモデルは追加しない。
