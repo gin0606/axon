@@ -225,6 +225,8 @@ Group などの評価は行う。履歴・Note・Revision の参照、claims、e
 
 保存状態filterに一致すればManual等の未浮上やinactiveなEntityも含む。`--terminal=false` はready / triage / active scopeを意味しない。filterは保存情報・履歴・claimを変更せず、表示順と1 Entity 1行の契約を維持する。保存情報で除外したEntityの行のためにCommandを評価しないが、残した候補の表示に必要な祖先等は通常どおり評価する。`--skip-command-evaluation` と併用できる。
 
+`list --search <text>` は現在のtitle、description、対象Entityの全Note本文をリテラル部分一致で検索する。大小文字を区別し、Unicode正規化や空白の除去を行わない。空文字は入力エラー。`%`、`_`、正規表現の記号は通常の文字であり、Noteのactor・日時、古いRevision、判断・進捗履歴は検索しない。kind・状態filterとはANDで併用し、未指定なら通常listの全Entity範囲を検索する。複数箇所の一致も1 Entity 1行とし、既存順序を維持する。検索時だけ行末に `Matched: title, description, note-…` を添え、一致したNote IDはID順に列挙する。全文は `show <id>` / `note show <id> <note-id>` で取得する。検索条件もCommand評価前に適用し、空結果は成功する。option形式の検索語は `--search='--help'` と渡す。
+
 `triage` は非 terminal・自身が surfaced・active scope 内・Undecided または orphaned の4条件をすべて満たす Entity を返す。完全定義と自身の未浮上／祖先 gate による inactive の区別は[状態モデル](state-model.md#observed-情報と-triage-frontier)を参照する。非表示は作成・更新の失敗や不存在を意味しないため、作成を再実行する根拠にはしない。管理 root 全体の棚卸しは `list`、個別の保存状態と非表示理由は `show` で確認する。`status` は状況の要約であり全件一覧ではない。
 
 `claims` は claim の経過時間やプロセス状態から staleness を推定しない。表示された保存済み事実を基に人が判断し、必要な claim だけ `release` で明示的に解放する。

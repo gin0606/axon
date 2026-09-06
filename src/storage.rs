@@ -1,5 +1,5 @@
 use crate::core::{ApplyOutcome, Change, Ctx, MetadataValue, StateSnapshot, StoreSnapshot};
-use crate::db::{DbError, Result, RevisionSnapshot, ShowSnapshot};
+use crate::db::{DbError, NoteMatches, Result, RevisionSnapshot, ShowSnapshot};
 use crate::derived::{Evaluation, View};
 use crate::domain::*;
 use crate::{codec, core, db};
@@ -597,6 +597,29 @@ impl Store {
             },
         }
     }
+    pub fn search_snapshot(&mut self, text: &str) -> Result<(View, NoteMatches)> {
+        match self {
+            Self::Sqlite(s) => s.search_snapshot(text),
+            Self::File(s) => {
+                let state = s.read()?.1;
+                let mut matches = NoteMatches::new();
+                for (owner, history) in &state.histories {
+                    let mut ids: Vec<_> = history
+                        .notes
+                        .iter()
+                        .filter(|note| note.body.contains(text))
+                        .map(|note| note.id)
+                        .collect();
+                    ids.sort();
+                    if !ids.is_empty() {
+                        matches.insert(owner.clone(), ids);
+                    }
+                }
+                Ok((state.declaration.view(), matches))
+            }
+        }
+    }
+
     pub fn snapshot(&mut self) -> Result<StoreSnapshot> {
         match self {
             Self::Sqlite(s) => s.snapshot(),

@@ -17,6 +17,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+pub type NoteMatches = std::collections::BTreeMap<EntityId, Vec<RecordId>>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
     #[error(transparent)]
@@ -464,6 +466,28 @@ impl Store {
         }
         tx.commit()?;
         Ok((id, view))
+    }
+
+    pub fn search_snapshot(&mut self, text: &str) -> Result<(View, NoteMatches)> {
+        let tx = self.conn.transaction()?;
+        let snapshot = read_snapshot(&tx, self.evaluation.clone())?;
+        let mut matches = NoteMatches::new();
+        {
+            let mut statement = tx.prepare(
+                "SELECT entity_id,record_id FROM entity_notes WHERE instr(body,?1)>0 ORDER BY record_id",
+            )?;
+            for row in statement.query_map([text], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, RecordId>(1)?))
+            })? {
+                let (owner, id) = row?;
+                matches
+                    .entry(EntityId::from_stored(&owner))
+                    .or_default()
+                    .push(id);
+            }
+        }
+        tx.commit()?;
+        Ok((snapshot.view(), matches))
     }
 
     pub fn snapshot(&mut self) -> Result<StoreSnapshot> {

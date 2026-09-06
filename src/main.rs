@@ -215,6 +215,10 @@ impl DispositionFilter {
 
 #[derive(clap::Args)]
 struct ListFilters {
+    /// Literal substring in current title, description, or any Note body
+    #[arg(long, value_name = "TEXT", value_parser = clap::builder::NonEmptyStringValueParser::new(),
+        long_help = "Search current title, description, and all Note bodies (including old Notes). Case-sensitive; no Unicode normalization or whitespace trimming. Empty text is invalid. %, _, and regex symbols are literal. Excludes actors, timestamps, Revisions, and decision/progress history. Adds Matched locations and stable Note IDs in ID order; use show or note show for full text. Combines with state/kind filters using AND before Command evaluation. For a leading hyphen use --search='--help'.")]
+    search: Option<String>,
     /// Include only one Entity kind
     #[arg(long, value_enum)]
     kind: Option<KindFilter>,
@@ -1476,7 +1480,12 @@ fn cmd_list(
     trace_conditions: bool,
     skip_command_evaluation: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (_, view) = load(trace_conditions)?;
+    let mut store = open_store(trace_conditions)?;
+    let (view, note_matches) = if let Some(text) = &filters.search {
+        store.search_snapshot(text)?
+    } else {
+        (store.view()?, db::NoteMatches::new())
+    };
     let view = if skip_command_evaluation {
         view.without_command_evaluation()
     } else {
@@ -1485,10 +1494,33 @@ fn cmd_list(
     let decoration = current_output_decoration();
     let mut rows = String::new();
     for entity in view.iter().filter(|entity| filters.matches(entity)) {
+        let mut locations = Vec::new();
+        if let Some(text) = &filters.search {
+            if entity.title.contains(text) {
+                locations.push("title".to_string());
+            }
+            if entity
+                .description
+                .as_ref()
+                .is_some_and(|body| body.contains(text))
+            {
+                locations.push("description".to_string());
+            }
+            if let Some(ids) = note_matches.get(&entity.id) {
+                locations.extend(ids.iter().map(ToString::to_string));
+            }
+            if locations.is_empty() {
+                continue;
+            }
+        }
         if skip_command_evaluation {
             rows.push_str(&render_skipped_row(&view, entity, decoration));
         } else {
             rows.push_str(&render_list_row(&view, entity, decoration)?);
+        }
+        if filters.search.is_some() {
+            rows.pop();
+            rows.push_str(&format!("  Matched: {}\n", locations.join(", ")));
         }
     }
     write_rows(&rows, "No entities", decoration)?;
