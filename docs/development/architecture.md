@@ -167,3 +167,14 @@ v12では既存IDと旧tableの全値を維持し、因果関係とmigration bas
 出力の全rowと参照・schema・整合性を検査し、manifestを最後に同期して成功を返す。
 出力先を上書きせず、失敗時も調査用の途中成果を残す。manifestがない途中成果は利用しない。
 具体的な切替は[手動移行](../reference/migration.md)に従う。
+
+## Merge workspace
+
+CLI adapter は独立 directory に原本、保存先 preimage、設定、固定 context を凍結する。
+`resolution.json` の選択と通常操作だけが編集対象で、check は候補と report、検査済みの
+manifest/resolution/candidate digest を更新する。apply は workspace と保存先の sidecar
+lock 下で全 digest、設定 identity、preimage を再照合して atomic replace する。
+入力・context drift、未解決、domain error を区別する。障害は Rust の fixture と fault
+テストで検査し、既存 Quint の状態・履歴意味は変更しない。
+Git driver は backend discovery を使わず三つの raw 入力を保存する。空・欠落・不正な
+祖先を合成せず診断を残し、recursive driver は binary として曖昧な仮想祖先を拒否する。

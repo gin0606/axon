@@ -81,6 +81,24 @@ fn root(init: bool) -> Result<(PathBuf, bool)> {
         Err(DbError::NotInitialized)
     }
 }
+pub(crate) fn merge_evaluation_root() -> Result<PathBuf> {
+    match root(false) {
+        Ok((root, _)) => Ok(root),
+        Err(DbError::NotInitialized) => Ok(std::env::current_dir()?),
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) fn file_config_identity(path: &Path) -> Result<RecordId> {
+    let (config, _) = config(path)?;
+    if config.backend != Backend::File {
+        return Err(invalid(
+            "destination configuration must select file backend",
+        ));
+    }
+    Ok(config.store_id)
+}
+
 fn check_index(root: &Path, is_git: bool) -> Result<()> {
     if is_git
         && git(

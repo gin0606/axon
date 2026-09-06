@@ -105,3 +105,90 @@ Note と Revision の表示順は因果順を優先し、並行記録だけを I
 | 1,000 | 1,001,137 | 312.05 ms |
 
 再現: `cargo test --release --bin axon merge::additional_tests::measure_merge -- --ignored --nocapture`。
+
+## CLI workspace と Git
+
+`axon storage check <snapshot>` は完全な JSONL の保存情報・参照・構造を検査する。
+Command 条件は評価せず、Git index や backend discovery に依存しない。
+
+```sh
+axon merge prepare --base /tmp/base.jsonl --ours /tmp/ours.jsonl \
+  --theirs /tmp/theirs.jsonl --output .axon/state.jsonl --workspace .axon/merge/manual
+axon merge check .axon/merge/manual
+axon merge apply .axon/merge/manual
+```
+
+workspace の親 directory は事前に用意し、workspace 自身は未使用の名前を指定する。
+出力先は workspace の外に置く。原本や管理ファイルを含む workspace 内への出力は、
+path の別名も解決して prepare/check/apply で拒否する。
+prepare は正本を変更せず、未解決でも原本と診断を残して非0を返す。
+`base.jsonl` / `ours.jsonl` / `theirs.jsonl` は原本、`preimage` は出力先の bytes、
+`manifest.json` は入力の絶対 path/digest・出力先・設定 binding、`context.json` は
+固定日時・actor・操作実行 directory・ID seed。これらは編集しない。
+原本 snapshots は全 Entity の辺・Revision・Note・typed history・因果参照を含み、
+`choices.json` は対象 Entity、stable choice ID、三側の bundle、自動選択 digest を示す。
+`report.json` の status は valid / unresolved / input_drift / invalid を区別する。
+候補が完全に valid の場合のみ `candidate.jsonl` と `checked.json` が公開可能になる。
+
+エージェントは report と choices、必要な owner/record ID の原本行を読み、
+`resolution.json` の choices と repairs を編集する。選択元は ours/theirs の文字列ではなく
+manifest にある入力 digest。base は比較材料で、現在値の選択元にはしない。
+自動選択済み Entity も明示選択できる。
+
+```json
+{
+  "choices": [{"conflict": "<choices.json の id>", "input": "<ours または theirs の digest>"}],
+  "repairs": [{
+    "operation": {"op": "dependency", "source": "t-b", "target": "t-a", "present": false},
+    "reason": "統合で生じた循環を解消する"
+  }]
+}
+```
+
+repair は `dependency`、`add_note` (`owner`, `body`)、`change` (`owner`, `change`) と
+`start` (`owner`)。start の claim は固定 context の actor・日時・管理 root から作る。
+change に自由な Start claim を渡すことはできない。
+change は共通 core の JSON 表現、例 `{"SetTitle":"新題名"}`、
+`{"Decide":"Undecided"}`、`{"SetParent":null}`、`"Done"`、`"Release"`。
+決定済み declaration を編集する場合は Undecided 化と再判断を明示する。
+固定 root は active file 出力の管理 root、それ以外は起動位置の通常管理 root
+（管理外では起動 directory）。操作は core の guard と履歴生成を通り、必要な ready 検査だけが固定 root で Command
+条件を実行する。原本履歴の編集や claim 単独の置換は提供しない。
+編集後の check は候補を再計算し、失敗時は以前の適用許可を失効する。
+apply は最後に検査した組と入力・設定・出力先 preimage を lock 下で再照合する。
+出力 file またはその `.axon` directory が symlink の場合は拒否する。
+設定の store identity 検査と通常 writer の lock を別 path への解決で外さないためである。
+原本 path の bytes も drift 検査するため、一時ファイルを削除しない。
+同じ候補が出力先にあれば再 apply は no-op。結果不明では原本と候補を保持して照合する。
+
+driver 登録は明示的な `axon merge setup`。現在の実行ファイルの絶対 path を Git local
+設定へ登録し、`.gitattributes` に `/.axon/state.jsonl merge=axon` を追加する。
+`.axon/merge/` も ignore する。init はこれらを変更しない。clone 先では setup を再実行する。
+Git の内部祖先統合は binary driver を使い、空・不正・曖昧な祖先を推測して合成しない。
+add/add や delete/modify も、完全な共通入力を構成できなければ手動解決へ返す。
+Git が driver を呼ばない場合も通常 open は index の未解決を拒否し、snapshot を検証する。
+
+```sh
+# 一時 repository などの独立 fixture で試す例
+axon init --backend file t
+axon merge setup
+# .axon/write.lock と .axon/merge/ を ignore してから利用者が commit
+# 利用者: git add .axon/config.json .axon/state.jsonl .gitattributes; git commit ...
+# 利用者: git worktree add ../feature -b feature
+# feature 内の axon 操作は main の bytes を変えない
+# feature の変更を利用者が commit した後、main で git merge feature
+```
+
+同一 Entity の競合では Git index を未解決のまま残し、driver は raw 三入力を
+`.axon/merge/<id>/` へ保全する。表示された workspace の原本を明示 prepare の入力にし、
+実際の `.axon/state.jsonl` を output とする新 workspace を作る。Git の marker は
+出力 preimage として保持され、状態入力には使わない。driver の workspace は Git の
+一時 `%A` を保存先としており、そのまま手動 apply する用途には使わない。
+driver 未登録でも Git の stage 1/2/3 や保全した完全 snapshot を明示入力として使える。
+解決後は storage check で確認し、利用者が stage/commit/rebase 継続等を行う。
+Axon はそれらの Git 操作を自動実行しない。
+
+2026-09-06、ローカル release binary、Git 外の一時 directory、100 Entity（各1 creation
+baseline）、別 Entity の title を両側で変更した三入力で CLI prepare を5回別 process
+実行した中央値は **108.89 ms**（base 104,317 bytes）。原本・context・候補・report の
+書込と sync を含み、Git process と apply は含まない。上の engine 単体測定とは条件が異なる。

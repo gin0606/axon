@@ -234,7 +234,7 @@ fn structure(
         })
         .collect()
 }
-fn validate(state: &StateSnapshot) -> Result<()> {
+pub fn validate(state: &StateSnapshot) -> Result<()> {
     state.validate_history()?;
     core::validate_snapshot_structure(&state.declaration)?;
     let view = state.declaration.view();

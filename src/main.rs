@@ -8,6 +8,7 @@ mod display;
 mod domain;
 mod history;
 mod merge;
+mod merge_cli;
 mod record_id;
 mod status;
 
@@ -47,7 +48,15 @@ const HELP_SECTIONS: &[HelpSection] = &[
     },
     HelpSection {
         heading: "Setup & utilities",
-        commands: &["init", "migrate", "completion", "docs", "help"],
+        commands: &[
+            "init",
+            "migrate",
+            "storage",
+            "merge",
+            "completion",
+            "docs",
+            "help",
+        ],
     },
 ];
 
@@ -169,6 +178,16 @@ impl KindFilter {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Validate a complete file snapshot
+    Storage {
+        #[command(subcommand)]
+        command: merge_cli::StorageCmd,
+    },
+    /// Prepare, validate and publish a three-way snapshot merge
+    Merge {
+        #[command(subcommand)]
+        command: merge_cli::MergeCmd,
+    },
     /// Convert a v11/v12 SQLite snapshot to causal history without modifying the source
     Migrate {
         /// Existing v11 or v12 database (stop its writers before the final conversion)
@@ -699,6 +718,8 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
             Ok(())
         }
         Command::Init { prefix, backend } => cmd_init(prefix, backend),
+        Command::Storage { command } => merge_cli::storage(command),
+        Command::Merge { command } => merge_cli::run(command),
         Command::Completion { shell } => write_completion(shell).map_err(Into::into),
         Command::Docs { topic } => cmd_docs(topic),
         Command::Plan {
@@ -2852,7 +2873,7 @@ fn render_docs(decoration: OutputDecoration) -> String {
     )
     .unwrap();
     writeln!(output, "\nUse axon docs declaration for declaration fields and the import workflow.\nUse axon docs declaration --example for a complete new-plan YAML example.").unwrap();
-    writeln!(output, "\nStorage recovery\n  DB commands require schema v13 and do not migrate old databases implicitly.\n  Use axon migrate --source <v11-or-v12-db> --output <new-directory> to create a new DB,\n  an intact source backup and an ID mapping manifest. The source is not switched.\n  v9/v10 must first be migrated to v11 using an older compatible build.\n  Keep an old binary, stop writers, verify copies, then switch all affected roots.\n  Failed outputs may be incomplete; preserve and inspect them before retry.\n  Unknown schemas are rejected. init only creates new DBs; init cannot upgrade.\n  --version identifies the executable release, not its DB schema.\n  Before recovery stop all writers and preserve .axon with SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  export also requires a compatible build and is not a complete database backup.\n  .axon/config.json selects backend and store ID at the active worktree root.\n  Outside Git, use the nearest ancestor config. Missing/invalid files never fall back.\n  init --backend file creates .axon/state.jsonl; the default backend is sqlite.\n  SQLite uses Git common directory/axon/state.db, or .axon/state.db outside Git.\n  Track file state and config in Git; ignore .axon/write.lock and temporary files.\n  File writers lock, read, validate, sync a temporary, compare original bytes, replace,\n  and sync the directory before success. No-op preserves bytes.\n  Failure before replace is not applied; failure after replace is result unknown.\n  Inspect state before retrying an unknown result; do not repeat an append blindly.\n  init publishes state before config. Preserve partial files and restore a matching\n  config/state pair; init never regenerates missing state or overwrites existing data.\n  Valid shared SQLite can be registered with init in another worktree.\n  Do not overlap Git checkout/merge or editor writes with Axon writes in one worktree.\n  OS locks are local; network filesystem/distributed guarantees are not provided.\n  help, docs, version and completion do not open the DB.\n").unwrap();
+    writeln!(output, "\nStorage recovery\n  DB commands require schema v13 and do not migrate old databases implicitly.\n  Use axon migrate --source <v11-or-v12-db> --output <new-directory> to create a new DB,\n  an intact source backup and an ID mapping manifest. The source is not switched.\n  v9/v10 must first be migrated to v11 using an older compatible build.\n  Keep an old binary, stop writers, verify copies, then switch all affected roots.\n  Failed outputs may be incomplete; preserve and inspect them before retry.\n  Unknown schemas are rejected. init only creates new DBs; init cannot upgrade.\n  --version identifies the executable release, not its DB schema.\n  Before recovery stop all writers and preserve .axon with SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  export also requires a compatible build and is not a complete database backup.\n  .axon/config.json selects backend and store ID at the active worktree root.\n  Outside Git, use the nearest ancestor config. Missing/invalid files never fall back.\n  init --backend file creates .axon/state.jsonl; the default backend is sqlite.\n  SQLite uses Git common directory/axon/state.db, or .axon/state.db outside Git.\n  Track file state and config in Git; ignore .axon/write.lock and temporary files.\n  File writers lock, read, validate, sync a temporary, compare original bytes, replace,\n  and sync the directory before success. No-op preserves bytes.\n  Failure before replace is not applied; failure after replace is result unknown.\n  Inspect state before retrying an unknown result; do not repeat an append blindly.\n  init publishes state before config. Preserve partial files and restore a matching\n  config/state pair; init never regenerates missing state or overwrites existing data.\n  Valid shared SQLite can be registered with init in another worktree.\n  Do not overlap Git checkout/merge or editor writes with Axon writes in one worktree.\n  OS locks are local; network filesystem/distributed guarantees are not provided.\n  Use storage check <snapshot> to validate a complete JSONL file.\n  merge prepare/check/apply use an explicit workspace; edit resolution.json then check.\n  merge setup explicitly registers the Git driver. Ignore .axon/merge/.\n  Conflicts preserve raw inputs; Axon never stages or commits Git files.\n  help, docs, version and completion do not open the DB.\n").unwrap();
     output
 }
 

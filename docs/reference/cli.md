@@ -11,7 +11,7 @@ axon の操作対象は `Issue` と `Group` の 2 kind を持つ Entity であ�
 | Workflow | `plan`, `capture`, `ready`, `triage`, `start`, `done`, `release` |
 | Inspect | `status`, `show`, `list`, `claims`, `log`, `note`, `revision` |
 | Plan management | `write`, `group`, `dep`, `decide`, `when`, `export`, `import` |
-| Setup & utilities | `init`, `completion`, `docs`, `help` |
+| Setup & utilities | `init`, `migrate`, `storage`, `merge`, `completion`, `docs`, `help` |
 
 分類内では、対になる操作と同じ対象を扱う namespace を隣接させる。namespace 内は `group plan|capture|set|unset`、`dep add|rm`、`decide accept|reject|undecide`、`when at|after|manual|command|clear`、`note add|list|show`、`revision list|show|diff`、`import prepare|check|apply` の順とする。
 
@@ -282,3 +282,9 @@ status は各項目の identity を一度だけ表示し、Ready / Triage、保�
 `axon migrate --source <v11-or-v12-db> --output <未使用directory>` は、通常のroot探索を行わず指定DBを読み取り専用で開き、新しい保存先へ変換する。元DBの切替は行わない。詳細は[手動移行](migration.md)。
 
 showは分岐・統合を含む履歴について因果参照と採用先端を表示する。並行記録のID順は時刻の前後を意味しない。
+
+## File storage と merge
+
+`storage check`、`merge prepare/check/apply/driver/setup` の保存・競合・Git 契約は
+[file storage](file-storage.md#cli-workspace-と-git) を参照する。
+これらの明示 snapshot 操作は通常 Store を開かず、stage/commit を行わない。
