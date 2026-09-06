@@ -33,6 +33,8 @@ Progress, Disposition, Resurface condition, and claim are Control state. Decisio
 
 An `Undecided` Entity has a draft declaration that can be edited. An `Accepted` or `Rejected` Entity has a fixed declaration. To change a fixed declaration, return it to `Undecided`, edit and verify the complete draft, then apply the intended final Disposition separately. Preserve any reasons supplied for those transitions in typed history.
 
+Initial creation may supply dependencies and a condition atomically. It preserves NotStarted without a claim and records initial values without fabricated transitions; Accepted creation captures the complete declaration in its first Revision, while Undecided creation has none. Initial Command strings are not executed for saving or confirmation.
+
 Each accepted or rejected declaration is preserved as an immutable Declaration Revision. A Note is append-only supplemental information that does not change the declaration or Control state. Investigation results, implementation results, constraints learned later, and handoff details belong in Notes. Do not use description as an activity log, use a Note to simulate a state change, edit an old Note, or duplicate a state-change reason in a Note.
 
 ## Entity context

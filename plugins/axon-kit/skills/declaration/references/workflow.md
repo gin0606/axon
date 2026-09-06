@@ -6,7 +6,7 @@ Read this reference before exporting to a file, canonicalizing, applying, or rec
 
 A declaration edits only title, description, parent, and outgoing dependencies. Existing `Accepted` or `Rejected` declarations are fixed; `axon import` does not bypass that rule. The calling workflow must use `axon-kit:triage` to return an Entity to `Undecided` before applying a real declaration change and must make any later Disposition or Resurface-condition change separately.
 
-New records in a declaration represent `Accepted`, `NotStarted`, `Always` Entities with no claim. Use staged `axon-kit:capture` and ordinary Control-state commands when the intended initial state differs. Do not normalize a caller's intended state merely to fit declaration import.
+New records in a declaration represent `Accepted`, `NotStarted`, `Always` Entities with no claim. Use `axon-kit:plan` or `axon-kit:capture` with the supplied initial condition for single-Entity creation when the intended condition or adoption differs. Ordinary Control-state operations remain separate when later transitions are required. Do not normalize a caller's intended state merely to fit declaration import.
 
 If a combined workflow partially completes, stop at the first unresolved phase. Report the applied DB state and remaining phases; do not compensate or roll back automatically.
 

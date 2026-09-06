@@ -235,3 +235,17 @@ environment, diagnostics, and evaluation sharing, and the
 [state model](../reference/state-model.md#resurface-condition) for resurfacing and Group behavior.
 
 status は所属なし Issue を一つの一覧にまとめ、各項目の候補・claim・待ちを近くに表示する。空セクションは省くが、冒頭の件数はゼロでも確認できる。Ended または Rejected の Group は完了可否と descendant gate を省き、Rejected Group は自身の保存 dependency と Resurface condition を表示する。Rejected root Group は subtree に保存済み claim がある場合だけ通常表示に残り、その場合は配下の未終了項目と inactive 理由も表示される。
+
+## Create a complete initial plan
+
+When adoption, dependencies, and timing are already decided, supply them together:
+
+```sh
+axon plan --parent <group-id> --needs <first-id> --needs <second-id> --after <wait-id> -m 'Purpose and completion criteria' 'Implement the agreed change'
+```
+
+`capture`, `group plan`, and `group capture` accept the same inputs. Choose capture when adoption is unresolved. For the initial condition choose one of `--manual`, `--at YYYY-MM-DD`, `--after <entity-id>`, or `--command 'shell string'`; omitting them means Always. References accept full IDs or unique suffixes, and repeated `--needs` values are stored once. Existing title, `-m`, and `-F` input rules still apply.
+
+Creation saves the complete initial state atomically. Plan creates Accepted with a first Revision containing its dependencies; capture creates Undecided without a Revision. Both remain NotStarted without a claim or invented transition history. A rejected input leaves no partial Entity. Known dependencies and timing no longer require capture/edit/accept staging. Existing fixed declarations still require explicit undecide, editing, and redecision.
+
+An initial Command string is saved without running it, even for confirmation. Verify the returned ID with `axon show <id> --skip-command-evaluation` and inspect the first Revision for Accepted creation. Normal derived queries evaluate Command as usual. Every create invocation allocates a new Entity: reconcile an uncertain result before retrying.

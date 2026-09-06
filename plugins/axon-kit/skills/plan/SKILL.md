@@ -23,15 +23,12 @@ Before mutation, reread the proposed declaration without conversational context.
 
 ## Create and verify
 
-When the complete declaration has no outgoing dependencies and the Resurface condition is `Always`, run `axon plan <title>` for an Issue or `axon group plan <title>` for a Group. Include `--parent <group-id>` and the initial description through `-m <description>` or `-F <snapshot>` when present, so the complete declaration is accepted atomically. Apply the mutation contract's frozen-input rule before using a file or stdin.
+Run `axon plan <title>` for an Issue or `axon group plan <title>` for a Group. Include `--parent <group-id>`, repeat `--needs <entity-id>` for each outgoing dependency, and supply the initial description through `-m <description>` or `-F <snapshot>`. Apply the mutation contract's frozen-input rule before using a file or stdin.
 
-When outgoing relationships are needed or the intended Resurface condition is not `Always`:
+Use the supplied initial condition: omit condition options for `Always`, or choose exactly one of `--manual`, `--at <YYYY-MM-DD>`, `--after <entity-id>`, or `--command <shell-string>`. IDs accept full IDs or unique suffixes. These inputs, the Entity, and its first complete Revision are saved atomically. Do not stage through capture merely to configure already-supplied dependencies or a condition. Initial values do not create transition history and creation has no reason option; do not fabricate transitions to attach a reason. Explicitly requested real transitions remain separate operations.
 
-1. Create the Entity as `Undecided` with `axon capture` or `axon group capture`; include the decided parent and initial description in that mutation.
-2. Set outgoing dependencies with separate mutations while the declaration remains draft. If the intended Resurface condition is not `Always`, apply it with `axon when ...`, include `-r <reason>` when supplied, and verify it before adoption.
-3. Read the complete Entity context and verify the intended draft, zero Declaration Revisions, and no unintended state or Note.
-4. Run `axon decide accept <id>` as a standalone mutation, including `-r <reason>` when supplied.
+Initial Command strings are saved without execution. Verify using `axon show <id> --skip-command-evaluation` so confirmation does not execute an external command. Report readiness as unevaluated when applicable; evaluate it separately only when the caller needs that observation.
 
-If a staged phase fails, leave the one Entity `Undecided`, return its ID and the remaining phases, and do not create another Entity or accept an incomplete declaration.
+On a clear creation failure, no partial Entity is left. Reconcile an uncertain outcome through the creation contract before any retry.
 
-After adoption, read the Entity context and the newly recorded Declaration Revision. Verify the fixed declaration, `Progress=NotStarted`, `Disposition=Accepted`, intended Resurface condition, parent, and dependencies. Return the ID, kind, declaration summary, readiness impact, and `DB applied` classification. Do not start the Entity.
+After adoption, read the Entity context and the newly recorded Declaration Revision. Verify the fixed declaration, `Progress=NotStarted`, `Disposition=Accepted`, intended Resurface condition, parent, dependencies, no claim, and zero decision/progress transitions. Return the ID, kind, declaration summary, readiness impact, and `DB applied` classification. Do not start the Entity.

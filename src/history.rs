@@ -773,7 +773,7 @@ pub(crate) mod tests {
     pub fn branching() -> StateSnapshot {
         let mut common = fixture::execute(
             &fixture::empty(),
-            Operation::Insert(fixture::entity("i", EntityKind::Issue, None)),
+            Operation::Insert(fixture::entity("i", EntityKind::Issue, None), Vec::new()),
             1,
         )
         .unwrap()

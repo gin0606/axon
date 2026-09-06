@@ -605,9 +605,18 @@ impl Store {
         Ok(result)
     }
 
+    #[cfg(test)]
     pub fn insert(&mut self, entity: &Entity) -> Result<()> {
+        self.insert_with_dependencies(entity, Vec::new())
+    }
+
+    pub fn insert_with_dependencies(
+        &mut self,
+        entity: &Entity,
+        dependencies: Vec<EntityId>,
+    ) -> Result<()> {
         self.mutate(
-            core::Operation::Insert(entity.clone()),
+            core::Operation::Insert(entity.clone(), dependencies),
             &Ctx {
                 actor: String::new(),
                 reason: None,

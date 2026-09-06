@@ -624,7 +624,7 @@ mod tests {
         for (n, id) in ["a", "b"].iter().enumerate() {
             s = run(
                 &s,
-                Operation::Insert(f::entity(id, EntityKind::Issue, None)),
+                Operation::Insert(f::entity(id, EntityKind::Issue, None), Vec::new()),
                 n as u64 + 1,
             );
         }
@@ -909,7 +909,7 @@ mod tests {
     fn group_fixture() -> StateSnapshot {
         let s = run(
             &fixture(),
-            Operation::Insert(f::entity("g", EntityKind::Group, None)),
+            Operation::Insert(f::entity("g", EntityKind::Group, None), Vec::new()),
             3,
         );
         let s = change(&s, "g", Change::Decide(Disposition::Accepted), 4);
@@ -1000,12 +1000,12 @@ mod tests {
         let b = fixture();
         let o = run(
             &b,
-            Operation::Insert(f::entity("new", EntityKind::Issue, None)),
+            Operation::Insert(f::entity("new", EntityKind::Issue, None), Vec::new()),
             10,
         );
         let t = run(
             &b,
-            Operation::Insert(f::entity("new", EntityKind::Issue, None)),
+            Operation::Insert(f::entity("new", EntityKind::Issue, None), Vec::new()),
             11,
         );
         assert!(
@@ -1023,7 +1023,7 @@ mod tests {
         let b = fixture();
         let o = run(
             &b,
-            Operation::Insert(f::entity("new", EntityKind::Issue, None)),
+            Operation::Insert(f::entity("new", EntityKind::Issue, None), Vec::new()),
             10,
         );
         let p = prepare(&b, &o, &b);
@@ -1084,7 +1084,7 @@ mod additional_tests {
             .insert("prefix".into(), MetadataValue::Text("t".into()));
         let base = f::execute(
             &base,
-            Operation::Insert(f::entity("a", EntityKind::Issue, None)),
+            Operation::Insert(f::entity("a", EntityKind::Issue, None), Vec::new()),
             1,
         )
         .unwrap()

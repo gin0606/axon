@@ -226,10 +226,13 @@ enum Command {
         topic: Option<DocsCmd>,
     },
     /// Create an Accepted issue
+    #[command(after_help = CREATION_HELP)]
     Plan {
         /// Parent group ID or unique ID suffix
         #[arg(long)]
         parent: Option<String>,
+        #[command(flatten)]
+        initial: InitialStateArgs,
         /// Initial description; an empty value leaves it absent. For a leading hyphen, use --message='--help text' (or -m='--help text')
         #[arg(short = 'm', long)]
         message: Option<String>,
@@ -241,10 +244,13 @@ enum Command {
         title: Vec<String>,
     },
     /// Create an Undecided issue
+    #[command(after_help = CREATION_HELP)]
     Capture {
         /// Parent group ID or unique ID suffix
         #[arg(long)]
         parent: Option<String>,
+        #[command(flatten)]
+        initial: InitialStateArgs,
         /// Initial description; an empty value leaves it absent. For a leading hyphen, use --message='--help text' (or -m='--help text')
         #[arg(short = 'm', long)]
         message: Option<String>,
@@ -399,13 +405,66 @@ Use axon docs declaration --example for a complete new-plan YAML example."
     Group(GroupCmd),
 }
 
+const CREATION_HELP: &str = "Repeat --needs for multiple dependencies; duplicate references are stored once. Choose at most one of --manual, --at, --after, or --command; omission means Always. Creation saves the complete initial declaration and condition atomically, without executing Command or recording fictional transitions. Every invocation creates a new Entity. Inspect saved state with axon show <id> --skip-command-evaluation.";
+
+#[derive(clap::Args)]
+#[group(multiple = true)]
+struct InitialStateArgs {
+    /// Required Entity ID or unique ID suffix; repeat for multiple dependencies
+    #[arg(long)]
+    needs: Vec<String>,
+    /// Initially remain unsurfaced until explicitly changed
+    #[arg(long, conflicts_with_all = ["at", "after", "command"])]
+    manual: bool,
+    /// Initial resurface date in YYYY-MM-DD format
+    #[arg(long, value_name = "DATE", conflicts_with_all = ["after", "command"])]
+    at: Option<String>,
+    /// Initially wait for an Entity (ID or unique suffix) to become Ended or Rejected
+    #[arg(long, value_name = "ENTITY", conflicts_with = "command")]
+    after: Option<String>,
+    /// Initial shell string, stored without execution; see axon when command --help. Use --command='--help text' for a leading hyphen
+    #[arg(long, value_name = "SHELL_STRING")]
+    command: Option<String>,
+}
+
+impl InitialStateArgs {
+    fn resolve(
+        &self,
+        store: &Store,
+    ) -> Result<(Vec<EntityId>, ResurfaceCondition), Box<dyn std::error::Error>> {
+        let dependencies = self
+            .needs
+            .iter()
+            .map(|id| store.resolve_id(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let condition = if self.manual {
+            ResurfaceCondition::Manual
+        } else if let Some(date) = &self.at {
+            ResurfaceCondition::AtDate(
+                date.parse::<NaiveDate>()
+                    .map_err(|_| format!("invalid date: {date} (expected YYYY-MM-DD)"))?,
+            )
+        } else if let Some(reference) = &self.after {
+            ResurfaceCondition::AfterEntity(store.resolve_id(reference)?)
+        } else if let Some(command) = &self.command {
+            ResurfaceCondition::Command(command.clone())
+        } else {
+            ResurfaceCondition::Always
+        };
+        Ok((dependencies, condition))
+    }
+}
+
 #[derive(Subcommand)]
 enum GroupCmd {
     /// Create an Accepted group
+    #[command(after_help = CREATION_HELP)]
     Plan {
         /// Parent group ID or unique ID suffix
         #[arg(long)]
         parent: Option<String>,
+        #[command(flatten)]
+        initial: InitialStateArgs,
         /// Initial description; an empty value leaves it absent. For a leading hyphen, use --message='--help text' (or -m='--help text')
         #[arg(short = 'm', long)]
         message: Option<String>,
@@ -417,10 +476,13 @@ enum GroupCmd {
         title: Vec<String>,
     },
     /// Create an Undecided group
+    #[command(after_help = CREATION_HELP)]
     Capture {
         /// Parent group ID or unique ID suffix
         #[arg(long)]
         parent: Option<String>,
+        #[command(flatten)]
+        initial: InitialStateArgs,
         /// Initial description; an empty value leaves it absent. For a leading hyphen, use --message='--help text' (or -m='--help text')
         #[arg(short = 'm', long)]
         message: Option<String>,
@@ -854,6 +916,7 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
         Command::Plan {
             title,
             parent,
+            initial,
             message,
             file,
         } => cmd_create(
@@ -861,12 +924,14 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
             Disposition::Accepted,
             title,
             parent,
+            initial,
             message,
             file,
         ),
         Command::Capture {
             title,
             parent,
+            initial,
             message,
             file,
         } => cmd_create(
@@ -874,6 +939,7 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
             Disposition::Undecided,
             title,
             parent,
+            initial,
             message,
             file,
         ),
@@ -1017,6 +1083,7 @@ fn cmd_create(
     disposition: Disposition,
     title: Vec<String>,
     parent: Option<String>,
+    initial: InitialStateArgs,
     message: Option<String>,
     file: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1027,6 +1094,7 @@ fn cmd_create(
         .as_deref()
         .map(|value| store.resolve_id(value))
         .transpose()?;
+    let (dependencies, resurface_condition) = initial.resolve(&store)?;
     let now = Utc::now();
     let entity = Entity {
         id: EntityId::generate(&store.prefix()?),
@@ -1037,13 +1105,13 @@ fn cmd_create(
         disposition,
         current_revision: (disposition != Disposition::Undecided)
             .then(|| RecordId::new(RecordKind::Revision)),
-        resurface_condition: ResurfaceCondition::Always,
+        resurface_condition,
         parent,
         created_at: now,
         updated_at: now,
     };
     store
-        .insert(&entity)
+        .insert_with_dependencies(&entity, dependencies)
         .map_err(|e| operation_error(entity.id.to_string(), e, ""))?;
     let decoration = current_output_decoration();
     write_mutation_output(
@@ -1066,6 +1134,7 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
         GroupCmd::Plan {
             title,
             parent,
+            initial,
             message,
             file,
         } => cmd_create(
@@ -1073,12 +1142,14 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             Disposition::Accepted,
             title,
             parent,
+            initial,
             message,
             file,
         ),
         GroupCmd::Capture {
             title,
             parent,
+            initial,
             message,
             file,
         } => cmd_create(
@@ -1086,6 +1157,7 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             Disposition::Undecided,
             title,
             parent,
+            initial,
             message,
             file,
         ),

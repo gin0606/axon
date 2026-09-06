@@ -107,7 +107,19 @@ Undecided への変更、編集、全文確認、再判断の意味を説明し�
 | Issue | `axon plan <title>` | `axon capture <title>` |
 | Group | `axon group plan <title>` | `axon group capture <title>` |
 
-4 コマンドはいずれも `--parent <group-id>` を受け取り、作成と包含設定を同じ transaction で行う。呼び出すたびに新しい Entity を作る追加操作である。
+4 コマンドはいずれも以下の初期入力を受け取る。
+
+- `--parent <group-id>`: 親 Group。
+- `--needs <entity-id>`: outgoing dependency。複数指定は `--needs A --needs B` と反復し、同じ参照は一つにまとめる。
+- `--manual` / `--at <YYYY-MM-DD>` / `--after <entity-id>` / `--command <shell-string>`: 初期 Resurface condition。一種類だけ指定でき、未指定は Always。日付と条件の意味は `when` と同じ。
+
+参照 ID は完全 ID または一意な suffix を受け取る。description は `-m/--message` または `-F/--file`（`-` は stdin）、title は従来どおり指定する。shell string は一引数として渡し、先頭がハイフンなら `--command='--help text'` のように `=` を使う。
+
+Entity、親、dependencies、初期条件、Accepted の最初の Declaration Revision は同じ transaction で確定し、参照・包含・待機 graph 等の既存制約を保存境界で検査する。失敗時は Entity、関係、Revision を残さない。初期 Command は保存と成功表示のために実行しない（通常の導出照会では評価する）。
+
+Progress は NotStarted、claim なし。plan は Accepted、capture は Undecided。Accepted の最初の Revision は dependencies を含む完成した宣言であり、Control state の条件を含めない。Undecided には Revision を作らない。初期採否と条件は初期値として保存し、架空の判断・条件変更履歴を作らない。
+
+呼び出すたびに新しい Entity を作る追加操作であり、重複排除や idempotency key はない。既存の固定宣言の変更には引き続き明示的な undecide・編集・再判断が必要。
 
 Group は Issue と同じ自動生成 ID で参照し、slug や kind ごとの参照 namespace は持たない。
 

@@ -179,3 +179,7 @@ quint run spec/branch_history.qnt --main branch_history \
 情報モデルはseed 2026090602、全invariantに反例なし・全27 witness到達。
 分岐履歴モデルは上記条件で5 invariantに反例なし・全7 witness到達。
 bounded random simulationであり、全状態の証明ではない。
+
+## 単独作成の初期入力
+
+4つの作成コマンドの dependency / Resurface condition 初期入力は、既存の状態値、関係制約、導出、情報所有を変更しない。core / Group / 情報モデルは固定 Entity 集合上の操作を扱い、CLI の動的な Entity 追加と入力構文は対象外である。分岐履歴モデルの因果・現在値の根拠も変えないため、モデルの意味変更や新しい action は加えない。完成した宣言の初回 Revision、初期値への架空の遷移履歴がないこと、保存失敗の原子性と Command 未実行は Rust の core / CLI テストで検証する。

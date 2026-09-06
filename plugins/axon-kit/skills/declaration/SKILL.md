@@ -13,6 +13,6 @@ The calling request or workflow supplies the operation mode and the intended dec
 
 Read [the declaration workflow](references/workflow.md) completely before exporting to a file, canonicalizing, applying, or recovering from a conflict or uncertain result. A read-only `axon import check <file>` needs only the boundaries in this entrypoint.
 
-Use `axon-kit:triage` when a fixed declaration must first return to `Undecided`, and use `axon-kit:plan` or `axon-kit:capture` when content decisions or non-default initial Control state require a staged new Entity. Those capabilities remain separate from artifact mechanics.
+Use `axon-kit:triage` when a fixed declaration must first return to `Undecided`, and use `axon-kit:plan` or `axon-kit:capture` for single-Entity creation with supplied content and initial conditions that the declaration format cannot represent. Those capabilities remain separate from artifact mechanics.
 
 Return the operation mode, `DB applied` classification, changed IDs and kinds, key-to-ID mappings, relevant structural and derived impact, warnings, artifact status, and any recovery file that must be retained.

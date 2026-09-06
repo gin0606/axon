@@ -536,7 +536,7 @@ pub struct Context<'a> {
 
 #[derive(Clone)]
 pub enum Operation {
-    Insert(Entity),
+    Insert(Entity, Vec<EntityId>),
     Change(EntityId, Change),
     Dependency {
         source: EntityId,
@@ -664,8 +664,8 @@ impl StateSnapshot {
         let mut state = self.clone();
         state.declaration.evaluation = ctx.evaluation.clone();
         let outcome = match operation {
-            Operation::Insert(entity) => {
-                state.insert(entity, ctx)?;
+            Operation::Insert(entity, dependencies) => {
+                state.insert(entity, dependencies, ctx)?;
                 ApplyOutcome::Changed
             }
             Operation::Change(id, change) => state.apply(&id, change, ctx)?,
@@ -695,7 +695,12 @@ impl StateSnapshot {
         }
         Ok(ValidatedChange { state, outcome })
     }
-    fn insert(&mut self, entity: Entity, ctx: &mut Context<'_>) -> Result<()> {
+    fn insert(
+        &mut self,
+        entity: Entity,
+        dependencies: Vec<EntityId>,
+        ctx: &mut Context<'_>,
+    ) -> Result<()> {
         if self.declaration.entities.iter().any(|e| e.id == entity.id) {
             return Err(Error::InvalidState(format!(
                 "duplicate Entity {}",
@@ -728,7 +733,18 @@ impl StateSnapshot {
         let id = entity.id.clone();
         let revision = entity.current_revision;
         let at = entity.created_at;
+        for target in &dependencies {
+            if target == &id {
+                return Err(Error::SelfDependency(id.to_string()));
+            }
+            self.entity(target)?;
+        }
         self.declaration.entities.push(entity);
+        self.declaration
+            .dependencies
+            .extend(dependencies.into_iter().map(|target| (id.clone(), target)));
+        self.declaration.dependencies.sort();
+        self.declaration.dependencies.dedup();
         if let Some(revision) = revision {
             let mut revision_ctx = Context {
                 at,
@@ -1093,14 +1109,39 @@ pub(crate) mod tests {
     pub fn contract(
         mut run: impl FnMut(Operation) -> std::result::Result<(ApplyOutcome, StateSnapshot), String>,
     ) {
+        assert!(
+            run(Operation::Insert(
+                entity("invalid", EntityKind::Issue, None),
+                vec![id("missing")]
+            ))
+            .is_err()
+        );
+        assert!(
+            run(Operation::Insert(
+                entity("invalid", EntityKind::Issue, None),
+                vec![id("invalid")]
+            ))
+            .is_err()
+        );
+        let mut invalid = entity("invalid", EntityKind::Group, None);
+        invalid.resurface_condition = ResurfaceCondition::AfterEntity(id("missing"));
+        assert!(run(Operation::Insert(invalid, Vec::new())).is_err());
         let change = |name: &str, change| Operation::Change(id(name), change);
         let claim = || Claim {
             actor: "contract".into(),
             worktree: "/worktree/contract".into(),
             at: at(),
         };
-        run(Operation::Insert(entity("g", EntityKind::Group, None))).unwrap();
-        run(Operation::Insert(entity("i", EntityKind::Issue, Some("g")))).unwrap();
+        run(Operation::Insert(
+            entity("g", EntityKind::Group, None),
+            Vec::new(),
+        ))
+        .unwrap();
+        run(Operation::Insert(
+            entity("i", EntityKind::Issue, Some("g")),
+            Vec::new(),
+        ))
+        .unwrap();
         assert!(run(change("i", Change::Start(claim()))).is_err());
         run(change("g", Change::Decide(Disposition::Accepted))).unwrap();
         let (_, state) = run(change("i", Change::Decide(Disposition::Accepted))).unwrap();
@@ -1209,11 +1250,10 @@ pub(crate) mod tests {
         run(change("g", Change::Done)).unwrap();
         assert!(run(change("g", Change::SetParent(None))).is_ok()); // exact setting no-op
         assert!(
-            run(Operation::Insert(entity(
-                "late",
-                EntityKind::Issue,
-                Some("g")
-            )))
+            run(Operation::Insert(
+                entity("late", EntityKind::Issue, Some("g")),
+                Vec::new()
+            ))
             .is_err()
         );
         let (_, state) = run(Operation::AddNote {
@@ -1300,7 +1340,7 @@ pub(crate) mod tests {
     fn failed_generation_leaves_no_revision_or_control_change() {
         let state = execute(
             &empty(),
-            Operation::Insert(entity("i", EntityKind::Issue, None)),
+            Operation::Insert(entity("i", EntityKind::Issue, None), Vec::new()),
             1,
         )
         .unwrap()
@@ -1328,7 +1368,7 @@ pub(crate) mod tests {
         input.disposition = Disposition::Accepted;
         input.current_revision = Some(RecordId::deterministic(RecordKind::Revision, b"initial"));
         input.resurface_condition = ResurfaceCondition::AtDate(at().date_naive());
-        let state = execute(&empty(), Operation::Insert(input), 1)
+        let state = execute(&empty(), Operation::Insert(input, Vec::new()), 1)
             .unwrap()
             .state;
         let start = || {

@@ -722,12 +722,20 @@ impl Store {
             }
         }
     }
+    #[cfg(test)]
     pub fn insert(&mut self, entity: &Entity) -> Result<()> {
+        self.insert_with_dependencies(entity, Vec::new())
+    }
+    pub fn insert_with_dependencies(
+        &mut self,
+        entity: &Entity,
+        dependencies: Vec<EntityId>,
+    ) -> Result<()> {
         match self {
-            Self::Sqlite(s) => s.insert(entity),
+            Self::Sqlite(s) => s.insert_with_dependencies(entity, dependencies),
             Self::File(s) => {
                 s.mutate(
-                    core::Operation::Insert(entity.clone()),
+                    core::Operation::Insert(entity.clone(), dependencies),
                     &Ctx {
                         actor: String::new(),
                         reason: None,
@@ -950,7 +958,7 @@ mod tests {
         };
         (
             bytes,
-            core::tests::execute(&state, core::Operation::Insert(entity), 1).unwrap(),
+            core::tests::execute(&state, core::Operation::Insert(entity, Vec::new()), 1).unwrap(),
         )
     }
     #[test]

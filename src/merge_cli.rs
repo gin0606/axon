@@ -921,7 +921,7 @@ mod tests {
             );
             let ours = f::execute(
                 &base,
-                core::Operation::Insert(f::entity("t-a", EntityKind::Issue, None)),
+                core::Operation::Insert(f::entity("t-a", EntityKind::Issue, None), Vec::new()),
                 1,
             )
             .unwrap()
