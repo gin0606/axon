@@ -41,6 +41,7 @@ DB schema の正は [src/db.rs](../src/db.rs)、CLI の Usage は Clap の定義
 | 文書 | 読む目的 |
 | --- | --- |
 | [設計判断](design/decisions.md) | 軸を分けた理由、代替案、Group・情報モデル・永続化の導入経緯 |
+| [file backend の設計](design/file-backend.md) | worktree ごとの保存、履歴の分岐、三方向 merge、手動移行の新仕様案 |
 | [CLI 操作案内の棚卸し](design/cli-guidance-audit.md) | 2026-09-05 時点の全コマンドの案内評価 |
 | [初期設計のドライラン](design/initial-dry-run.md) | 初期モデルを運用シナリオに当てはめた検討記録 |
 
