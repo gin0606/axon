@@ -20,7 +20,9 @@ The calling request or workflow supplies the target and Note content. It may ask
 
 ## Freeze the append input
 
-Fix the exact Note body and observe the actor label before the first append attempt. When using `-F` or stdin, preserve the bytes and record their digest as required by the mutation contract.
+Fix the exact Note body. Before the first append attempt, run `axon actor` in the same environment and working directory as the append to observe the current actor label. This works before the first Note and does not open the DB or create a record. Environment or directory changes after observation can change the next operation’s actor; past Notes or claims do not guarantee the current label. When using `-F` or stdin, preserve the bytes and record their digest as required by the mutation contract.
+
+The actor is a display and investigation label, not a unique session ID, authentication or a lock. Multiple Codex or other agent sessions can share it. Never create a Note or start work merely to discover the actor.
 
 Read `axon note list <id>` immediately before the append and record the count and complete set of stable IDs, using an empty set when no Notes exist.
 
@@ -35,7 +37,7 @@ If the append clearly failed, do not retry without resolving its cause. If its o
 1. Confirm the original process ended.
 2. List every Note ID absent from the recorded pre-append set; ID order is not creation order.
 3. Read each candidate and compare both frozen body and actor.
-4. Treat one match as success and multiple matches as `DB applied: unknown`; preserve unrelated concurrent Notes.
+4. Actor agreement alone does not establish ownership. Treat one matching new ID and frozen body/actor as success only when the evidence establishes the append outcome. Multiple matches or otherwise inconclusive evidence are `DB applied: unknown`; preserve unrelated concurrent Notes.
 5. Only when every later Note was observed and none matches may the same frozen append be retried once. Reconcile that attempt by the same rule and do not retry again.
 
 Return the Note ID and summary and report concurrent Notes separately. Retain the input snapshot when the DB outcome remains unknown.

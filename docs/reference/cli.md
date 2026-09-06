@@ -9,11 +9,29 @@ axon の操作対象は `Issue` と `Group` の 2 kind を持つ Entity であ�
 | 分類 | command 順序 |
 | --- | --- |
 | Workflow | `plan`, `capture`, `ready`, `triage`, `start`, `done`, `release` |
-| Inspect | `status`, `show`, `list`, `claims`, `log`, `note`, `revision` |
+| Inspect | `status`, `show`, `list`, `claims`, `log`, `note`, `revision`, `actor` |
 | Plan management | `write`, `group`, `dep`, `decide`, `when`, `export`, `import` |
 | Setup & utilities | `init`, `migrate`, `storage`, `merge`, `completion`, `docs`, `help` |
 
 分類内では、対になる操作と同じ対象を扱う namespace を隣接させる。namespace 内は `group plan|capture|set|unset`、`dep add|rm`、`decide accept|reject|undecide`、`when at|after|manual|command|clear`、`note add|list|show`、`revision list|show|diff`、`import prepare|check|apply` の順とする。
+
+## 現在の actor
+
+`axon actor` は引数を取らず、現在の actor ラベルだけを改行付きで stdout に返す。
+通常成功時は終了コード 0。DB を開かず、管理 root の有無や DB の状態に依存しない。
+初期化、migration、記録追加、claim 取得、外部 Command 評価は行わない。
+Note・判断履歴・claim と同じ判定関数を使い、優先順位は
+[actor と作業場所](../development/architecture.md#actor-と作業場所)に従う。
+
+Note の追記前には、追記と同じ環境・作業ディレクトリで実行する。過去の Note や
+claim の actor は現在値の保証にならず、観測後に環境やディレクトリを変えた場合も
+次の操作の actor を保証しない。通常シェルで `USER=gin0606`、ディレクトリ名が
+`axon` なら `gin0606@axon` となる。
+
+actor は表示・調査用ラベルであり、一意なセッション ID、認証、排他制御ではない。
+複数の Codex 等が同じラベルを共有し得る。結果不明の Note 追記は actor 一致だけで
+断定せず、追記前になかった Note ID 集合と凍結した本文などを照合する。
+証拠で確定できない結果は unknown として扱う。
 
 ## 宣言の説明と新規例
 

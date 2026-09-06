@@ -37,7 +37,7 @@ const HELP_SECTIONS: &[HelpSection] = &[
     HelpSection {
         heading: "Inspect",
         commands: &[
-            "status", "show", "list", "claims", "log", "note", "revision",
+            "status", "show", "list", "claims", "log", "note", "revision", "actor",
         ],
     },
     HelpSection {
@@ -178,6 +178,11 @@ impl KindFilter {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Print the current actor label without opening a database
+    #[command(
+        long_about = "Print the current actor label followed by a newline, without opening a database or evaluating external conditions. Uses the same detection as Notes, history and claims. Run in the same environment and working directory as the intended operation; later changes can change the label. This display label is not a unique session ID, authentication or a lock; multiple agents can share it."
+    )]
+    Actor,
     /// Validate a complete file snapshot
     Storage {
         #[command(subcommand)]
@@ -736,6 +741,7 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
             }
             Ok(())
         }
+        Command::Actor => write_plain_output(&format!("{}\n", actor::actor())).map_err(Into::into),
         Command::Init { prefix, backend } => cmd_init(prefix, backend),
         Command::Storage { command } => merge_cli::storage(command),
         Command::Merge { command } => merge_cli::run(command),

@@ -47,7 +47,7 @@ fn root_help_groups_commands_in_workflow_order() {
         (
             "Inspect:",
             [
-                "status", "show", "list", "claims", "log", "note", "revision",
+                "status", "show", "list", "claims", "log", "note", "revision", "actor",
             ]
             .as_slice(),
         ),
