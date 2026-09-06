@@ -58,7 +58,7 @@ Git/editor は lock に従わないため、同じ worktree の checkout/merge �
 - **Revision と判断は同じ transaction で確定する**。採用系統のlast Revisionと同じ declaration は Revision を再利用し、違う場合だけ 新しい安定IDと内部順序キーを追加する
 - **Note の追加は immediate transaction で安定IDと保存順を確定する**。入力時刻ではなくこの保存順を正にし、空白だけの本文は Store の書き込み境界で拒否する。DB の `NOT NULL` / `CHECK` 制約も NULL、空文字、U+0020 だけの本文を拒否する
 - **複数テーブルの詳細表示は一つの read transaction から作る**。現在 Entity、関係、履歴、Revision、Note、件数を異なる時点から混ぜない
-- **スキーマは `user_version` と既知 DDL の両方で識別する**。v13の通常openは旧版を変換せず、手動変換はv11/v12を入力とし、未知版・未知構造を変更しない
+- **スキーマは `user_version` と既知 DDL の両方で識別する**。v13の通常openは旧版を変換せず、手動変換はv11/v12/v13を入力とし、未知版・未知構造を変更しない
 
 ## 状態更新と履歴
 
@@ -156,8 +156,12 @@ actor は一覧と調査の手掛かりであり、排他制御や `release` の
 ## schema 切り替えの境界
 
 v13の通常openは版と既知DDLを検査し、旧版を暗黙に更新しない。
-`axon migrate --source <v11-or-v12-db> --output <未使用directory>` はSQLite backup APIでWALを含む
-一貫した入力を出力directory内に固定し、新しいSQLiteと対応表を作る。元DBのpathは切り替えない。
+`axon migrate --source <v11-v12-v13-db> --output <未使用directory> --backend <sqlite|file>` はSQLite backup APIでWALを含む
+一貫した入力を出力directory内に固定し、新しい正本・設定と対応表を作る。元DBのpathは切り替えない。
+v11は既存の安定ID変換でv12を作り、v12の因果変換を共通に通す。v13は因果履歴を再生成しない。
+途中段階はstagingに保全し、最上位manifestを最後に公開する。SQLite/fileともcanonical round-tripと
+最終正本の再読取を比較し、正本と設定のdigestをmanifestへ記録する。この接続は状態・履歴の意味を
+変えず、filesystem障害と経路同等性は合成fixtureのRustテストで検証する。
 v9/v10は旧版でv11にしてから手動変換する。
 
 論理digestは既知tableの列名・SQLite値の型・値を決定的に符号化して計算する。

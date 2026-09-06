@@ -343,22 +343,195 @@ fn copy_database(source: &Connection, destination: &Path) -> super::Result<()> {
 
 /// The source is read-only; only a newly created output directory is written.
 /// A failed output is retained for diagnosis and must not be used as a live store.
-pub fn migrate(source_path: &Path, output: &Path) -> Result<Outcome, Failure> {
-    let probe = Connection::open_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY);
-    if let Ok(conn) = &probe
-        && version(conn).ok() == Some(12)
-    {
-        return migrate_v12(source_path, output);
+pub fn migrate(
+    source_path: &Path,
+    output: &Path,
+    backend: crate::storage::Backend,
+) -> Result<Outcome, Failure> {
+    migrate_with_checkpoint(source_path, output, backend, |_| Ok(()))
+}
+
+fn migrate_with_checkpoint(
+    source_path: &Path,
+    output: &Path,
+    backend: crate::storage::Backend,
+    mut checkpoint: impl FnMut(&str) -> super::Result<()>,
+) -> Result<Outcome, Failure> {
+    let mut failure = Failure {
+        database: source_path.to_owned(),
+        stage: "opening source",
+        from: None,
+        to: SCHEMA_VERSION,
+        backup: None,
+        applied: ApplicationState::NotApplied,
+        source: Box::new(invalid("conversion not run")),
+    };
+    let result = (|| -> super::Result<_> {
+        let source = Connection::open_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        source.busy_timeout(std::time::Duration::from_secs(5))?;
+        source.execute_batch("BEGIN")?;
+        let found = version(&source)?;
+        failure.from = Some(found);
+        if ![11, 12, 13].contains(&found) {
+            return Err(invalid(format!(
+                "manual migration requires schema v11/v12/v13, found v{found}"
+            )));
+        }
+        validate_schema(&source, found)?;
+        integrity(&source)?;
+        fs::create_dir(output)?;
+        failure.stage = "saving source snapshot";
+        let backup = output.join(format!("source-v{found}.db"));
+        failure.backup = Some(backup.clone());
+        copy_database(&source, &backup)?;
+        source.execute_batch("COMMIT")?;
+        checkpoint("after-backup")?;
+        let staging = output.join("staging");
+        fs::create_dir(&staging)?;
+        failure.stage = "converting staged snapshot";
+        let mut current = backup.clone();
+        let mut mappings = serde_json::json!([]);
+        if found == 11 {
+            let linear = staging.join("linear");
+            migrate_v11(&current, &linear).map_err(|e| *e.source)?;
+            let manifest: serde_json::Value =
+                serde_saphyr::from_str(&fs::read_to_string(linear.join("manifest.yaml"))?)
+                    .map_err(|e| invalid(e.to_string()))?;
+            mappings = manifest["mappings"].clone();
+            current = linear.join("axon.db");
+        }
+        if found <= 12 {
+            let causal = staging.join("causal");
+            migrate_v12(&current, &causal).map_err(|e| *e.source)?;
+            current = causal.join("axon.db");
+        }
+        checkpoint("after-conversion")?;
+        let fixed = Connection::open_with_flags(&current, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        validate_schema(&fixed, SCHEMA_VERSION)?;
+        integrity(&fixed)?;
+        validate_record_ids(&fixed)?;
+        let evaluation = std::rc::Rc::new(crate::derived::Evaluation::new(PathBuf::from(".")));
+        let state = super::read_state(&fixed, evaluation.clone())?;
+        let canonical = crate::codec::encode(&state)?;
+        let decoded = crate::codec::decode(&canonical, evaluation.clone())?;
+        if crate::codec::encode(&decoded)? != canonical {
+            return Err(invalid("canonical round-trip mismatch"));
+        }
+        let store_id: String =
+            fixed.query_row("SELECT value FROM meta WHERE key='store_id'", [], |r| {
+                r.get(0)
+            })?;
+        failure.stage = "writing backend and configuration";
+        let destination = output.join(match backend {
+            crate::storage::Backend::Sqlite => "state.db",
+            crate::storage::Backend::File => "state.jsonl",
+        });
+        match backend {
+            crate::storage::Backend::Sqlite => {
+                copy_database(&fixed, &destination)?;
+                let (target, _) = open(&destination).map_err(|e| *e.source)?;
+                if crate::codec::encode(&super::read_state(&target, evaluation.clone())?)?
+                    != canonical
+                {
+                    return Err(invalid("final SQLite snapshot mismatch"));
+                }
+            }
+            crate::storage::Backend::File => {
+                write_new(&destination, &canonical)?;
+                let reread = crate::codec::decode(&fs::read(&destination)?, evaluation)?;
+                if crate::codec::encode(&reread)? != canonical {
+                    return Err(invalid("final file snapshot mismatch"));
+                }
+            }
+        }
+        write_new(&output.join("snapshot.jsonl"), &canonical)?;
+        let config = serde_json::to_vec_pretty(
+            &serde_json::json!({"schema":1,"backend":backend,"store_id":store_id}),
+        )
+        .map_err(|e| invalid(e.to_string()))?;
+        write_new(&output.join("config.json"), &config)?;
+        checkpoint("after-backend")?;
+        let input = Connection::open_with_flags(&backup, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let input_tables = all_tables(&input)?;
+        let final_tables = all_tables(&fixed)?;
+        let manifest = serde_json::json!({
+            "format":2, "source_schema":found, "target_schema":SCHEMA_VERSION, "backend":backend,
+            "source_backup":backup.file_name().unwrap().to_string_lossy(),
+            "target":destination.file_name().unwrap().to_string_lossy(),
+            "store_id":store_id, "source_logical_digest":logical_digest(&input_tables),
+            "source_backup_blake3":blake3::hash(&fs::read(&backup)?).to_hex().to_string(),
+            "target_blake3":blake3::hash(&fs::read(&destination)?).to_hex().to_string(),
+            "snapshot_blake3":blake3::hash(&canonical).to_hex().to_string(),
+            "config_blake3":blake3::hash(&config).to_hex().to_string(),
+            "row_counts":input_tables.iter().map(|(n,t)|(n.clone(),t.rows.len())).collect::<BTreeMap<_,_>>(),
+            "target_row_counts":final_tables.iter().map(|(n,t)|(n.clone(),t.rows.len())).collect::<BTreeMap<_,_>>(),
+            "mappings":mappings, "identity":"v11 deterministic IDs; all v12/v13 store and record IDs preserved",
+            "verification":"all source fields retained through staged conversion; schema, integrity, foreign keys, causal validation, canonical round-trip and final backend readback passed"
+        });
+        failure.stage = "publishing manifest";
+        checkpoint("before-manifest")?;
+        failure.applied = ApplicationState::Unknown;
+        write_new(
+            &output.join("manifest.yaml"),
+            serde_saphyr::to_string(&manifest)
+                .map_err(|e| invalid(e.to_string()))?
+                .as_bytes(),
+        )?;
+        checkpoint("after-manifest")?;
+        File::open(output)?.sync_all()?;
+        File::open(
+            output
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new(".")),
+        )?
+        .sync_all()?;
+        checkpoint("after-sync")?;
+        Ok(Outcome::Migrated {
+            database: destination,
+            from: found,
+            to: SCHEMA_VERSION,
+            backup,
+        })
+    })();
+    result.map_err(|source| {
+        *failure.source = source;
+        failure
+    })
+}
+
+fn all_tables(conn: &Connection) -> super::Result<BTreeMap<String, Table>> {
+    let mut result = tables(conn)?;
+    if version(conn)? == 13 {
+        for (name, order) in [
+            ("history_lineage", "entity_id"),
+            ("causal_links", "record_id"),
+            ("history_baselines", "record_id"),
+            ("history_merges", "record_id"),
+        ] {
+            let columns = conn
+                .prepare(&format!("PRAGMA table_info({name})"))?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let rows = conn
+                .prepare(&format!("SELECT * FROM {name} ORDER BY {order}"))?
+                .query_map([], |r| {
+                    (0..columns.len())
+                        .map(|i| r.get(i))
+                        .collect::<rusqlite::Result<Vec<Value>>>()
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            result.insert(name.into(), Table { columns, rows });
+        }
     }
-    drop(probe);
-    migrate_v11(source_path, output)
+    Ok(result)
 }
 fn migrate_v11(source_path: &Path, output: &Path) -> Result<Outcome, Failure> {
     let mut failure = Failure {
         database: source_path.to_owned(),
         stage: "opening source",
         from: None,
-        to: SCHEMA_VERSION,
+        to: 12,
         backup: None,
         applied: ApplicationState::NotApplied,
         source: Box::new(invalid("conversion not run")),
@@ -405,7 +578,7 @@ fn migrate_v11(source_path: &Path, output: &Path) -> Result<Outcome, Failure> {
             Connection::open_with_flags(&destination, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         configure(&target)?;
         let tx = target.transaction()?;
-        tx.execute_batch(FRESH_SCHEMA)?;
+        tx.execute_batch(include_str!("schema_v12.sql"))?;
         tx.execute_batch("PRAGMA defer_foreign_keys=ON")?;
         let mut mappings = Vec::new();
         let mut expected = BTreeMap::new();
@@ -501,8 +674,8 @@ fn migrate_v11(source_path: &Path, output: &Path) -> Result<Outcome, Failure> {
             }
             expected.insert(name.clone(), converted);
         }
-        tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        validate_schema(&tx, SCHEMA_VERSION)?;
+        tx.pragma_update(None, "user_version", 12)?;
+        validate_schema(&tx, 12)?;
         integrity(&tx)?;
         validate_record_ids(&tx)?;
         for entity in super::read_all(&tx)? {
@@ -543,15 +716,13 @@ fn migrate_v11(source_path: &Path, output: &Path) -> Result<Outcome, Failure> {
                 return Err(invalid(format!("full data comparison failed for {name}")));
             }
         }
-        let canonical = add_causality(&tx, 11)?;
         tx.commit()?;
-        write_new(&output.join("snapshot.jsonl"), &canonical)?;
         target.close().map_err(|(_, e)| DbError::from(e))?;
         file.sync_all()?;
         let manifest = Manifest {
             format: 1,
             source_schema: 11,
-            target_schema: SCHEMA_VERSION,
+            target_schema: 12,
             source_logical_digest: digest,
             source_backup_blake3: blake3::hash(&fs::read(&backup)?).to_hex().to_string(),
             target_blake3: blake3::hash(&fs::read(&destination)?).to_hex().to_string(),
@@ -585,7 +756,7 @@ fn migrate_v11(source_path: &Path, output: &Path) -> Result<Outcome, Failure> {
         Ok(Outcome::Migrated {
             database: destination,
             from: 11,
-            to: SCHEMA_VERSION,
+            to: 12,
             backup,
         })
     })();
@@ -692,4 +863,73 @@ fn migrate_v12(source_path: &Path, output: &Path) -> Result<Outcome, Failure> {
         *failure.source = source;
         failure
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interrupted_packages_preserve_source_staging_and_retriable_identity() {
+        let root = std::env::temp_dir().join(format!(
+            "axon-migration-fault-{}",
+            RecordId::new(RecordKind::Store)
+        ));
+        fs::create_dir(&root).unwrap();
+        let source = root.join("source.db");
+        let mut conn = Connection::open(&source).unwrap();
+        super::super::initialize_schema(&mut conn).unwrap();
+        conn.execute("INSERT INTO meta VALUES ('prefix','fault')", [])
+            .unwrap();
+        drop(conn);
+        let before = fs::read(&source).unwrap();
+        for backend in [
+            crate::storage::Backend::Sqlite,
+            crate::storage::Backend::File,
+        ] {
+            for point in [
+                "after-backup",
+                "after-conversion",
+                "after-backend",
+                "before-manifest",
+                "after-manifest",
+                "after-sync",
+            ] {
+                let output = root.join(format!("{backend:?}-{point}"));
+                let error = migrate_with_checkpoint(&source, &output, backend, |stage| {
+                    if stage == point {
+                        Err(invalid("injected interruption"))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .unwrap_err();
+                let published = ["after-manifest", "after-sync"].contains(&point);
+                assert_eq!(
+                    error.applied,
+                    if published {
+                        ApplicationState::Unknown
+                    } else {
+                        ApplicationState::NotApplied
+                    }
+                );
+                assert_eq!(output.join("manifest.yaml").exists(), published);
+                assert_eq!(fs::read(&source).unwrap(), before);
+                let backup = output.join("source-v13.db");
+                assert!(backup.exists());
+                let saved = fs::read(&backup).unwrap();
+                assert!(migrate(&source, &output, backend).is_err());
+                assert_eq!(fs::read(&backup).unwrap(), saved);
+                let retry = root.join(format!("{backend:?}-{point}-retry"));
+                migrate(&backup, &retry, backend).unwrap();
+                if output.join("snapshot.jsonl").exists() {
+                    assert_eq!(
+                        fs::read(output.join("snapshot.jsonl")).unwrap(),
+                        fs::read(retry.join("snapshot.jsonl")).unwrap()
+                    );
+                }
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 }

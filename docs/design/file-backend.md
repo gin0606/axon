@@ -1,7 +1,7 @@
 # Worktree ごとの file backend と三方向 merge
 
 この文書は 2026-09-06 の計画・仕様検討の成果である。file保存/backend選択まで実装済み。
-現行の保存契約は[backendとfile保存](../reference/file-storage.md)を参照する。移行接続は後続段階の仕様を含む。
+現行の保存契約は[backendとfile保存](../reference/file-storage.md)を参照する。移行経路と切替手順は[手動移行](../reference/migration.md)を参照する。
 現行 CLI の規範を置き換えるものではない。実装時は、ここで定めた意味を検証してから
 担当する reference 文書と形式モデルへ反映する。
 作業単位と依存関係は `axon show axon-x7j4we` で参照する。

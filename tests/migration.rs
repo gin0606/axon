@@ -97,6 +97,8 @@ fn migrate(repo: &TestRepo, source: &Path, output: &Path) -> std::process::Outpu
         source.to_str().unwrap(),
         "--output",
         output.to_str().unwrap(),
+        "--backend",
+        "sqlite",
     ])
 }
 
@@ -114,14 +116,14 @@ fn manual_conversion_is_deterministic_and_preserves_all_values() {
     assert_eq!(version(&source), 11);
     assert_eq!(snapshot(&a.join("source-v11.db"), 11), before);
     assert_eq!(
-        snapshot(&a.join("axon.db"), 12),
-        snapshot(&b.join("axon.db"), 12)
+        snapshot(&a.join("state.db"), 12),
+        snapshot(&b.join("state.db"), 12)
     );
     assert_eq!(
         fs::read(a.join("manifest.yaml")).unwrap(),
         fs::read(b.join("manifest.yaml")).unwrap()
     );
-    let c = Connection::open(a.join("axon.db")).unwrap();
+    let c = Connection::open(a.join("state.db")).unwrap();
     // Independent field projection through the persisted mapping (including nullable references).
     let old = Connection::open(&source).unwrap();
     for table in before.keys() {
@@ -221,7 +223,7 @@ fn converted_database_supports_normal_commands_without_remapping_ids() {
     fs::rename(&source, repo.root().join("old.db")).unwrap();
     let source = repo.root().join(".git/axon/state.db");
     fs::create_dir_all(source.parent().unwrap()).unwrap();
-    fs::copy(out.join("axon.db"), &source).unwrap();
+    fs::copy(out.join("state.db"), &source).unwrap();
     assert_success(&repo.axon(&["init"]));
     for args in [
         &["list"][..],
@@ -245,7 +247,7 @@ fn converted_database_supports_normal_commands_without_remapping_ids() {
     assert_success(&repo.axon(&["note", "show", "accepted", &id[5..13]]));
     assert_failure(&repo.axon(&["note", "show", "accepted", "1"]));
     let before = snapshot(&source, 12);
-    assert_failure(&migrate(&repo, &source, &repo.root().join("twice")));
+    assert_success(&migrate(&repo, &source, &repo.root().join("twice")));
     assert_eq!(snapshot(&source, 12), before);
 }
 
@@ -265,8 +267,8 @@ fn physical_layout_does_not_define_migrated_identity() {
         fs::read(b.join("source-v11.db")).unwrap()
     );
     assert_eq!(
-        snapshot(&a.join("axon.db"), 12),
-        snapshot(&b.join("axon.db"), 12)
+        snapshot(&a.join("state.db"), 12),
+        snapshot(&b.join("state.db"), 12)
     );
 }
 
@@ -323,9 +325,9 @@ fn v12_upgrade_preserves_all_tables_ids_and_known_stream_order() {
     assert_success(&migrate(&repo, &source, &a));
     assert_success(&migrate(&repo, &source, &b));
     assert_eq!(version(&source), 12);
-    assert_eq!(version(&a.join("axon.db")), 13);
+    assert_eq!(version(&a.join("state.db")), 13);
     assert_eq!(fs::read(&source).unwrap(), original);
-    let after = snapshot(&a.join("axon.db"), 13);
+    let after = snapshot(&a.join("state.db"), 13);
     for (name, rows) in &before {
         assert_eq!(rows, &after[name], "{name}");
     }
@@ -333,7 +335,7 @@ fn v12_upgrade_preserves_all_tables_ids_and_known_stream_order() {
         fs::read(a.join("snapshot.jsonl")).unwrap(),
         fs::read(b.join("snapshot.jsonl")).unwrap()
     );
-    let conn = Connection::open(a.join("axon.db")).unwrap();
+    let conn = Connection::open(a.join("state.db")).unwrap();
     let links = conn
         .prepare("SELECT payload FROM causal_links")
         .unwrap()
@@ -347,7 +349,164 @@ fn v12_upgrade_preserves_all_tables_ids_and_known_stream_order() {
         .find(|v| v["result"].is_object())
         .unwrap();
     assert_eq!(baseline["parents"].as_array().unwrap().len(), 2); // separate decision and progress tails
-    fs::copy(a.join("axon.db"), &source).unwrap();
+    fs::copy(a.join("state.db"), &source).unwrap();
     assert_success(&repo.axon(&["release", &issue, "-r", "after migration"]));
     assert_success(&repo.axon(&["show", &issue]));
+}
+
+fn migrate_backend(
+    repo: &TestRepo,
+    source: &Path,
+    output: &Path,
+    backend: &str,
+) -> std::process::Output {
+    repo.axon(&[
+        "migrate",
+        "--source",
+        source.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+        "--backend",
+        backend,
+    ])
+}
+
+#[test]
+fn every_input_path_and_backend_preserves_the_same_complete_snapshot() {
+    let repo = TestRepo::new();
+    let source = fixture(repo.root(), 11);
+    let direct = repo.root().join("direct");
+    assert_success(&migrate(&repo, &source, &direct));
+    let expected = fs::read(direct.join("snapshot.jsonl")).unwrap();
+    let linear = direct.join("staging/linear/axon.db");
+    let causal = direct.join("state.db");
+    for (stage, input) in [(11, &source), (12, &linear), (13, &causal)] {
+        let before = fs::read(input).unwrap();
+        for backend in ["sqlite", "file"] {
+            let output = repo.root().join(format!("{stage}-{backend}"));
+            assert_success(&migrate_backend(&repo, input, &output, backend));
+            assert_eq!(fs::read(output.join("snapshot.jsonl")).unwrap(), expected);
+            let manifest: serde_json::Value =
+                serde_saphyr::from_str(&fs::read_to_string(output.join("manifest.yaml")).unwrap())
+                    .unwrap();
+            assert_eq!(manifest["source_schema"], stage);
+            assert_eq!(manifest["backend"], backend);
+            let target = manifest["target"].as_str().unwrap();
+            assert_eq!(
+                manifest["target_blake3"],
+                blake3::hash(&fs::read(output.join(target)).unwrap())
+                    .to_hex()
+                    .to_string()
+            );
+            assert_eq!(
+                manifest["config_blake3"],
+                blake3::hash(&fs::read(output.join("config.json")).unwrap())
+                    .to_hex()
+                    .to_string()
+            );
+            if stage == 11 {
+                assert_eq!(manifest["mappings"].as_array().unwrap().len(), 10);
+            }
+            let check = TestRepo::new();
+            fs::create_dir(check.root().join(".axon")).unwrap();
+            fs::copy(
+                output.join("config.json"),
+                check.root().join(".axon/config.json"),
+            )
+            .unwrap();
+            let state_path = if backend == "file" {
+                check.root().join(".axon/state.jsonl")
+            } else {
+                check.root().join(".git/axon/state.db")
+            };
+            fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+            fs::copy(output.join(target), state_path).unwrap();
+            for args in [
+                &["show", "accepted"][..],
+                &["list"],
+                &["log", "rejected"],
+                &["revision", "list", "accepted"],
+                &["note", "list", "accepted"],
+            ] {
+                assert_success(&check.axon(args));
+            }
+            assert_success(&check.axon(&["note", "add", "accepted", "-m", "after conversion"]));
+            assert_eq!(fs::read(input).unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn v13_wal_and_changed_source_keep_existing_identity_and_causal_payloads() {
+    let repo = TestRepo::new();
+    repo.init("current");
+    let id = repo.plan("history");
+    let source = repo.root().join(".git/axon/state.db");
+    let first = repo.root().join("first");
+    assert_success(&migrate_backend(&repo, &source, &first, "file"));
+    assert_success(&repo.axon(&["note", "add", &id, "-m", "additional record"]));
+    let conn = Connection::open(&source).unwrap();
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO meta VALUES ('wal-extra','retained');").unwrap();
+    let bytes = fs::read(&source).unwrap();
+    let wal = fs::read(source.with_extension("db-wal")).unwrap();
+    let second = repo.root().join("second");
+    assert_success(&migrate_backend(&repo, &source, &second, "file"));
+    assert_eq!(fs::read(&source).unwrap(), bytes);
+    assert_eq!(fs::read(source.with_extension("db-wal")).unwrap(), wal);
+    let records = |dir: &Path| {
+        fs::read_to_string(dir.join("state.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let old = records(&first);
+    let new = records(&second);
+    for record in old
+        .iter()
+        .filter(|r| !["Entity", "Header"].contains(&r["type"].as_str().unwrap_or("")))
+    {
+        assert!(new.contains(record), "original record missing: {record}");
+    }
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(first.join("config.json")).unwrap()).unwrap();
+    let later: serde_json::Value =
+        serde_json::from_slice(&fs::read(second.join("config.json")).unwrap()).unwrap();
+    assert_eq!(config["store_id"], later["store_id"]);
+}
+
+#[test]
+fn broken_references_unknown_v13_ddl_and_missing_backend_do_not_publish() {
+    let repo = TestRepo::new();
+    let source = fixture(repo.root(), 11);
+    let out = repo.root().join("out");
+    let omitted = repo.axon(&[
+        "migrate",
+        "--source",
+        source.to_str().unwrap(),
+        "--output",
+        out.to_str().unwrap(),
+    ]);
+    assert_failure(&omitted);
+    assert!(!out.exists());
+    Connection::open(&source).unwrap().execute_batch("PRAGMA foreign_keys=OFF; DELETE FROM declaration_revisions WHERE entity_id='accepted' AND revision=2;").unwrap();
+    let before = fs::read(&source).unwrap();
+    assert_failure(&migrate_backend(&repo, &source, &out, "file"));
+    assert_eq!(fs::read(&source).unwrap(), before);
+    assert!(!out.join("manifest.yaml").exists());
+    let repo = TestRepo::new();
+    repo.init("unknown");
+    let source = repo.root().join(".git/axon/state.db");
+    Connection::open(&source)
+        .unwrap()
+        .execute_batch("CREATE TABLE extra(data TEXT)")
+        .unwrap();
+    let before = fs::read(&source).unwrap();
+    assert_failure(&migrate_backend(
+        &repo,
+        &source,
+        &repo.root().join("out"),
+        "file",
+    ));
+    assert_eq!(fs::read(&source).unwrap(), before);
 }
