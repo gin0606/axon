@@ -141,6 +141,128 @@ fn mutation_confirmations_begin_with_the_affected_entity() {
 }
 
 #[test]
+fn setting_confirmations_follow_saved_changes_and_preserve_noop_storage() {
+    for backend in ["sqlite", "file"] {
+        let repo = TestRepo::new();
+        assert_success(&repo.axon(&["init", "--backend", backend, "test"]));
+        let saved_path = repo.root().join(if backend == "sqlite" {
+            ".git/axon/state.db"
+        } else {
+            ".axon/state.jsonl"
+        });
+        let parent = repo.group_capture("parent");
+        let prerequisite = repo.capture("prerequisite");
+        for id in [repo.capture("draft"), repo.group_capture("draft")] {
+            let cases = [
+                (
+                    vec!["write", &id, "--title", "renamed"],
+                    "Title updated".to_string(),
+                    "No changes".to_string(),
+                ),
+                (
+                    vec!["write", &id, "-m", "body"],
+                    "Description updated".to_string(),
+                    "No changes".to_string(),
+                ),
+                (
+                    vec!["write", &id, "--title", "both", "-m", "both body"],
+                    "Title updated  Description updated".to_string(),
+                    "No changes".to_string(),
+                ),
+                (
+                    vec!["write", &id, "--title", "both", "-m", "partial"],
+                    "Description updated".to_string(),
+                    "No changes".to_string(),
+                ),
+                (
+                    vec!["write", &id, "--title", "final", "-m", "partial"],
+                    "Title updated".to_string(),
+                    "No changes".to_string(),
+                ),
+                (
+                    vec!["write", &id, "-m", ""],
+                    "Description removed".to_string(),
+                    "No changes".to_string(),
+                ),
+                (
+                    vec!["dep", "add", &id, "--needs", &prerequisite],
+                    format!("Dependency added: {prerequisite}"),
+                    format!("No changes  Dependency already present: {prerequisite}"),
+                ),
+                (
+                    vec!["dep", "rm", &id, "--needs", &prerequisite],
+                    format!("Dependency removed: {prerequisite}"),
+                    format!("No changes  Dependency already absent: {prerequisite}"),
+                ),
+                (
+                    vec!["group", "set", &id, &parent],
+                    format!("Parent: {parent}"),
+                    format!("No changes  Parent: {parent}"),
+                ),
+                (
+                    vec!["group", "unset", &id],
+                    "Parent: (none)".to_string(),
+                    "No changes  Parent: (none)".to_string(),
+                ),
+            ];
+            for (args, changed, unchanged) in cases {
+                let output = repo.axon(&args);
+                assert_success(&output);
+                assert!(output.stderr.is_empty());
+                assert_eq!(stdout(&output), format!("{id}  {changed}\n"));
+                let before = fs::read(&saved_path).unwrap();
+                let output = repo.axon(&args);
+                assert_success(&output);
+                assert!(output.stderr.is_empty());
+                assert_eq!(stdout(&output), format!("{id}  {unchanged}\n"));
+                assert_eq!(fs::read(&saved_path).unwrap(), before);
+            }
+            assert_success(&repo.axon(&["dep", "add", &id, "--needs", &prerequisite]));
+            assert_success(&repo.axon(&["group", "set", &id, &parent]));
+            for decision in ["accept", "reject"] {
+                assert_success(&repo.axon(&["decide", decision, &id]));
+                let before = fs::read(&saved_path).unwrap();
+                for (args, expected) in [
+                    (
+                        vec!["write", &id, "--title", "final", "-m", "  "],
+                        "No changes".to_string(),
+                    ),
+                    (
+                        vec!["dep", "add", &id, "--needs", &prerequisite],
+                        format!("No changes  Dependency already present: {prerequisite}"),
+                    ),
+                    (
+                        vec!["dep", "rm", &id, "--needs", &parent],
+                        format!("No changes  Dependency already absent: {parent}"),
+                    ),
+                    (
+                        vec!["group", "set", &id, &parent],
+                        format!("No changes  Parent: {parent}"),
+                    ),
+                ] {
+                    let output = repo.axon(&args);
+                    assert_success(&output);
+                    assert_eq!(stdout(&output), format!("{id}  {expected}\n"));
+                }
+                for args in [
+                    vec!["write", &id, "--title", "forbidden"],
+                    vec!["write", &id, "-m", "forbidden"],
+                    vec!["dep", "rm", &id, "--needs", &prerequisite],
+                    vec!["dep", "add", &id, "--needs", &parent],
+                    vec!["group", "unset", &id],
+                ] {
+                    let output = repo.axon(&args);
+                    assert_failure(&output);
+                    assert!(stderr(&output).contains("plan declaration"));
+                }
+                assert_eq!(fs::read(&saved_path).unwrap(), before);
+                repo.undecide(&id);
+            }
+        }
+    }
+}
+
+#[test]
 fn creation_description_files_stdin_and_empty_values_match_write() {
     let repo = TestRepo::new();
     repo.init("test");

@@ -131,6 +131,19 @@ fn prepare_check_and_apply_create_mixed_entities_and_dependencies() {
 
     let apply = repo.axon(&["import", "apply", path.to_str().unwrap()]);
     assert_success(&apply);
+    assert!(stdout(&apply).contains("create Issue"));
+    assert!(stdout(&apply).contains(&format!("Applied  {}", path.display())));
+    let refreshed = fs::read(&path).unwrap();
+    assert_ne!(refreshed, canonical.as_bytes());
+    let saved_path = repo.root().join(".git/axon/state.db");
+    let saved = fs::read(&saved_path).unwrap();
+    let repeated = repo.axon(&["import", "apply", path.to_str().unwrap()]);
+    assert_success(&repeated);
+    assert!(stdout(&repeated).contains("Changes:\n  none\n"));
+    assert!(stdout(&repeated).contains(&format!("Applied  {}", path.display())));
+    assert_eq!(fs::read(&saved_path).unwrap(), saved);
+    assert_eq!(fs::read(&path).unwrap(), refreshed);
+
     let list = stdout(&repo.axon(&["list"]));
     let api = entity_id(&list, "import API");
     let storage = entity_id(&list, "storage layer");

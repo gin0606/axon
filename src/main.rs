@@ -16,6 +16,7 @@ use anstyle::{AnsiColor, Color, Style};
 use chrono::{NaiveDate, Utc};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
+use core::ApplyOutcome;
 use db::{Change, Ctx};
 use storage::Store;
 mod storage;
@@ -1072,12 +1073,15 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             let mut store = open_store(false)?;
             let id = store.resolve_id(&id)?;
             let parent = store.resolve_id(&parent)?;
-            store.apply(&id, Change::SetParent(Some(parent.clone())), &ctx(None))?;
+            let outcome = store.apply(&id, Change::SetParent(Some(parent.clone())), &ctx(None))?;
             write_confirmation(
                 &id,
-                render_inline_fields(
-                    current_output_decoration(),
-                    vec![("Parent", parent.to_string())],
+                setting_confirmation(
+                    outcome,
+                    render_inline_fields(
+                        current_output_decoration(),
+                        vec![("Parent", parent.to_string())],
+                    ),
                 ),
                 Style::new(),
             )?;
@@ -1086,8 +1090,12 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
         GroupCmd::Unset { id } => {
             let mut store = open_store(false)?;
             let id = store.resolve_id(&id)?;
-            store.apply(&id, Change::SetParent(None), &ctx(None))?;
-            write_confirmation(&id, "Parent: (none)".to_string(), Style::new())?;
+            let outcome = store.apply(&id, Change::SetParent(None), &ctx(None))?;
+            write_confirmation(
+                &id,
+                setting_confirmation(outcome, "Parent: (none)".to_string()),
+                Style::new(),
+            )?;
             Ok(())
         }
     }
@@ -2838,19 +2846,36 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn setting_confirmation(outcome: ApplyOutcome, detail: String) -> String {
+    match outcome {
+        ApplyOutcome::Changed => detail,
+        ApplyOutcome::Unchanged => format!("No changes  {detail}"),
+    }
+}
+
 fn cmd_dep(command: DepCmd) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = open_store(false)?;
     match command {
         DepCmd::Add { id, needs } => {
             let id = store.resolve_id(&id)?;
             let needs = store.resolve_id(&needs)?;
-            store.add_dep(&id, &needs)?;
+            let outcome = store.add_dep(&id, &needs)?;
             let decoration = current_output_decoration();
             write_confirmation(
                 &id,
-                render_inline_fields(
-                    decoration,
-                    vec![("Dependency added", decoration.paint(OUTPUT_ID, &needs))],
+                setting_confirmation(
+                    outcome,
+                    render_inline_fields(
+                        decoration,
+                        vec![(
+                            if outcome == ApplyOutcome::Changed {
+                                "Dependency added"
+                            } else {
+                                "Dependency already present"
+                            },
+                            decoration.paint(OUTPUT_ID, &needs),
+                        )],
+                    ),
                 ),
                 Style::new(),
             )?;
@@ -2858,13 +2883,23 @@ fn cmd_dep(command: DepCmd) -> Result<(), Box<dyn std::error::Error>> {
         DepCmd::Rm { id, needs } => {
             let id = store.resolve_id(&id)?;
             let needs = store.resolve_id(&needs)?;
-            store.remove_dep(&id, &needs)?;
+            let outcome = store.remove_dep(&id, &needs)?;
             let decoration = current_output_decoration();
             write_confirmation(
                 &id,
-                render_inline_fields(
-                    decoration,
-                    vec![("Dependency removed", decoration.paint(OUTPUT_ID, &needs))],
+                setting_confirmation(
+                    outcome,
+                    render_inline_fields(
+                        decoration,
+                        vec![(
+                            if outcome == ApplyOutcome::Changed {
+                                "Dependency removed"
+                            } else {
+                                "Dependency already absent"
+                            },
+                            decoration.paint(OUTPUT_ID, &needs),
+                        )],
+                    ),
                 ),
                 Style::new(),
             )?;
@@ -2981,29 +3016,27 @@ fn write_fields(
     title: Option<String>,
     body: Option<String>,
 ) -> Result<Vec<&'static str>, Box<dyn std::error::Error>> {
-    let current = store.get(id)?;
     let mut changed = Vec::new();
     if let Some(title) = title {
         let title = normalize_title(&title)?;
-        if title != current.title {
-            store.apply(id, Change::SetTitle(title), &ctx(None))?;
+        if store.apply(id, Change::SetTitle(title), &ctx(None))? == ApplyOutcome::Changed {
             changed.push("Title updated");
         }
     }
     if let Some(body) = body {
         let body = normalize_description(body);
-        if body != current.description {
-            let removed = body.is_none();
-            store
-                .apply(id, Change::SetDescription(body), &ctx(None))
-                .map_err(|e| {
-                    let applied = if changed.is_empty() {
-                        String::new()
-                    } else {
-                        format!("\nApplied: {id} {}", changed.join("  "))
-                    };
-                    operation_error("description save", e, applied)
-                })?;
+        let removed = body.is_none();
+        let outcome = store
+            .apply(id, Change::SetDescription(body), &ctx(None))
+            .map_err(|e| {
+                let applied = if changed.is_empty() {
+                    String::new()
+                } else {
+                    format!("\nApplied: {id} {}", changed.join("  "))
+                };
+                operation_error("description save", e, applied)
+            })?;
+        if outcome == ApplyOutcome::Changed {
             changed.push(if removed {
                 "Description removed"
             } else {
@@ -3297,6 +3330,49 @@ mod tests {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    #[test]
+    fn write_uses_description_save_outcome_after_title_changes_storage() {
+        let path = std::env::temp_dir().join(format!(
+            "axon-write-outcome-{}.db",
+            RecordId::new(RecordKind::Store)
+        ));
+        db::Store::init_at(&path, "t").unwrap();
+        let evaluation = std::rc::Rc::new(derived::Evaluation::new(std::env::temp_dir()));
+        let mut store = Store::Sqlite(db::Store::open_at(&path, evaluation, |_| {}).unwrap());
+        let mut task = entity("t-task", EntityKind::Issue);
+        task.disposition = Disposition::Undecided;
+        task.current_revision = None;
+        store.insert(&task).unwrap();
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        // Model another writer completing the later field before its save.
+        connection.execute_batch("CREATE TRIGGER concurrent_description AFTER UPDATE OF title ON entities BEGIN UPDATE entities SET description = 'already saved' WHERE id = NEW.id; END;").unwrap();
+        assert_eq!(
+            write_fields(
+                &mut store,
+                &task.id,
+                Some("new title".into()),
+                Some("already saved".into())
+            )
+            .unwrap(),
+            vec!["Title updated"]
+        );
+        let before = std::fs::read(&path).unwrap();
+        assert!(
+            write_fields(
+                &mut store,
+                &task.id,
+                Some("new title".into()),
+                Some("already saved".into())
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        drop(store);
+        drop(connection);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

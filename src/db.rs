@@ -518,6 +518,7 @@ impl Store {
         resolve_id(&self.conn, input)
     }
 
+    #[cfg(test)]
     pub fn get(&self, id: &EntityId) -> Result<Entity> {
         read_entity(&self.conn, id)
     }

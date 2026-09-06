@@ -615,6 +615,7 @@ impl Store {
             Self::File(s) => resolve(&s.read()?.1, input),
         }
     }
+    #[cfg(test)]
     pub fn get(&self, id: &EntityId) -> Result<Entity> {
         match self {
             Self::Sqlite(s) => s.get(id),
