@@ -364,6 +364,9 @@ enum Command {
     #[command(subcommand)]
     Revision(RevisionCmd),
     /// Export an editable plan declaration as canonical YAML
+    #[command(
+        after_help = "Use axon docs declaration for external dependency/parent snapshots without expanding the edit set."
+    )]
     Export {
         /// Entity IDs or unique ID suffixes to edit
         #[arg(value_name = "ID")]
@@ -377,8 +380,10 @@ enum Command {
     },
     /// Prepare, validate, or atomically apply a plan declaration
     #[command(subcommand)]
-    #[command(after_help = "Use axon docs declaration for the format and workflow.
-Use axon docs declaration --example for a complete new-plan YAML example.")]
+    #[command(
+        after_help = "Use axon docs declaration for the format, workflow, and external dependency/parent snapshots.
+Use axon docs declaration --example for a complete new-plan YAML example."
+    )]
     Import(ImportCmd),
     /// Change an Entity Disposition
     #[command(subcommand)]
@@ -453,8 +458,10 @@ enum DocsCmd {
 #[derive(Subcommand)]
 enum ImportCmd {
     /// Assign final IDs and rewrite a declaration into canonical form without changing the DB
-    #[command(after_help = "Use axon docs declaration for the format and workflow.
-Save axon docs declaration --example output to a file, then pass it to prepare.")]
+    #[command(
+        after_help = "Use axon docs declaration for the format, workflow, and external dependency/parent snapshots.
+Save axon docs declaration --example output to a file, then pass it to prepare."
+    )]
     Prepare {
         /// YAML declaration file to rewrite
         file: std::path::PathBuf,
@@ -692,6 +699,11 @@ fn error_guidance(error: &(dyn std::error::Error + 'static)) -> Option<String> {
 
     if let Some(guidance) = merge_cli::error_guidance(error) {
         return Some(guidance.to_string());
+    }
+    if let Some(declaration::DeclarationError::Reference { guidance, .. }) =
+        error.downcast_ref::<declaration::DeclarationError>()
+    {
+        return Some(guidance.clone());
     }
     if let Some(error) = error.downcast_ref::<DbError>() {
         return Some(match error {

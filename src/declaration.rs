@@ -20,6 +20,8 @@ pub enum DeclarationError {
     Evaluation(#[from] EvaluationError),
     #[error("{0}")]
     Invalid(String),
+    #[error("{reason}")]
+    Reference { reason: String, guidance: String },
     #[error("{0}")]
     Database(#[from] DbError),
     #[error(
@@ -740,16 +742,31 @@ fn validate_references(document: &PlanFile, current: &View, resolver: &Resolver)
     for record in &document.references.entities {
         let id = EntityId::from_stored(&record.id);
         let entity = current.get(&id).ok_or_else(|| {
-            DeclarationError::Invalid(format!("referenced Entity {id} does not exist"))
+            DeclarationError::Reference {
+                reason: format!("referenced Entity {id} does not exist in the current DB"),
+                guidance: "Check the active root and ID with `axon list --skip-command-evaluation`; export the intended existing Entity. See `axon docs declaration` for external snapshots.".to_string(),
+            }
         })?;
+        if record.base != fingerprint(current, entity) {
+            return Err(DeclarationError::Reference {
+                reason: format!("stale or incorrect reference base fingerprint for {id}"),
+                guidance: format!(
+                    "Preserve the file and compare a fresh `axon export {id}` snapshot; reconcile the reference before preparing again. See `axon docs declaration`."
+                ),
+            });
+        }
         if record.kind != kind_record(entity.kind)
             || record.title != entity.title
             || !observed_matches(&record.observed, entity, resolver)?
-            || record.base != fingerprint(current, entity)
         {
-            return Err(DeclarationError::Invalid(format!(
-                "read-only reference was edited or changed for {id}"
-            )));
+            return Err(DeclarationError::Reference {
+                reason: format!(
+                    "read-only reference snapshot differs from the current DB for {id} despite a matching base"
+                ),
+                guidance: format!(
+                    "Restore kind, title and observed from `axon export {id}`; these fields do not request changes to the referenced Entity. See `axon docs declaration`."
+                ),
+            });
         }
     }
     Ok(())
@@ -966,9 +983,10 @@ fn validate_reference_scope(
     }
     let actual = references.keys().cloned().collect::<BTreeSet<_>>();
     if actual != required {
-        return Err(DeclarationError::Invalid(
-            "references.entities contains missing or unrelated snapshots".to_string(),
-        ));
+        return Err(DeclarationError::Reference {
+            reason: format!("references.entities contains unrelated snapshots: {}", actual.difference(&required).map(ToString::to_string).collect::<Vec<_>>().join(", ")),
+            guidance: "Keep only snapshots required by relations and observed AfterEntity references (including their recursive AfterEntity targets); do not expand issues/groups to silence this error. See `axon docs declaration`.".to_string(),
+        });
     }
     Ok(())
 }
@@ -1061,9 +1079,14 @@ impl Resolver {
             _ => unreachable!("shape validated"),
         };
         if !self.ids.contains_key(id) {
-            return Err(DeclarationError::Invalid(format!(
-                "unknown Entity ID: {id}"
-            )));
+            return Err(DeclarationError::Reference {
+                reason: format!(
+                    "Entity ID {id} is missing from this declaration file (issues, groups, or references.entities); DB existence has not been checked"
+                ),
+                guidance: format!(
+                    "Check the ID; for an external Entity, obtain `axon export {id}` and copy its snapshot into references.entities without adding it to the edit set. See `axon docs declaration`."
+                ),
+            });
         }
         Ok(EntityId::from_stored(id))
     }
@@ -1255,7 +1278,10 @@ fn document_from_snapshot(
     let mut pending = reference_ids.iter().cloned().collect::<Vec<_>>();
     while let Some(id) = pending.pop() {
         let entity = view.get(&id).ok_or_else(|| {
-            DeclarationError::Invalid(format!("referenced Entity {id} does not exist"))
+            DeclarationError::Reference {
+                reason: format!("referenced Entity {id} does not exist in the current DB"),
+                guidance: "Check the active root and ID with `axon list --skip-command-evaluation`; export the intended existing Entity. See `axon docs declaration` for external snapshots.".to_string(),
+            }
         })?;
         if let ResurfaceCondition::AfterEntity(target) = &entity.resurface_condition
             && !selected.contains(target)

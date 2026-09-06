@@ -568,3 +568,218 @@ fn builtin_example_applies_without_editing_and_preserves_its_plan_structure() {
     assert_success(&claims);
     assert!(claims.stdout.is_empty());
 }
+
+fn export_value(repo: &TestRepo, id: &str) -> serde_json::Value {
+    let output = repo.axon(&["export", id]);
+    assert_success(&output);
+    serde_saphyr::from_str(&stdout(&output)).unwrap()
+}
+
+fn external_snapshot(source: &serde_json::Value, list: &str) -> serde_json::Value {
+    let mut record = source[list][0].clone();
+    let fields = record.as_object_mut().unwrap();
+    fields.remove("key");
+    fields.remove("description");
+    fields.insert(
+        "kind".into(),
+        if list == "issues" { "issue" } else { "group" }.into(),
+    );
+    record
+}
+
+#[test]
+fn external_snapshots_support_new_and_existing_owners_without_editing_targets() {
+    use serde_json::json;
+    for existing in [false, true] {
+        let repo = TestRepo::new();
+        repo.init("test");
+        let prerequisite = repo.plan("external prerequisite");
+        let parent = repo.group_plan("external parent");
+        let waiter_target = repo.plan("schedule target");
+        assert_success(&repo.axon(&["when", "after", &prerequisite, &waiter_target]));
+        let before = [&prerequisite, &parent, &waiter_target].map(|id| repo.snapshot(id));
+        let source = export_value(&repo, &prerequisite);
+        let parent_source = export_value(&repo, &parent);
+        let owner = existing.then(|| repo.capture("existing owner"));
+        let mut plan = if let Some(id) = &owner {
+            export_value(&repo, id)
+        } else {
+            serde_saphyr::from_str::<serde_json::Value>(include_str!(
+                "../src/docs/declaration-example.yaml"
+            ))
+            .unwrap()
+        };
+        let owner_ref = owner
+            .as_ref()
+            .map_or(json!({"key": "implement"}), |id| json!({"id": id}));
+        let parent_ref = if existing {
+            owner_ref.clone()
+        } else {
+            json!({"key": "feature"})
+        };
+        plan["relations"]["editable"]["parents"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"child": parent_ref, "parent": {"id": parent}}));
+        plan["relations"]["editable"]["dependencies"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"dependent": owner_ref, "prerequisite": {"id": prerequisite}}));
+        let refs = plan["references"]["entities"].as_array_mut().unwrap();
+        refs.push(external_snapshot(&source, "issues"));
+        refs.push(external_snapshot(&parent_source, "groups"));
+        refs.extend(
+            source["references"]["entities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .cloned(),
+        );
+        let path = plan_path(&repo, "external.yml");
+        write(&path, &serde_saphyr::to_string(&plan).unwrap());
+        for operation in ["prepare", "check", "apply", "check"] {
+            let output = repo.axon(&["import", operation, path.to_str().unwrap()]);
+            assert_success(&output);
+        }
+        let check = repo.axon(&["import", "check", path.to_str().unwrap()]);
+        assert!(stdout(&check).contains("Changes:\n  none\n"));
+        let applied: serde_json::Value =
+            serde_saphyr::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let owner_id = owner.unwrap_or_else(|| {
+            applied["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["key"] == "implement")
+                .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        });
+        let parent_owner = if existing {
+            owner_id.clone()
+        } else {
+            applied["groups"][0]["id"].as_str().unwrap().to_string()
+        };
+        assert_eq!(
+            repo.snapshot(&parent_owner).parent.as_deref(),
+            Some(parent.as_str())
+        );
+        assert_show_relation(
+            &stdout(&repo.axon(&["show", &owner_id])),
+            "Dependency:",
+            &prerequisite,
+        );
+        assert_eq!(
+            before,
+            [&prerequisite, &parent, &waiter_target].map(|id| repo.snapshot(id))
+        );
+        let edit_ids = applied["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(applied["groups"].as_array().unwrap())
+            .map(|r| r["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(!edit_ids.contains(&prerequisite.as_str()));
+        assert!(!edit_ids.contains(&parent.as_str()));
+        let after = export_value(&repo, &prerequisite);
+        assert_eq!(source["issues"], after["issues"]);
+        assert_eq!(
+            source["relations"]["editable"],
+            after["relations"]["editable"]
+        );
+        let after_parent = export_value(&repo, &parent);
+        assert_eq!(parent_source["groups"], after_parent["groups"]);
+        assert_eq!(
+            parent_source["relations"]["editable"],
+            after_parent["relations"]["editable"]
+        );
+        if existing {
+            let mut removal = applied.clone();
+            removal["relations"]["editable"] = json!({"parents": [], "dependencies": []});
+            removal["references"]["entities"] = json!([]);
+            write(&path, &serde_saphyr::to_string(&removal).unwrap());
+            for operation in ["prepare", "check", "apply", "check"] {
+                assert_success(&repo.axon(&["import", operation, path.to_str().unwrap()]));
+            }
+            assert_eq!(repo.snapshot(&owner_id).parent, None);
+            assert_eq!(
+                before,
+                [&prerequisite, &parent, &waiter_target].map(|id| repo.snapshot(id))
+            );
+        }
+    }
+}
+
+#[test]
+fn external_reference_diagnostics_preserve_database_and_failed_prepare_file() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let owner = repo.capture("owner");
+    let prerequisite = repo.plan("external prerequisite");
+    assert_success(&repo.axon(&["dep", "add", &owner, "--needs", &prerequisite]));
+    let output = repo.axon(&["export", &owner]);
+    assert_success(&output);
+    let original = stdout(&output);
+    let reference_start = original.find("references:\n").unwrap();
+    let dependency = format!(
+        "    dependencies:\n      - dependent: {{ id: {owner} }}\n        prerequisite: {{ id: {prerequisite} }}"
+    );
+    let base = export_value(&repo, &prerequisite)["issues"][0]["base"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let cases = [
+        (
+            format!(
+                "{}references:\n  entities: []\n",
+                &original[..reference_start]
+            ),
+            "missing from this declaration file",
+            "axon export",
+        ),
+        (
+            original.replace(&prerequisite, "test-zzzzzz"),
+            "does not exist in the current DB",
+            "active root",
+        ),
+        (
+            original.replace(
+                "title: external prerequisite",
+                "title: altered prerequisite",
+            ),
+            "despite a matching base",
+            "Restore kind, title and observed",
+        ),
+        (
+            original.replace(&base, &format!("blake3:{}", "0".repeat(64))),
+            "stale or incorrect reference base",
+            "fresh",
+        ),
+        (
+            original.replace(&dependency, "    dependencies: []"),
+            "unrelated snapshots",
+            "Keep only snapshots required",
+        ),
+    ];
+    let saved_path = repo.root().join(".git/axon/state.db");
+    let saved = fs::read(&saved_path).unwrap();
+    let path = plan_path(&repo, "invalid-external.yml");
+    for (input, diagnostic, guidance) in cases {
+        assert_ne!(input, original);
+        write(&path, &input);
+        for operation in ["prepare", "check", "apply"] {
+            let output = repo.axon(&["import", operation, path.to_str().unwrap()]);
+            assert_eq!(output.status.code(), Some(1));
+            let error = stderr(&output);
+            assert!(error.contains(diagnostic), "{operation}: {error}");
+            assert!(
+                error.contains("Help:") && error.contains(guidance),
+                "{error}"
+            );
+            assert_eq!(fs::read(&path).unwrap(), input.as_bytes());
+            assert_eq!(fs::read(&saved_path).unwrap(), saved);
+        }
+    }
+}

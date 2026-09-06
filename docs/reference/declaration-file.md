@@ -6,7 +6,7 @@
 
 ## 1. Canonical YAML
 
-次は既存と新規の issue / group、内部と境界をまたぐ関係を含む、`prepare` 前の完全な例である。fingerprint は例示値だが、文字数と表記は実際の canonical form と同じである。
+次は既存と新規の issue / group、内部と境界をまたぐ関係を含む、`prepare` 前の完全な例である。fingerprint は例示値であり、そのまま適用できない。実在 snapshot の取得手順は §6.1.1 を参照する。新規 DB で使える完全 YAML は `axon docs declaration --example` で取得する。
 
 ```yaml
 schema: axon-plan/v2
@@ -345,7 +345,7 @@ references:
 
 `references.entities` には relations または observed の `after_entity` から参照される編集対象外 Entity と、readonly relation の外部 owner を一度ずつ載せる。要素は `id`、`kind`、`base`、`title`、`observed` をこの順で必須とし、description、key、relation は持たない。
 
-references 全体は読み取り専用である。外部 Entity の表示と状態、境界をまたぐ incoming relation を一枚の file で確認できる一方、import の編集範囲を暗黙に広げない。
+各 snapshot の値は読み取り専用であり、現在 DB と一致する必要がある。編集対象の関係を変える際、必要になった実在 snapshot は追加し、不要になったものは除く。必要集合は relation と編集対象の observed AfterEntity から始まり、外部 snapshot の AfterEntity 先を再帰的に含む。過不足は拒否する。外部 Entity の表示と状態、境界をまたぐ incoming relation を一枚の file で確認できる一方、import の編集範囲を暗黙に広げない。
 
 ## 4. 必須性、null、空、要素の不在
 
@@ -392,6 +392,33 @@ export は一貫した DB snapshot から selector の和集合を編集対象�
 - selector の重複は除く
 
 編集対象は現在値と base を持ち、key は null になる。編集対象 owner の parent / outgoing dependency は `relations.editable` へ、境界の外から入る parent / dependency は `relations.readonly` へ出す。必要な外部 endpoint は `references.entities` へ出す。
+
+### 6.1.1 新しい外部 dependency・親の snapshot を用意する
+
+編集対象にまだ関係のない既存 Entity を参照するときも、対象を `issues` / `groups` に増やす必要はない。以下は実在 ID と DB の取得値が必要な手順であり、架空 fingerprint をそのまま適用する例ではない。
+
+1. 新規 owner は `axon docs declaration --example > plan.yml` から始める。既存 owner は Undecided であることを確認し、意図した編集集合だけを `axon export <OWNER-ID> > plan.yml` へ取得する。固定 owner の変更には別途 Undecided 化が必要。
+2. 別ファイルに `axon export <PREREQUISITE-ID> > prerequisite.yml` と `axon export <PARENT-GROUP-ID> > parent.yml` を実行し、各終了成功を確認する。これらは取得用であり、destination へ丸ごと連結しない。
+3. 各 export の `issues` / `groups` から対象 record の `id`、`base`、`title`、完全な `observed` をコピーし、元 list に合わせて `kind: issue` / `kind: group` を加える。`key` と `description` はコピーしない。この record を `plan.yml` の `references.entities` へ一度だけ追加する。ID・base・observed を推測・捏造しない。
+4. 新規例なら以下の edge を既存 `relations.editable` の各 list に追加する（他の edge は保持）。`<...>` は取得した完全 ID に置換する。既存 owner なら key の代わりに `{ id: <OWNER-ID> }` を使い、親は追加ではなく必要に応じて置換する。
+
+```yaml
+# 各 list に加える断片。完全な適用可能 YAML ではない。
+parents:
+  - child: { key: feature }
+    parent: { id: <PARENT-GROUP-ID> }
+dependencies:
+  - dependent: { key: implement }
+    prerequisite: { id: <PREREQUISITE-ID> }
+```
+
+5. 取り込む `observed.resurface` が AfterEntity なら、その参照先も編集集合にない限り snapshot を含め、再帰的に辿る。取得元 export の `references.entities` から必要 record をコピーできるが、取得元にある不要 record は取り込まない。
+6. `relations.readonly` は destination の編集集合に入る、外部 owner の incoming relation を保持する。取得元 export の関係を丸ごとコピーしてはならない。外部 snapshot 自身の親・outgoing dependency は destination の readonly relation ではない。関係の削除等で不要になった snapshot は除き、AfterEntity を含む必要集合だけを残す。
+7. destination に `prepare` → `check` →（差分を確認して）`apply` → `check` を各々実行する。最終 check は差分なしを要求する。参照先を再 export し、宣言と Control 値が不変であることを確認する。参照先への新しい incoming edge は再 export の readonly に現れ得る。
+
+親は child、dependency は dependent が所有するため、外部の親・prerequisite が固定でも、その Entity の Undecided 化は不要である。snapshot を含めることは、外部 Entity の宣言・状態を変更する要求ではない。
+
+内蔵 `axon docs declaration` にも同手順があり、import/export help から参照できる。参照不足は ID とファイル内 snapshot を、DB 不存在は active root と ID を確認する。base 不一致では元ファイルを保持して fresh export と比較し、競合を調整する。base が一致する snapshot 不一致は取得値を復元する。
 
 ### 6.2 prepare
 
@@ -498,13 +525,13 @@ prerequisite: { key: storage }
 
 - 編集対象 Entity の `observed.disposition` を `accepted` から `rejected` に変える
 - `in_progress` の claim actor、worktree、at を書き換える
-- `references.entities` の title、observed、kind、base を書き換える、要素を追加・削除する
+- `references.entities` の title、observed、kind、base が現在 DB の snapshot と一致しない、または必要な参照集合に過不足がある
 - `relations.readonly.parents` から外部 child の所属を消す
 - `relations.readonly.dependencies` の endpoint を変える、追加・削除する
 - 既存 Entity の base を null または別の fingerprint に変える
 - export 後に DB が変わって base が stale になった file を適用する
 
-base が現在 DB と一致するのに observed / references / readonly relation だけが違えば「読み取り専用部分の編集」、base 自体も一致しなければ「export 後の競合」と区別して報告する。
+reference の base が現在 DB と一致するのに kind/title/observed が違えば読み取り専用 snapshot の不一致、base 自体が違えば古いまたは不正確な fingerprint として区別する。後者だけでは DB の変更と入力側の改変を断定できない。ファイル内で未解決の ID は DB の不存在を意味せず、snapshot 付きで DB にない reference とは別診断にする。拒否時は DB へ部分適用せず、prepare の失敗では元ファイルを保持する。
 
 ## 8. 実装テストへ落とす fixture
 

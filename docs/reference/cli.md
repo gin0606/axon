@@ -71,6 +71,10 @@ prepare → check → apply → 再check の手順を端末向け英語で返す
 両コマンドは DB を開かず、管理 root、DB の状態、ネット接続、ソース checkout に依存しない。
 取得だけでは登録も着手も行わない。`axon docs` は従来の概念・基本 workflow を維持して
 宣言の説明へ案内し、`import --help` と `import prepare --help` も説明と例へ案内する。
+`export --help` も内蔵説明へ案内する。内蔵説明には外部 dependency・親 Group の
+実在 snapshot を別 export から用意する手順を含め、DB 不要の新規例と区別する。
+外部参照のファイル内欠落、現在 DB の不存在、古い/不正確な base、matching-base の
+snapshot 不一致、不要 snapshot は原因と確認先を分けて案内する。
 形式の正本は [宣言ファイル](declaration-file.md) とする。
 
 ## 操作を理解するための案内

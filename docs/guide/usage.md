@@ -99,6 +99,14 @@ Undecided before exporting it.
 
 Progress, Disposition, resurface conditions, claims, external references, and incoming relationships are read-only in declarations. Use the ordinary transition commands for state changes. A stale fingerprint stops check/apply instead of merging concurrent changes.
 
+To add a dependency or parent outside the edit set, export that Entity separately,
+copy its id/base/title/observed into `references.entities`, and add kind from its
+source list; omit key/description. Include required recursive AfterEntity targets.
+Add the edge under editable for its listed owner; preserve destination readonly
+incoming edges. Adding/removing required snapshots does not edit external Entities.
+Use the [external snapshot procedure](../reference/declaration-file.md#611-新しい外部-dependency親の-snapshot-を用意する)
+or offline `axon docs declaration` for both new and existing owner examples.
+
 Treat an exported declaration as a working snapshot. After a successful apply, keep the rewritten file only when it is intentionally maintained elsewhere; otherwise remove the temporary working file after verifying the result. If the database commit succeeds but rewriting the file fails, retain the original file and run the same `apply` again: axon accepts the retry only when the database already matches the complete declared result.
 
 ## Choosing a query

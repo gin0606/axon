@@ -18,6 +18,16 @@ For export to a file, write to a temporary path, confirm that `axon export` succ
 
 For a read-only check, run `axon import check <file>` without preparing or rewriting the file. For a read-only review, keep the original unchanged, prepare a temporary copy if necessary, and inspect both the declaration content and the reported structural and derived impact.
 
+## Add an external dependency or parent snapshot
+
+Use `axon docs declaration` for the offline procedure and examples. Keep the destination edit set explicit. Export the external Entity separately; copy its id, base, title and complete observed mapping into destination references.entities, add kind from its source issues/groups list, and omit key/description. Never invent snapshot values or add the target to the destination edit set merely to resolve an ID.
+
+Include exactly the snapshots needed by destination relations and observed AfterEntity targets, recursively through reference observed states. Reuse required source references.entities records, not all source records or relations. Destination readonly relations belong to external owners pointing into the destination edit set; preserve them from its export. Remove snapshots that are no longer required. Adding a correct required snapshot is not editing the referenced Entity.
+
+New owners and existing Undecided owners can own editable edges to fixed external parents/prerequisites. After prepare/check/apply/check, require no remaining changes and verify external declaration/Control values are unchanged (new incoming edges may appear in their exports).
+
+A missing file ID is not proof of DB absence. Check the ID and export its snapshot. For DB absence verify the active root; for a stale/incorrect reference base preserve and compare a fresh export, and return unresolved conflicts. A matching-base snapshot mismatch requires restoring exported kind/title/observed, not changing external state.
+
 ## Canonicalize or apply
 
 Work on a private temporary copy when the caller-owned source must remain recoverable. `axon import prepare` discards comments and rewrites canonical YAML.

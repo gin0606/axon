@@ -291,6 +291,9 @@ fn generated_output_treats_closed_stdout_as_success() {
 
 #[test]
 fn declaration_help_connects_the_format_and_example() {
+    let export = help_stdout(&["export", "--help"]);
+    assert!(export.contains("axon docs declaration"));
+    assert!(export.contains("external dependency/parent snapshots"));
     for args in [
         &["import", "--help"][..],
         &["import", "prepare", "--help"][..],
@@ -317,6 +320,11 @@ fn declaration_help_connects_the_format_and_example() {
         "kind: always",
         "axon export",
         "axon decide undecide",
+        "Reference an existing dependency or parent without editing it",
+        "references.entities",
+        "kind: issue or kind: group",
+        "recursively",
+        "existing Undecided owner",
     ] {
         assert!(output.contains(required), "missing {required:?}");
     }

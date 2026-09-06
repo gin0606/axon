@@ -7,7 +7,7 @@ description: Review, export, canonicalize, check, or apply strict YAML plan decl
 
 Use `axon-kit:conventions`. Read its model contract and, before any DB or artifact mutation, its mutation contract.
 
-This capability owns declaration artifacts and the `axon export` / `axon import prepare|check|apply` mechanics. A declaration can edit only title, description, parent, and outgoing dependencies. It cannot edit Progress, Disposition, Resurface condition, claim, Declaration Revision, Note, typed history, incoming relationships, or external references.
+This capability owns declaration artifacts and the `axon export` / `axon import prepare|check|apply` mechanics. A declaration can edit only title, description, parent, and outgoing dependencies. It cannot edit Progress, Disposition, Resurface condition, claim, Declaration Revision, Note, typed history, incoming relationships, or external Entity values. Required external snapshots can be added/removed as owned relations change; this does not expand the edit set.
 
 The calling request or workflow supplies the operation mode and the intended declaration content. Artifact editing does not authorize DB application, and DB application does not authorize a Control-state change.
 

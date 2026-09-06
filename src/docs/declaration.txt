@@ -56,7 +56,8 @@ Required fields
   listed owner. readonly edges belong to Entities outside the edit set.
 
   references requires an entities list, using [] when empty. External Entity
-  snapshots and readonly relations must be preserved from export.
+  snapshots must match export; readonly relations preserve external owners.
+  Add/remove required snapshots when owned relations change (see below).
   Do not omit required fields or empty structures. Unknown fields are rejected.
 
 Edit existing Entities
@@ -67,6 +68,56 @@ Edit existing Entities
   use axon decide undecide <ID> -r <reason>, then export a fresh snapshot, edit,
   prepare, check, apply, and check again. Inspect the full result and make the
   intended Disposition decision separately; import does not make it for you.
+
+Reference an existing dependency or parent without editing it
+  Unlike --example, this procedure needs real snapshots from the active DB.
+  Keep your destination plan separate from these source exports:
+    axon export <PREREQUISITE-ID> > prerequisite.yml
+    axon export <PARENT-GROUP-ID> > parent.yml
+  Check each export succeeded. Select the exact record under issues or groups.
+  Copy id, base, title and the complete observed mapping to references.entities
+  in your destination; add kind: issue or kind: group according to its source
+  list. Do not copy key or description. Never fabricate a fingerprint or state.
+  Do not add these external Entities to destination issues/groups.
+
+  For example, starting from --example, add the following edges to the existing
+  editable lists (replace placeholders with the exported full IDs):
+    parents:
+      - child: { key: feature }
+        parent: { id: <PARENT-GROUP-ID> }
+    dependencies:
+      - dependent: { key: implement }
+        prerequisite: { id: <PREREQUISITE-ID> }
+  Preserve the example's other edges. These snippets are not complete YAML and
+  are not applicable until real IDs and reference snapshots have been supplied.
+
+  For an existing Undecided owner, first export only the intended edit set;
+  add or replace its editable parent/dependency edge in the same way. Parent
+  ownership is the child; dependency ownership is the dependent. A fixed
+  external parent or prerequisite need not be made Undecided to receive an edge.
+  references do not request changes to the external Entity's title or state.
+
+  Include each required external snapshot once. If an included observed state
+  uses after_entity, include its target snapshot too, recursively, unless that
+  target is already in issues/groups. Source exports provide these snapshots;
+  reuse their references.entities records only when required by the destination.
+  Do not copy source editable/readonly relations wholesale: destination readonly
+  edges are incoming edges owned outside its edit set, not outgoing edges of a
+  referenced Entity. Preserve those returned by the destination's own export.
+  Remove snapshots no longer required by destination relations or this recursive
+  AfterEntity closure; unrelated snapshots are rejected.
+
+  Run prepare, check, apply, then check on the destination as above. Review the
+  edit set and changes before apply; final check must report no changes. Compare
+  source exports again to verify external declaration/Control values are intact
+  (exports may gain readonly incoming edges from the new owner).
+
+  A missing file ID means a missing declaration/reference record, not proof of
+  DB absence. Inspect the ID and export its real snapshot. DB absence is reported
+  separately; check the active root with axon list --skip-command-evaluation.
+  A mismatched reference base may be stale or incorrect: preserve the file,
+  compare a fresh export, and reconcile it. With a matching base, mismatched
+  kind/title/observed is a read-only snapshot mismatch; restore exported values.
 
 The authoritative schema is docs/reference/declaration-file.md in the axon
 source distribution. This built-in guide and example are available offline.
