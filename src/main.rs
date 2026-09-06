@@ -1,4 +1,5 @@
 mod actor;
+mod core;
 mod db;
 mod declaration;
 mod derived;
@@ -3097,7 +3098,6 @@ mod tests {
         let at = Utc::now();
         let notes = vec![Note {
             id: RecordId::new(RecordKind::Note),
-            number: 1,
             body: "note body\nwith two lines".to_string(),
             actor: "tester".to_string(),
             created_at: at,
@@ -3230,7 +3230,6 @@ mod tests {
         let at = Utc::now();
         let from = DeclarationRevision {
             id: RecordId::new(RecordKind::Revision),
-            number: 1,
             title: "raw old title".to_string(),
             description: Some("raw old description".to_string()),
             parent: None,
@@ -3240,7 +3239,6 @@ mod tests {
         };
         let to = DeclarationRevision {
             id: RecordId::new(RecordKind::Revision),
-            number: 2,
             title: "raw new title".to_string(),
             description: Some("raw new description".to_string()),
             parent: Some(EntityId::from_stored("parent")),

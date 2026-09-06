@@ -1,10 +1,19 @@
 pub mod migration;
+mod record_id;
+use crate::core;
+pub use crate::core::{
+    ApplyOutcome, Change, Ctx, Event, ProgressEvent, ProgressEventKind, StoreSnapshot,
+};
+
+pub fn validate_import_snapshot(before: &StoreSnapshot, desired: &StoreSnapshot) -> Result<()> {
+    Ok(core::validate_import_snapshot(before, desired)?)
+}
 
 use crate::derived::{Evaluation, EvaluationError, View};
 use crate::domain::*;
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
-use std::collections::{HashMap, HashSet, VecDeque};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
@@ -489,23 +498,6 @@ impl RevisionSnapshot {
     }
 }
 
-#[derive(Clone)]
-pub struct StoreSnapshot {
-    pub evaluation: Rc<Evaluation>,
-    pub entities: Vec<Entity>,
-    pub dependencies: Vec<(EntityId, EntityId)>,
-}
-
-impl StoreSnapshot {
-    pub fn view(&self) -> View {
-        View::with_evaluation(
-            self.entities.clone(),
-            self.dependencies.clone(),
-            self.evaluation.clone(),
-        )
-    }
-}
-
 impl Store {
     fn from_conn(conn: Connection) -> Result<Self> {
         require_current_schema(&conn)?;
@@ -638,9 +630,21 @@ impl Store {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(DbError::from)?;
-        let before = read_snapshot(&tx, self.evaluation.clone()).map_err(E::from)?;
-        let (value, desired) = build(before.clone())?;
-        apply_import_snapshot(&tx, &before, &desired).map_err(E::from)?;
+        let before = read_state(&tx, self.evaluation.clone()).map_err(E::from)?;
+        let (value, desired) = build(before.declaration.clone())?;
+        let result = before
+            .execute(
+                core::Operation::Import(desired),
+                &mut core::Context {
+                    at: Utc::now(),
+                    evaluation: self.evaluation.clone(),
+                    actor: "",
+                    reason: None,
+                    ids: &mut RecordId::new,
+                },
+            )
+            .map_err(DbError::from)?;
+        publish(&tx, &before, &result).map_err(E::from)?;
         let after = read_snapshot(&tx, self.evaluation.clone()).map_err(E::from)?;
         tx.commit().map_err(DbError::from)?;
         Ok((value, after))
@@ -655,50 +659,37 @@ impl Store {
     }
 
     pub fn notes(&self, id: &EntityId) -> Result<Vec<Note>> {
-        read_entity(&self.conn, id)?;
-        read_notes(&self.conn, id)
+        let tx = self.conn.unchecked_transaction()?;
+        read_entity(&tx, id)?;
+        let notes = read_notes(&tx, id)?;
+        tx.commit()?;
+        Ok(notes)
     }
 
     pub fn note(&self, id: &EntityId, number: &str) -> Result<Note> {
-        read_entity(&self.conn, id)?;
-        read_note(&self.conn, id, number)
+        let tx = self.conn.unchecked_transaction()?;
+        read_entity(&tx, id)?;
+        let note = read_note(&tx, id, number)?;
+        tx.commit()?;
+        Ok(note)
     }
 
     pub fn add_note(&mut self, id: &EntityId, body: &str, actor: &str) -> Result<Note> {
-        if body.trim().is_empty() {
-            return Err(DbError::EmptyNote);
-        }
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        read_entity(&tx, id)?;
-        let number = tx.query_row(
-            "SELECT coalesce(max(note),0) + 1 FROM entity_notes WHERE entity_id=?1",
-            params![id.as_str()],
-            |row| row.get::<_, i64>(0),
+        let result = self.mutate(
+            core::Operation::AddNote {
+                owner: id.clone(),
+                body: body.into(),
+            },
+            &Ctx {
+                actor: actor.into(),
+                reason: None,
+            },
         )?;
-        let created_at = Utc::now();
-        let record_id = RecordId::new(RecordKind::Note);
-        tx.execute(
-            "INSERT INTO entity_notes (entity_id,note,body,actor,at,record_id)
-             VALUES (?1,?2,?3,?4,?5,?6)",
-            params![
-                id.as_str(),
-                number,
-                body,
-                actor,
-                created_at.to_rfc3339(),
-                record_id
-            ],
-        )?;
-        tx.commit()?;
-        Ok(Note {
-            id: record_id,
-            number,
-            body: body.to_string(),
-            actor: actor.to_string(),
-            created_at,
-        })
+        Ok(result.state().histories[id]
+            .notes
+            .last()
+            .expect("added Note")
+            .clone())
     }
 
     #[cfg(test)]
@@ -714,325 +705,67 @@ impl Store {
         Ok(snapshot)
     }
 
-    pub fn insert(&mut self, entity: &Entity) -> Result<()> {
+    fn mutate(&mut self, operation: core::Operation, ctx: &Ctx) -> Result<core::ValidatedChange> {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        validate_parent_target(&tx, entity.parent.as_ref())?;
-        if let Some(parent) = &entity.parent {
-            let current = read_view(&tx, self.evaluation.clone())?;
-            let target = current.get(parent).expect("validated parent exists");
-            if matches!(target.progress, Progress::Ended)
-                || current
-                    .ancestors(parent)
-                    .into_iter()
-                    .any(|ancestor| matches!(ancestor.progress, Progress::Ended))
-            {
-                return Err(DbError::Containment(format!(
-                    "cannot add {} below an Ended group",
-                    entity.id
-                )));
-            }
-        }
-        write_entity(&tx, entity)?;
-        let view = read_view(&tx, self.evaluation.clone())?;
-        validate_structure(&view)?;
-        validate_relations(&view)?;
+        let before = read_state(&tx, self.evaluation.clone())?;
+        let result = before.execute(
+            operation,
+            &mut core::Context {
+                at: Utc::now(),
+                evaluation: self.evaluation.clone(),
+                actor: &ctx.actor,
+                reason: ctx.reason.as_deref(),
+                ids: &mut RecordId::new,
+            },
+        )?;
+        publish(&tx, &before, &result)?;
         tx.commit()?;
+        Ok(result)
+    }
+
+    pub fn insert(&mut self, entity: &Entity) -> Result<()> {
+        self.mutate(
+            core::Operation::Insert(entity.clone()),
+            &Ctx {
+                actor: String::new(),
+                reason: None,
+            },
+        )?;
         Ok(())
     }
 
     pub fn add_dep(&mut self, source: &EntityId, target: &EntityId) -> Result<ApplyOutcome> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let source_entity = read_entity(&tx, source)?;
-        read_entity(&tx, target)?;
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM entity_deps WHERE entity_id=?1 AND depends_on_id=?2)",
-            params![source.as_str(), target.as_str()],
-            |row| row.get(0),
-        )?;
-        if exists {
-            tx.commit()?;
-            return Ok(ApplyOutcome::Unchanged);
-        }
-        if source_entity.kind == EntityKind::Group
-            && matches!(source_entity.progress, Progress::Ended)
-        {
-            return Err(DbError::Containment(format!(
-                "Ended group {source} cannot change its dependencies"
-            )));
-        }
-        if source_entity.disposition != Disposition::Undecided {
-            return Err(DbError::DeclarationFixed(source.to_string()));
-        }
-        write_dependency(&tx, source, target, true)?;
-        validate_relations(&read_view(&tx, self.evaluation.clone())?)?;
-        tx.commit()?;
-        Ok(ApplyOutcome::Changed)
+        self.dependency(source, target, true)
     }
-
     pub fn remove_dep(&mut self, source: &EntityId, target: &EntityId) -> Result<ApplyOutcome> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let source_entity = read_entity(&tx, source)?;
-        read_entity(&tx, target)?;
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM entity_deps WHERE entity_id=?1 AND depends_on_id=?2)",
-            params![source.as_str(), target.as_str()],
-            |row| row.get(0),
-        )?;
-        if !exists {
-            tx.commit()?;
-            return Ok(ApplyOutcome::Unchanged);
-        }
-        if source_entity.kind == EntityKind::Group
-            && matches!(source_entity.progress, Progress::Ended)
-        {
-            return Err(DbError::Containment(format!(
-                "Ended group {source} cannot change its dependencies"
-            )));
-        }
-        if source_entity.disposition != Disposition::Undecided {
-            return Err(DbError::DeclarationFixed(source.to_string()));
-        }
-        write_dependency(&tx, source, target, false)?;
-        tx.commit()?;
-        Ok(ApplyOutcome::Changed)
+        self.dependency(source, target, false)
     }
-
+    fn dependency(
+        &mut self,
+        source: &EntityId,
+        target: &EntityId,
+        present: bool,
+    ) -> Result<ApplyOutcome> {
+        Ok(self
+            .mutate(
+                core::Operation::Dependency {
+                    source: source.clone(),
+                    target: target.clone(),
+                    present,
+                },
+                &Ctx {
+                    actor: String::new(),
+                    reason: None,
+                },
+            )?
+            .outcome)
+    }
     pub fn apply(&mut self, id: &EntityId, change: Change, ctx: &Ctx) -> Result<ApplyOutcome> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let before = read_entity(&tx, id)?;
-        if let Some((field, current)) = unchanged_transition(&before, &change) {
-            return Err(DbError::Unchanged {
-                id: id.to_string(),
-                field,
-                current,
-            });
-        }
-        if unchanged_setting(&before, &change) {
-            tx.commit()?;
-            return Ok(ApplyOutcome::Unchanged);
-        }
-        if matches!(
-            change,
-            Change::SetTitle(_) | Change::SetDescription(_) | Change::SetParent(_)
-        ) && before.disposition != Disposition::Undecided
-            && !matches!(
-                change,
-                Change::SetParent(_)
-                    if before.kind == EntityKind::Group
-                        && matches!(before.progress, Progress::Ended)
-            )
-        {
-            return Err(DbError::DeclarationFixed(id.to_string()));
-        }
-
-        let now = Utc::now();
-        let view = read_view(&tx, self.evaluation.clone())?;
-        match &change {
-            Change::Start(claim) => {
-                if !view.is_ready(&before)? {
-                    return Err(DbError::CannotStart {
-                        id: id.to_string(),
-                        fact: not_ready_fact(&view, &before)?,
-                    });
-                }
-                tx.execute(
-                    "UPDATE entities SET progress='in_progress', claimed_actor=?2,
-                     claimed_worktree=?3, claimed_at=?4, updated_at=?5 WHERE id=?1",
-                    params![
-                        id.as_str(),
-                        claim.actor,
-                        claim.worktree,
-                        claim.at.to_rfc3339(),
-                        now.to_rfc3339()
-                    ],
-                )?;
-            }
-            Change::Done => {
-                if !matches!(before.progress, Progress::InProgress(_)) {
-                    return Err(cannot_progress(id, "ended", &before));
-                }
-                if before.kind == EntityKind::Group && !view.group_completion_satisfied(id) {
-                    let remaining = view
-                        .descendants(id)
-                        .into_iter()
-                        .filter(|entity| !entity.is_terminal())
-                        .map(|entity| entity.id.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    return Err(DbError::CannotProgress {
-                        id: id.to_string(),
-                        action: "ended",
-                        fact: format!("non-terminal descendants: {remaining}"),
-                    });
-                }
-                clear_claim_and_set_progress(&tx, id, "ended", &now)?;
-            }
-            Change::Release => {
-                if !matches!(before.progress, Progress::InProgress(_)) {
-                    return Err(cannot_progress(id, "released", &before));
-                }
-                if before.kind == EntityKind::Group {
-                    let active = view.in_progress_descendants(id);
-                    if !active.is_empty() {
-                        return Err(DbError::CannotProgress {
-                            id: id.to_string(),
-                            action: "released",
-                            fact: format!(
-                                "InProgress descendants: {}",
-                                active
-                                    .iter()
-                                    .map(|entity| entity.id.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            ),
-                        });
-                    }
-                }
-                clear_claim_and_set_progress(&tx, id, "not_started", &now)?;
-            }
-            Change::Decide(disposition) => {
-                let current_revision = if *disposition == Disposition::Undecided {
-                    None
-                } else {
-                    Some(ensure_current_revision(&tx, id, &now, false)?)
-                };
-                tx.execute(
-                    "UPDATE entities SET disposition=?2,current_revision=?3,updated_at=?4
-                     WHERE id=?1",
-                    params![
-                        id.as_str(),
-                        disposition.as_db(),
-                        current_revision,
-                        now.to_rfc3339()
-                    ],
-                )?;
-                let updated = read_view(&tx, self.evaluation.clone())?;
-                if updated
-                    .ancestors(id)
-                    .into_iter()
-                    .any(|ancestor| matches!(ancestor.progress, Progress::Ended))
-                    && !updated
-                        .get(id)
-                        .expect("updated entity exists")
-                        .is_terminal()
-                {
-                    return Err(DbError::Containment(format!(
-                        "{id} must remain terminal below an Ended group"
-                    )));
-                }
-            }
-            Change::SetResurfaceCondition(condition) => {
-                if let ResurfaceCondition::AfterEntity(target) = condition {
-                    read_entity(&tx, target)?;
-                }
-                tx.execute(
-                    "UPDATE entities SET resurface_kind=?2, resurface_date=?3,
-                     resurface_ref=?4, updated_at=?5, resurface_command=?6 WHERE id=?1",
-                    params![
-                        id.as_str(),
-                        condition.kind_db(),
-                        resurface_date(condition),
-                        resurface_ref(condition),
-                        now.to_rfc3339(),
-                        resurface_command(condition)
-                    ],
-                )?;
-                if matches!(condition, ResurfaceCondition::AfterEntity(_)) {
-                    validate_relations(&read_view(&tx, self.evaluation.clone())?)?;
-                }
-            }
-            Change::SetTitle(title) => {
-                write_entity_setting(&tx, id, &Change::SetTitle(title.clone()), &now)?;
-            }
-            Change::SetDescription(description) => {
-                write_entity_setting(&tx, id, &Change::SetDescription(description.clone()), &now)?;
-            }
-            Change::SetParent(parent) => {
-                validate_parent_target(&tx, parent.as_ref())?;
-                if before.kind == EntityKind::Group && matches!(before.progress, Progress::Ended) {
-                    return Err(DbError::Containment(format!(
-                        "Ended group {id} cannot move"
-                    )));
-                }
-                if view
-                    .ancestors(id)
-                    .into_iter()
-                    .any(|ancestor| matches!(ancestor.progress, Progress::Ended))
-                {
-                    return Err(DbError::Containment(format!(
-                        "{id} cannot move within an Ended group"
-                    )));
-                }
-                if let Some(parent) = parent {
-                    let target = read_entity(&tx, parent)?;
-                    if matches!(target.progress, Progress::Ended)
-                        || view
-                            .ancestors(parent)
-                            .into_iter()
-                            .any(|ancestor| matches!(ancestor.progress, Progress::Ended))
-                    {
-                        return Err(DbError::Containment(format!(
-                            "cannot add {id} below an Ended group"
-                        )));
-                    }
-                }
-                write_entity_setting(&tx, id, &Change::SetParent(parent.clone()), &now)?;
-                if parent.is_some() {
-                    let updated = read_view(&tx, self.evaluation.clone())?;
-                    validate_structure(&updated)?;
-                    validate_relations(&updated)?;
-                }
-            }
-        }
-
-        if let Some(kind) = progress_event_kind(&change) {
-            tx.execute(
-                "INSERT INTO entity_progress_events (entity_id,kind,actor,reason,at,record_id)
-                 VALUES (?1,?2,?3,?4,?5,?6)",
-                params![
-                    id.as_str(),
-                    kind.as_db(),
-                    ctx.actor,
-                    (kind == ProgressEventKind::Release)
-                        .then_some(ctx.reason.as_deref())
-                        .flatten(),
-                    now.to_rfc3339(),
-                    RecordId::new(RecordKind::Progress)
-                ],
-            )?;
-        }
-        if let Some((field, old_value, new_value)) = decision_event(&before, &change) {
-            let revision = match change {
-                Change::Decide(_) => read_entity(&tx, id)?.current_revision,
-                _ => None,
-            };
-            tx.execute(
-                "INSERT INTO entity_events
-                 (entity_id,field,old_value,new_value,revision,actor,reason,at,record_id)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-                params![
-                    id.as_str(),
-                    field,
-                    old_value,
-                    new_value,
-                    revision,
-                    ctx.actor,
-                    ctx.reason,
-                    now.to_rfc3339(),
-                    RecordId::new(RecordKind::Decision)
-                ],
-            )?;
-        }
-        tx.commit()?;
-        Ok(ApplyOutcome::Changed)
+        Ok(self
+            .mutate(core::Operation::Change(id.clone(), change), ctx)?
+            .outcome)
     }
 
     pub fn events(&self, id: &EntityId) -> Result<Vec<Event>> {
@@ -1050,203 +783,6 @@ impl Store {
         tx.commit()?;
         Ok(snapshot)
     }
-}
-
-fn cannot_progress(id: &EntityId, action: &'static str, entity: &Entity) -> DbError {
-    DbError::CannotProgress {
-        id: id.to_string(),
-        action,
-        fact: format!("Progress is {}", entity.progress.label()),
-    }
-}
-
-fn clear_claim_and_set_progress(
-    tx: &Transaction<'_>,
-    id: &EntityId,
-    progress: &str,
-    at: &DateTime<Utc>,
-) -> Result<()> {
-    tx.execute(
-        "UPDATE entities SET progress=?2, claimed_actor=NULL, claimed_worktree=NULL,
-         claimed_at=NULL, updated_at=?3 WHERE id=?1",
-        params![id.as_str(), progress, at.to_rfc3339()],
-    )?;
-    Ok(())
-}
-
-fn validate_parent_target(conn: &Connection, parent: Option<&EntityId>) -> Result<()> {
-    if let Some(parent) = parent {
-        let entity = read_entity(conn, parent)?;
-        if entity.kind != EntityKind::Group {
-            return Err(DbError::NotGroup(parent.to_string()));
-        }
-    }
-    Ok(())
-}
-
-fn validate_structure(view: &View) -> Result<()> {
-    for entity in view.iter() {
-        if let Some(parent) = &entity.parent {
-            let Some(parent) = view.get(parent) else {
-                return Err(DbError::Containment(format!(
-                    "parent {} of {} does not exist",
-                    parent, entity.id
-                )));
-            };
-            if parent.kind != EntityKind::Group {
-                return Err(DbError::NotGroup(parent.id.to_string()));
-            }
-        }
-    }
-    for group in view.iter().filter(|entity| {
-        entity.kind == EntityKind::Group && matches!(entity.progress, Progress::NotStarted)
-    }) {
-        if let Some(active) = view
-            .descendants(&group.id)
-            .into_iter()
-            .find(|entity| matches!(entity.progress, Progress::InProgress(_)))
-        {
-            return Err(DbError::Containment(format!(
-                "InProgress entity {} cannot be below NotStarted group {}",
-                active.id, group.id
-            )));
-        }
-    }
-    Ok(())
-}
-
-#[derive(Clone)]
-struct GraphEdge {
-    from: EntityId,
-    to: EntityId,
-}
-
-fn validate_relations(view: &View) -> Result<()> {
-    let mut logical = Vec::new();
-    for (source, target) in view.dependencies() {
-        expand_source(view, source, target, &mut logical);
-    }
-    for entity in view.iter() {
-        if let ResurfaceCondition::AfterEntity(target) = &entity.resurface_condition {
-            expand_source(view, &entity.id, target, &mut logical);
-        }
-    }
-
-    let mut activation = logical.clone();
-    let mut completion = logical;
-    for entity in view.iter() {
-        if let Some(parent) = &entity.parent {
-            activation.push(GraphEdge {
-                from: entity.id.clone(),
-                to: parent.clone(),
-            });
-            completion.push(GraphEdge {
-                from: parent.clone(),
-                to: entity.id.clone(),
-            });
-        }
-    }
-    validate_acyclic(view, &activation, "activation")?;
-    validate_acyclic(view, &completion, "completion")
-}
-
-fn expand_source(view: &View, source: &EntityId, target: &EntityId, edges: &mut Vec<GraphEdge>) {
-    edges.push(GraphEdge {
-        from: source.clone(),
-        to: target.clone(),
-    });
-    if view
-        .get(source)
-        .is_some_and(|entity| entity.kind == EntityKind::Group)
-    {
-        edges.extend(
-            view.descendants(source)
-                .into_iter()
-                .map(|entity| GraphEdge {
-                    from: entity.id.clone(),
-                    to: target.clone(),
-                }),
-        );
-    }
-}
-
-fn validate_acyclic(view: &View, edges: &[GraphEdge], projection: &'static str) -> Result<()> {
-    let live: Vec<_> = edges
-        .iter()
-        .filter(|edge| {
-            [view.get(&edge.from), view.get(&edge.to)]
-                .into_iter()
-                .flatten()
-                .all(|entity| !matches!(entity.progress, Progress::Ended))
-        })
-        .cloned()
-        .collect();
-    for entity in view
-        .iter()
-        .filter(|entity| !matches!(entity.progress, Progress::Ended))
-    {
-        if let Some(path) = path_between(&live, &entity.id, &entity.id, true) {
-            let rendered = path
-                .into_iter()
-                .map(|id| id.to_string())
-                .collect::<Vec<_>>()
-                .join(" -> ");
-            return Err(DbError::Cycle {
-                projection,
-                path: rendered,
-            });
-        }
-    }
-    Ok(())
-}
-
-fn path_between(
-    edges: &[GraphEdge],
-    start: &EntityId,
-    goal: &EntityId,
-    require_edge: bool,
-) -> Option<Vec<EntityId>> {
-    let mut queue = VecDeque::new();
-    let mut previous: HashMap<EntityId, EntityId> = HashMap::new();
-    let mut seen = HashSet::new();
-    queue.push_back(start.clone());
-    while let Some(current) = queue.pop_front() {
-        for edge in edges.iter().filter(|edge| edge.from == current) {
-            if &edge.to == goal && (require_edge || current != *start) {
-                let mut path = vec![goal.clone(), current.clone()];
-                let mut cursor = current;
-                while cursor != *start {
-                    cursor = previous.get(&cursor)?.clone();
-                    path.push(cursor.clone());
-                }
-                path.reverse();
-                return Some(path);
-            }
-            if seen.insert(edge.to.clone()) {
-                previous.insert(edge.to.clone(), current.clone());
-                queue.push_back(edge.to.clone());
-            }
-        }
-    }
-    None
-}
-
-fn not_ready_fact(view: &View, entity: &Entity) -> Result<String> {
-    Ok(if !matches!(entity.progress, Progress::NotStarted) {
-        format!("Progress is {}", entity.progress.label())
-    } else if entity.disposition != Disposition::Accepted {
-        format!("Disposition is {}", entity.disposition.label())
-    } else if !view.is_surfaced(entity)? {
-        "resurface condition is not satisfied".to_string()
-    } else if !view.within_active_scope(&entity.id)? {
-        "outside active scope".to_string()
-    } else if view.is_orphaned(&entity.id) {
-        "a dependency is Rejected".to_string()
-    } else if view.is_blocked(&entity.id) {
-        "an unresolved dependency exists".to_string()
-    } else {
-        "not ready".to_string()
-    })
 }
 
 fn write_entity(conn: &Connection, entity: &Entity) -> Result<()> {
@@ -1277,72 +813,26 @@ fn write_entity(conn: &Connection, entity: &Entity) -> Result<()> {
             resurface_command(&entity.resurface_condition),
         ],
     )?;
-    if let Some(revision) = entity.current_revision {
-        write_revision(conn, entity, revision, &[], false, &entity.created_at)?;
-    }
     Ok(())
 }
 
 fn write_revision(
     conn: &Connection,
-    entity: &Entity,
-    revision: RecordId,
-    dependencies: &[EntityId],
-    baseline: bool,
-    created_at: &DateTime<Utc>,
+    owner: &EntityId,
+    revision: &DeclarationRevision,
 ) -> Result<()> {
     conn.execute(
         "INSERT INTO declaration_revisions
          (entity_id,revision,title,description,parent_id,created_at,baseline,sequence)
          VALUES (?1,?2,?3,?4,?5,?6,?7,(SELECT coalesce(max(sequence),0)+1 FROM declaration_revisions WHERE entity_id=?1))",
-        params![
-            entity.id.as_str(),
-            revision,
-            entity.title,
-            entity.description,
-            entity.parent.as_ref().map(EntityId::as_str),
-            created_at.to_rfc3339(),
-            baseline,
-        ],
+        params![owner.as_str(), revision.id, revision.title, revision.description,
+            revision.parent.as_ref().map(EntityId::as_str), revision.created_at.to_rfc3339(), revision.baseline],
     )?;
-    for dependency in dependencies {
-        conn.execute(
-            "INSERT INTO revision_dependencies (entity_id,revision,depends_on_id)
-             VALUES (?1,?2,?3)",
-            params![entity.id.as_str(), revision, dependency.as_str()],
-        )?;
+    for dependency in &revision.dependencies {
+        conn.execute("INSERT INTO revision_dependencies (entity_id,revision,depends_on_id) VALUES (?1,?2,?3)",
+            params![owner.as_str(), revision.id, dependency.as_str()])?;
     }
     Ok(())
-}
-
-fn ensure_current_revision(
-    conn: &Connection,
-    id: &EntityId,
-    created_at: &DateTime<Utc>,
-    baseline: bool,
-) -> Result<RecordId> {
-    let entity = read_entity(conn, id)?;
-    let dependencies = read_deps(conn)?
-        .into_iter()
-        .filter_map(|(source, target)| (source == *id).then_some(target))
-        .collect::<Vec<_>>();
-    let latest = conn.query_row(
-        "SELECT revision FROM declaration_revisions WHERE entity_id=?1 ORDER BY sequence DESC LIMIT 1",
-        params![id.as_str()], |row| row.get::<_, RecordId>(0),
-    ).optional()?;
-    if let Some(number) = latest {
-        let revision = read_revision(conn, id, number)?;
-        if revision.title == entity.title
-            && revision.description == entity.description
-            && revision.parent == entity.parent
-            && revision.dependencies == dependencies
-        {
-            return Ok(number);
-        }
-    }
-    let number = RecordId::new(RecordKind::Revision);
-    write_revision(conn, &entity, number, &dependencies, baseline, created_at)?;
-    Ok(number)
 }
 
 fn read_snapshot(conn: &Connection, evaluation: Rc<Evaluation>) -> Result<StoreSnapshot> {
@@ -1351,217 +841,6 @@ fn read_snapshot(conn: &Connection, evaluation: Rc<Evaluation>) -> Result<StoreS
         entities: read_all(conn)?,
         dependencies: read_deps(conn)?,
     })
-}
-
-pub fn validate_import_snapshot(before: &StoreSnapshot, desired: &StoreSnapshot) -> Result<()> {
-    let before_view = before.view();
-    let desired_view = desired.view();
-    let desired_ids = desired
-        .entities
-        .iter()
-        .map(|entity| entity.id.clone())
-        .collect::<HashSet<_>>();
-    if desired_ids.len() != desired.entities.len() {
-        return Err(DbError::InvalidImport(
-            "the final snapshot contains duplicate Entity IDs".to_string(),
-        ));
-    }
-    if let Some(missing) = before
-        .entities
-        .iter()
-        .find(|entity| !desired_ids.contains(&entity.id))
-    {
-        return Err(DbError::InvalidImport(format!(
-            "the final snapshot removes {}",
-            missing.id
-        )));
-    }
-
-    for after in &desired.entities {
-        let Some(current) = before_view.get(&after.id) else {
-            if after.progress != Progress::NotStarted
-                || after.disposition != Disposition::Accepted
-                || after.resurface_condition != ResurfaceCondition::Always
-            {
-                return Err(DbError::InvalidImport(format!(
-                    "new Entity {} does not have the required initial state",
-                    after.id
-                )));
-            }
-            continue;
-        };
-        if current.kind != after.kind
-            || current.progress != after.progress
-            || current.disposition != after.disposition
-            || current.current_revision != after.current_revision
-            || current.resurface_condition != after.resurface_condition
-        {
-            return Err(DbError::InvalidImport(format!(
-                "read-only state changed for {}",
-                after.id
-            )));
-        }
-        let declaration_changed = current.title != after.title
-            || current.description != after.description
-            || current.parent != after.parent
-            || direct_dependency_ids(&before_view, &current.id)
-                != direct_dependency_ids(&desired_view, &after.id);
-        if declaration_changed && current.disposition != Disposition::Undecided {
-            return Err(DbError::DeclarationFixed(after.id.to_string()));
-        }
-        if current.kind == EntityKind::Group
-            && matches!(current.progress, Progress::Ended)
-            && (current.parent != after.parent
-                || direct_dependency_ids(&before_view, &current.id)
-                    != direct_dependency_ids(&desired_view, &after.id))
-        {
-            return Err(DbError::Containment(format!(
-                "Ended group {} cannot change its parent or dependencies",
-                after.id
-            )));
-        }
-        if current.parent != after.parent
-            && before_view
-                .ancestors(&current.id)
-                .into_iter()
-                .any(|ancestor| matches!(ancestor.progress, Progress::Ended))
-        {
-            return Err(DbError::Containment(format!(
-                "{} cannot move within an Ended group",
-                after.id
-            )));
-        }
-    }
-
-    for after in &desired.entities {
-        let parent_changed = before_view
-            .get(&after.id)
-            .is_none_or(|before| before.parent != after.parent);
-        if parent_changed
-            && desired_view
-                .ancestors(&after.id)
-                .into_iter()
-                .any(|ancestor| matches!(ancestor.progress, Progress::Ended))
-        {
-            return Err(DbError::Containment(format!(
-                "cannot add {} below an Ended group",
-                after.id
-            )));
-        }
-    }
-    validate_structure(&desired_view)?;
-    validate_relations(&desired_view)?;
-    Ok(())
-}
-
-fn apply_import_snapshot(
-    conn: &Connection,
-    before: &StoreSnapshot,
-    desired: &StoreSnapshot,
-) -> Result<()> {
-    validate_import_snapshot(before, desired)?;
-    let before_view = before.view();
-    let now = Utc::now();
-    let new_ids = desired
-        .entities
-        .iter()
-        .filter(|entity| before_view.get(&entity.id).is_none())
-        .map(|entity| entity.id.clone())
-        .collect::<Vec<_>>();
-    for after in &desired.entities {
-        if before_view.get(&after.id).is_none() {
-            let mut entity = after.clone();
-            entity.parent = None;
-            entity.disposition = Disposition::Undecided;
-            entity.current_revision = None;
-            entity.created_at = now;
-            entity.updated_at = now;
-            write_entity(conn, &entity)?;
-        }
-    }
-    for after in &desired.entities {
-        let current = before_view.get(&after.id);
-        if current.is_none_or(|current| current.title != after.title) {
-            write_entity_setting(
-                conn,
-                &after.id,
-                &Change::SetTitle(after.title.clone()),
-                &now,
-            )?;
-        }
-        if current.is_none_or(|current| current.description != after.description) {
-            write_entity_setting(
-                conn,
-                &after.id,
-                &Change::SetDescription(after.description.clone()),
-                &now,
-            )?;
-        }
-        if current.is_none_or(|current| current.parent != after.parent) {
-            write_entity_setting(
-                conn,
-                &after.id,
-                &Change::SetParent(after.parent.clone()),
-                &now,
-            )?;
-        }
-    }
-    if before.dependencies != desired.dependencies {
-        let before = before.dependencies.iter().cloned().collect::<HashSet<_>>();
-        let desired = desired.dependencies.iter().cloned().collect::<HashSet<_>>();
-        for (source, target) in before.difference(&desired) {
-            write_dependency(conn, source, target, false)?;
-        }
-        for (source, target) in desired.difference(&before) {
-            write_dependency(conn, source, target, true)?;
-        }
-    }
-    for id in new_ids {
-        let revision = ensure_current_revision(conn, &id, &now, false)?;
-        conn.execute(
-            "UPDATE entities SET disposition='accepted',current_revision=?2 WHERE id=?1",
-            params![id.as_str(), revision],
-        )?;
-    }
-    Ok(())
-}
-
-fn write_entity_setting(
-    conn: &Connection,
-    id: &EntityId,
-    change: &Change,
-    now: &DateTime<Utc>,
-) -> Result<()> {
-    match change {
-        Change::SetTitle(title) => {
-            conn.execute(
-                "UPDATE entities SET title=?2, updated_at=?3 WHERE id=?1",
-                params![id.as_str(), title, now.to_rfc3339()],
-            )?;
-        }
-        Change::SetDescription(description) => {
-            conn.execute(
-                "UPDATE entities SET description=?2, updated_at=?3 WHERE id=?1",
-                params![id.as_str(), description, now.to_rfc3339()],
-            )?;
-        }
-        Change::SetParent(parent) => {
-            conn.execute(
-                "UPDATE entities SET parent_id=?2, updated_at=?3 WHERE id=?1",
-                params![
-                    id.as_str(),
-                    parent.as_ref().map(EntityId::as_str),
-                    now.to_rfc3339()
-                ],
-            )?;
-        }
-        _ => {
-            return Err(DbError::InvalidImport(
-                "a transition was passed to the setting writer".to_string(),
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn write_dependency(
@@ -1582,17 +861,6 @@ fn write_dependency(
         )?;
     }
     Ok(())
-}
-
-fn direct_dependency_ids(view: &View, id: &EntityId) -> Vec<EntityId> {
-    let mut ids = view
-        .dependencies()
-        .iter()
-        .filter(|(source, _)| source == id)
-        .map(|(_, target)| target.clone())
-        .collect::<Vec<_>>();
-    ids.sort();
-    ids
 }
 
 fn read_view(conn: &Connection, evaluation: Rc<Evaluation>) -> Result<View> {
@@ -1656,10 +924,9 @@ fn read_notes(conn: &Connection, id: &EntityId) -> Result<Vec<Note>> {
         ))
     })?;
     rows.map(|row| {
-        let (number, body, actor, at, record_id) = row?;
+        let (_sequence, body, actor, at, record_id) = row?;
         Ok(Note {
             id: record_id,
-            number,
             body,
             actor,
             created_at: parse_time(&at)?,
@@ -1727,7 +994,6 @@ fn read_revision(
         })?;
     Ok(DeclarationRevision {
         id: number,
-        number: row.5,
         title: row.0,
         description: row.1,
         parent: row.2.as_deref().map(EntityId::from_stored),
@@ -1881,84 +1147,6 @@ fn resurface_ref(condition: &ResurfaceCondition) -> Option<String> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Ctx {
-    pub actor: String,
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ApplyOutcome {
-    Changed,
-    Unchanged,
-}
-
-#[derive(Debug, Clone)]
-pub enum Change {
-    Start(Claim),
-    Done,
-    Release,
-    Decide(Disposition),
-    SetResurfaceCondition(ResurfaceCondition),
-    SetTitle(String),
-    SetDescription(Option<String>),
-    SetParent(Option<EntityId>),
-}
-
-fn unchanged_transition(entity: &Entity, change: &Change) -> Option<(&'static str, String)> {
-    match change {
-        Change::Start(_) | Change::Done | Change::Release => None,
-        Change::Decide(value) if *value == entity.disposition => {
-            Some(("Disposition", value.label().to_string()))
-        }
-        Change::SetResurfaceCondition(value) if value == &entity.resurface_condition => {
-            Some(("Resurface condition", value.label()))
-        }
-        _ => None,
-    }
-}
-
-fn unchanged_setting(entity: &Entity, change: &Change) -> bool {
-    match change {
-        Change::SetTitle(value) => value == &entity.title,
-        Change::SetDescription(value) => value == &entity.description,
-        Change::SetParent(value) => value == &entity.parent,
-        _ => false,
-    }
-}
-
-fn decision_event(
-    entity: &Entity,
-    change: &Change,
-) -> Option<(&'static str, Option<String>, Option<String>)> {
-    match change {
-        Change::Decide(value) => Some((
-            "disposition",
-            Some(entity.disposition.as_db().to_string()),
-            Some(value.as_db().to_string()),
-        )),
-        Change::SetResurfaceCondition(value) => Some((
-            "resurface_condition",
-            (!matches!(entity.resurface_condition, ResurfaceCondition::Always))
-                .then(|| entity.resurface_condition.label()),
-            (!matches!(value, ResurfaceCondition::Always)).then(|| value.label()),
-        )),
-        _ => None,
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Event {
-    pub id: RecordId,
-    pub field: String,
-    pub old_value: Option<String>,
-    pub new_value: Option<String>,
-    pub revision: Option<RecordId>,
-    pub actor: String,
-    pub reason: Option<String>,
-    pub at: DateTime<Utc>,
-}
-
 fn read_events(conn: &Connection, id: &EntityId) -> Result<Vec<Event>> {
     let mut statement = conn.prepare(
         "SELECT field,old_value,new_value,revision,actor,reason,at,record_id
@@ -1992,13 +1180,6 @@ fn read_events(conn: &Connection, id: &EntityId) -> Result<Vec<Event>> {
     .collect()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProgressEventKind {
-    Start,
-    Done,
-    Release,
-}
-
 impl ProgressEventKind {
     fn as_db(self) -> &'static str {
         match self {
@@ -2016,24 +1197,6 @@ impl ProgressEventKind {
             other => Err(DbError::InvalidProgressEvent(other.to_string())),
         }
     }
-}
-
-fn progress_event_kind(change: &Change) -> Option<ProgressEventKind> {
-    match change {
-        Change::Start(_) => Some(ProgressEventKind::Start),
-        Change::Done => Some(ProgressEventKind::Done),
-        Change::Release => Some(ProgressEventKind::Release),
-        _ => None,
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ProgressEvent {
-    pub id: RecordId,
-    pub kind: ProgressEventKind,
-    pub actor: String,
-    pub reason: Option<String>,
-    pub at: DateTime<Utc>,
 }
 
 fn read_progress_events(conn: &Connection, id: &EntityId) -> Result<Vec<ProgressEvent>> {
@@ -2088,6 +1251,196 @@ fn read_show_snapshot(
         counts,
         id,
     })
+}
+
+impl From<core::Error> for DbError {
+    fn from(error: core::Error) -> Self {
+        match error {
+            core::Error::Evaluation(e) => Self::Evaluation(e),
+            core::Error::NoSuchEntity(e) => Self::NoSuchEntity(e),
+            core::Error::NotGroup(e) => Self::NotGroup(e),
+            core::Error::CannotStart { id, fact } => Self::CannotStart { id, fact },
+            core::Error::CannotProgress { id, action, fact } => {
+                Self::CannotProgress { id, action, fact }
+            }
+            core::Error::Unchanged { id, field, current } => Self::Unchanged { id, field, current },
+            core::Error::Containment(e) => Self::Containment(e),
+            core::Error::Cycle { projection, path } => Self::Cycle { projection, path },
+            core::Error::InvalidImport(e) => Self::InvalidImport(e),
+            core::Error::EmptyNote => Self::EmptyNote,
+            core::Error::DeclarationFixed(e) => Self::DeclarationFixed(e),
+            core::Error::InvalidState(e) => Self::InvalidSchema(e),
+        }
+    }
+}
+
+fn read_state(conn: &Connection, evaluation: Rc<Evaluation>) -> Result<core::StateSnapshot> {
+    let declaration = read_snapshot(conn, evaluation)?;
+    let mut metadata = std::collections::BTreeMap::new();
+    let mut statement = conn.prepare("SELECT key,value FROM meta ORDER BY key")?;
+    for row in statement.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, rusqlite::types::Value>(1)?,
+        ))
+    })? {
+        let (key, value) = row?;
+        let value = match value {
+            rusqlite::types::Value::Text(value) => core::MetadataValue::Text(value),
+            rusqlite::types::Value::Integer(value) => core::MetadataValue::Integer(value),
+            rusqlite::types::Value::Real(value) => core::MetadataValue::Real(value),
+            rusqlite::types::Value::Blob(value) => core::MetadataValue::Bytes(value),
+            rusqlite::types::Value::Null => {
+                return Err(DbError::InvalidSchema("NULL metadata".into()));
+            }
+        };
+        metadata.insert(key, value);
+    }
+    let mut histories = std::collections::BTreeMap::new();
+    for entity in &declaration.entities {
+        histories.insert(
+            entity.id.clone(),
+            core::History {
+                revisions: read_revisions(conn, &entity.id)?,
+                notes: read_notes(conn, &entity.id)?,
+                decisions: read_events(conn, &entity.id)?,
+                progress: read_progress_events(conn, &entity.id)?,
+            },
+        );
+    }
+    Ok(core::StateSnapshot {
+        declaration,
+        metadata,
+        histories,
+    })
+}
+
+fn publish(
+    conn: &Connection,
+    before: &core::StateSnapshot,
+    change: &core::ValidatedChange,
+) -> Result<()> {
+    let after = change.state();
+    debug_assert_eq!(before.metadata, after.metadata);
+    let before_view = before.declaration.view();
+    // Parents can be later in an import. Insert all owners before publishing relations.
+    for entity in &after.declaration.entities {
+        if before_view.get(&entity.id).is_none() {
+            let mut initial = entity.clone();
+            initial.parent = None;
+            write_entity(conn, &initial)?;
+        }
+    }
+    for entity in &after.declaration.entities {
+        let current = before_view.get(&entity.id);
+        if let Some(current) = current {
+            update_entity(conn, current, entity)?;
+        } else if entity.parent.is_some() {
+            conn.execute(
+                "UPDATE entities SET parent_id=?2 WHERE id=?1",
+                params![
+                    entity.id.as_str(),
+                    entity.parent.as_ref().map(EntityId::as_str)
+                ],
+            )?;
+        }
+    }
+    let old_edges: HashSet<_> = before.declaration.dependencies.iter().collect();
+    let new_edges: HashSet<_> = after.declaration.dependencies.iter().collect();
+    for (source, target) in old_edges.difference(&new_edges) {
+        write_dependency(conn, source, target, false)?;
+    }
+    for (source, target) in new_edges.difference(&old_edges) {
+        write_dependency(conn, source, target, true)?;
+    }
+    for (owner, history) in &after.histories {
+        let empty = core::History::default();
+        let old = before.histories.get(owner).unwrap_or(&empty);
+        for revision in &history.revisions[old.revisions.len()..] {
+            write_revision(conn, owner, revision)?;
+        }
+        for note in &history.notes[old.notes.len()..] {
+            conn.execute("INSERT INTO entity_notes (entity_id,note,body,actor,at,record_id)
+                VALUES (?1,(SELECT coalesce(max(note),0)+1 FROM entity_notes WHERE entity_id=?1),?2,?3,?4,?5)",
+                params![owner.as_str(), note.body, note.actor, note.created_at.to_rfc3339(), note.id])?;
+        }
+        for event in &history.decisions[old.decisions.len()..] {
+            conn.execute("INSERT INTO entity_events (entity_id,field,old_value,new_value,revision,actor,reason,at,record_id)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                params![owner.as_str(), event.field, event.old_value, event.new_value, event.revision, event.actor, event.reason, event.at.to_rfc3339(), event.id])?;
+        }
+        for event in &history.progress[old.progress.len()..] {
+            conn.execute("INSERT INTO entity_progress_events (entity_id,kind,actor,reason,at,record_id) VALUES (?1,?2,?3,?4,?5,?6)",
+                params![owner.as_str(), event.kind.as_db(), event.actor, event.reason, event.at.to_rfc3339(), event.id])?;
+        }
+    }
+    Ok(())
+}
+
+fn update_entity(conn: &Connection, before: &Entity, after: &Entity) -> Result<()> {
+    use rusqlite::types::Value;
+    let mut columns = Vec::new();
+    let mut values = vec![Value::Text(after.id.to_string())];
+    let mut set = |column: &'static str, value: Value| {
+        values.push(value);
+        columns.push(format!("{column}=?{}", values.len()));
+    };
+    fn optional(value: Option<String>) -> Value {
+        value.map(Value::Text).unwrap_or(Value::Null)
+    }
+    if before.title != after.title {
+        set("title", Value::Text(after.title.clone()));
+    }
+    if before.description != after.description {
+        set("description", optional(after.description.clone()));
+    }
+    if before.parent != after.parent {
+        set(
+            "parent_id",
+            optional(after.parent.as_ref().map(ToString::to_string)),
+        );
+    }
+    if before.progress != after.progress {
+        let claim = after.progress.claim();
+        set("progress", Value::Text(after.progress.as_db().into()));
+        set("claimed_actor", optional(claim.map(|c| c.actor.clone())));
+        set(
+            "claimed_worktree",
+            optional(claim.map(|c| c.worktree.clone())),
+        );
+        set("claimed_at", optional(claim.map(|c| c.at.to_rfc3339())));
+    }
+    if before.disposition != after.disposition || before.current_revision != after.current_revision
+    {
+        set("disposition", Value::Text(after.disposition.as_db().into()));
+        set(
+            "current_revision",
+            optional(after.current_revision.map(|id| id.to_string())),
+        );
+    }
+    if before.resurface_condition != after.resurface_condition {
+        let condition = &after.resurface_condition;
+        set(
+            "resurface_kind",
+            optional(condition.kind_db().map(str::to_string)),
+        );
+        set("resurface_date", optional(resurface_date(condition)));
+        set("resurface_ref", optional(resurface_ref(condition)));
+        set(
+            "resurface_command",
+            optional(resurface_command(condition).map(str::to_string)),
+        );
+    }
+    if before.updated_at != after.updated_at {
+        set("updated_at", Value::Text(after.updated_at.to_rfc3339()));
+    }
+    if !columns.is_empty() {
+        conn.execute(
+            &format!("UPDATE entities SET {} WHERE id=?1", columns.join(",")),
+            rusqlite::params_from_iter(values),
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2414,7 +1767,6 @@ mod tests {
         store.insert(&entity("i", EntityKind::Issue, None)).unwrap();
         let first = store.add_note(&id("i"), "first", "alice").unwrap();
         let second = store.add_note(&id("i"), "first", "alice").unwrap();
-        assert_eq!((first.number, second.number), (1, 2));
         assert_ne!(first.id, second.id);
         assert_eq!(store.note(&id("i"), &first.id.to_string()).unwrap(), first);
         assert_eq!(store.notes(&id("i")).unwrap(), [first, second]);
@@ -2482,6 +1834,150 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_runs_the_core_contract_and_publishes_identical_state() {
+        let mut store = Store::in_memory("t").unwrap();
+        let mut tick = 0;
+        core::tests::contract(|operation| {
+            tick += 1;
+            let tx = store
+                .conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            let before = read_state(&tx, store.evaluation.clone()).unwrap();
+            let result =
+                core::tests::execute(&before, operation, tick).map_err(|e| e.to_string())?;
+            publish(&tx, &before, &result).unwrap();
+            let after = read_state(&tx, store.evaluation.clone()).unwrap();
+            let expected = result.state();
+            let mut actual_entities = after.declaration.entities.clone();
+            let mut expected_entities = expected.declaration.entities.clone();
+            actual_entities.sort_by(|a, b| a.id.cmp(&b.id));
+            expected_entities.sort_by(|a, b| a.id.cmp(&b.id));
+            assert_eq!(actual_entities, expected_entities);
+            assert_eq!(
+                after.declaration.dependencies,
+                expected.declaration.dependencies
+            );
+            for entity in &after.declaration.entities {
+                assert_eq!(
+                    after.histories[&entity.id],
+                    expected
+                        .histories
+                        .get(&entity.id)
+                        .cloned()
+                        .unwrap_or_default()
+                );
+            }
+            assert_eq!(after.metadata, before.metadata);
+            tx.commit().unwrap();
+            Ok((result.outcome, after))
+        });
+    }
+
+    #[test]
+    fn publication_failure_rolls_back_control_revision_and_history() {
+        let mut store = Store::in_memory("t").unwrap();
+        store
+            .insert(&core::tests::entity("i", EntityKind::Issue, None))
+            .unwrap();
+        store
+            .conn
+            .execute_batch(
+                "CREATE TEMP TRIGGER reject_decision BEFORE INSERT ON entity_events
+            BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+            )
+            .unwrap();
+        assert!(matches!(
+            store.apply(&id("i"), Change::Decide(Disposition::Accepted), &ctx()),
+            Err(DbError::Sqlite(_))
+        ));
+        assert_eq!(
+            store.get(&id("i")).unwrap().disposition,
+            Disposition::Undecided
+        );
+        assert!(store.revisions(&id("i")).unwrap().is_empty());
+        assert!(store.events(&id("i")).unwrap().is_empty());
+        store
+            .conn
+            .execute_batch("DROP TRIGGER reject_decision")
+            .unwrap();
+        store
+            .apply(&id("i"), Change::Decide(Disposition::Accepted), &ctx())
+            .unwrap();
+        store
+            .conn
+            .execute_batch(
+                "CREATE TEMP TRIGGER reject_progress BEFORE INSERT ON entity_progress_events
+            BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+            )
+            .unwrap();
+        assert!(
+            store
+                .apply(&id("i"), Change::Start(claim()), &ctx())
+                .is_err()
+        );
+        assert_eq!(store.get(&id("i")).unwrap().progress, Progress::NotStarted);
+        assert!(store.progress_events(&id("i")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn unrelated_writes_preserve_legacy_bytes_metadata_and_sequence_gaps() {
+        let mut store = Store::in_memory("t").unwrap();
+        store
+            .insert(&core::tests::entity("i", EntityKind::Issue, None))
+            .unwrap();
+        let note = store.add_note(&id("i"), "old", "legacy").unwrap();
+        store
+            .conn
+            .execute_batch(
+                "UPDATE entities SET created_at='2020-01-02T03:04:05.000Z';
+            UPDATE entity_notes SET note=17, at='2020-01-02T03:04:05.000Z';
+            INSERT INTO meta VALUES ('custom',x'00ff');",
+            )
+            .unwrap();
+        store
+            .apply(&id("i"), Change::SetTitle("updated".into()), &ctx())
+            .unwrap();
+        store.add_note(&id("i"), "new", "new").unwrap();
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT created_at FROM entities WHERE id='i'", [], |r| {
+                    r.get::<_, String>(0)
+                })
+                .unwrap(),
+            "2020-01-02T03:04:05.000Z"
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT at FROM entity_notes WHERE record_id=?1",
+                    [note.id],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            "2020-01-02T03:04:05.000Z"
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT max(note) FROM entity_notes", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            18
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT value FROM meta WHERE key='custom'", [], |r| r
+                    .get::<_, Vec<u8>>(0))
+                .unwrap(),
+            [0, 255]
+        );
+    }
+
+    #[test]
     fn concurrent_note_additions_do_not_overwrite_each_other() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -2508,12 +2004,11 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
-        let mut numbers = threads
+        let records = threads
             .into_iter()
-            .map(|thread| thread.join().unwrap().number)
+            .map(|thread| thread.join().unwrap().id)
             .collect::<Vec<_>>();
-        numbers.sort();
-        assert_eq!(numbers, (1..=8).collect::<Vec<_>>());
+        assert_eq!(records.into_iter().collect::<HashSet<_>>().len(), 8);
 
         let store = Store::from_conn(Connection::open(&path).unwrap()).unwrap();
         assert_eq!(store.notes(&id("i")).unwrap().len(), 8);

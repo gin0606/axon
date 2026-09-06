@@ -56,7 +56,27 @@ Git リポジトリ内では common root を管理境界として常に優先す
 
 ## 状態更新と履歴
 
-状態更新と履歴の記録判定は `Store::apply` に集約し、同じ transaction で行う。
+状態更新と履歴の記録判定は SQL に依存しない `core::StateSnapshot::execute` に集約する。
+`StateSnapshot` は Entity、dependency、metadata と、所有 Entity ごとの Revision、Note、
+判断履歴、進行履歴を持つ。履歴の vector 順を線形保存順とし、SQLite の row ID や順序番号を
+コアへ渡さない。`StoreSnapshot` は宣言編集・表示に使う Entity と dependency の射影である。
+
+操作 context は時刻、actor、reason、ID 生成関数、Command の評価 context を明示する。
+Start の入力には作業場所と取得時刻を含む claim を渡す。コアは入力 snapshot を変更せず、
+ガードを検査し、成功した操作だけを `ValidatedChange` として返す。生成 ID の種別と重複も検査する。
+直前の Revision との比較、履歴を追加する条件、設定の no-op と遷移の反復失敗、
+既存の不整合を修復する辺の削除は、コアで決定する。
+
+SQLite adapter は immediate transaction 内で完全な snapshot を読み、コアを呼び出し、
+変更された現在値と新しい履歴だけを保存して commit する。途中の失敗は全体を rollback する。
+宣言 import も、同じ transaction 内の読み取り・宣言組み立て・コア検査・保存を通る。
+保存順の整数キーは adapter が割り当て、既存の番号の欠番や日時の文字列表現を上書きしない。
+RecordId の SQL 変換も adapter 内に置く。
+
+この境界は SQLite 単独でも使う構造であり、schema v12、管理 root、公開操作の意味を変更しない。
+既存 v12 DB の変換は不要で、v11 からの明示的な手動変換も維持する。
+基礎・補助モデルの状態の意味を変えないため、モデル変更は行わず、共通操作契約を
+メモリと SQLite で検証し、CLI・Command・migration テストで境界を確認する。
 判断履歴は Disposition / Resurface condition の変更について、時刻、actor、対象軸、old / new、
 任意の reason を保存する。Progress の操作は別の型付き進行履歴へ保存する。
 進行履歴の順序は入力時刻ではなく、同じ transaction で保存された順序を正とする。

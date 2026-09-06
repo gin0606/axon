@@ -129,6 +129,7 @@ pub struct View {
     order: Vec<EntityId>,
     deps: Vec<(EntityId, EntityId)>,
     evaluation: Rc<Evaluation>,
+    date: Option<chrono::NaiveDate>,
 }
 
 impl View {
@@ -156,7 +157,13 @@ impl View {
             order,
             deps,
             evaluation,
+            date: None,
         }
+    }
+
+    pub fn at(mut self, at: chrono::DateTime<Utc>) -> Self {
+        self.date = Some(at.date_naive());
+        self
     }
 
     pub fn get(&self, id: &EntityId) -> Option<&Entity> {
@@ -246,7 +253,9 @@ impl View {
             ResurfaceCondition::Always => true,
             ResurfaceCondition::Manual => false,
             ResurfaceCondition::Command(script) => self.evaluation.command(entity, script)?,
-            ResurfaceCondition::AtDate(date) => *date <= Utc::now().date_naive(),
+            ResurfaceCondition::AtDate(date) => {
+                *date <= self.date.unwrap_or_else(|| Utc::now().date_naive())
+            }
             ResurfaceCondition::AfterEntity(target) => {
                 self.get(target).is_none_or(Entity::is_terminal)
             }

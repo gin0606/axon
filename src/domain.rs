@@ -217,7 +217,7 @@ impl fmt::Display for EntityId {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entity {
     pub id: EntityId,
     pub kind: EntityKind,
@@ -241,7 +241,6 @@ impl Entity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeclarationRevision {
     pub id: RecordId,
-    pub number: i64,
     pub title: String,
     pub description: Option<String>,
     pub parent: Option<EntityId>,
@@ -253,7 +252,6 @@ pub struct DeclarationRevision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Note {
     pub id: RecordId,
-    pub number: i64,
     pub body: String,
     pub actor: String,
     pub created_at: DateTime<Utc>,
