@@ -1079,13 +1079,12 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             let outcome = store.apply(&id, Change::SetParent(Some(parent.clone())), &ctx(None))?;
             write_confirmation(
                 &id,
-                setting_confirmation(
-                    outcome,
-                    render_inline_fields(
-                        current_output_decoration(),
-                        vec![("Parent", parent.to_string())],
-                    ),
-                ),
+                |decoration| {
+                    setting_confirmation(
+                        outcome,
+                        render_inline_fields(decoration, vec![("Parent", parent.to_string())]),
+                    )
+                },
                 Style::new(),
             )?;
             Ok(())
@@ -1096,7 +1095,7 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             let outcome = store.apply(&id, Change::SetParent(None), &ctx(None))?;
             write_confirmation(
                 &id,
-                setting_confirmation(outcome, "Parent: (none)".to_string()),
+                |_| setting_confirmation(outcome, "Parent: (none)".to_string()),
                 Style::new(),
             )?;
             Ok(())
@@ -1134,15 +1133,24 @@ fn write_mutation_output(
 
 fn write_confirmation(
     id: &EntityId,
-    result: String,
+    result: impl Fn(OutputDecoration) -> String,
     style: Style,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let decoration = current_output_decoration();
-    write_output(
+    write_confirmation_with(id, result, style, current_output_decoration(), write_output)
+}
+
+fn write_confirmation_with(
+    id: &EntityId,
+    result: impl Fn(OutputDecoration) -> String,
+    style: Style,
+    decoration: OutputDecoration,
+    output: impl FnOnce(&str, OutputDecoration) -> std::io::Result<()>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    output(
         &format!(
             "{}  {}\n",
             decoration.paint(OUTPUT_ID, id),
-            decoration.paint(style, &result)
+            decoration.paint(style, result(decoration))
         ),
         decoration,
     )
@@ -1150,7 +1158,7 @@ fn write_confirmation(
         operation_error(
             "confirmation output",
             e,
-            format!("\nApplied: {id} {result}"),
+            format!("\nApplied: {id} {}", result(OutputDecoration::Plain)),
         )
     })
 }
@@ -1274,15 +1282,16 @@ fn cmd_start(raw: &str, trace_conditions: bool) -> Result<(), Box<dyn std::error
         at: Utc::now(),
     };
     store.apply(&id, Change::Start(claim.clone()), &ctx(None))?;
-    let decoration = current_output_decoration();
     write_confirmation(
         &id,
-        format!(
-            "{}  {} {}",
-            decoration.paint(OUTPUT_ACTIVE, "Started"),
-            decoration.paint(OUTPUT_MUTED, "Claim:"),
-            claim.actor
-        ),
+        |decoration| {
+            format!(
+                "{}  {} {}",
+                decoration.paint(OUTPUT_ACTIVE, "Started"),
+                decoration.paint(OUTPUT_MUTED, "Claim:"),
+                claim.actor
+            )
+        },
         Style::new(),
     )?;
     Ok(())
@@ -1292,7 +1301,7 @@ fn cmd_done(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = open_store(false)?;
     let id = store.resolve_id(raw)?;
     store.apply(&id, Change::Done, &ctx(None))?;
-    write_confirmation(&id, "Ended".to_string(), OUTPUT_MUTED)?;
+    write_confirmation(&id, |_| "Ended".to_string(), OUTPUT_MUTED)?;
     Ok(())
 }
 
@@ -1300,7 +1309,7 @@ fn cmd_release(raw: &str, reason: Option<String>) -> Result<(), Box<dyn std::err
     let mut store = open_store(false)?;
     let id = store.resolve_id(raw)?;
     store.apply(&id, Change::Release, &ctx(reason))?;
-    write_confirmation(&id, "Released".to_string(), Style::new())?;
+    write_confirmation(&id, |_| "Released".to_string(), Style::new())?;
     Ok(())
 }
 
@@ -2342,7 +2351,11 @@ fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
             let body = read_description(message, file)?
                 .ok_or("a Note body is required; provide -m or -F")?;
             let note = store.add_note(&id, &body, &actor::actor())?;
-            write_confirmation(&id, format!("Note {} recorded", note.id), OUTPUT_POSITIVE)?;
+            write_confirmation(
+                &id,
+                |_| format!("Note {} recorded", note.id),
+                OUTPUT_POSITIVE,
+            )?;
         }
         NoteCmd::List { id } => {
             let id = store.resolve_id(&id)?;
@@ -2757,16 +2770,17 @@ fn cmd_decide(command: DecideCmd) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = open_store(false)?;
     let id = store.resolve_id(&args.id)?;
     store.apply(&id, Change::Decide(disposition), &ctx(args.reason))?;
-    let decoration = current_output_decoration();
     write_confirmation(
         &id,
-        render_inline_fields(
-            decoration,
-            vec![(
-                "Disposition",
-                decoration.paint(disposition_style(disposition), disposition.label()),
-            )],
-        ),
+        |decoration| {
+            render_inline_fields(
+                decoration,
+                vec![(
+                    "Disposition",
+                    decoration.paint(disposition_style(disposition), disposition.label()),
+                )],
+            )
+        },
         Style::new(),
     )?;
     Ok(())
@@ -2789,7 +2803,7 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
             )?;
             write_confirmation(
                 &id,
-                format!("Resurface condition: {}", condition.label()),
+                |_| format!("Resurface condition: {}", condition.label()),
                 Style::new(),
             )?;
         }
@@ -2805,7 +2819,7 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
             )?;
             write_confirmation(
                 &id,
-                format!("Resurface condition: AtDate({date})"),
+                |_| format!("Resurface condition: AtDate({date})"),
                 Style::new(),
             )?;
         }
@@ -2823,7 +2837,7 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
             )?;
             write_confirmation(
                 &id,
-                format!("Resurface condition: AfterEntity({reference})"),
+                |_| format!("Resurface condition: AfterEntity({reference})"),
                 Style::new(),
             )?;
         }
@@ -2834,7 +2848,11 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
                 Change::SetResurfaceCondition(ResurfaceCondition::Manual),
                 &ctx(reason),
             )?;
-            write_confirmation(&id, "Resurface condition: Manual".to_string(), Style::new())?;
+            write_confirmation(
+                &id,
+                |_| "Resurface condition: Manual".to_string(),
+                Style::new(),
+            )?;
         }
         WhenCmd::Clear { id, reason } => {
             let id = store.resolve_id(&id)?;
@@ -2843,7 +2861,11 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
                 Change::SetResurfaceCondition(ResurfaceCondition::Always),
                 &ctx(reason),
             )?;
-            write_confirmation(&id, "Resurface condition: Always".to_string(), Style::new())?;
+            write_confirmation(
+                &id,
+                |_| "Resurface condition: Always".to_string(),
+                Style::new(),
+            )?;
         }
     }
     Ok(())
@@ -2863,23 +2885,24 @@ fn cmd_dep(command: DepCmd) -> Result<(), Box<dyn std::error::Error>> {
             let id = store.resolve_id(&id)?;
             let needs = store.resolve_id(&needs)?;
             let outcome = store.add_dep(&id, &needs)?;
-            let decoration = current_output_decoration();
             write_confirmation(
                 &id,
-                setting_confirmation(
-                    outcome,
-                    render_inline_fields(
-                        decoration,
-                        vec![(
-                            if outcome == ApplyOutcome::Changed {
-                                "Dependency added"
-                            } else {
-                                "Dependency already present"
-                            },
-                            decoration.paint(OUTPUT_ID, &needs),
-                        )],
-                    ),
-                ),
+                |decoration| {
+                    setting_confirmation(
+                        outcome,
+                        render_inline_fields(
+                            decoration,
+                            vec![(
+                                if outcome == ApplyOutcome::Changed {
+                                    "Dependency added"
+                                } else {
+                                    "Dependency already present"
+                                },
+                                decoration.paint(OUTPUT_ID, &needs),
+                            )],
+                        ),
+                    )
+                },
                 Style::new(),
             )?;
         }
@@ -2887,23 +2910,24 @@ fn cmd_dep(command: DepCmd) -> Result<(), Box<dyn std::error::Error>> {
             let id = store.resolve_id(&id)?;
             let needs = store.resolve_id(&needs)?;
             let outcome = store.remove_dep(&id, &needs)?;
-            let decoration = current_output_decoration();
             write_confirmation(
                 &id,
-                setting_confirmation(
-                    outcome,
-                    render_inline_fields(
-                        decoration,
-                        vec![(
-                            if outcome == ApplyOutcome::Changed {
-                                "Dependency removed"
-                            } else {
-                                "Dependency already absent"
-                            },
-                            decoration.paint(OUTPUT_ID, &needs),
-                        )],
-                    ),
-                ),
+                |decoration| {
+                    setting_confirmation(
+                        outcome,
+                        render_inline_fields(
+                            decoration,
+                            vec![(
+                                if outcome == ApplyOutcome::Changed {
+                                    "Dependency removed"
+                                } else {
+                                    "Dependency already absent"
+                                },
+                                decoration.paint(OUTPUT_ID, &needs),
+                            )],
+                        ),
+                    )
+                },
                 Style::new(),
             )?;
         }
@@ -3006,9 +3030,9 @@ fn cmd_write(
     let id = store.resolve_id(raw)?;
     let changed = write_fields(&mut store, &id, title, body)?;
     if changed.is_empty() {
-        write_confirmation(&id, "No changes".to_string(), OUTPUT_MUTED)?;
+        write_confirmation(&id, |_| "No changes".to_string(), OUTPUT_MUTED)?;
     } else {
-        write_confirmation(&id, changed.join("  "), OUTPUT_POSITIVE)?;
+        write_confirmation(&id, |_| changed.join("  "), OUTPUT_POSITIVE)?;
     }
     Ok(())
 }
@@ -3332,6 +3356,35 @@ mod tests {
             parent: None,
             created_at: now,
             updated_at: now,
+        }
+    }
+
+    #[test]
+    fn confirmation_failure_keeps_stdout_decoration_out_of_applied_result() {
+        let id = EntityId::from_stored("t-task");
+        for raw in ["actor", "raw \u{1b}[31mactor\u{1b}[0m"] {
+            let error = write_confirmation_with(
+                &id,
+                |decoration| {
+                    format!(
+                        "{}  Claim: {raw}",
+                        decoration.paint(OUTPUT_ACTIVE, "Started")
+                    )
+                },
+                Style::new(),
+                OutputDecoration::Ansi,
+                |output, _| {
+                    assert!(output.contains("\u{1b}["));
+                    Err(std::io::Error::other("injected output failure"))
+                },
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "confirmation output: injected output failure\nApplied: t-task Started  Claim: {raw}"
+                )
+            );
         }
     }
 
