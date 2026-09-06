@@ -111,7 +111,7 @@ quint run spec/information_model.qnt --main information_model \
     invConsecutiveSnapshotsDiffer invRecordsAppendOnly invDeclarationOpScope \
     invDecideOpScope invSetWhenOpScope invProgressOpScope invSupplementalOpScope \
     invSupplementalNeverRestricted invSupplementalRefUniquePerTarget \
-    invSupplementalTargetsExist invSupplementalFullyObservable \
+    invSupplementalTargetsExist invSupplementalFullyObservable invRecordIdsUnique \
   --witnesses wSetTitle wSetDescription wSetParent wUnsetParent wAddDependency \
     wRemoveDependency wDecide wSetWhen wStart wDone wRelease wAddSupplemental \
     wFrozenNoOpAccepted wEndedUndecidedDeclarationEdited wNotStartedAndFrozen \
@@ -120,7 +120,7 @@ quint run spec/information_model.qnt --main information_model \
     wUndecideClearsCurrentSnapshot wHistoricalSnapshotReappearsAsNew \
     wBaselineWithoutDecisionHistory wSupplementalOnDecidedAndEnded \
     wRepeatedSupplementalCreatesNewRecord wStorageOrderDiffersFromInputTime \
-    wAllRecordKindsPresent \
+    wAllRecordKindsPresent wIdOrderDiffersFromStorage \
   --max-samples 1000 --max-steps 80 --backend rust --n-threads 8 \
   --seed 2026090303
 ```
@@ -157,3 +157,5 @@ quint run spec/information_model.qnt --main information_model \
 基礎状態モデルの意味は変えない。移行の順序は 2 process・旧/新版・データ世代 0/1 に限定した補助検討で、SQLite の排他と commit 原子性を前提に、backup と移行対象の世代一致、成功した移行の最大 1 回適用を確認した（2026-09-05、Quint 0.32.0、Rust backend、seed 2026090501、10,000 sampled traces、max-steps 10、全 6 witness 到達）。全探索ではなく SQL / WAL / filesystem / crash recovery は対象外。
 
 Rust の migration tests は公開履歴の v9 / v10 DDL と合成データを使い、全旧列・全行と backup を比較する。最新 no-op、未知 schema、backup 失敗、途中 SQL エラー、子 process の強制終了、並行移行と通常書き込み、WAL、再実行を検証する。実データを fixture に使わない。
+
+2026-09-06、安定IDと線形順序を分離した情報モデルをQuint 0.32.0 / Rust backend、1,000 samples、80 steps、8 threads、seed 2026090601で検査した。全invariantに反例はなく、全27 witnessが1 trace以上で観測された。ID生成は衝突しない負数で抽象化し、乱数・SQLite移行はRustテストで扱う。

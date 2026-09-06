@@ -78,9 +78,9 @@ Group は Issue と同じ自動生成 ID で参照し、slug や kind ごとの�
 
 title、description、parent Group、outgoing dependency は対象 Entity 自身が所有する plan declaration である。Undecided は draft として実変更でき、Accepted / Rejected は判断対象を固定する。固定済み declaration の変更は `decide undecide`、編集、全文確認、再判断として露出させる。同じ値の再指定は実変更ではないため no-op とする。
 
-Accepted / Rejected への判断時には declaration 全文を Entity 内連番の Declaration Revision として保存する。直前の Revision と同じなら再利用し、判断履歴から対象 Revision を参照できる。`revision list|show|diff` は Entity と Revision を一つの read transaction から読み、`revision diff` は title、description、parent、outgoing dependency を別々に比較する。optional な description は `present` / `absent` を本文と分けて表示する。
+Accepted / Rejected への判断時には declaration 全文を 安定IDを持つ Declaration Revision として保存する。直前の Revision と同じなら再利用し、判断履歴から対象 Revision を参照できる。`revision list|show|diff` は Entity と Revision を一つの read transaction から読み、`revision diff` は title、description、parent、outgoing dependency を別々に比較する。optional な description は `present` / `absent` を本文と分けて表示する。
 
-`note add` は本文または file から非空の Note を一件追記する追加操作である。Issue / Group、Progress、Disposition を問わず使え、declaration、状態、関係、導出値を変えない。Note は Entity 内連番、本文、actor、保存時刻を持ち、通常操作では編集・削除しない。`show` は状況と計画の見通しを先に、declaration の固定状態と記録件数を Details に示し、description と全 Note を一つの read transaction から保存順で省略せず表示する。
+`note add` は本文または file から非空の Note を一件追記する追加操作である。Issue / Group、Progress、Disposition を問わず使え、declaration、状態、関係、導出値を変えない。Note は安定ID、本文、actor、保存時刻を持ち、通常操作では編集・削除しない。`show` は状況と計画の見通しを先に、declaration の固定状態と記録件数を Details に示し、description と全 Note を一つの read transaction から保存順で省略せず表示する。
 
 ### 明示解除までの待機
 
@@ -229,7 +229,7 @@ Ended Group は完了宣言を後から無効にしないため、親変更、su
 
 help、一覧、詳細、成功確認は stdout、エラーは stderr に出す。一覧が空なら stdout を空に保ち、案内だけを stderr に出して成功する。
 
-人向け出力は、Entity一覧、履歴と索引、一件の詳細、状態変更の確認という役割ごとに共通の文字構造と語彙を使う。一覧と履歴は1 recordを1行に置き、一件の詳細では短い metadata を長文やdiffより先に置く。状態変更の確認は対象IDから始め、保存されたsnapshot全体を繰り返さない。Note / Revision一覧はEntity-local numberから始める。
+人向け出力は、Entity一覧、履歴と索引、一件の詳細、状態変更の確認という役割ごとに共通の文字構造と語彙を使う。一覧と履歴は1 recordを1行に置き、一件の詳細では短い metadata を長文やdiffより先に置く。状態変更の確認は対象IDから始め、保存されたsnapshot全体を繰り返さない。Note / Revision一覧は安定IDから始める。照会・diffはIDまたは4文字以上の一意な接頭辞を受け付け、旧番号を参照として受け付けない。判断・進行履歴にもIDを表示する。
 
 `show` を含む人向け出力は、stdout が対話 terminal なら状態の識別を補助する ANSI style を使う。非対話出力と `NO_COLOR` では同じ文字、空白、改行、順序を無装飾で出し、状態の違いを色だけでは表さない。title、description、Note本文、reasonなど利用者が保存した文字列は装飾・省略・整形しない。下流でpipeが閉じた場合は成功として扱う。
 
@@ -265,14 +265,18 @@ actor、worktree、外部command、pathも値全体を意味色で塗らない�
 
 Git 配下では common Git directory の親を管理 root とし、全 worktree で `.axon/axon.db` を共有する。Git 外ではカレントから祖先へ最も近い DB を探す。Issue と Group は同じ `<prefix>-<ランダム 6 文字>` namespace を使い、完全 ID または一意な suffix で解決する。
 
-## DB の自動移行
+## DBの互換性検査
 
-DB を使う全コマンドは共通の open 境界で v9 / v10 を現行 v11 へ自動移行する。`list`、`show`、`export`、`import check` の読取用途も初回 open では書込権限が必要になる。`import prepare` も DB を参照し、自動移行対象である。`init` は新規作成専用で、既存 DB の reset や upgrade をしない。help、docs、version、completion は DB 不要である。
-
-移行成功の版と backup 先は元の処理を始める前に stderr へ通知する。stdout の record / YAML は維持し、最新 DB では通知も backup も増やさない。移行の transaction と元の操作は独立し、元の操作の失敗は成功した移行を取り消さない。
-
-backup は管理 root の `.axon/migration-backups` に移行直前の全保存情報を SQLite backup として残し、自動削除・上書きしない。失敗した backup は不完全な場合がある。診断は DB、版、処理段階、原因、backup 先（作成開始後）、適用状態を示す。未適用では元の操作を実行しない。適用済みなら移行は保持され、結果不明なら再実行前に DB と backup を保全・確認する。v9 未満・未来版・未知構造を変更せず拒否し、未来版には対応する新しい axon を案内する。権限、容量、他 writer の lock は表示した実 path を起点に調べる。
+通常openはv12と既知DDLを検査し、旧版・未来版・未知構造を変更せず拒否する。
+`init`は新規作成専用で、既存DBのresetやupgradeをしない。help、docs、version、completionはDB不要。
+手動変換は明示したv11入力から別directoryへ出力し、元DBの切替はしない。
+診断はpath、版、処理段階、原因、backup先と出力の適用状態を示す。失敗時の途中成果を上書きせず、
+結果不明なら出力とbackupを調べてから再開する。具体的な手順は[手動移行](migration.md)。
 
 ### 計画表示の情報密度
 
 status は各項目の identity を一度だけ表示し、Ready / Triage、保存 claim と待ち理由をその項目に添える。所属なし Issue は Ungrouped Issues にまとめ、空セクションは省く。冒頭の件数はゼロでも表示する（対象全体が空の場合は既存の空表示案内）。Ended Group の完了不可と終了由来 gate は要約から外し、show の Details で確認できる。Rejected root Group は保存済み claim がある場合だけ通常表示に残し、その場合は配下の未終了項目・保存 claim・inactive 理由も表示する。
+
+## 手動移行
+
+`axon migrate --source <v11-db> --output <未使用directory>` は、通常のroot探索を行わず指定DBを読み取り専用で開き、新しい保存先へ変換する。元DBの切替は行わない。詳細は[手動移行](migration.md)。

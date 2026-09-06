@@ -33,4 +33,4 @@ Groupをdoneにするのは、そのGroup自身の完了が指示され、全子
 
 後から参照すべき確定済みの結果や検証記録がある場合は、定型報告ではない簡潔なNoteを先に追加する。`axon:conventions`に従ってdependent、reverse `AfterEntity` waiter、Group ancestry、frontierへの波及を確認してから`axon-kit:work-state`を実行する。
 
-安全に照合できる再試行は自律して行い、競合、結果不明、別の最終状態が必要な場合は停止する。最終Progress、claim、Note番号、検証した波及、完了可能になった祖先Group、未解決事項を報告する。
+安全に照合できる再試行は自律して行い、競合、結果不明、別の最終状態が必要な場合は停止する。最終Progress、claim、Note ID、検証した波及、完了可能になった祖先Group、未解決事項を報告する。

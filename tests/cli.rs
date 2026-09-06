@@ -132,7 +132,7 @@ fn mutation_confirmations_begin_with_the_affected_entity() {
     );
     assert_eq!(
         stdout(&repo.axon(&["note", "add", &draft, "-m", "context"])),
-        format!("{draft}  Note 1 recorded\n")
+        format!("{draft}  Note {} recorded\n", repo.note_id(&draft, 1))
     );
     assert_eq!(
         stdout(&repo.axon(&["write", &draft, "--title", "draft task"])),
@@ -304,8 +304,11 @@ fn human_output_preserves_escape_sequences_stored_in_content() {
     assert!(show.contains(description));
     assert!(show.contains(note));
     assert!(stdout(&repo.axon(&["list"])).contains(title));
-    assert!(stdout(&repo.axon(&["note", "show", &issue, "1"])).contains(note));
-    assert!(stdout(&repo.axon(&["revision", "show", &issue, "1"])).contains(description));
+    assert!(stdout(&repo.axon(&["note", "show", &issue, &repo.note_id(&issue, 1)])).contains(note));
+    assert!(
+        stdout(&repo.axon(&["revision", "show", &issue, &repo.revision_id(&issue, 1)]))
+            .contains(description)
+    );
 
     assert_success(&repo.axon(&["decide", "undecide", &issue, "-r", reason]));
     assert!(stdout(&repo.axon(&["log", &issue])).contains(reason));
@@ -816,19 +819,32 @@ fn human_timestamps_use_local_time_with_a_numeric_offset() {
 
     let show = run(&repo, &["show", &issue]);
     assert!(show.contains(&format!("Started: {expected}")));
-    assert!(show.contains(&format!("Note 1  {expected}  test-actor")));
+    assert!(show.contains(&format!(
+        "Note {}  {expected}  test-actor",
+        repo.note_id(&issue, 1)
+    )));
     assert!(show.contains(&format!("  {expected}  test-actor  Started")));
 
     let log = run(&repo, &["log", &issue]);
     assert!(log.starts_with(expected), "{log}");
-    assert!(run(&repo, &["note", "list", &issue]).contains(&format!("1  {expected}")));
     assert!(
-        run(&repo, &["note", "show", &issue, "1"])
+        run(&repo, &["note", "list", &issue])
+            .contains(&format!("{}  {expected}", repo.note_id(&issue, 1)))
+    );
+    assert!(
+        run(&repo, &["note", "show", &issue, &repo.note_id(&issue, 1)])
             .contains(&format!("Recorded: {expected}  Actor: test-actor"))
     );
-    assert!(run(&repo, &["revision", "list", &issue]).contains(&format!("1  {expected}")));
     assert!(
-        run(&repo, &["revision", "show", &issue, "1"]).contains(&format!("Created: {expected}"))
+        run(&repo, &["revision", "list", &issue])
+            .contains(&format!("{}  {expected}", repo.revision_id(&issue, 1)))
+    );
+    assert!(
+        run(
+            &repo,
+            &["revision", "show", &issue, &repo.revision_id(&issue, 1)]
+        )
+        .contains(&format!("Created: {expected}"))
     );
 }
 
@@ -894,17 +910,21 @@ fn notes_preserve_full_bodies_and_work_for_every_entity_state() {
     let list = repo.axon(&["note", "list", suffix]);
     assert_success(&list);
     let list = stdout(&list);
-    assert!(list.contains("1  "));
-    assert!(list.contains("2  "));
+    assert!(list.contains(&repo.note_id(suffix, 1)));
+    assert!(list.contains(&repo.note_id(suffix, 2)));
 
-    let first = repo.axon(&["note", "show", suffix, "1"]);
+    let first = repo.axon(&["note", "show", suffix, &repo.note_id(suffix, 1)]);
     assert_success(&first);
     assert!(stdout(&first).ends_with(&long_markdown));
 
     let show = repo.axon(&["show", suffix]);
     assert_success(&show);
     let show = stdout(&show);
-    assert_show_field(&show, "Plan declaration:", "fixed at Revision 1");
+    assert_show_field(
+        &show,
+        "Plan declaration:",
+        &format!("fixed at Revision {}", repo.revision_id(&accepted, 1)),
+    );
     assert_show_field(
         &show,
         "Records:",
@@ -913,7 +933,8 @@ fn notes_preserve_full_bodies_and_work_for_every_entity_state() {
     assert!(show.contains("Declaration description\nwith two lines"));
     assert!(show.contains(&long_markdown));
     assert!(
-        show.find("Note 1").unwrap() < show.find("Note 2").unwrap(),
+        show.find(&repo.note_id(&accepted, 1)).unwrap()
+            < show.find(&repo.note_id(&accepted, 2)).unwrap(),
         "notes must stay in save order"
     );
 
@@ -979,20 +1000,29 @@ fn revision_commands_expose_fixed_declarations_and_structural_diffs() {
     let list = repo.axon(&["revision", "list", suffix]);
     assert_success(&list);
     let list = stdout(&list);
-    assert!(list.contains("1  "));
-    assert!(list.contains("2  "));
+    assert!(list.contains(&repo.revision_id(suffix, 1)));
+    assert!(list.contains(&repo.revision_id(suffix, 2)));
     assert!(list.contains("[current]  second title"));
 
-    let revision = repo.axon(&["revision", "show", suffix, "2"]);
+    let revision = repo.axon(&["revision", "show", suffix, &repo.revision_id(suffix, 2)]);
     assert_success(&revision);
     let revision = stdout(&revision);
-    assert!(revision.contains("Declaration Revision 2  [current]"));
+    assert!(revision.contains(&format!(
+        "Declaration Revision {}  [current]",
+        repo.revision_id(&issue, 2)
+    )));
     assert!(revision.contains("Title: second title"));
     assert!(revision.contains("new description\nwith detail"));
     assert!(revision.contains(&format!("Parent: {parent}")));
     assert!(revision.contains(&format!("  {prerequisite}")));
 
-    let diff = repo.axon(&["revision", "diff", suffix, "1", "2"]);
+    let diff = repo.axon(&[
+        "revision",
+        "diff",
+        suffix,
+        &repo.revision_id(suffix, 1),
+        &repo.revision_id(suffix, 2),
+    ]);
     assert_success(&diff);
     let diff = stdout(&diff);
     assert!(diff.contains("Title\n- first title\n+ second title"));
@@ -1001,19 +1031,29 @@ fn revision_commands_expose_fixed_declarations_and_structural_diffs() {
     assert!(diff.contains(&format!("Outgoing dependencies\n+ {prerequisite}")));
 
     let show = stdout(&repo.axon(&["show", &issue]));
-    assert_show_field(&show, "Plan declaration:", "fixed at Revision 2");
+    assert_show_field(
+        &show,
+        "Plan declaration:",
+        &format!("fixed at Revision {}", repo.revision_id(&issue, 2)),
+    );
     assert!(show.contains("Revisions: 2"));
     assert!(show.contains("Decision history: 3"));
     let log = stdout(&repo.axon(&["log", &issue]));
-    assert!(log.contains("Revision: 1"));
-    assert!(log.contains("Revision: 2"));
+    assert!(log.contains(&format!("Revision: {}", repo.revision_id(&issue, 1))));
+    assert!(log.contains(&format!("Revision: {}", repo.revision_id(&issue, 2))));
 
     repo.undecide(&issue);
     assert_success(&repo.axon(&["write", &issue, "-m", "(none)"]));
     repo.accept(&issue);
-    let literal = stdout(&repo.axon(&["revision", "show", &issue, "3"]));
+    let literal = stdout(&repo.axon(&["revision", "show", &issue, &repo.revision_id(&issue, 3)]));
     assert!(literal.contains("Description\npresent\n(none)"));
-    let absence_to_literal = stdout(&repo.axon(&["revision", "diff", &issue, "1", "3"]));
+    let absence_to_literal = stdout(&repo.axon(&[
+        "revision",
+        "diff",
+        &issue,
+        &repo.revision_id(&issue, 1),
+        &repo.revision_id(&issue, 3),
+    ]));
     assert!(absence_to_literal.contains("Description\n- absent\n+ present\n+ (none)"));
 }
 
@@ -1312,7 +1352,10 @@ fn show_leads_with_situation_remaining_and_owned_waits() {
     assert!(show.contains("Description\nfull\n  description"));
     assert!(show.contains("note one\n  untouched"));
     assert!(show.contains("note two"));
-    assert!(show.contains("Plan declaration: fixed at Revision 1"));
+    assert!(show.contains(&format!(
+        "Plan declaration: fixed at Revision {}",
+        repo.revision_id(&root, 1)
+    )));
     assert!(show.contains("Records: Notes: 2"));
     assert!(show.contains("Claim: test-actor"));
     let child_show = stdout(&repo.axon(&["show", &manual_child]));

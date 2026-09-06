@@ -1,3 +1,4 @@
+pub use crate::record_id::{RecordId, RecordKind};
 use chrono::{DateTime, NaiveDate, Utc};
 use std::fmt;
 
@@ -224,7 +225,7 @@ pub struct Entity {
     pub description: Option<String>,
     pub progress: Progress,
     pub disposition: Disposition,
-    pub current_revision: Option<i64>,
+    pub current_revision: Option<RecordId>,
     pub resurface_condition: ResurfaceCondition,
     pub parent: Option<EntityId>,
     pub created_at: DateTime<Utc>,
@@ -239,6 +240,7 @@ impl Entity {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeclarationRevision {
+    pub id: RecordId,
     pub number: i64,
     pub title: String,
     pub description: Option<String>,
@@ -250,6 +252,7 @@ pub struct DeclarationRevision {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Note {
+    pub id: RecordId,
     pub number: i64,
     pub body: String,
     pub actor: String,

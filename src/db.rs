@@ -60,10 +60,12 @@ pub enum DbError {
     InvalidImport(String),
     #[error("a Note body must contain non-whitespace text")]
     EmptyNote,
+    #[error("record reference {0} is ambiguous; use a longer stable ID")]
+    AmbiguousRecord(String),
     #[error("Note {number} does not exist for {id}")]
-    NoSuchNote { id: String, number: i64 },
+    NoSuchNote { id: String, number: String },
     #[error("Declaration Revision {number} does not exist for {id}")]
-    NoSuchRevision { id: String, number: i64 },
+    NoSuchRevision { id: String, number: String },
     #[error("the plan declaration of {0} is fixed by its Disposition")]
     DeclarationFixed(String),
     #[error("invalid axon schema: {0}")]
@@ -74,7 +76,7 @@ pub enum DbError {
 
 pub type Result<T> = std::result::Result<T, DbError>;
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 
 #[cfg(test)]
 const SCHEMA_V1: &str = r#"
@@ -251,7 +253,7 @@ CREATE TABLE entities (
   description TEXT,
   progress TEXT NOT NULL CHECK (progress IN ('not_started','in_progress','ended')),
   disposition TEXT NOT NULL CHECK (disposition IN ('undecided','accepted','rejected')),
-  current_revision INTEGER,
+  current_revision TEXT,
   resurface_kind TEXT CHECK (resurface_kind IN ('date','after_entity','manual','command')),
   resurface_date TEXT,
   resurface_ref TEXT,
@@ -286,18 +288,20 @@ CREATE TABLE entity_deps (
 
 CREATE TABLE declaration_revisions (
   entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-  revision INTEGER NOT NULL CHECK (revision > 0),
+  revision TEXT NOT NULL UNIQUE CHECK (revision GLOB 'rev-*'),
+  sequence INTEGER NOT NULL CHECK (sequence > 0),
   title TEXT NOT NULL,
   description TEXT,
   parent_id TEXT REFERENCES entities(id),
   created_at TEXT NOT NULL,
   baseline INTEGER NOT NULL DEFAULT 0 CHECK (baseline IN (0,1)),
-  PRIMARY KEY (entity_id, revision)
+  PRIMARY KEY (entity_id, revision),
+  UNIQUE (entity_id, sequence)
 );
 
 CREATE TABLE revision_dependencies (
   entity_id TEXT NOT NULL,
-  revision INTEGER NOT NULL,
+  revision TEXT NOT NULL,
   depends_on_id TEXT NOT NULL REFERENCES entities(id),
   PRIMARY KEY (entity_id, revision, depends_on_id),
   FOREIGN KEY (entity_id,revision)
@@ -306,11 +310,12 @@ CREATE TABLE revision_dependencies (
 
 CREATE TABLE entity_events (
   id INTEGER PRIMARY KEY,
+  record_id TEXT NOT NULL UNIQUE,
   entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
   field TEXT NOT NULL CHECK (field IN ('disposition','resurface_condition')),
   old_value TEXT,
   new_value TEXT,
-  revision INTEGER,
+  revision TEXT,
   actor TEXT NOT NULL,
   reason TEXT,
   at TEXT NOT NULL,
@@ -324,6 +329,7 @@ CREATE INDEX idx_entity_events_entity ON entity_events (entity_id, id);
 
 CREATE TABLE entity_progress_events (
   id INTEGER PRIMARY KEY,
+  record_id TEXT NOT NULL UNIQUE,
   entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
   kind TEXT NOT NULL CHECK (kind IN ('start','done','release')),
   actor TEXT NOT NULL,
@@ -333,6 +339,7 @@ CREATE TABLE entity_progress_events (
 CREATE INDEX idx_entity_progress_events_entity ON entity_progress_events (entity_id, id);
 
 CREATE TABLE entity_notes (
+  record_id TEXT NOT NULL UNIQUE,
   entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
   note INTEGER NOT NULL CHECK (note > 0),
   body TEXT NOT NULL CHECK (length(trim(body)) > 0),
@@ -357,6 +364,10 @@ fn initialize_schema(conn: &mut Connection) -> Result<()> {
     configure(conn)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     tx.execute_batch(FRESH_SCHEMA)?;
+    tx.execute(
+        "INSERT INTO meta VALUES ('store_id',?1)",
+        params![RecordId::new(RecordKind::Store)],
+    )?;
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     tx.commit()?;
     Ok(())
@@ -461,14 +472,20 @@ pub struct RevisionSnapshot {
 }
 
 impl RevisionSnapshot {
-    pub fn revision(&self, number: i64) -> Result<&DeclarationRevision> {
-        self.revisions
+    pub fn revision(&self, number: &str) -> Result<&DeclarationRevision> {
+        let matches: Vec<_> = self
+            .revisions
             .iter()
-            .find(|revision| revision.number == number)
-            .ok_or_else(|| DbError::NoSuchRevision {
+            .filter(|r| r.id.matches(number))
+            .collect();
+        match matches.as_slice() {
+            [record] => Ok(record),
+            [] => Err(DbError::NoSuchRevision {
                 id: self.entity.id.to_string(),
-                number,
-            })
+                number: number.into(),
+            }),
+            _ => Err(DbError::AmbiguousRecord(number.into())),
+        }
     }
 }
 
@@ -642,7 +659,7 @@ impl Store {
         read_notes(&self.conn, id)
     }
 
-    pub fn note(&self, id: &EntityId, number: i64) -> Result<Note> {
+    pub fn note(&self, id: &EntityId, number: &str) -> Result<Note> {
         read_entity(&self.conn, id)?;
         read_note(&self.conn, id, number)
     }
@@ -661,13 +678,22 @@ impl Store {
             |row| row.get::<_, i64>(0),
         )?;
         let created_at = Utc::now();
+        let record_id = RecordId::new(RecordKind::Note);
         tx.execute(
-            "INSERT INTO entity_notes (entity_id,note,body,actor,at)
-             VALUES (?1,?2,?3,?4,?5)",
-            params![id.as_str(), number, body, actor, created_at.to_rfc3339()],
+            "INSERT INTO entity_notes (entity_id,note,body,actor,at,record_id)
+             VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                id.as_str(),
+                number,
+                body,
+                actor,
+                created_at.to_rfc3339(),
+                record_id
+            ],
         )?;
         tx.commit()?;
         Ok(Note {
+            id: record_id,
             number,
             body: body.to_string(),
             actor: actor.to_string(),
@@ -969,8 +995,8 @@ impl Store {
 
         if let Some(kind) = progress_event_kind(&change) {
             tx.execute(
-                "INSERT INTO entity_progress_events (entity_id,kind,actor,reason,at)
-                 VALUES (?1,?2,?3,?4,?5)",
+                "INSERT INTO entity_progress_events (entity_id,kind,actor,reason,at,record_id)
+                 VALUES (?1,?2,?3,?4,?5,?6)",
                 params![
                     id.as_str(),
                     kind.as_db(),
@@ -978,7 +1004,8 @@ impl Store {
                     (kind == ProgressEventKind::Release)
                         .then_some(ctx.reason.as_deref())
                         .flatten(),
-                    now.to_rfc3339()
+                    now.to_rfc3339(),
+                    RecordId::new(RecordKind::Progress)
                 ],
             )?;
         }
@@ -989,8 +1016,8 @@ impl Store {
             };
             tx.execute(
                 "INSERT INTO entity_events
-                 (entity_id,field,old_value,new_value,revision,actor,reason,at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                 (entity_id,field,old_value,new_value,revision,actor,reason,at,record_id)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
                 params![
                     id.as_str(),
                     field,
@@ -999,7 +1026,8 @@ impl Store {
                     revision,
                     ctx.actor,
                     ctx.reason,
-                    now.to_rfc3339()
+                    now.to_rfc3339(),
+                    RecordId::new(RecordKind::Decision)
                 ],
             )?;
         }
@@ -1258,15 +1286,15 @@ fn write_entity(conn: &Connection, entity: &Entity) -> Result<()> {
 fn write_revision(
     conn: &Connection,
     entity: &Entity,
-    revision: i64,
+    revision: RecordId,
     dependencies: &[EntityId],
     baseline: bool,
     created_at: &DateTime<Utc>,
 ) -> Result<()> {
     conn.execute(
         "INSERT INTO declaration_revisions
-         (entity_id,revision,title,description,parent_id,created_at,baseline)
-         VALUES (?1,?2,?3,?4,?5,?6,?7)",
+         (entity_id,revision,title,description,parent_id,created_at,baseline,sequence)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,(SELECT coalesce(max(sequence),0)+1 FROM declaration_revisions WHERE entity_id=?1))",
         params![
             entity.id.as_str(),
             revision,
@@ -1292,17 +1320,16 @@ fn ensure_current_revision(
     id: &EntityId,
     created_at: &DateTime<Utc>,
     baseline: bool,
-) -> Result<i64> {
+) -> Result<RecordId> {
     let entity = read_entity(conn, id)?;
     let dependencies = read_deps(conn)?
         .into_iter()
         .filter_map(|(source, target)| (source == *id).then_some(target))
         .collect::<Vec<_>>();
     let latest = conn.query_row(
-        "SELECT max(revision) FROM declaration_revisions WHERE entity_id=?1",
-        params![id.as_str()],
-        |row| row.get::<_, Option<i64>>(0),
-    )?;
+        "SELECT revision FROM declaration_revisions WHERE entity_id=?1 ORDER BY sequence DESC LIMIT 1",
+        params![id.as_str()], |row| row.get::<_, RecordId>(0),
+    ).optional()?;
     if let Some(number) = latest {
         let revision = read_revision(conn, id, number)?;
         if revision.title == entity.title
@@ -1313,7 +1340,7 @@ fn ensure_current_revision(
             return Ok(number);
         }
     }
-    let number = latest.unwrap_or(0) + 1;
+    let number = RecordId::new(RecordKind::Revision);
     write_revision(conn, &entity, number, &dependencies, baseline, created_at)?;
     Ok(number)
 }
@@ -1616,19 +1643,22 @@ fn read_deps(conn: &Connection) -> Result<Vec<(EntityId, EntityId)>> {
 }
 
 fn read_notes(conn: &Connection, id: &EntityId) -> Result<Vec<Note>> {
-    let mut statement = conn
-        .prepare("SELECT note,body,actor,at FROM entity_notes WHERE entity_id=?1 ORDER BY note")?;
+    let mut statement = conn.prepare(
+        "SELECT note,body,actor,at,record_id FROM entity_notes WHERE entity_id=?1 ORDER BY note",
+    )?;
     let rows = statement.query_map(params![id.as_str()], |row| {
         Ok((
             row.get::<_, i64>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
+            row.get::<_, RecordId>(4)?,
         ))
     })?;
     rows.map(|row| {
-        let (number, body, actor, at) = row?;
+        let (number, body, actor, at, record_id) = row?;
         Ok(Note {
+            id: record_id,
             number,
             body,
             actor,
@@ -1638,36 +1668,25 @@ fn read_notes(conn: &Connection, id: &EntityId) -> Result<Vec<Note>> {
     .collect()
 }
 
-fn read_note(conn: &Connection, id: &EntityId, number: i64) -> Result<Note> {
-    let row = conn
-        .query_row(
-            "SELECT body,actor,at FROM entity_notes WHERE entity_id=?1 AND note=?2",
-            params![id.as_str(), number],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            },
-        )
-        .optional()?
-        .ok_or_else(|| DbError::NoSuchNote {
+fn read_note(conn: &Connection, id: &EntityId, number: &str) -> Result<Note> {
+    let matches: Vec<_> = read_notes(conn, id)?
+        .into_iter()
+        .filter(|n| n.id.matches(number))
+        .collect();
+    match matches.len() {
+        1 => Ok(matches.into_iter().next().unwrap()),
+        0 => Err(DbError::NoSuchNote {
             id: id.to_string(),
-            number,
-        })?;
-    Ok(Note {
-        number,
-        body: row.0,
-        actor: row.1,
-        created_at: parse_time(&row.2)?,
-    })
+            number: number.into(),
+        }),
+        _ => Err(DbError::AmbiguousRecord(number.into())),
+    }
 }
 
 fn read_revision_dependencies(
     conn: &Connection,
     id: &EntityId,
-    revision: i64,
+    revision: RecordId,
 ) -> Result<Vec<EntityId>> {
     let mut statement = conn.prepare(
         "SELECT depends_on_id FROM revision_dependencies
@@ -1680,10 +1699,14 @@ fn read_revision_dependencies(
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
-fn read_revision(conn: &Connection, id: &EntityId, number: i64) -> Result<DeclarationRevision> {
+fn read_revision(
+    conn: &Connection,
+    id: &EntityId,
+    number: RecordId,
+) -> Result<DeclarationRevision> {
     let row = conn
         .query_row(
-            "SELECT title,description,parent_id,created_at,baseline
+            "SELECT title,description,parent_id,created_at,baseline,sequence
              FROM declaration_revisions WHERE entity_id=?1 AND revision=?2",
             params![id.as_str(), number],
             |row| {
@@ -1693,16 +1716,18 @@ fn read_revision(conn: &Connection, id: &EntityId, number: i64) -> Result<Declar
                     row.get::<_, Option<String>>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, bool>(4)?,
+                    row.get::<_, i64>(5)?,
                 ))
             },
         )
         .optional()?
         .ok_or_else(|| DbError::NoSuchRevision {
             id: id.to_string(),
-            number,
+            number: number.to_string(),
         })?;
     Ok(DeclarationRevision {
-        number,
+        id: number,
+        number: row.5,
         title: row.0,
         description: row.1,
         parent: row.2.as_deref().map(EntityId::from_stored),
@@ -1714,9 +1739,9 @@ fn read_revision(conn: &Connection, id: &EntityId, number: i64) -> Result<Declar
 
 fn read_revisions(conn: &Connection, id: &EntityId) -> Result<Vec<DeclarationRevision>> {
     let mut statement = conn.prepare(
-        "SELECT revision FROM declaration_revisions WHERE entity_id=?1 ORDER BY revision",
+        "SELECT revision FROM declaration_revisions WHERE entity_id=?1 ORDER BY sequence",
     )?;
-    let rows = statement.query_map(params![id.as_str()], |row| row.get::<_, i64>(0))?;
+    let rows = statement.query_map(params![id.as_str()], |row| row.get::<_, RecordId>(0))?;
     let numbers = rows.collect::<std::result::Result<Vec<_>, _>>()?;
     numbers
         .into_iter()
@@ -1753,7 +1778,7 @@ struct RawEntity {
     description: Option<String>,
     progress: String,
     disposition: String,
-    current_revision: Option<i64>,
+    current_revision: Option<RecordId>,
     resurface_kind: Option<String>,
     resurface_date: Option<String>,
     resurface_ref: Option<String>,
@@ -1924,10 +1949,11 @@ fn decision_event(
 
 #[derive(Debug, Clone)]
 pub struct Event {
+    pub id: RecordId,
     pub field: String,
     pub old_value: Option<String>,
     pub new_value: Option<String>,
-    pub revision: Option<i64>,
+    pub revision: Option<RecordId>,
     pub actor: String,
     pub reason: Option<String>,
     pub at: DateTime<Utc>,
@@ -1935,7 +1961,7 @@ pub struct Event {
 
 fn read_events(conn: &Connection, id: &EntityId) -> Result<Vec<Event>> {
     let mut statement = conn.prepare(
-        "SELECT field,old_value,new_value,revision,actor,reason,at
+        "SELECT field,old_value,new_value,revision,actor,reason,at,record_id
          FROM entity_events WHERE entity_id=?1 ORDER BY id",
     )?;
     let rows = statement.query_map(params![id.as_str()], |row| {
@@ -1943,15 +1969,17 @@ fn read_events(conn: &Connection, id: &EntityId) -> Result<Vec<Event>> {
             row.get::<_, String>(0)?,
             row.get::<_, Option<String>>(1)?,
             row.get::<_, Option<String>>(2)?,
-            row.get::<_, Option<i64>>(3)?,
+            row.get::<_, Option<RecordId>>(3)?,
             row.get::<_, String>(4)?,
             row.get::<_, Option<String>>(5)?,
             row.get::<_, String>(6)?,
+            row.get::<_, RecordId>(7)?,
         ))
     })?;
     rows.map(|row| {
-        let (field, old_value, new_value, revision, actor, reason, at) = row?;
+        let (field, old_value, new_value, revision, actor, reason, at, record_id) = row?;
         Ok(Event {
+            id: record_id,
             field,
             old_value,
             new_value,
@@ -2001,6 +2029,7 @@ fn progress_event_kind(change: &Change) -> Option<ProgressEventKind> {
 
 #[derive(Debug, Clone)]
 pub struct ProgressEvent {
+    pub id: RecordId,
     pub kind: ProgressEventKind,
     pub actor: String,
     pub reason: Option<String>,
@@ -2009,7 +2038,7 @@ pub struct ProgressEvent {
 
 fn read_progress_events(conn: &Connection, id: &EntityId) -> Result<Vec<ProgressEvent>> {
     let mut statement = conn.prepare(
-        "SELECT kind,actor,reason,at FROM entity_progress_events
+        "SELECT kind,actor,reason,at,record_id FROM entity_progress_events
          WHERE entity_id=?1 ORDER BY id",
     )?;
     let rows = statement.query_map(params![id.as_str()], |row| {
@@ -2018,11 +2047,13 @@ fn read_progress_events(conn: &Connection, id: &EntityId) -> Result<Vec<Progress
             row.get::<_, String>(1)?,
             row.get::<_, Option<String>>(2)?,
             row.get::<_, String>(3)?,
+            row.get::<_, RecordId>(4)?,
         ))
     })?;
     rows.map(|row| {
-        let (kind, actor, reason, at) = row?;
+        let (kind, actor, reason, at, record_id) = row?;
         Ok(ProgressEvent {
+            id: record_id,
             kind: ProgressEventKind::from_db(&kind)?,
             actor,
             reason,
@@ -2081,7 +2112,7 @@ mod tests {
             description: None,
             progress: Progress::NotStarted,
             disposition: Disposition::Accepted,
-            current_revision: Some(1),
+            current_revision: Some(RecordId::new(RecordKind::Revision)),
             resurface_condition: ResurfaceCondition::Always,
             parent: parent.map(id),
             created_at: now,
@@ -2316,7 +2347,10 @@ mod tests {
         store.insert(&draft).unwrap();
 
         let accepted = store.get(&id("accepted")).unwrap();
-        assert_eq!(accepted.current_revision, Some(1));
+        assert_eq!(
+            accepted.current_revision,
+            Some(store.revisions(&accepted.id).unwrap()[0].id)
+        );
         assert_eq!(store.revisions(&accepted.id).unwrap().len(), 1);
         assert_eq!(store.get(&id("draft")).unwrap().current_revision, None);
         assert!(store.revisions(&id("draft")).unwrap().is_empty());
@@ -2351,11 +2385,14 @@ mod tests {
         store
             .apply(&id("i"), Change::Decide(Disposition::Accepted), &ctx())
             .unwrap();
-        assert_eq!(store.get(&id("i")).unwrap().current_revision, Some(2));
+        assert_eq!(
+            store.get(&id("i")).unwrap().current_revision,
+            Some(store.revisions(&id("i")).unwrap()[1].id)
+        );
         assert_eq!(store.revisions(&id("i")).unwrap().len(), 2);
         assert_eq!(
             store.events(&id("i")).unwrap().last().unwrap().revision,
-            Some(2)
+            Some(store.revisions(&id("i")).unwrap()[1].id)
         );
 
         store
@@ -2364,7 +2401,10 @@ mod tests {
         store
             .apply(&id("i"), Change::Decide(Disposition::Rejected), &ctx())
             .unwrap();
-        assert_eq!(store.get(&id("i")).unwrap().current_revision, Some(2));
+        assert_eq!(
+            store.get(&id("i")).unwrap().current_revision,
+            Some(store.revisions(&id("i")).unwrap()[1].id)
+        );
         assert_eq!(store.revisions(&id("i")).unwrap().len(), 2);
     }
 
@@ -2375,6 +2415,8 @@ mod tests {
         let first = store.add_note(&id("i"), "first", "alice").unwrap();
         let second = store.add_note(&id("i"), "first", "alice").unwrap();
         assert_eq!((first.number, second.number), (1, 2));
+        assert_ne!(first.id, second.id);
+        assert_eq!(store.note(&id("i"), &first.id.to_string()).unwrap(), first);
         assert_eq!(store.notes(&id("i")).unwrap(), [first, second]);
         assert!(matches!(
             store.add_note(&id("i"), " \n\t", "alice"),
@@ -2405,8 +2447,8 @@ mod tests {
                         _ => unreachable!(),
                     };
                     candidate.disposition = disposition;
-                    candidate.current_revision =
-                        (disposition != Disposition::Undecided).then_some(1);
+                    candidate.current_revision = (disposition != Disposition::Undecided)
+                        .then(|| RecordId::new(RecordKind::Revision));
                     store.insert(&candidate).unwrap();
 
                     store
@@ -2578,9 +2620,9 @@ mod tests {
                            WHERE id='i';
                          UPDATE entities SET title='changed' WHERE id='i';
                          INSERT INTO declaration_revisions
-                           (entity_id,revision,title,created_at,baseline)
-                           VALUES ('i',2,'changed','2026-09-03T00:00:00Z',0);
-                         UPDATE entities SET disposition='accepted',current_revision=2
+                           (entity_id,revision,title,created_at,baseline,sequence)
+                           VALUES ('i','rev-00000000000000000000000000000002','changed','2026-09-03T00:00:00Z',0,2);
+                         UPDATE entities SET disposition='accepted',current_revision='rev-00000000000000000000000000000002'
                            WHERE id='i';
                          COMMIT;",
                     )
@@ -2594,11 +2636,14 @@ mod tests {
         let snapshot = reader.revision_snapshot(&id("i")).unwrap();
         assert!(write_attempted.load(Ordering::SeqCst));
         assert_eq!(write_error.lock().unwrap().as_deref(), None);
-        assert_eq!(snapshot.entity.current_revision, Some(1));
+        assert_eq!(
+            snapshot.entity.current_revision,
+            Some(snapshot.revisions[0].id)
+        );
         assert_eq!(snapshot.revisions.len(), 1);
 
         let fresh = reader.revision_snapshot(&id("i")).unwrap();
-        assert_eq!(fresh.entity.current_revision, Some(2));
+        assert_eq!(fresh.entity.current_revision, Some(fresh.revisions[1].id));
         assert_eq!(fresh.revisions.len(), 2);
 
         drop(reader);

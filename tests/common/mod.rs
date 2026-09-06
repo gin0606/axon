@@ -272,11 +272,34 @@ impl TestRepo {
             .unwrap()
     }
 
+    pub fn note_id(&self, entity: &str, sequence: i64) -> String {
+        self.record_id(entity, sequence, "entity_notes", "note", "record_id")
+    }
+    pub fn revision_id(&self, entity: &str, sequence: i64) -> String {
+        self.record_id(
+            entity,
+            sequence,
+            "declaration_revisions",
+            "sequence",
+            "revision",
+        )
+    }
+    fn record_id(
+        &self,
+        entity: &str,
+        sequence: i64,
+        table: &str,
+        order: &str,
+        column: &str,
+    ) -> String {
+        self.connection().query_row(&format!("SELECT {column} FROM {table} WHERE (entity_id=?1 OR entity_id LIKE '%' || '-' || ?1) AND {order}=?2"), params![entity,sequence], |r| r.get(0)).unwrap()
+    }
+
     pub fn current_revision(&self, id: &str) -> (i64, String, Option<String>, i64) {
         let connection = self.connection();
         let (revision, title, parent) = connection
             .query_row(
-                "SELECT e.current_revision,r.title,r.parent_id
+                "SELECT r.sequence,r.title,r.parent_id
                  FROM entities e JOIN declaration_revisions r
                    ON r.entity_id=e.id AND r.revision=e.current_revision
                  WHERE e.id=?1",
@@ -287,7 +310,7 @@ impl TestRepo {
         let dependencies = connection
             .query_row(
                 "SELECT COUNT(*) FROM revision_dependencies
-                 WHERE entity_id=?1 AND revision=?2",
+                 WHERE entity_id=?1 AND revision=(SELECT revision FROM declaration_revisions WHERE entity_id=?1 AND sequence=?2)",
                 params![id, revision],
                 |row| row.get(0),
             )

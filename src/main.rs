@@ -4,6 +4,7 @@ mod declaration;
 mod derived;
 mod display;
 mod domain;
+mod record_id;
 mod status;
 
 use anstyle::{AnsiColor, Color, Style};
@@ -40,7 +41,7 @@ const HELP_SECTIONS: &[HelpSection] = &[
     },
     HelpSection {
         heading: "Setup & utilities",
-        commands: &["init", "completion", "docs", "help"],
+        commands: &["init", "migrate", "completion", "docs", "help"],
     },
 ];
 
@@ -162,6 +163,15 @@ impl KindFilter {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Convert a v11 SQLite snapshot to stable IDs without modifying the source
+    Migrate {
+        /// Existing v11 database (stop its writers before the final conversion)
+        #[arg(long)]
+        source: std::path::PathBuf,
+        /// New directory for the backup, converted database and ID mapping manifest
+        #[arg(long)]
+        output: std::path::PathBuf,
+    },
     /// Initialize axon at the management root
     Init {
         /// Prefix for generated Entity IDs; defaults to the management-root directory name
@@ -523,12 +533,12 @@ enum NoteCmd {
         /// Entity ID or unique ID suffix
         id: String,
     },
-    /// Show one note by its Entity-local number
+    /// Show one note by its stable ID
     Show {
         /// Entity ID or unique ID suffix
         id: String,
-        /// Entity-local note number
-        number: i64,
+        /// Note stable ID or unique prefix (at least 4 characters)
+        number: String,
     },
 }
 
@@ -539,21 +549,21 @@ enum RevisionCmd {
         /// Entity ID or unique ID suffix
         id: String,
     },
-    /// Show one revision by its Entity-local number
+    /// Show one revision by its stable ID
     Show {
         /// Entity ID or unique ID suffix
         id: String,
-        /// Entity-local revision number
-        number: i64,
+        /// Revision stable ID or unique prefix (at least 4 characters)
+        number: String,
     },
     /// Compare two plan declaration revisions
     Diff {
         /// Entity ID or unique ID suffix
         id: String,
-        /// Older Entity-local revision number
-        from: i64,
-        /// Newer Entity-local revision number
-        to: i64,
+        /// Older Revision stable ID or unique prefix (at least 4 characters)
+        from: String,
+        /// Newer Revision stable ID or unique prefix (at least 4 characters)
+        to: String,
     },
 }
 
@@ -600,20 +610,20 @@ fn migration_guidance(failure: &db::migration::Failure) -> String {
     use db::migration::ApplicationState;
     let state = match failure.applied {
         ApplicationState::NotApplied => {
-            "Migration was not applied; the requested operation did not run."
+            "Migration was not applied to the source; the requested operation did not run. Incomplete output may remain."
         }
         ApplicationState::Applied => {
-            "Migration was committed; the requested operation did not run. The migration has not been rolled back."
+            "Migration was committed to the output; the source was not switched. Preserve both databases."
         }
         ApplicationState::Unknown => {
-            "Migration application is unknown; the requested operation did not run. Preserve and inspect the database and backup before any retry."
+            "Migration output durability is unknown; the source was not switched. Preserve and inspect the output and backup before any retry."
         }
     };
     let cause = match failure.source.as_ref() {
         db::DbError::UnsupportedSchema { found, expected } if found > expected =>
             format!("Use a newer axon build that supports DB schema {found}; automatic downgrade is not supported."),
         db::DbError::UnsupportedSchema { found, .. } =>
-            format!("Automatic migration requires schema v9 or later. Use a build that supports DB schema {found} to inspect this older database."),
+            format!("Manual migration requires schema v11: `axon migrate --source <v11-db> --output <new-directory>`. For v9/v10, first use a v11 build. Use a build that supports DB schema {found} to inspect this older database."),
         db::DbError::InvalidSchema(_) => "Preserve the database; its schema or stored data did not pass validation. Inspect the reported structure/integrity error with SQLite tooling.".to_string(),
         db::DbError::Sqlite(rusqlite::Error::SqliteFailure(error, _))
             if matches!(error.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) =>
@@ -643,8 +653,8 @@ fn error_guidance(error: &(dyn std::error::Error + 'static)) -> Option<String> {
             DbError::NoSuchEntity(_) => "Use `axon list` to inspect Entity IDs in this management root; linked worktrees share their main repository's DB.".to_string(),
             DbError::AmbiguousId { .. } => "Use one of the full candidate IDs to identify the intended Entity.".to_string(),
             DbError::NotGroup(_) => "Use `axon list --kind group` to inspect Group IDs. A parent must be a Group.".to_string(),
-            DbError::NoSuchNote { id, .. } => format!("Use `axon note list {id}` to inspect this Entity's Note numbers."),
-            DbError::NoSuchRevision { id, .. } => format!("Use `axon revision list {id}` to inspect this Entity's Revision numbers."),
+            DbError::NoSuchNote { id, .. } => format!("Use `axon note list {id}` to inspect this Entity's Note IDs."),
+            DbError::NoSuchRevision { id, .. } => format!("Use `axon revision list {id}` to inspect this Entity's Revision IDs."),
             DbError::Unchanged { id, .. } => format!("No transition was applied. Use `axon show {id}` to inspect the current state; repeating the same transition is an error."),
             DbError::Cycle { .. } | DbError::Containment(_) => "Inspect the involved Entities with `axon show <ID>` and use `axon docs` for relationship constraints. Changing a relationship changes the plan; select any revision according to the intended plan.".to_string(),
             DbError::AlreadyInitialized(_) => "init creates a new database; it does not reset or upgrade an existing one. Use `axon list` to inspect it, or `axon docs` for storage recovery guidance.".to_string(),
@@ -665,6 +675,20 @@ fn evaluation_guidance() -> &'static str {
 fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> {
     let mut matches = cli_command().get_matches_from(args);
     match Cli::from_arg_matches_mut(&mut matches)?.command {
+        Command::Migrate { source, output } => {
+            if let db::migration::Outcome::Migrated {
+                database, backup, ..
+            } = db::migration::migrate(&source, &output)?
+            {
+                write_plain_output(&format!(
+                    "Converted: {}\nSource backup: {}\nManifest: {}\nSource unchanged; verify the output before switching the live database.\n",
+                    database.display(),
+                    backup.display(),
+                    output.join("manifest.yaml").display()
+                ))?;
+            }
+            Ok(())
+        }
         Command::Init { prefix } => cmd_init(prefix),
         Command::Completion { shell } => write_completion(shell).map_err(Into::into),
         Command::Docs { topic } => cmd_docs(topic),
@@ -831,7 +855,8 @@ fn cmd_create(
         description,
         progress: Progress::NotStarted,
         disposition,
-        current_revision: (disposition != Disposition::Undecided).then_some(1),
+        current_revision: (disposition != Disposition::Undecided)
+            .then(|| RecordId::new(RecordKind::Revision)),
         resurface_condition: ResurfaceCondition::Always,
         parent,
         created_at: now,
@@ -1562,7 +1587,7 @@ fn render_show(
             }
             rendered_notes.push(format!(
                 "{}  {}  {}",
-                decoration.paint(OUTPUT_HEADING, format!("Note {}", note.number)),
+                decoration.paint(OUTPUT_HEADING, format!("Note {}", note.id)),
                 decoration.paint(OUTPUT_MUTED, display::timestamp(&note.created_at)),
                 note.actor
             ));
@@ -1585,10 +1610,11 @@ fn render_show(
                 .map(|reason| format!("  ({reason})"))
                 .unwrap_or_default();
             history.push(format!(
-                "  {}  {}  {}{reason}",
+                "  {}  {}  {}{reason}  [{}]",
                 display::timestamp(&event.at),
                 event.actor,
                 decoration.paint(action_style, action),
+                event.id,
             ));
         }
         blocks.push(render_section(decoration, "Progress history", history));
@@ -1914,11 +1940,7 @@ fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
             let body = read_description(message, file)?
                 .ok_or("a Note body is required; provide -m or -F")?;
             let note = store.add_note(&id, &body, &actor::actor())?;
-            write_confirmation(
-                &id,
-                format!("Note {} recorded", note.number),
-                OUTPUT_POSITIVE,
-            )?;
+            write_confirmation(&id, format!("Note {} recorded", note.id), OUTPUT_POSITIVE)?;
         }
         NoteCmd::List { id } => {
             let id = store.resolve_id(&id)?;
@@ -1929,7 +1951,7 @@ fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
                     let first_line = note.body.lines().next().unwrap_or_default();
                     format!(
                         "{}  {}  {}  {}\n",
-                        decoration.paint(OUTPUT_INDEX, note.number),
+                        decoration.paint(OUTPUT_INDEX, note.id),
                         decoration.paint(OUTPUT_MUTED, display::timestamp(&note.created_at)),
                         note.actor,
                         first_line
@@ -1940,11 +1962,11 @@ fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
         }
         NoteCmd::Show { id, number } => {
             let id = store.resolve_id(&id)?;
-            let note = store.note(&id, number)?;
+            let note = store.note(&id, &number)?;
             let mut output = format!(
                 "{}  {}\n{}\n\n{}\n{}",
                 decoration.paint(OUTPUT_ID, &id),
-                decoration.paint(OUTPUT_HEADING, format!("Note {}", note.number)),
+                decoration.paint(OUTPUT_HEADING, format!("Note {}", note.id)),
                 render_inline_fields(
                     decoration,
                     vec![
@@ -1976,14 +1998,14 @@ fn cmd_revision(command: RevisionCmd) -> Result<(), Box<dyn std::error::Error>> 
                 .into_iter()
                 .map(|revision| {
                     let marks = render_revision_marks(
-                        snapshot.entity.current_revision == Some(revision.number),
+                        snapshot.entity.current_revision == Some(revision.id),
                         revision.baseline,
                         " ",
                         decoration,
                     );
                     format!(
                         "{}  {}{}  {}\n",
-                        decoration.paint(OUTPUT_INDEX, revision.number),
+                        decoration.paint(OUTPUT_INDEX, revision.id),
                         decoration.paint(OUTPUT_MUTED, display::timestamp(&revision.created_at)),
                         marks,
                         revision.title
@@ -1995,7 +2017,7 @@ fn cmd_revision(command: RevisionCmd) -> Result<(), Box<dyn std::error::Error>> 
         RevisionCmd::Show { id, number } => {
             let id = store.resolve_id(&id)?;
             let snapshot = store.revision_snapshot(&id)?;
-            let revision = snapshot.revision(number)?;
+            let revision = snapshot.revision(&number)?;
             write_output(
                 &render_revision(&id, &snapshot.entity, revision, decoration),
                 decoration,
@@ -2004,8 +2026,8 @@ fn cmd_revision(command: RevisionCmd) -> Result<(), Box<dyn std::error::Error>> 
         RevisionCmd::Diff { id, from, to } => {
             let id = store.resolve_id(&id)?;
             let snapshot = store.revision_snapshot(&id)?;
-            let from_revision = snapshot.revision(from)?;
-            let to_revision = snapshot.revision(to)?;
+            let from_revision = snapshot.revision(&from)?;
+            let to_revision = snapshot.revision(&to)?;
             write_output(
                 &render_revision_diff(&id, from_revision, to_revision, decoration),
                 decoration,
@@ -2022,7 +2044,7 @@ fn render_revision(
     decoration: OutputDecoration,
 ) -> String {
     let marks = render_revision_marks(
-        entity.current_revision == Some(revision.number),
+        entity.current_revision == Some(revision.id),
         revision.baseline,
         "  ",
         decoration,
@@ -2060,7 +2082,7 @@ fn render_revision(
         decoration.paint(OUTPUT_ID, id),
         decoration.paint(
             OUTPUT_HEADING,
-            format!("Declaration Revision {}", revision.number)
+            format!("Declaration Revision {}", revision.id)
         ),
         metadata,
         decoration.paint(OUTPUT_HEADING, "Description"),
@@ -2099,7 +2121,7 @@ fn render_revision_diff(
         decoration.paint(OUTPUT_ID, id),
         decoration.paint(
             OUTPUT_HEADING,
-            format!("Declaration Revision {} -> {}", from.number, to.number)
+            format!("Declaration Revision {} -> {}", from.id, to.id)
         )
     );
     push_value_diff(&mut output, "Title", &from.title, &to.title, decoration);
@@ -2489,7 +2511,7 @@ fn cmd_log(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
                 decoration.paint(OUTPUT_MUTED, "Revision:")
             ));
         }
-        output.push('\n');
+        output.push_str(&format!("  [{}]\n", event.id));
     }
     write_output(&output, decoration)?;
     Ok(())
@@ -2818,7 +2840,7 @@ fn render_docs(decoration: OutputDecoration) -> String {
     )
     .unwrap();
     writeln!(output, "\nUse axon docs declaration for declaration fields and the import workflow.\nUse axon docs declaration --example for a complete new-plan YAML example.").unwrap();
-    writeln!(output, "\nStorage recovery\n  DB commands automatically migrate known v9/v10 databases to v11, including\n  read commands, export and import check. The first open needs write permission.\n  Migration saves all stored data in .axon/migration-backups before committing;\n  backups are never overwritten or deleted automatically. Success is reported on\n  stderr before the requested operation; a later command failure does not undo it.\n  Current databases create no migration notice or backup. init only creates new DBs.\n  Versions below v9, future versions, and unknown/corrupt schemas are rejected.\n  Future versions require a newer axon build supporting that schema. --version\n  identifies the executable release, not its DB schema.\n  On failure inspect the reported stage, cause, DB path and application state.\n  The requested operation did not run; an unknown migration result requires\n  inspection before retry. Failed backups may be incomplete. Check permissions,\n  disk space and other writers (including linked worktrees) for I/O or lock errors.\n  Before recovery stop all writers and preserve .axon with SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  export also requires a compatible build and is not a complete database backup.\n  In Git, .axon/axon.db is at the parent of the common Git directory; outside Git,\n  axon uses the nearest ancestor containing .axon/axon.db.\n  help, docs, version and completion do not open the DB.\n").unwrap();
+    writeln!(output, "\nStorage recovery\n  DB commands require schema v12 and do not migrate old databases implicitly.\n  Use axon migrate --source <v11-db> --output <new-directory> to create a new DB,\n  an intact source backup and an ID mapping manifest. The source is not switched.\n  v9/v10 must first be migrated to v11 using an older compatible build.\n  Keep an old binary, stop writers, verify copies, then switch all affected roots.\n  Failed outputs may be incomplete; preserve and inspect them before retry.\n  Unknown schemas are rejected. init only creates new DBs; init cannot upgrade.\n  --version identifies the executable release, not its DB schema.\n  Before recovery stop all writers and preserve .axon with SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  export also requires a compatible build and is not a complete database backup.\n  In Git, .axon/axon.db is at the parent of the common Git directory; outside Git,\n  axon uses the nearest ancestor containing .axon/axon.db.\n  help, docs, version and completion do not open the DB.\n").unwrap();
     output
 }
 
@@ -2853,7 +2875,7 @@ mod tests {
             description: None,
             progress: Progress::NotStarted,
             disposition: Disposition::Accepted,
-            current_revision: Some(1),
+            current_revision: Some(RecordId::new(RecordKind::Revision)),
             resurface_condition: ResurfaceCondition::Always,
             parent: None,
             created_at: now,
@@ -2949,7 +2971,7 @@ mod tests {
             };
             let guidance = error_guidance(&db::DbError::Migration(failure)).unwrap();
             assert!(guidance.contains(expected));
-            assert!(guidance.contains("requested operation did not run"));
+            assert!(guidance.contains("source"));
             if applied != ApplicationState::NotApplied {
                 assert!(!guidance.contains("Migration was not applied"));
             }
@@ -3074,12 +3096,14 @@ mod tests {
         );
         let at = Utc::now();
         let notes = vec![Note {
+            id: RecordId::new(RecordKind::Note),
             number: 1,
             body: "note body\nwith two lines".to_string(),
             actor: "tester".to_string(),
             created_at: at,
         }];
         let progress_events = vec![db::ProgressEvent {
+            id: RecordId::new(RecordKind::Progress),
             kind: db::ProgressEventKind::Release,
             actor: "tester".to_string(),
             reason: Some("handoff".to_string()),
@@ -3108,7 +3132,7 @@ mod tests {
         assert!(description < notes_section);
         assert!(notes_section < progress);
         assert!(output.contains("Description\ndescription body\nwith two lines"));
-        assert!(output.contains("Notes\nNote 1"));
+        assert!(output.contains(&format!("Notes\nNote {}", notes[0].id)));
         assert!(output.contains("note body\nwith two lines"));
 
         let styled = render_show(
@@ -3144,10 +3168,11 @@ mod tests {
             at: Utc::now(),
         };
         let event = db::Event {
+            id: RecordId::new(RecordKind::Decision),
             field: "disposition".to_string(),
             old_value: Some("undecided".to_string()),
             new_value: Some("accepted".to_string()),
-            revision: Some(1),
+            revision: Some(RecordId::new(RecordKind::Revision)),
             actor: "raw actor".to_string(),
             reason: Some("raw reason".to_string()),
             at: Utc::now(),
@@ -3204,6 +3229,7 @@ mod tests {
         let issue = entity("i", EntityKind::Issue);
         let at = Utc::now();
         let from = DeclarationRevision {
+            id: RecordId::new(RecordKind::Revision),
             number: 1,
             title: "raw old title".to_string(),
             description: Some("raw old description".to_string()),
@@ -3213,6 +3239,7 @@ mod tests {
             baseline: true,
         };
         let to = DeclarationRevision {
+            id: RecordId::new(RecordKind::Revision),
             number: 2,
             title: "raw new title".to_string(),
             description: Some("raw new description".to_string()),

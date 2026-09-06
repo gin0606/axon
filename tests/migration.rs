@@ -1,6 +1,6 @@
 mod common;
 
-use common::{TestDir, TestRepo, assert_failure, assert_success, stderr, stdout};
+use common::{TestRepo, assert_failure, assert_success, stderr, stdout};
 use rusqlite::{Connection, types::Value};
 use std::{
     collections::BTreeMap,
@@ -14,8 +14,10 @@ fn fixture(root: &Path, version: i64) -> PathBuf {
     let conn = Connection::open(&path).unwrap();
     conn.execute_batch(if version == 9 {
         include_str!("../src/db/schema_v9.sql")
-    } else {
+    } else if version == 10 {
         include_str!("../src/db/schema_v10.sql")
+    } else {
+        include_str!("../src/db/schema_v11.sql")
     })
     .unwrap();
     conn.pragma_update(None, "user_version", version).unwrap();
@@ -82,193 +84,201 @@ fn snapshot(path: &Path, version: i64) -> Snapshot {
         })
         .collect()
 }
-fn backups(root: &Path) -> Vec<PathBuf> {
-    fs::read_dir(root.join(".axon/migration-backups"))
-        .map(|d| d.map(|p| p.unwrap().path()).collect())
-        .unwrap_or_default()
-}
 fn version(path: &Path) -> i64 {
     Connection::open(path)
         .unwrap()
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap()
 }
-fn migrated(output: &std::process::Output, from: i64) {
-    assert!(
-        stderr(output).contains(&format!("Migrated database v{from} -> v11; backup:")),
-        "{}",
-        stderr(output)
+fn migrate(repo: &TestRepo, source: &Path, output: &Path) -> std::process::Output {
+    repo.axon(&[
+        "migrate",
+        "--source",
+        source.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+    ])
+}
+
+#[test]
+fn manual_conversion_is_deterministic_and_preserves_all_values() {
+    let repo = TestRepo::new();
+    let source = fixture(repo.root(), 11);
+    let before = snapshot(&source, 11);
+    let original = fs::read(&source).unwrap();
+    let a = repo.root().join("converted-a");
+    let b = repo.root().join("converted-b");
+    assert_success(&migrate(&repo, &source, &a));
+    assert_success(&migrate(&repo, &source, &b));
+    assert_eq!(fs::read(&source).unwrap(), original);
+    assert_eq!(version(&source), 11);
+    assert_eq!(snapshot(&a.join("source-v11.db"), 11), before);
+    assert_eq!(
+        snapshot(&a.join("axon.db"), 12),
+        snapshot(&b.join("axon.db"), 12)
     );
-    assert!(!stdout(output).contains("Migrated database"));
-}
-
-#[test]
-fn first_reads_preserve_all_tables_and_repeated_output() {
-    for from in [9, 10] {
-        for args in [
-            vec!["list"],
-            vec!["show", "accepted"],
-            vec!["claims"],
-            vec!["log", "accepted"],
-            vec!["note", "list", "accepted"],
-            vec!["revision", "show", "accepted", "2"],
-            vec!["export", "accepted"],
-        ] {
-            let repo = TestRepo::new();
-            let path = fixture(repo.root(), from);
-            let before = snapshot(&path, from);
-            let first = repo.axon(&args);
-            assert_success(&first);
-            migrated(&first, from);
-            assert_eq!(version(&path), 11);
-            assert_eq!(snapshot(&path, from), before);
-            let backup = backups(repo.root());
-            assert_eq!(backup.len(), 1);
-            assert_eq!(version(&backup[0]), from);
-            assert_eq!(snapshot(&backup[0], from), before);
-            let again = repo.axon(&args);
-            assert_success(&again);
-            assert_eq!(first.stdout, again.stdout);
-            assert!(again.stderr.is_empty());
-            assert_eq!(backups(repo.root()), backup);
-        }
+    assert_eq!(
+        fs::read(a.join("manifest.yaml")).unwrap(),
+        fs::read(b.join("manifest.yaml")).unwrap()
+    );
+    let c = Connection::open(a.join("axon.db")).unwrap();
+    // Independent field projection through the persisted mapping (including nullable references).
+    let old = Connection::open(&source).unwrap();
+    for table in before.keys() {
+        let cols: Vec<String> = old
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap()
+            .query_map([], |r| r.get(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let cols_sql = cols.iter().map(|col| {
+            if (table == "entities" && col == "current_revision") || (["declaration_revisions", "revision_dependencies", "entity_events"].contains(&table.as_str()) && col == "revision") {
+                format!("(SELECT sequence FROM declaration_revisions r WHERE r.revision=t.{col}) AS {col}")
+            } else { format!("t.{col}") }
+        }).collect::<Vec<_>>().join(",");
+        let filter = if table == "meta" {
+            " WHERE key <> 'store_id'"
+        } else {
+            ""
+        };
+        let rows: Vec<Vec<Value>> = c
+            .prepare(&format!(
+                "SELECT {cols_sql} FROM {table} t{filter} ORDER BY {}",
+                cols.join(",")
+            ))
+            .unwrap()
+            .query_map([], |r| {
+                (0..cols.len())
+                    .map(|i| r.get(i))
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(rows, before[table], "{table}");
     }
+    assert_failure(&migrate(&repo, &source, &a));
 }
 
 #[test]
-fn writes_and_import_paths_continue_after_migration() {
-    for from in [9, 10] {
-        for args in [
-            vec!["capture", "new task"],
-            vec!["note", "add", "accepted", "-m", "new note"],
-        ] {
-            let repo = TestRepo::new();
-            let path = fixture(repo.root(), from);
-            let before = snapshot(&path, from);
-            let output = repo.axon(&args);
-            assert_success(&output);
-            migrated(&output, from);
-            assert_ne!(snapshot(&path, from), before);
-            assert_eq!(snapshot(&backups(repo.root())[0], from), before);
-        }
-        for command in ["prepare", "check", "apply"] {
-            let repo = TestRepo::new();
-            let path = fixture(repo.root(), from);
-            let before = snapshot(&path, from);
-            let file = repo.root().join("plan.yaml");
-            fs::write(&file, "schema: axon-plan/v2\nissues: []\ngroups: []\nrelations:\n  editable:\n    parents: []\n    dependencies: []\n  readonly:\n    parents: []\n    dependencies: []\nreferences:\n  entities: []\n").unwrap();
-            let output = repo.axon(&["import", command, file.to_str().unwrap()]);
-            assert_success(&output);
-            migrated(&output, from);
-            assert_eq!(version(&path), 11);
-            assert_eq!(snapshot(&path, from), before);
-        }
-    }
-}
-
-#[test]
-fn root_resolution_migrates_shared_database_once() {
-    let repo = TestRepo::new();
-    let path = fixture(repo.root(), 9);
-    let worktree = repo.add_worktree();
-    let output = repo.axon_in(&worktree, &["list"]);
-    assert_success(&output);
-    migrated(&output, 9);
-    assert_eq!(version(&path), 11);
-    assert!(!worktree.join(".axon").exists());
-    assert!(repo.axon(&["list"]).stderr.is_empty());
-    assert_eq!(backups(repo.root()).len(), 1);
-    let dir = TestDir::new("nongit-migration");
-    let path = fixture(dir.path(), 10);
-    let nested = dir.path().join("one/two");
-    fs::create_dir_all(&nested).unwrap();
-    let output = dir.axon_in(&nested, &["list"]);
-    assert_success(&output);
-    migrated(&output, 10);
-    assert_eq!(version(&path), 11);
-    assert_eq!(backups(dir.path()).len(), 1);
-}
-
-#[test]
-fn utilities_and_init_do_not_migrate() {
-    let repo = TestRepo::new();
-    let path = fixture(repo.root(), 9);
-    let before = fs::read(&path).unwrap();
-    for args in [
-        vec!["--help"],
-        vec!["docs"],
-        vec!["--version"],
-        vec!["completion", "bash"],
-    ] {
-        let output = repo.axon(&args);
-        assert_success(&output);
-        assert!(output.stderr.is_empty());
-        assert_eq!(fs::read(&path).unwrap(), before);
-    }
-    assert_failure(&repo.axon(&["init"]));
-    assert_eq!(fs::read(&path).unwrap(), before);
-    assert!(backups(repo.root()).is_empty());
-}
-
-#[test]
-fn failures_stop_original_operation_and_committed_migration_is_distinct() {
-    for corrupt in [false, true] {
+fn old_open_never_migrates_and_unknown_inputs_are_unchanged() {
+    for schema in [9, 10, 11, 999] {
         let repo = TestRepo::new();
-        let path = fixture(repo.root(), 9);
-        if corrupt {
-            Connection::open(&path)
-                .unwrap()
-                .execute_batch("CREATE TABLE unexpected (id)")
-                .unwrap();
-        } else {
-            fs::write(repo.root().join(".axon/migration-backups"), "obstruction").unwrap();
+        let source = fixture(repo.root(), schema);
+        let before = fs::read(&source).unwrap();
+        let result = repo.axon(&["list"]);
+        assert_failure(&result);
+        assert!(stderr(&result).contains("unsupported axon schema"));
+        assert_eq!(fs::read(&source).unwrap(), before);
+        if schema != 11 {
+            assert_failure(&migrate(&repo, &source, &repo.root().join("out")));
         }
-        let before = fs::read(&path).unwrap();
-        let output = repo.axon(&["capture", "must not exist"]);
-        assert_failure(&output);
-        assert!(output.stdout.is_empty());
-        assert!(stderr(&output).contains("requested operation did not run"));
-        assert!(stderr(&output).contains(if corrupt {
-            "unknown structure"
-        } else {
-            "saving backup"
-        }));
-        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(fs::read(&source).unwrap(), before);
     }
     let repo = TestRepo::new();
-    let path = fixture(repo.root(), 9);
-    let before = snapshot(&path, 9);
-    let output = repo.axon(&["show", "missing"]);
-    assert_failure(&output);
-    migrated(&output, 9);
-    assert!(stderr(&output).contains("does not exist"));
-    assert!(!stderr(&output).contains("Migration was not applied"));
-    assert_eq!(version(&path), 11);
-    assert_eq!(snapshot(&path, 9), before);
+    let source = fixture(repo.root(), 11);
+    Connection::open(&source)
+        .unwrap()
+        .execute_batch("CREATE TABLE unknown(data TEXT)")
+        .unwrap();
+    let before = fs::read(&source).unwrap();
+    assert_failure(&migrate(&repo, &source, &repo.root().join("out")));
+    assert_eq!(fs::read(&source).unwrap(), before);
 }
 
 #[test]
-fn lock_and_permission_failures_report_the_actual_cause() {
+fn wal_and_failed_conversion_preserve_source_and_do_not_publish_completion() {
     let repo = TestRepo::new();
-    let path = fixture(repo.root(), 9);
-    let conn = Connection::open(&path).unwrap();
-    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
-    let output = repo.axon(&["capture", "must not exist"]);
-    assert_failure(&output);
-    assert!(stderr(&output).contains("acquiring migration lock"));
-    assert!(stderr(&output).contains("other writers"));
-    assert_eq!(version(&path), 9);
-    conn.execute_batch("ROLLBACK").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let permissions = fs::metadata(&path).unwrap().permissions();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
-        let output = repo.axon(&["capture", "must not exist"]);
-        fs::set_permissions(&path, permissions).unwrap();
-        assert_failure(&output);
-        assert!(stderr(&output).contains("permissions"));
-        assert!(stderr(&output).contains("requested operation did not run"));
-        assert_eq!(version(&path), 9);
+    let source = fixture(repo.root(), 11);
+    let conn = Connection::open(&source).unwrap();
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; UPDATE entity_notes SET body='committed in WAL' WHERE note=1").unwrap();
+    let bytes = fs::read(&source).unwrap();
+    let wal = fs::read(source.with_extension("db-wal")).unwrap();
+    let out = repo.root().join("out");
+    assert_success(&migrate(&repo, &source, &out));
+    assert_eq!(fs::read(&source).unwrap(), bytes);
+    assert_eq!(fs::read(source.with_extension("db-wal")).unwrap(), wal);
+    assert_eq!(
+        snapshot(&out.join("source-v11.db"), 11),
+        snapshot(&source, 11)
+    );
+    conn.execute("UPDATE entity_notes SET at='invalid time'", [])
+        .unwrap();
+    let before = snapshot(&source, 11);
+    let failed = repo.root().join("failed");
+    assert_failure(&migrate(&repo, &source, &failed));
+    assert!(!failed.join("manifest.yaml").exists());
+    assert_eq!(snapshot(&source, 11), before);
+}
+
+#[test]
+fn converted_database_supports_normal_commands_without_remapping_ids() {
+    let repo = TestRepo::new();
+    let source = fixture(repo.root(), 11);
+    let out = repo.root().join("out");
+    assert_success(&migrate(&repo, &source, &out));
+    fs::rename(&source, repo.root().join("old.db")).unwrap();
+    fs::copy(out.join("axon.db"), &source).unwrap();
+    for args in [
+        &["list"][..],
+        &["show", "accepted"],
+        &["log", "accepted"],
+        &["revision", "list", "accepted"],
+        &["note", "list", "accepted"],
+        &["export", "accepted"],
+    ] {
+        assert_success(&repo.axon(args));
     }
+    let added = repo.axon(&["note", "add", "accepted", "-m", "new note"]);
+    assert_success(&added);
+    let id = stdout(&added)
+        .split_whitespace()
+        .nth(2)
+        .unwrap()
+        .to_string();
+    assert!(id.starts_with("note-"));
+    assert_success(&repo.axon(&["note", "show", "accepted", &id]));
+    assert_success(&repo.axon(&["note", "show", "accepted", &id[5..13]]));
+    assert_failure(&repo.axon(&["note", "show", "accepted", "1"]));
+    let before = snapshot(&source, 12);
+    assert_failure(&migrate(&repo, &source, &repo.root().join("twice")));
+    assert_eq!(snapshot(&source, 12), before);
+}
+
+#[test]
+fn physical_layout_does_not_define_migrated_identity() {
+    let repo = TestRepo::new();
+    let source = fixture(repo.root(), 11);
+    let a = repo.root().join("a");
+    assert_success(&migrate(&repo, &source, &a));
+    let conn = Connection::open(&source).unwrap();
+    conn.execute_batch("PRAGMA page_size=8192; VACUUM").unwrap();
+    drop(conn);
+    let b = repo.root().join("b");
+    assert_success(&migrate(&repo, &source, &b));
+    assert_ne!(
+        fs::read(a.join("source-v11.db")).unwrap(),
+        fs::read(b.join("source-v11.db")).unwrap()
+    );
+    assert_eq!(
+        snapshot(&a.join("axon.db"), 12),
+        snapshot(&b.join("axon.db"), 12)
+    );
+}
+
+#[test]
+fn ambiguous_ids_and_duplicate_record_identity_are_rejected() {
+    let repo = TestRepo::new();
+    repo.init("t");
+    let id = repo.plan("task");
+    assert_success(&repo.axon(&["note", "add", &id, "-m", "same"]));
+    assert_success(&repo.axon(&["note", "add", &id, "-m", "same"]));
+    repo.execute_batch("UPDATE entity_notes SET record_id=CASE note WHEN 1 THEN 'note-abcd0000000000000000000000000001' ELSE 'note-abcd0000000000000000000000000002' END");
+    let result = repo.axon(&["note", "show", &id, "abcd"]);
+    assert_failure(&result);
+    assert!(stderr(&result).contains("ambiguous"));
+    assert_success(&repo.axon(&["note", "show", &id, "note-abcd0000000000000000000000000001"]));
+    let conn = Connection::open(repo.root().join(".axon/axon.db")).unwrap();
+    assert!(conn.execute("UPDATE entity_notes SET record_id='note-abcd0000000000000000000000000001' WHERE note=2",[]).is_err());
 }

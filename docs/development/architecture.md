@@ -37,7 +37,7 @@ Git リポジトリ内では common root を管理境界として常に優先す
 | `entity_deps` | Entity 間の依存。両端は kind の全組み合わせを許す |
 | `declaration_revisions` | Accepted / Rejected と判断された plan declaration の不変な全文 Revision |
 | `revision_dependencies` | 各 Declaration Revision が所有した outgoing dependency |
-| `entity_notes` | 状態と独立した追記専用 Note。Entity 内連番、本文、actor、保存時刻を持つ |
+| `entity_notes` | 状態と独立した追記専用 Note。安定ID、内部の線形順序キー、本文、actor、保存時刻を持つ |
 | `entity_events` | B (`disposition`) / C (`resurface_condition`) の Entity 単位の判断ログ。B の判断は対象 Revision を参照する |
 | `entity_progress_events` | A (進行) の Entity 単位の状態遷移履歴 |
 
@@ -49,10 +49,10 @@ Git リポジトリ内では common root を管理境界として常に優先す
 - **C の直和型は CHECK 制約で整合性を保つ**。`resurface_kind` が取る値ごとに、どの列が埋まっているべきかを縛る
 - **待機関係は DAG に保つ**。dependency、`AfterEntity`、包含を activation / completion の 2 つの wait graph に射影し、両方を同じ write transaction で検査する。group を待機元にした辺は全子孫へ展開する
 - **決定済み declaration と Revision の参照を DB 制約でも一致させる**。Undecided は `current_revision IS NULL`、Accepted / Rejected は同じ Entity の Revision を必ず参照する
-- **Revision と判断は同じ transaction で確定する**。直前と同じ declaration は Revision を再利用し、違う場合だけ Entity 内連番を追加する
-- **Note の追加は immediate transaction で連番を割り当てる**。入力時刻ではなくこの保存順を正にし、空白だけの本文は Store の書き込み境界で拒否する。DB の `NOT NULL` / `CHECK` 制約も NULL、空文字、U+0020 だけの本文を拒否する
+- **Revision と判断は同じ transaction で確定する**。直前と同じ declaration は Revision を再利用し、違う場合だけ 新しい安定IDと内部順序キーを追加する
+- **Note の追加は immediate transaction で安定IDと保存順を確定する**。入力時刻ではなくこの保存順を正にし、空白だけの本文は Store の書き込み境界で拒否する。DB の `NOT NULL` / `CHECK` 制約も NULL、空文字、U+0020 だけの本文を拒否する
 - **複数テーブルの詳細表示は一つの read transaction から作る**。現在 Entity、関係、履歴、Revision、Note、件数を異なる時点から混ぜない
-- **スキーマは `user_version` と既知 DDL の両方で識別する**。移行基盤は v9 / v10 から現行版への経路を持ち、未知版・未知構造を変更しない
+- **スキーマは `user_version` と既知 DDL の両方で識別する**。v12の通常openは旧版を変換せず、手動変換はv11を入力とし、未知版・未知構造を変更しない
 
 ## 状態更新と履歴
 
@@ -112,13 +112,14 @@ actor は一覧と調査の手掛かりであり、排他制御や `release` の
 
 ## schema 切り替えの境界
 
-移行基盤 `db::migration::open` は移行済み・移行不要と、対象 DB、移行前後の版、backup 先を返す。失敗には未適用・適用済み・結果不明の区別を持たせる。`Store::open` がこの境界を使い、CLI は成功 callback で stderr へ移行結果を通知してから元の操作を続ける。元操作の transaction は移行とは独立している。
+v12の通常openは版と既知DDLを検査し、旧版を暗黙に更新しない。
+`axon migrate --source <v11-db> --output <未使用directory>` はSQLite backup APIでWALを含む
+一貫した入力を出力directory内に固定し、新しいSQLiteと対応表を作る。元DBのpathは切り替えない。
+v9/v10は旧版でv11にしてから手動変換する。
 
-旧版は `BEGIN IMMEDIATE` 取得後に版と既知 DDL を再確認し、整合性を検査する。排他取得後に初めて開く別の read connection から SQLite backup API で `.axon/migration-backups` へ保存する。backup は新規ファイルとして排他的に作成し、整合性検査とファイル・directory の同期後に schema 変更を始める。途中の失敗で残った backup も上書き・自動削除しない。
-
-v9→v10 は entities の条件列追加と制約更新、v10→v11 は Manual の制約追加だけを行う。元の列を列名で複写し、他テーブルと履歴は保持する。v9 の新しい `resurface_command` は NULL とし、過去の事実は生成しない。外部キーを connection 単位で一時停止し、テーブル再構築、全経路の適用、整合性検査、版更新を同じ transaction で確定する。commit 前のエラーは rollback し、途中終了は SQLite の recovery に委ねる。commit / rollback が失敗して結果を確定できない場合は結果不明を返す。
-
-DDL 比較は文字列リテラルと token 境界を保持したまま空白・SQL keyword の大小と、手動移行時の `CREATE TABLE "entities"` 表記差だけを正規化する。未知の table / index / trigger / view / 制約を黙って捨てない。
-情報モデル導入時の一回限りの切り替え条件は
-[導入時の記録](../design/decisions.md#情報モデル導入時の-schema-切り替え) に残す。
-通常の open、公開 import、将来の migration としてその処理を残さない。
+論理digestは既知tableの列名・SQLite値の型・値を決定的に符号化して計算する。
+そのdigestと旧table/keyからstoreとrecordのIDを生成し、元の番号を内部保存順として残す。
+元の全field、claim、日時、legacy reason、baseline、metadataと関係を保持する。
+出力の全rowと参照・schema・整合性を検査し、manifestを最後に同期して成功を返す。
+出力先を上書きせず、失敗時も調査用の途中成果を残す。manifestがない途中成果は利用しない。
+具体的な切替は[手動移行](../reference/migration.md)に従う。

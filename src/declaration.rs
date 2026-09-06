@@ -632,7 +632,7 @@ fn validate_against(
                 description: record.description.clone(),
                 progress: Progress::NotStarted,
                 disposition: Disposition::Accepted,
-                current_revision: Some(1),
+                current_revision: Some(RecordId::new(RecordKind::Revision)),
                 resurface_condition: ResurfaceCondition::Always,
                 parent: None,
                 created_at: now,

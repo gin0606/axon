@@ -467,7 +467,8 @@ mod tests {
             description: None,
             progress,
             disposition,
-            current_revision: (disposition != Disposition::Undecided).then_some(1),
+            current_revision: (disposition != Disposition::Undecided)
+                .then(|| RecordId::new(RecordKind::Revision)),
             resurface_condition: ResurfaceCondition::Always,
             parent: parent.map(EntityId::from_stored),
             created_at: now,

@@ -47,7 +47,10 @@ module information_model {
     | DispositionDecided(Disposition)
     | ResurfaceChanged(ResurfaceCondition)
 
+  type SnapshotRecord = { ref: int, declaration: Declaration }
+
   type DecisionRecord = {
+    ref: int,
     target: Id,
     change: DecisionChange,
     snapshot: int,
@@ -56,6 +59,7 @@ module information_model {
   }
 
   type ProgressRecord = {
+    ref: int,
     target: Id,
     before: Progress,
     after: Progress,
@@ -74,7 +78,7 @@ module information_model {
 
   type State = {
     entities: Id -> Entity,
-    snapshots: Id -> List[Declaration],
+    snapshots: Id -> List[SnapshotRecord],
     currentSnapshot: Id -> int,
     decisionHistory: List[DecisionRecord],
     progressHistory: List[ProgressRecord],
@@ -117,7 +121,7 @@ module information_model {
 
   pure val NO_PARENT: Id = -1
   pure val NO_TARGET: Id = -1
-  pure val NO_SNAPSHOT: int = -1
+  pure val NO_SNAPSHOT: int = 0
 
   // 文面は不透明な値として扱う。差分の有無だけが意味を持つ。
   pure val TEXTS = Set(0, 1)
@@ -171,8 +175,8 @@ module information_model {
   pure val INITIAL_STATE: State = {
     entities: ENTITIES.mapBy(i => initialEntity(i)),
     snapshots: ENTITIES.mapBy(i =>
-      if (i == BASELINE_ENTITY) List(initialDeclaration(i)) else List()),
-    currentSnapshot: ENTITIES.mapBy(i => if (i == BASELINE_ENTITY) 0 else NO_SNAPSHOT),
+      if (i == BASELINE_ENTITY) List({ ref: -1, declaration: initialDeclaration(i) }) else List()),
+    currentSnapshot: ENTITIES.mapBy(i => if (i == BASELINE_ENTITY) -1 else NO_SNAPSHOT),
     decisionHistory: List(),
     progressHistory: List(),
     supplemental: List(),
@@ -282,26 +286,26 @@ module information_model {
     canReplaceDeclaration(s, source, withoutDependency(s, source, target))
 
   // ---- 決定済み declaration の記録 ----
-  pure def snapshotsOf(s: State, i: Id): List[Declaration] = s.snapshots.get(i)
+  pure def snapshotsOf(s: State, i: Id): List[SnapshotRecord] = s.snapshots.get(i)
   pure def currentSnapshotOf(s: State, i: Id): int = s.currentSnapshot.get(i)
 
   pure def validSnapshotIndex(s: State, i: Id, k: int): bool =
-    k >= 0 and k < snapshotsOf(s, i).length()
+    snapshotsOf(s, i).indices().exists(n => snapshotsOf(s, i).nth(n).ref == k)
 
   pure def snapshotAt(s: State, i: Id, k: int): Declaration =
-    if (validSnapshotIndex(s, i, k)) snapshotsOf(s, i).nth(k) else MISSING_DECLARATION
+    if (validSnapshotIndex(s, i, k)) snapshotsOf(s, i).select(r => r.ref == k).head().declaration else MISSING_DECLARATION
 
-  pure def isBaselineSnapshot(i: Id, k: int): bool = i == BASELINE_ENTITY and k == 0
+  pure def isBaselineSnapshot(i: Id, k: int): bool = i == BASELINE_ENTITY and k == -1
 
   pure def latestSnapshotMatchesCurrent(s: State, i: Id): bool = {
     val snaps = snapshotsOf(s, i)
-    if (snaps.length() == 0) false else snaps.nth(snaps.length() - 1) == decl(s, i)
+    if (snaps.length() == 0) false else snaps.nth(snaps.length() - 1).declaration == decl(s, i)
   }
 
   // declaration が前回の決定済み snapshot と同じなら、同じ snapshot に別の判断を結び付ける。
   pure def snapshotIndexOnDecide(s: State, i: Id): int = {
     val snaps = snapshotsOf(s, i)
-    if (latestSnapshotMatchesCurrent(s, i)) snaps.length() - 1 else snaps.length()
+    if (latestSnapshotMatchesCurrent(s, i)) snaps.nth(snaps.length() - 1).ref else freshRef(s)
   }
 
   pure def declarationDiff(a: Declaration, b: Declaration): Set[DeclarationField] =
@@ -313,7 +317,7 @@ module information_model {
   pure def latestSnapshotDiff(s: State, i: Id): Set[DeclarationField] = {
     val snaps = snapshotsOf(s, i)
     if (snaps.length() < 2) Set()
-    else declarationDiff(snaps.nth(snaps.length() - 2), snaps.nth(snaps.length() - 1))
+    else declarationDiff(snaps.nth(snaps.length() - 2).declaration, snaps.nth(snaps.length() - 1).declaration)
   }
 
   // ---- 記録の絞り込み ----
@@ -352,9 +356,10 @@ module information_model {
     val nextSnapshot = if (decided) snapshotIndexOnDecide(s, i) else NO_SNAPSHOT
     val nextSnapshots =
       if (decided and not(latestSnapshotMatchesCurrent(s, i)))
-        s.snapshots.set(i, snapshotsOf(s, i).append(decl(s, i)))
+        s.snapshots.set(i, snapshotsOf(s, i).append({ref: nextSnapshot, declaration: decl(s, i)}))
       else s.snapshots
     val record = {
+      ref: freshRef({...s, snapshots: nextSnapshots}),
       target: i,
       change: DispositionDecided(choice),
       snapshot: nextSnapshot,
@@ -374,6 +379,7 @@ module information_model {
 
   pure def applySetWhen(s: State, i: Id, condition: ResurfaceCondition, reason: int, actor: int): State = {
     val record = {
+      ref: freshRef(s),
       target: i,
       change: ResurfaceChanged(condition),
       snapshot: NO_SNAPSHOT,
@@ -393,6 +399,7 @@ module information_model {
 
   pure def applyProgress(s: State, i: Id, updated: Progress, actor: int): State = {
     val record = {
+      ref: freshRef(s),
       target: i,
       before: control(s, i).progress,
       after: updated,
@@ -408,13 +415,19 @@ module information_model {
   // ここに条件を足すと invSupplementalNeverRestricted が壊れる。
   pure def canAddSupplemental(s: State, i: Id): bool = ENTITIES.contains(i)
 
-  // 対象内で安定した識別子を採番する。既存記録は書き換えない。
-  pure def nextRef(s: State, i: Id): int = supplementalOf(s, i).length()
+  // ID生成の抽象化。負数を使い、保存順とIDの大小を逆にして順序依存を検出する。
+  // ランダム生成の衝突確率・文字列表現はRustの責務。リストだけが線形順序を持つ。
+  pure def freshRef(s: State): int = -(1 +
+    ENTITIES.fold(0, (n, i) => n + snapshotsOf(s, i).length()) +
+    s.decisionHistory.length() + s.progressHistory.length() + s.supplemental.length())
+
+  pure def snapshotPosition(s: State, i: Id, ref: int): int =
+    snapshotsOf(s, i).indices().filter(k => snapshotsOf(s, i).nth(k).ref == ref).fold(-1, (_, k) => k)
 
   pure def applyAddSupplemental(s: State, i: Id, body: int, actor: int, inputTime: int): State = {
     val record = {
       target: i,
-      ref: nextRef(s, i),
+      ref: freshRef(s),
       body: body,
       actor: actor,
       inputTime: inputTime,
@@ -686,8 +699,8 @@ module information_model {
     ENTITIES.forall(i => {
       val decisions = dispositionDecisions(state, i)
       snapshotsOf(state, i).indices().forall(k =>
-        isBaselineSnapshot(i, k)
-          or decisions.indices().exists(m => decisions.nth(m).snapshot == k))
+        isBaselineSnapshot(i, snapshotsOf(state, i).nth(k).ref)
+          or decisions.indices().exists(m => decisions.nth(m).snapshot == snapshotsOf(state, i).nth(k).ref))
     })
 
   // 判断は過去の同内容 snapshot へ巻き戻らず、直前の決定済み snapshot だけを再利用する。
@@ -696,7 +709,7 @@ module information_model {
       val decisions = dispositionDecisions(state, i).select(r => r.snapshot != NO_SNAPSHOT)
       decisions.indices().forall(a =>
         decisions.indices().forall(b =>
-          (a < b) implies decisions.nth(a).snapshot <= decisions.nth(b).snapshot))
+          (a < b) implies snapshotPosition(state, i, decisions.nth(a).snapshot) <= snapshotPosition(state, i, decisions.nth(b).snapshot)))
     })
 
   // 連続する決定済み snapshot は必ず差分を持つ (同一なら同じ snapshot を再利用するため)。
@@ -705,7 +718,7 @@ module information_model {
       val snaps = snapshotsOf(state, i)
       snaps.indices().forall(k =>
         (k + 1 < snaps.length())
-          implies declarationDiff(snaps.nth(k), snaps.nth(k + 1)).size() > 0)
+          implies declarationDiff(snaps.nth(k).declaration, snaps.nth(k + 1).declaration).size() > 0)
     })
 
   // ---- 記録は追記のみ ----
@@ -799,6 +812,17 @@ module information_model {
     state.supplemental.length() ==
       ENTITIES.fold(0, (acc, i) => acc + supplementalOf(state, i).length())
 
+  val invRecordIdsUnique: bool = {
+    val refs = ENTITIES.fold(List(), (acc, i) => acc.concat(snapshotsOf(state, i).foldl(List(), (acc, r) => acc.append(r.ref))))
+      .concat(state.decisionHistory.foldl(List(), (acc, r) => acc.append(r.ref)))
+      .concat(state.progressHistory.foldl(List(), (acc, r) => acc.append(r.ref)))
+      .concat(state.supplemental.foldl(List(), (acc, r) => acc.append(r.ref)))
+    refs.indices().forall(a => refs.indices().forall(b => (a != b) implies refs.nth(a) != refs.nth(b)))
+  }
+
+  val wIdOrderDiffersFromStorage: bool = state.supplemental.length() >= 2 and
+    state.supplemental.head().ref > state.supplemental.nth(1).ref
+
   // ---- Reachability witnesses ----
 
   val wSetTitle: bool = operation == SetTitleOp
@@ -891,16 +915,16 @@ module information_model {
           snaps.indices().exists(c => and {
             a < b,
             b < c,
-            snaps.nth(a) == snaps.nth(c),
-            snaps.nth(a) != snaps.nth(b),
+            snaps.nth(a).declaration == snaps.nth(c).declaration,
+            snaps.nth(a).declaration != snaps.nth(b).declaration,
           })))
     })
 
   // migration 直後は baseline snapshot と現在参照だけがあり、判断履歴を捏造しない。
   val wBaselineWithoutDecisionHistory: bool = and {
     control(state, BASELINE_ENTITY).disposition == Accepted,
-    currentSnapshotOf(state, BASELINE_ENTITY) == 0,
-    snapshotAt(state, BASELINE_ENTITY, 0) == decl(state, BASELINE_ENTITY),
+    currentSnapshotOf(state, BASELINE_ENTITY) == -1,
+    snapshotAt(state, BASELINE_ENTITY, -1) == decl(state, BASELINE_ENTITY),
     decisionRecordsOf(state, BASELINE_ENTITY).length() == 0,
   }
 

@@ -70,6 +70,15 @@ Rejected も固定するのは、不採用も特定の declaration に対する�
 ことを禁止しない。決定済み declaration の変更を採否の再検討として露出させる、意味上の
 ガードとして捉える。
 
+### 記録の識別と保存順
+
+Note、Declaration Revision、判断履歴、進行履歴は、生成時の種類付き128-bit安定IDで識別する。
+同内容・同actor・同時刻でも独立した記録は異なるIDを持つ。current Revisionと判断履歴の
+Revision参照はこのIDを使う。IDは順序を表さず、各streamの線形保存順を別に保持する。
+Revisionの再利用は保存順で直前のRevisionと比較する。過去の同内容へ巻き戻らない。
+表示番号・SQLiteの内部順序キーは公開参照にしない。本文内の旧番号は移行時に書き換えず、
+移行manifestの対応表で解決する。この段階では履歴の分岐は導入しない。
+
 ### Declaration Revision
 
 - Accepted または Rejected と判断された declaration の全文 Revision を残す
