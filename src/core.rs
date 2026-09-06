@@ -39,6 +39,8 @@ pub enum Error {
     EmptyNote,
     #[error("the plan declaration of {0} is fixed by its Disposition")]
     DeclarationFixed(String),
+    #[error("Entity {0} cannot depend on itself")]
+    SelfDependency(String),
     #[error("invalid state: {0}")]
     InvalidState(String),
 }
@@ -762,9 +764,7 @@ impl StateSnapshot {
         }
         if present {
             if source == target {
-                return Err(Error::InvalidState(format!(
-                    "invalid dependency {source} -> {target}"
-                )));
+                return Err(Error::SelfDependency(source.to_string()));
             }
             self.declaration.dependencies.push(edge);
             self.declaration.dependencies.sort();

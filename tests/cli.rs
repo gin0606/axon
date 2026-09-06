@@ -1076,11 +1076,16 @@ fn schema_mismatch_explains_recovery_without_changing_the_database() {
         let diagnostic = stderr(&output);
         assert!(diagnostic.contains(&format!("unsupported axon schema version {version}")));
         assert!(diagnostic.contains(&format!("supports DB schema {version}")));
-        assert!(diagnostic.contains("Migration was not applied"));
+        assert!(diagnostic.contains("The source was not modified"));
         assert!(diagnostic.contains("init cannot upgrade"));
         assert!(diagnostic.contains("axon docs"));
         assert_eq!(fs::read(&path).unwrap(), before);
         assert_eq!(repo.snapshot(&id), snapshot);
+        let init = repo.axon(&["init", "test"]);
+        assert_failure(&init);
+        assert!(stderr(&init).contains(&format!("supports DB schema {version}")));
+        assert!(!stderr(&init).contains("restore a matching config/state pair"));
+        assert_eq!(fs::read(&path).unwrap(), before);
         for args in [&["docs"][..], &["--help"][..], &["--version"][..]] {
             assert_success(&repo.axon(args));
         }

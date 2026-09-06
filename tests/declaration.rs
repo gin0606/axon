@@ -393,12 +393,20 @@ fn apply_retry_repairs_the_file_after_a_post_commit_rewrite_failure() {
     write(&path, &new_plan(" []"));
     assert_success(&repo.axon(&["import", "prepare", path.to_str().unwrap()]));
 
+    let prepared = fs::read(&path).unwrap();
     let original_mode = fs::metadata(repo.root()).unwrap().permissions().mode();
     fs::set_permissions(repo.root(), fs::Permissions::from_mode(0o555)).unwrap();
     let first = repo.axon(&["import", "apply", path.to_str().unwrap()]);
     fs::set_permissions(repo.root(), fs::Permissions::from_mode(original_mode)).unwrap();
     assert_failure(&first);
     assert!(stderr(&first).contains("I/O"));
+    assert!(stderr(&first).contains(&format!(
+        "{} import apply: declaration file refresh failed:",
+        path.display()
+    )));
+    assert!(stderr(&first).contains("Applied: storage declaration values"));
+    assert!(stderr(&first).contains("Not applied: declaration file refresh"));
+    assert_eq!(fs::read(&path).unwrap(), prepared);
     assert!(stdout(&repo.axon(&["list"])).contains("import API"));
 
     let retry = repo.axon(&["import", "apply", path.to_str().unwrap()]);

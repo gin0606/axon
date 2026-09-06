@@ -574,3 +574,65 @@ fn workspace_alias_is_rejected_after_relocation() {
         assert_eq!(original, fs::read(output.join(artifact)).unwrap());
     }
 }
+
+#[test]
+fn setup_reports_saved_configuration_when_attributes_cannot_be_read() {
+    let d = TestDir::new("setup-partial");
+    d.init_git(d.path());
+    fs::create_dir(d.path().join(".gitattributes")).unwrap();
+    let output = d.axon_in(d.path(), &["merge", "setup"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains(".gitattributes setup:"));
+    assert!(
+        stderr(&output).contains(
+            "Applied: Git config merge.axon.name, merge.axon.driver, merge.axon.recursive"
+        )
+    );
+    let config = git(
+        d.path(),
+        &["config", "--local", "--get", "merge.axon.recursive"],
+    );
+    assert_success(&config);
+    assert_eq!(stdout(&config).trim(), "binary");
+    assert!(d.path().join(".gitattributes").is_dir());
+}
+
+#[test]
+fn prepare_destination_resolution_failure_reports_preserved_workspace() {
+    let d = TestDir::new("merge-prepare-partial");
+    init(&d);
+    let bytes = fs::read(state(d.path())).unwrap();
+    for name in ["base", "ours", "theirs"] {
+        fs::write(d.path().join(name), &bytes).unwrap();
+    }
+    let output = d.axon_in(
+        d.path(),
+        &[
+            "merge",
+            "prepare",
+            "--base",
+            "base",
+            "--ours",
+            "ours",
+            "--theirs",
+            "theirs",
+            "--output",
+            "missing/out",
+            "--workspace",
+            "partial",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let diagnostic = stderr(&output);
+    assert!(diagnostic.contains("missing/out resolve destination:"));
+    assert!(diagnostic.contains("Applied: workspace directory created at partial"));
+    assert!(diagnostic.contains("Not applied: merge candidate publication at missing/out"));
+    assert!(diagnostic.contains("use a new workspace path"));
+    for name in ["base", "ours", "theirs"] {
+        assert_eq!(
+            fs::read(d.path().join(format!("partial/{name}.jsonl"))).unwrap(),
+            bytes
+        );
+    }
+    assert!(!d.path().join("missing/out").exists());
+}

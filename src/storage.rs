@@ -150,14 +150,24 @@ fn store_id(state: &StateSnapshot) -> Result<RecordId> {
         _ => Err(invalid("missing store ID")),
     }
 }
+fn boundary(path: &Path, phase: &'static str, result: &'static str, source: DbError) -> DbError {
+    DbError::Boundary {
+        path: path.display().to_string(),
+        phase,
+        result,
+        source: Box::new(source),
+    }
+}
 fn lock(path: &Path) -> Result<File> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(path)?;
-    file.lock()?;
+        .open(path)
+        .map_err(|e| boundary(path, "open writer lock", "Not applied", e.into()))?;
+    file.lock()
+        .map_err(|e| boundary(path, "acquire writer lock", "Not applied", e.into()))?;
     Ok(file)
 }
 fn sync_dir(path: &Path) -> Result<()> {
@@ -179,17 +189,14 @@ fn temporary(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
     Ok(temp)
 }
 fn create(path: &Path, bytes: &[u8]) -> Result<()> {
-    let temp = temporary(path, bytes)?;
-    fs::hard_link(&temp, path)?;
+    let temp = temporary(path, bytes)
+        .map_err(|e| boundary(path, "create temporary file", "Not applied", e))?;
+    fs::hard_link(&temp, path)
+        .map_err(|e| boundary(path, "publish file", "Not applied", e.into()))?;
     fs::remove_file(temp)
         .map_err(DbError::from)
         .and_then(|_| sync_dir(path.parent().unwrap()))
-        .map_err(|e| {
-            invalid(format!(
-                "result unknown after publishing {}: {e}; inspect before retry",
-                path.display()
-            ))
-        })
+        .map_err(|e| boundary(path, "sync published file", "Result unknown", e))
 }
 
 pub enum Store {
@@ -238,11 +245,12 @@ impl FileStore {
         if change.outcome == ApplyOutcome::Unchanged {
             return Ok(());
         }
-        checkpoint("before-write")?;
+        checkpoint("before-write")
+            .map_err(|e| boundary(&self.path, "before replace", "Not applied", e))?;
         let bytes = codec::encode(change.state())
-            .map_err(|e| invalid(format!("operation not applied before replace: {e}")))?;
+            .map_err(|e| boundary(&self.path, "before replace", "Not applied", e.into()))?;
         let temp = temporary(&self.path, &bytes)
-            .map_err(|e| invalid(format!("operation not applied before replace: {e}")))?;
+            .map_err(|e| boundary(&self.path, "before replace", "Not applied", e))?;
         let mut replaced = false;
         let mut publish = || -> Result<()> {
             checkpoint("after-sync")?;
@@ -256,20 +264,25 @@ impl FileStore {
             }
             fs::rename(&temp, &self.path)?;
             replaced = true;
-            checkpoint("after-replace")
-                .and_then(|_| sync_dir(self.path.parent().unwrap()))
-                .map_err(|e| {
-                    invalid(format!(
-                        "result unknown after replace: {e}; inspect state before retry"
-                    ))
-                })
+            checkpoint("after-replace").and_then(|_| sync_dir(self.path.parent().unwrap()))
         };
         let result = publish();
-        let result = if replaced {
-            result
-        } else {
-            result.map_err(|e| invalid(format!("operation not applied before replace: {e}")))
-        };
+        let result = result.map_err(|e| {
+            boundary(
+                &self.path,
+                if replaced {
+                    "directory sync after replace"
+                } else {
+                    "before replace"
+                },
+                if replaced {
+                    "Result unknown"
+                } else {
+                    "Not applied"
+                },
+                e,
+            )
+        });
         if temp.exists() {
             let _ = fs::remove_file(temp);
         }
@@ -294,7 +307,12 @@ impl FileStore {
 }
 impl Store {
     pub fn init(prefix: Option<&str>, backend: Option<Backend>) -> Result<(PathBuf, String)> {
-        Self::init_with(prefix, backend, |_| Ok(()))
+        Self::init_with(prefix, backend, |_| Ok(())).map_err(|e| match e {
+            DbError::Boundary { .. } | DbError::Partial { .. } => {
+                DbError::Initialization(Box::new(e))
+            }
+            other => other,
+        })
     }
     fn init_with(
         prefix: Option<&str>,
@@ -322,118 +340,215 @@ impl Store {
             return Ok((data_path(&root, is_git, cfg.backend)?, actual_prefix));
         }
         let pending = directory.join("init.pending");
-        if present(&pending)? {
-            return Err(invalid(format!(
-                "incomplete initialization at {}; preserve the pending marker and state, restore a matching config before retry",
-                pending.display()
-            )));
-        }
-        if directory.join("axon.db").exists() {
-            return Err(invalid(format!(
-                "legacy database at {}; preserve it and use manual migration",
-                directory.join("axon.db").display()
-            )));
-        }
-        let backend = backend.unwrap_or(Backend::Sqlite);
-        let path = data_path(&root, is_git, backend)?;
-        if directory.join("state.jsonl").exists() || directory.join("state.db").exists() {
-            return Err(invalid(format!(
-                "incomplete initialization at {}; preserve state and restore a matching config.json; no empty state was generated",
-                directory.display()
-            )));
-        }
-        let requested_prefix = prefix;
-        let prefix = prefix.map(str::to_owned).unwrap_or_else(|| {
-            root.file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        });
-        let evaluation = Rc::new(Evaluation::new(root.clone()));
-        fs::create_dir_all(path.parent().unwrap())?;
-        sync_dir(path.parent().unwrap().parent().unwrap())?;
-        let _shared_lock = if backend == Backend::Sqlite && is_git {
-            Some(lock(&path.with_extension("lock"))?)
-        } else {
-            None
-        };
-        let existing = if backend == Backend::Sqlite && present(&path)? {
-            let state = db::Store::open_at(&path, evaluation.clone(), |_| {})?.state()?;
-            if requested_prefix.is_some_and(|p| !matches!(state.metadata.get("prefix"),Some(MetadataValue::Text(actual)) if actual == p)) {
-                return Err(invalid("init prefix differs from existing shared SQLite; no configuration was published"));
-            }
-            Some(state)
-        } else {
-            None
-        };
-        let new_state = existing.is_none();
-        let state = if let Some(state) = existing {
-            state
-        } else {
-            if prefix.is_empty() {
-                return Err(invalid("Entity prefix must not be empty"));
-            }
-            create(&pending, format!("{}\n", path.display()).as_bytes())?;
-            if path.exists() {
+        let mut applied = Vec::new();
+        let initialization = (|| -> Result<(PathBuf, String)> {
+            if present(&pending)? {
                 return Err(invalid(format!(
-                    "incomplete initialization at {}",
-                    path.display()
+                    "incomplete initialization at {}; preserve the pending marker and state, restore a matching config before retry",
+                    pending.display()
                 )));
             }
-            match backend {
-                Backend::File => {
-                    let state = StateSnapshot {
-                        declaration: StoreSnapshot {
-                            evaluation,
-                            entities: vec![],
-                            dependencies: vec![],
-                        },
-                        metadata: [
-                            ("prefix".into(), MetadataValue::Text(prefix.clone())),
-                            (
-                                "store_id".into(),
-                                MetadataValue::Text(RecordId::new(RecordKind::Store).to_string()),
-                            ),
-                        ]
-                        .into(),
-                        histories: Default::default(),
-                        causal: Default::default(),
-                    };
-                    create(&path, &codec::encode(&state)?)?;
-                    state
-                }
-                Backend::Sqlite => {
-                    let temp = temporary(&path, &[])?;
-                    db::Store::init_at(&temp, &prefix)?;
-                    File::open(&temp)?.sync_all()?;
-                    fs::hard_link(&temp, &path)?;
-                    fs::remove_file(temp)?;
-                    sync_dir(path.parent().unwrap())?;
-                    db::Store::open_at(&path, evaluation, |_| {})?.state()?
-                }
+            if directory.join("axon.db").exists() {
+                return Err(invalid(format!(
+                    "legacy database at {}; preserve it and use manual migration",
+                    directory.join("axon.db").display()
+                )));
             }
-        };
-        if requested_prefix.is_some_and(|p| !matches!(state.metadata.get("prefix"),Some(MetadataValue::Text(actual)) if actual == p)) {
+            let backend = backend.unwrap_or(Backend::Sqlite);
+            let path = data_path(&root, is_git, backend)?;
+            if directory.join("state.jsonl").exists() || directory.join("state.db").exists() {
+                return Err(invalid(format!(
+                    "incomplete initialization at {}; preserve state and restore a matching config.json; no empty state was generated",
+                    directory.display()
+                )));
+            }
+            let requested_prefix = prefix;
+            let prefix = prefix.map(str::to_owned).unwrap_or_else(|| {
+                root.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            });
+            let evaluation = Rc::new(Evaluation::new(root.clone()));
+            fs::create_dir_all(path.parent().unwrap())?;
+            sync_dir(path.parent().unwrap().parent().unwrap())?;
+            let _shared_lock = if backend == Backend::Sqlite && is_git {
+                Some(lock(&path.with_extension("lock"))?)
+            } else {
+                None
+            };
+            let existing = if backend == Backend::Sqlite && present(&path)? {
+                let state = db::Store::open_at(&path, evaluation.clone(), |_| {})?.state()?;
+                if requested_prefix.is_some_and(|p| !matches!(state.metadata.get("prefix"),Some(MetadataValue::Text(actual)) if actual == p)) {
+                return Err(invalid("init prefix differs from existing shared SQLite; no configuration was published"));
+            }
+                Some(state)
+            } else {
+                None
+            };
+            let new_state = existing.is_none();
+            let state = if let Some(state) = existing {
+                state
+            } else {
+                if prefix.is_empty() {
+                    return Err(invalid("Entity prefix must not be empty"));
+                }
+                create(&pending, format!("{}\n", path.display()).as_bytes())?;
+                applied.push(("initialization marker", pending.clone()));
+                checkpoint("after-marker")
+                    .map_err(|e| boundary(&path, "before state publication", "Not applied", e))?;
+                if path.exists() {
+                    return Err(invalid(format!(
+                        "incomplete initialization at {}",
+                        path.display()
+                    )));
+                }
+                match backend {
+                    Backend::File => {
+                        let state = StateSnapshot {
+                            declaration: StoreSnapshot {
+                                evaluation,
+                                entities: vec![],
+                                dependencies: vec![],
+                            },
+                            metadata: [
+                                ("prefix".into(), MetadataValue::Text(prefix.clone())),
+                                (
+                                    "store_id".into(),
+                                    MetadataValue::Text(
+                                        RecordId::new(RecordKind::Store).to_string(),
+                                    ),
+                                ),
+                            ]
+                            .into(),
+                            histories: Default::default(),
+                            causal: Default::default(),
+                        };
+                        checkpoint("before-state-publication").map_err(|e| {
+                            boundary(&path, "before state publication", "Not applied", e)
+                        })?;
+                        create(&path, &codec::encode(&state)?)?;
+                        applied.push(("state", path.clone()));
+                        checkpoint("state-published").map_err(|e| {
+                            boundary(
+                                &config_path,
+                                "before configuration publication",
+                                "Not applied",
+                                e,
+                            )
+                        })?;
+                        state
+                    }
+                    Backend::Sqlite => {
+                        let preparation_error = |source| {
+                            boundary(
+                                &path,
+                                "prepare temporary SQLite state",
+                                "Not applied",
+                                source,
+                            )
+                        };
+                        let temp = temporary(&path, &[]).map_err(preparation_error)?;
+                        db::Store::init_at(&temp, &prefix).map_err(preparation_error)?;
+                        File::open(&temp)
+                            .and_then(|file| file.sync_all())
+                            .map_err(|e| preparation_error(e.into()))?;
+                        checkpoint("before-state-publication").map_err(|e| {
+                            boundary(&path, "before state publication", "Not applied", e)
+                        })?;
+                        fs::hard_link(&temp, &path).map_err(|e| {
+                            boundary(&path, "publish SQLite state", "Not applied", e.into())
+                        })?;
+                        fs::remove_file(temp)
+                            .map_err(DbError::from)
+                            .and_then(|_| sync_dir(path.parent().unwrap()))
+                            .map_err(|e| {
+                                boundary(&path, "sync published SQLite state", "Result unknown", e)
+                            })?;
+                        applied.push(("state", path.clone()));
+                        checkpoint("state-published").map_err(|e| {
+                            boundary(
+                                &config_path,
+                                "before configuration publication",
+                                "Not applied",
+                                e,
+                            )
+                        })?;
+                        db::Store::open_at(&path, evaluation, |_| {})?.state()?
+                    }
+                }
+            };
+            if requested_prefix.is_some_and(|p| !matches!(state.metadata.get("prefix"),Some(MetadataValue::Text(actual)) if actual == p)) {
             return Err(invalid("init prefix differs from existing shared SQLite; no configuration was published"));
         }
-        checkpoint("after-state")?;
-        let cfg = Config {
-            schema: 1,
-            backend,
-            store_id: store_id(&state)?,
-        };
-        let mut bytes = serde_json::to_vec_pretty(&cfg).map_err(invalid)?;
-        bytes.push(b'\n');
-        create(&config_path, &bytes)?;
-        checkpoint("after-config")?;
-        if new_state {
-            fs::remove_file(&pending).and_then(|_| File::open(&directory)?.sync_all()).map_err(|e| invalid(format!("initialization applied but cleanup result unknown at {}: {e}; inspect config/state before retry", directory.display())))?;
-        }
-        let actual_prefix = match &state.metadata["prefix"] {
-            MetadataValue::Text(p) => p.clone(),
-            _ => return Err(invalid("invalid prefix")),
-        };
-        Ok((path, actual_prefix))
+            checkpoint("after-state").map_err(|e| {
+                boundary(
+                    &config_path,
+                    "before configuration publication",
+                    "Not applied",
+                    e,
+                )
+            })?;
+            let cfg = Config {
+                schema: 1,
+                backend,
+                store_id: store_id(&state)?,
+            };
+            let mut bytes = serde_json::to_vec_pretty(&cfg).map_err(invalid)?;
+            bytes.push(b'\n');
+            checkpoint("before-config").map_err(|e| {
+                boundary(
+                    &config_path,
+                    "before configuration publication",
+                    "Not applied",
+                    e,
+                )
+            })?;
+            create(&config_path, &bytes)?;
+            applied.push(("configuration", config_path.clone()));
+            checkpoint("after-config")?;
+            if new_state {
+                checkpoint("before-marker-cleanup")?;
+                fs::remove_file(&pending).map_err(|e| {
+                    boundary(
+                        &pending,
+                        "remove initialization marker",
+                        "Result unknown",
+                        e.into(),
+                    )
+                })?;
+                applied.retain(|(label, _)| *label != "initialization marker");
+                checkpoint("after-marker-cleanup")
+                    .and_then(|_| sync_dir(&directory))
+                    .map_err(|e| {
+                        boundary(
+                            &pending,
+                            "sync initialization marker removal",
+                            "Result unknown",
+                            e,
+                        )
+                    })?;
+            }
+            let actual_prefix = match &state.metadata["prefix"] {
+                MetadataValue::Text(p) => p.clone(),
+                _ => return Err(invalid("invalid prefix")),
+            };
+            Ok((path, actual_prefix))
+        })();
+        initialization.map_err(|source| {
+            if applied.is_empty() {
+                source
+            } else {
+                DbError::Partial {
+                    applied: applied
+                        .into_iter()
+                        .map(|(label, path)| format!("{label} at {}", path.display()))
+                        .collect::<Vec<_>>()
+                        .join("\nApplied: "),
+                    source: Box::new(source),
+                }
+            }
+        })
     }
     pub fn open(trace: bool, report: impl FnOnce(&db::migration::Outcome)) -> Result<Self> {
         let (root, is_git) = root(false)?;
@@ -898,7 +1013,7 @@ mod tests {
                 .unwrap_err();
             let actual = fs::read(&store.path).unwrap();
             if stage == "after-replace" {
-                assert!(error.to_string().contains("result unknown"));
+                assert!(error.to_string().contains("Result unknown"));
                 assert_eq!(actual, codec::encode(change.state()).unwrap());
             } else {
                 assert_eq!(actual, bytes);
@@ -1000,9 +1115,39 @@ mod tests {
             if point == stage {
                 std::process::exit(71);
             }
+            if stage == "config-publication-failure" && point == "after-state" {
+                fs::create_dir(".axon/config.json")?;
+            }
+            if stage == format!("error-{point}") {
+                return Err(invalid("injected initialization failure"));
+            }
             Ok(())
         });
-        if stage == "retry" {
+        if stage == "config-publication-failure" {
+            let error = result.unwrap_err();
+            assert!(
+                matches!(&error, DbError::Partial { source, .. } if matches!(source.as_ref(), DbError::Boundary { source, .. } if matches!(source.as_ref(), DbError::Io(_))))
+            );
+            assert!(error.to_string().contains("Applied: state at"));
+            assert!(!error.to_string().contains("invalid axon schema"));
+        } else if stage.starts_with("error-") {
+            let error = result.unwrap_err().to_string();
+            let (marker, state, config) = initialization_stage_files(&stage);
+            assert_eq!(
+                error.contains("Applied: initialization marker at"),
+                marker,
+                "{error}"
+            );
+            assert_eq!(error.contains("Applied: state at"), state, "{error}");
+            assert_eq!(
+                error.contains("Applied: configuration at"),
+                config,
+                "{error}"
+            );
+            if stage == "error-after-marker-cleanup" {
+                assert!(error.contains("Result unknown: storage update"));
+            }
+        } else if stage == "retry" {
             assert!(
                 result
                     .unwrap_err()
@@ -1013,6 +1158,63 @@ mod tests {
             panic!("crash point not reached");
         }
     }
+    fn initialization_stage_files(stage: &str) -> (bool, bool, bool) {
+        let marker = stage != "error-after-marker-cleanup";
+        let state = !matches!(
+            stage,
+            "error-after-marker" | "error-before-state-publication"
+        );
+        let config = matches!(
+            stage,
+            "error-after-config" | "error-before-marker-cleanup" | "error-after-marker-cleanup"
+        );
+        (marker, state, config)
+    }
+    #[test]
+    fn initialization_fault_diagnostics_match_published_stages() {
+        for backend in ["file", "sqlite"] {
+            for stage in [
+                "error-after-marker",
+                "error-before-state-publication",
+                "error-state-published",
+                "error-after-state",
+                "error-before-config",
+                "error-after-config",
+                "error-before-marker-cleanup",
+                "error-after-marker-cleanup",
+                "config-publication-failure",
+            ] {
+                let fixture = Fixture::new();
+                fs::remove_file(fixture.root.join(".axon/config.json")).unwrap();
+                fs::remove_file(fixture.root.join(".axon/state.jsonl")).unwrap();
+                let status = child_command()
+                    .args(["--exact", "storage::tests::init_crash_child", "--ignored"])
+                    .env("AXON_TEST_CRASH_ROOT", &fixture.root)
+                    .env("AXON_TEST_CRASH_STAGE", stage)
+                    .env("AXON_TEST_BACKEND", backend)
+                    .status()
+                    .unwrap();
+                assert!(status.success());
+                let state = fixture.root.join(if backend == "file" {
+                    ".axon/state.jsonl"
+                } else {
+                    ".axon/state.db"
+                });
+                let (marker_expected, state_expected, config_expected) =
+                    initialization_stage_files(stage);
+                assert_eq!(state.is_file(), state_expected);
+                assert_eq!(
+                    fixture.root.join(".axon/config.json").is_file(),
+                    config_expected
+                );
+                assert_eq!(
+                    fixture.root.join(".axon/init.pending").is_file(),
+                    marker_expected
+                );
+            }
+        }
+    }
+
     #[test]
     fn interrupted_initialization_never_regenerates_state() {
         for backend in ["file", "sqlite"] {

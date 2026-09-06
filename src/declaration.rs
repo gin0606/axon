@@ -22,6 +22,14 @@ pub enum DeclarationError {
     Invalid(String),
     #[error("{0}")]
     Database(#[from] DbError),
+    #[error(
+        "declaration file refresh failed: {source}\nApplied: storage declaration values\nNot applied: declaration file refresh at {path}\nHelp: Inspect saved information with `axon list --skip-command-evaluation` and preserve the file; retry the same file only after verifying the declared final values match storage."
+    )]
+    Refresh {
+        path: String,
+        #[source]
+        source: Box<DeclarationError>,
+    },
     #[error("I/O: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -241,7 +249,12 @@ pub fn prepare(store: &mut Store, path: &Path) -> Result<()> {
     canonicalize(&mut document)?;
     validate_local(&document, false)?;
     validate_against(&document, &snapshot, &prefix, ValidationMode::Prepare)?;
-    atomic_write(path, &serialize(&document)?)
+    atomic_write(path, &serialize(&document)?).map_err(|e| {
+        DeclarationError::Invalid(format!(
+            "{e}\nNot applied: declaration file replacement at {}",
+            path.display()
+        ))
+    })
 }
 
 pub fn check(store: &mut Store, path: &Path) -> Result<String> {
@@ -268,11 +281,17 @@ pub fn apply(store: &mut Store, path: &Path) -> Result<String> {
         let desired = validated.desired.clone();
         Ok::<_, DeclarationError>((validated, desired))
     })?;
-    let selected = selected_ids(&document)?;
-    let mut refreshed = document_from_snapshot(&after, &selected, &selected_keys)?;
-    validate_local(&refreshed, false)?;
-    canonicalize(&mut refreshed)?;
-    atomic_write(path, &serialize(&refreshed)?)?;
+    let refresh = (|| -> Result<()> {
+        let selected = selected_ids(&document)?;
+        let mut refreshed = document_from_snapshot(&after, &selected, &selected_keys)?;
+        validate_local(&refreshed, false)?;
+        canonicalize(&mut refreshed)?;
+        atomic_write(path, &serialize(&refreshed)?)
+    })();
+    refresh.map_err(|source| DeclarationError::Refresh {
+        path: path.display().to_string(),
+        source: Box::new(source),
+    })?;
     Ok(validated.report)
 }
 

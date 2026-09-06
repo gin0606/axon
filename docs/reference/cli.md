@@ -319,7 +319,8 @@ axon-a1b2c3  Note note-0123456789abcdef0123456789abcdef recorded
 
 ```text
 Error: axon-a1b2c3 dep add: Entity axon-a1b2c3 cannot depend on itself
-Error: axon-a1b2c3 decide accept: Disposition is already Accepted; no transition was applied
+Error: axon-a1b2c3 decide accept: axon-a1b2c3: Disposition is already Accepted
+Help: No transition was applied. Use `axon show axon-a1b2c3` to inspect the current state; repeating the same transition is an error.
 ```
 
 適用前の I/O 失敗（置換前と確認できる場合、stderr / 終了1）:
@@ -361,9 +362,9 @@ DB 全体の適用後、宣言 file の置換前に失敗した場合（stderr /
 
 ```text
 Error: /work/plan.yml import apply: declaration file refresh failed: permission denied
-Applied: DB declaration changes
+Applied: storage declaration values
 Not applied: declaration file refresh at /work/plan.yml
-Help: Inspect the DB and preserve the file; retry the same file only after verifying the declared final values match the DB.
+Help: Inspect saved information with `axon list --skip-command-evaluation` and preserve the file; retry the same file only after verifying the declared final values match storage.
 ```
 
 file backend の置換後の同期失敗など、保存結果を確定できない場合（stderr / 終了1）:
@@ -378,6 +379,21 @@ DB が no-op でも file 更新は別の段階であり、その失敗は成功�
 init、migration、merge の複数保存先も同じ規則で、既知の保存先、phase、backup と
 適用状態を示す。個別の保存保証・復旧条件は[保存契約](file-storage.md)と
 [手動移行](migration.md)に従い、この表示規則から全体の原子性を推測しない。
+
+#### 診断の保存境界
+
+通常の診断は操作と判明した対象を含み、自由記述の reason や title を診断の context に転載しない。
+自己依存は通常操作・宣言とも `Entity <id> cannot depend on itself` として拒否する。
+保存済み snapshot の不整合は引き続き保存データ異常として扱う。
+SQLite は transaction の開始・保存・commit、file は置換前・置換後の同期を区別して保存 path を示す。
+SQLite の commit 自体のエラーは保守的に `Result unknown` とし、保存前の拒否と混同しない。
+`Applied: storage declaration values` は import の保存値が確定したことを表し、DB no-op も含む。
+確認出力に失敗しても保存済みの結果は `Applied:` に残す。BrokenPipe の成功扱いは維持する。
+init の設定公開前に state を保存した場合、merge setup の属性更新前に Git config を設定した場合も、
+適用済みの段階を診断に残す。
+
+時点・確認経路・維持/修正の処分は
+[2026-09-06 の更新系診断棚卸し](../development/audits/mutation-diagnostics-2026-09-06.md)を参照する。
 
 #### 実装への対応
 

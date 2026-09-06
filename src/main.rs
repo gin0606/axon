@@ -661,7 +661,7 @@ fn migration_guidance(failure: &db::migration::Failure) -> String {
     use db::migration::ApplicationState;
     let state = match failure.applied {
         ApplicationState::NotApplied => {
-            "Migration was not applied to the source; the requested operation did not run. Incomplete output may remain."
+            "The source was not modified. Migration output publication did not complete; incomplete output, including converted state or configuration, may remain."
         }
         ApplicationState::Applied => {
             "Migration was committed to the output; the source was not switched. Preserve both databases."
@@ -692,8 +692,10 @@ fn error_guidance(error: &(dyn std::error::Error + 'static)) -> Option<String> {
     if let Some(error) = error.downcast_ref::<DbError>() {
         return Some(match error {
             DbError::Migration(failure) => migration_guidance(failure),
+            DbError::Initialization(_) => "Preserve the state, config.json, and init.pending at the reported paths, along with temporary files. Inspect these files before retrying init; initialization may be incomplete, so normal Axon reads may not work. If initialization is incomplete, restore a matching config/state pair without regenerating or overwriting saved state. See `axon docs` for storage recovery guidance.".to_string(),
+            DbError::Boundary { result: "Result unknown", .. } => "Confirm the writer has stopped, then inspect saved information with `axon list --skip-command-evaluation` / `axon show <id> --skip-command-evaluation` and Note IDs/bodies with `axon note list <id>` / `axon note show <id> <note-id>` before retrying. Creation and Note append are not idempotent.".to_string(),
             DbError::UnsupportedSchema { found, .. } => format!(
-                "Use an axon build that supports DB schema {found}. Automatic migration supports v9 and later; init cannot upgrade an existing DB. Preserve the database and do not change user_version to bypass this check. See `axon docs` for storage recovery guidance."
+                "Use an axon build that supports DB schema {found}. Use `axon migrate --source <v11-v12-v13-db> --output <new-directory> --backend <sqlite|file>` for manual conversion; for v9/v10 first use a v11 build. init cannot upgrade an existing DB. Preserve the database and do not change user_version to bypass this check. See `axon docs` for storage recovery guidance."
             ),
             DbError::CannotStart { id, .. } | DbError::CannotProgress { id, .. } => format!(
                 "Inspect `axon show {id}` for state, relationships, and Group completion constraints. `axon docs` explains the operation prerequisites."
@@ -710,7 +712,7 @@ fn error_guidance(error: &(dyn std::error::Error + 'static)) -> Option<String> {
             DbError::Cycle { .. } | DbError::Containment(_) => "Inspect the involved Entities with `axon show <ID>` and use `axon docs` for relationship constraints. Changing a relationship changes the plan; select any revision according to the intended plan.".to_string(),
             DbError::AlreadyInitialized(_) => "init creates a new database; it does not reset or upgrade an existing one. Use `axon list` to inspect it, or `axon docs` for storage recovery guidance.".to_string(),
             DbError::Evaluation(_) => evaluation_guidance().to_string(),
-            _ => return None,
+            _ => return std::error::Error::source(error).and_then(error_guidance),
         });
     }
     if error.is::<derived::EvaluationError>() {
@@ -723,9 +725,87 @@ fn evaluation_guidance() -> &'static str {
     "Read saved information without executing conditions with `axon list --skip-command-evaluation` or `axon show <id> --skip-command-evaluation`. See `axon when command --help` for the exit-status contract. Correcting a Command condition, or explicitly replacing or clearing it, does not evaluate the failing condition; replacing or clearing it changes when the Entity surfaces."
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{context}: {source}{details}")]
+struct OperationError {
+    context: String,
+    #[source]
+    source: Box<dyn std::error::Error>,
+    details: String,
+}
+
+fn operation_error(
+    context: impl Into<String>,
+    source: impl Into<Box<dyn std::error::Error>>,
+    details: impl Into<String>,
+) -> Box<dyn std::error::Error> {
+    Box::new(OperationError {
+        context: context.into(),
+        source: source.into(),
+        details: details.into(),
+    })
+}
+
+fn mutation_context(matches: &clap::ArgMatches) -> Option<String> {
+    let (root, mut args) = matches.subcommand()?;
+    let mut operation = root.to_string();
+    while let Some((name, child)) = args.subcommand() {
+        operation.push(' ');
+        operation.push_str(name);
+        args = child;
+    }
+    let mutates = matches!(
+        root,
+        "init"
+            | "migrate"
+            | "plan"
+            | "capture"
+            | "write"
+            | "start"
+            | "done"
+            | "release"
+            | "decide"
+            | "when"
+            | "dep"
+            | "merge"
+    ) || matches!(
+        operation.as_str(),
+        "note add"
+            | "group plan"
+            | "group capture"
+            | "group set"
+            | "group unset"
+            | "import prepare"
+            | "import apply"
+    );
+    if !mutates {
+        return None;
+    }
+    let target = args
+        .try_get_one::<String>("id")
+        .ok()
+        .flatten()
+        .cloned()
+        .or_else(|| {
+            ["file", "workspace", "output", "ours"]
+                .iter()
+                .find_map(|key| {
+                    args.try_get_one::<std::path::PathBuf>(key)
+                        .ok()
+                        .flatten()
+                        .map(|p| p.display().to_string())
+                })
+        });
+    Some(target.map_or_else(
+        || operation.clone(),
+        |target| format!("{target} {operation}"),
+    ))
+}
+
 fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> {
     let mut matches = cli_command().get_matches_from(args);
-    match Cli::from_arg_matches_mut(&mut matches)?.command {
+    let context = mutation_context(&matches);
+    let result = (|| match Cli::from_arg_matches_mut(&mut matches)?.command {
         Command::Migrate {
             source,
             output,
@@ -740,7 +820,7 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
                     database.display(),
                     backup.display(),
                     output.join("manifest.yaml").display()
-                ))?;
+                )).map_err(|e| operation_error("confirmation output", e, format!("\nApplied: migration output at {}", output.display())))?;
             }
             Ok(())
         }
@@ -812,7 +892,11 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
         Command::When(command) => cmd_when(command),
         Command::Dep(command) => cmd_dep(command),
         Command::Group(command) => cmd_group(command),
-    }
+    })();
+    result.map_err(|error| match context {
+        Some(context) => operation_error(context, error, ""),
+        None => error,
+    })
 }
 
 fn cmd_export(
@@ -831,13 +915,14 @@ fn cmd_import(command: ImportCmd) -> Result<(), Box<dyn std::error::Error>> {
         ImportCmd::Prepare { file } => {
             let mut store = open_store(false)?;
             declaration::prepare(&mut store, &file)?;
-            write_output(
+            write_mutation_output(
                 &format!(
                     "{}  {}\n",
                     decoration.paint(OUTPUT_POSITIVE, "Prepared"),
                     file.display()
                 ),
                 decoration,
+                &format!("declaration file prepared at {}", file.display()),
             )?;
         }
         ImportCmd::Check { file, trace } => {
@@ -856,7 +941,11 @@ fn cmd_import(command: ImportCmd) -> Result<(), Box<dyn std::error::Error>> {
                 decoration.paint(OUTPUT_POSITIVE, "Applied"),
                 file.display()
             ));
-            write_output(&output, decoration)?;
+            write_mutation_output(
+                &output,
+                decoration,
+                &format!("storage declaration and file refresh at {}", file.display()),
+            )?;
         }
     }
     Ok(())
@@ -889,7 +978,7 @@ fn cmd_init(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (path, prefix) = Store::init(prefix.as_deref(), backend)?;
     let decoration = current_output_decoration();
-    write_output(
+    write_mutation_output(
         &format!(
             "{}  {}\n{}  {prefix}-xxxxxx\n",
             decoration.paint(OUTPUT_POSITIVE, "Initialized"),
@@ -897,6 +986,7 @@ fn cmd_init(
             decoration.paint(OUTPUT_MUTED, "Entity ID format:"),
         ),
         decoration,
+        &format!("initialization at {}", path.display()),
     )?;
     Ok(())
 }
@@ -931,9 +1021,11 @@ fn cmd_create(
         created_at: now,
         updated_at: now,
     };
-    store.insert(&entity)?;
+    store
+        .insert(&entity)
+        .map_err(|e| operation_error(entity.id.to_string(), e, ""))?;
     let decoration = current_output_decoration();
-    write_output(
+    write_mutation_output(
         &format!(
             "{}  {}  {}  [{}]  {}\n",
             decoration.paint(OUTPUT_ID, &entity.id),
@@ -943,6 +1035,7 @@ fn cmd_create(
             entity.title,
         ),
         decoration,
+        &format!("{} Created", entity.id),
     )?;
     Ok(())
 }
@@ -1019,16 +1112,36 @@ fn render_entity_identity(entity: &Entity, decoration: OutputDecoration) -> Stri
     )
 }
 
-fn write_confirmation(id: &EntityId, result: String, style: Style) -> std::io::Result<()> {
+fn write_mutation_output(
+    output: &str,
+    decoration: OutputDecoration,
+    applied: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    write_output(output, decoration)
+        .map_err(|e| operation_error("confirmation output", e, format!("\nApplied: {applied}")))
+}
+
+fn write_confirmation(
+    id: &EntityId,
+    result: String,
+    style: Style,
+) -> Result<(), Box<dyn std::error::Error>> {
     let decoration = current_output_decoration();
     write_output(
         &format!(
             "{}  {}\n",
             decoration.paint(OUTPUT_ID, id),
-            decoration.paint(style, result)
+            decoration.paint(style, &result)
         ),
         decoration,
     )
+    .map_err(|e| {
+        operation_error(
+            "confirmation output",
+            e,
+            format!("\nApplied: {id} {result}"),
+        )
+    })
 }
 
 fn cmd_ready(
@@ -2853,12 +2966,27 @@ fn cmd_write(
 
     let mut store = open_store(false)?;
     let id = store.resolve_id(raw)?;
-    let current = store.get(&id)?;
+    let changed = write_fields(&mut store, &id, title, body)?;
+    if changed.is_empty() {
+        write_confirmation(&id, "No changes".to_string(), OUTPUT_MUTED)?;
+    } else {
+        write_confirmation(&id, changed.join("  "), OUTPUT_POSITIVE)?;
+    }
+    Ok(())
+}
+
+fn write_fields(
+    store: &mut Store,
+    id: &EntityId,
+    title: Option<String>,
+    body: Option<String>,
+) -> Result<Vec<&'static str>, Box<dyn std::error::Error>> {
+    let current = store.get(id)?;
     let mut changed = Vec::new();
     if let Some(title) = title {
         let title = normalize_title(&title)?;
         if title != current.title {
-            store.apply(&id, Change::SetTitle(title), &ctx(None))?;
+            store.apply(id, Change::SetTitle(title), &ctx(None))?;
             changed.push("Title updated");
         }
     }
@@ -2866,7 +2994,16 @@ fn cmd_write(
         let body = normalize_description(body);
         if body != current.description {
             let removed = body.is_none();
-            store.apply(&id, Change::SetDescription(body), &ctx(None))?;
+            store
+                .apply(id, Change::SetDescription(body), &ctx(None))
+                .map_err(|e| {
+                    let applied = if changed.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\nApplied: {id} {}", changed.join("  "))
+                    };
+                    operation_error("description save", e, applied)
+                })?;
             changed.push(if removed {
                 "Description removed"
             } else {
@@ -2874,12 +3011,7 @@ fn cmd_write(
             });
         }
     }
-    if changed.is_empty() {
-        write_confirmation(&id, "No changes".to_string(), OUTPUT_MUTED)?;
-    } else {
-        write_confirmation(&id, changed.join("  "), OUTPUT_POSITIVE)?;
-    }
-    Ok(())
+    Ok(changed)
 }
 
 fn read_description(
@@ -2895,7 +3027,11 @@ fn read_description(
             std::io::stdin().read_to_string(&mut buffer)?;
             Ok(Some(buffer))
         }
-        (None, Some(file)) => Ok(Some(std::fs::read_to_string(file)?)),
+        (None, Some(file)) => {
+            Ok(Some(std::fs::read_to_string(&file).map_err(|e| {
+                operation_error(format!("{file} read input"), e, "")
+            })?))
+        }
         (Some(_), Some(_)) => Err("-m and -F cannot be used together".into()),
         (None, None) => Ok(None),
     }
@@ -3164,6 +3300,42 @@ mod tests {
     }
 
     #[test]
+    fn write_reports_saved_title_when_description_transaction_rolls_back() {
+        let path = std::env::temp_dir().join(format!(
+            "axon-write-fault-{}.db",
+            RecordId::new(RecordKind::Store)
+        ));
+        db::Store::init_at(&path, "t").unwrap();
+        let evaluation = std::rc::Rc::new(derived::Evaluation::new(std::env::temp_dir()));
+        let mut store = Store::Sqlite(db::Store::open_at(&path, evaluation, |_| {}).unwrap());
+        let mut task = entity("t-task", EntityKind::Issue);
+        task.disposition = Disposition::Undecided;
+        task.current_revision = None;
+        store.insert(&task).unwrap();
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.execute_batch("CREATE TRIGGER fail_description BEFORE UPDATE OF description ON entities WHEN NEW.description IS NOT NULL BEGIN SELECT RAISE(ABORT, 'injected description failure'); END;").unwrap();
+        let error = write_fields(
+            &mut store,
+            &task.id,
+            Some("saved title".into()),
+            Some("unsaved description".into()),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("description save:"));
+        assert!(error.to_string().contains("Not applied: storage update"));
+        assert!(error.to_string().contains("Applied: t-task Title updated"));
+        let saved = store.get(&task.id).unwrap();
+        assert_eq!(saved.title, "saved title");
+        assert_eq!(saved.description, None);
+        assert_eq!(saved.disposition, task.disposition);
+        assert!(store.events(&task.id).unwrap().is_empty());
+        assert!(store.notes(&task.id).unwrap().is_empty());
+        drop(store);
+        drop(connection);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn status_styles_preserve_text_and_stored_strings() {
         let mut group = entity("t-g", EntityKind::Group);
         group.title = " 計画\n  continued ".into();
@@ -3233,10 +3405,34 @@ mod tests {
     }
 
     #[test]
+    fn unknown_result_guidance_uses_valid_note_commands_and_initialization_files() {
+        let failure = || db::DbError::Boundary {
+            path: "/fixture/.axon/config.json".into(),
+            phase: "sync published file",
+            result: "Result unknown",
+            source: Box::new(db::DbError::Io(std::io::Error::other(
+                "injected sync failure",
+            ))),
+        };
+        let guidance = error_guidance(&failure()).unwrap();
+        assert!(guidance.contains("`axon note list <id>`"));
+        assert!(guidance.contains("`axon note show <id> <note-id>`"));
+        assert!(Cli::try_parse_from(["axon", "note", "list", "t-task"]).is_ok());
+        assert!(Cli::try_parse_from(["axon", "note", "show", "t-task", "note-0123"]).is_ok());
+        let guidance = error_guidance(&db::DbError::Initialization(Box::new(failure()))).unwrap();
+        assert!(guidance.contains("config.json, and init.pending"));
+        assert!(!guidance.contains("`axon list"));
+        assert!(!guidance.contains("`axon note"));
+    }
+
+    #[test]
     fn migration_failure_guidance_preserves_application_uncertainty() {
         use db::migration::{ApplicationState, Failure};
         for (applied, expected) in [
-            (ApplicationState::NotApplied, "Migration was not applied"),
+            (
+                ApplicationState::NotApplied,
+                "output publication did not complete",
+            ),
             (ApplicationState::Applied, "Migration was committed"),
             (ApplicationState::Unknown, "before any retry"),
         ] {
@@ -3252,6 +3448,7 @@ mod tests {
             let guidance = error_guidance(&db::DbError::Migration(failure)).unwrap();
             assert!(guidance.contains(expected));
             assert!(guidance.contains("source"));
+            assert!(!guidance.contains("operation did not run"));
             if applied != ApplicationState::NotApplied {
                 assert!(!guidance.contains("Migration was not applied"));
             }

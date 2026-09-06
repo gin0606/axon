@@ -11,6 +11,14 @@ use std::{
 };
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+#[derive(Debug, thiserror::Error)]
+#[error("{source}\n{details}")]
+struct ArtifactFailure {
+    #[source]
+    source: Box<dyn std::error::Error>,
+    details: String,
+}
+
 #[derive(Subcommand)]
 pub enum StorageCmd {
     Check { snapshot: PathBuf },
@@ -191,7 +199,11 @@ fn optional(path: &Path) -> Result<Option<Vec<u8>>> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.into()),
+        Err(e) => Err(crate::operation_error(
+            format!("{} read destination", path.display()),
+            e,
+            "",
+        )),
     }
 }
 fn lock(path: &Path) -> Result<File> {
@@ -205,23 +217,32 @@ fn lock(path: &Path) -> Result<File> {
     Ok(f)
 }
 fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let temporary = path.with_file_name(format!(".merge-{}.tmp", RecordId::new(RecordKind::Store)));
-    let mut f = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    f.write_all(bytes)?;
-    f.sync_all()?;
-    fs::rename(&temporary, path)?;
+    let publication = (|| -> Result<()> {
+        let temporary =
+            path.with_file_name(format!(".merge-{}.tmp", RecordId::new(RecordKind::Store)));
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    publication.map_err(|e| {
+        format!(
+            "{} publish: {e}\nNot applied: file replacement at {}",
+            path.display(),
+            path.display()
+        )
+    })?;
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|e| {
-            format!("result unknown after replace: {e}; preserve workspace and inspect destination")
-        })?;
+    File::open(parent).and_then(|directory| directory.sync_all()).map_err(|e| {
+        format!("result unknown after replace at {}: {e}\nResult unknown: file durability at {}\nHelp: Preserve the workspace and inspect the destination before retrying.", path.display(), path.display())
+    })?;
     Ok(())
 }
 fn evaluate(root: PathBuf) -> Rc<Evaluation> {
@@ -258,6 +279,21 @@ fn prepare(
     preserved_ours: &mut Option<Vec<u8>>,
 ) -> Result<()> {
     fs::create_dir(workspace)?;
+    prepare_created(base, ours, theirs, output, workspace, driver, preserved_ours).map_err(|source| Box::new(ArtifactFailure {
+        source,
+        details: format!("Applied: workspace directory created at {}\nResult unknown: completeness of workspace artifacts at {}\nNot applied: merge candidate publication at {}\nHelp: Preserve the partial workspace and inspect its artifacts. Correct the reported cause and use a new workspace path for merge prepare.", workspace.display(), workspace.display(), output.display()),
+    }) as Box<dyn std::error::Error>)
+}
+
+fn prepare_created(
+    base: &Path,
+    ours: &Path,
+    theirs: &Path,
+    output: &Path,
+    workspace: &Path,
+    driver: bool,
+    preserved_ours: &mut Option<Vec<u8>>,
+) -> Result<()> {
     let workspace = fs::canonicalize(workspace)?;
     let mut inputs = Vec::new();
     // Preserve every readable input even when another is missing; Git discards its temporaries.
@@ -294,7 +330,9 @@ fn prepare(
         )
         .into());
     }
-    let output = output_path(output, &workspace)?;
+    let output = output_path(output, &workspace).map_err(|e| {
+        crate::operation_error(format!("{} resolve destination", output.display()), e, "")
+    })?;
     let preimage = optional(&output)?;
     if let Some(bytes) = &preimage {
         atomic(&workspace.join("preimage"), bytes)?;
@@ -345,8 +383,12 @@ fn prepare(
             repairs: vec![],
         },
     )?;
-    println!("Workspace: {}", workspace.display());
-    check(&workspace)
+    crate::write_mutation_output(
+        &format!("Workspace: {}\n", workspace.display()),
+        crate::OutputDecoration::Plain,
+        &format!("merge workspace at {}", workspace.display()),
+    )?;
+    check_inner(&workspace)
 }
 fn drift_read(path: impl AsRef<Path>) -> Result<Vec<u8>> {
     let path = path.as_ref();
@@ -447,6 +489,12 @@ fn compute(workspace: &Path, manifest: &Manifest, bytes: [Vec<u8>; 3]) -> Result
     Ok(outcome)
 }
 fn check(workspace: &Path) -> Result<()> {
+    check_inner(workspace).map_err(|source| Box::new(ArtifactFailure {
+        source,
+        details: format!("Result unknown: workspace artifact updates at {}\nNot applied: merge candidate publication\nHelp: Preserve the workspace, inspect its original snapshots and generated artifacts, and resolve the reported cause before running merge check again.", workspace.display()),
+    }) as Box<dyn std::error::Error>)
+}
+fn check_inner(workspace: &Path) -> Result<()> {
     let _lock = lock(&workspace.join("workspace.lock"))?;
     let manifest: Manifest = read(&workspace.join("manifest.json"))?;
     output_path(&manifest.output, workspace)?;
@@ -529,7 +577,11 @@ fn apply_with(workspace: &Path, mut checkpoint: impl FnMut(&str) -> Result<()>) 
     merge::validate(&state)?;
     let before = optional(&manifest.output)?;
     if before.as_deref() == Some(&candidate) {
-        println!("Already applied");
+        crate::write_mutation_output(
+            "Already applied\n",
+            crate::OutputDecoration::Plain,
+            &format!("destination already matches {}", manifest.output.display()),
+        )?;
         return Ok(());
     }
     if before.as_deref().map(digest) != manifest.preimage {
@@ -548,7 +600,11 @@ fn apply_with(workspace: &Path, mut checkpoint: impl FnMut(&str) -> Result<()>) 
     atomic(&manifest.output, &candidate)?;
     checkpoint("after-replace")
         .map_err(|e| format!("result unknown after replace: {e}; inspect retained candidate"))?;
-    println!("Applied: {}", manifest.output.display());
+    crate::write_mutation_output(
+        &format!("Applied: {}\n", manifest.output.display()),
+        crate::OutputDecoration::Plain,
+        &format!("destination at {}", manifest.output.display()),
+    )?;
     Ok(())
 }
 fn git(args: &[&str]) -> Result<String> {
@@ -563,33 +619,53 @@ fn setup() -> Result<()> {
     let executable = std::env::current_exe()?
         .to_string_lossy()
         .replace('\'', "'\\''");
-    git(&[
-        "config",
-        "--local",
-        "merge.axon.name",
-        "Axon validated snapshot merge",
-    ])?;
-    git(&[
-        "config",
-        "--local",
-        "merge.axon.driver",
-        &format!("'{executable}' merge driver %O %A %B"),
-    ])?;
-    git(&["config", "--local", "merge.axon.recursive", "binary"])?;
-    let attributes = root.join(".gitattributes");
-    let mut bytes = optional(&attributes)?.unwrap_or_default();
-    let entry = "/.axon/state.jsonl merge=axon";
-    if !String::from_utf8_lossy(&bytes)
-        .lines()
-        .any(|line| line == entry)
-    {
-        if !bytes.is_empty() && !bytes.ends_with(b"\n") {
-            bytes.push(b'\n');
-        }
-        bytes.extend_from_slice(format!("{entry}\n").as_bytes());
-        atomic(&attributes, &bytes)?;
+    let settings = [
+        (
+            "merge.axon.name",
+            "Axon validated snapshot merge".to_string(),
+        ),
+        (
+            "merge.axon.driver",
+            format!("'{executable}' merge driver %O %A %B"),
+        ),
+        ("merge.axon.recursive", "binary".to_string()),
+    ];
+    let mut applied = Vec::new();
+    for (key, value) in &settings {
+        git(&["config", "--local", key, value]).map_err(|e| {
+            let prior = if applied.is_empty() { String::new() } else { format!("\nApplied: Git config {}", applied.join(", ")) };
+            format!("{} Git config {key}: {e}{prior}\nResult unknown: Git config {key}\nHelp: Inspect local Git configuration before retrying setup.", root.display())
+        })?;
+        applied.push(*key);
     }
-    println!("Registered driver; review .gitattributes and ignore .axon/merge/");
+    let attributes_result = (|| -> Result<()> {
+        let attributes = root.join(".gitattributes");
+        let mut bytes = optional(&attributes)?.unwrap_or_default();
+        let entry = "/.axon/state.jsonl merge=axon";
+        if !String::from_utf8_lossy(&bytes)
+            .lines()
+            .any(|line| line == entry)
+        {
+            if !bytes.is_empty() && !bytes.ends_with(b"\n") {
+                bytes.push(b'\n');
+            }
+            bytes.extend_from_slice(format!("{entry}\n").as_bytes());
+            atomic(&attributes, &bytes)?;
+        }
+        Ok(())
+    })();
+    attributes_result.map_err(|e| {
+        format!(
+            "{} .gitattributes setup: {e}\nApplied: Git config {}",
+            root.display(),
+            applied.join(", ")
+        )
+    })?;
+    crate::write_mutation_output(
+        "Registered driver; review .gitattributes and ignore .axon/merge/\n",
+        crate::OutputDecoration::Plain,
+        "Git merge driver configuration and .gitattributes",
+    )?;
     Ok(())
 }
 pub fn run(command: MergeCmd) -> Result<()> {
@@ -627,6 +703,7 @@ pub fn run(command: MergeCmd) -> Result<()> {
                         && optional(&ours)? == preserved_ours
                     {
                         atomic(&ours,format!("<<<<<<< Axon unresolved\nWorkspace: {}\n{}\n=======\nUse preserved base/ours/theirs with merge prepare to resolve explicitly.\n>>>>>>> Axon unresolved\n",workspace.display(),e).as_bytes())?;
+                        return Err(format!("{e}\nApplied: conflict marker at {}\nHelp: Resolve using preserved inputs in {}.", ours.display(), workspace.display()).into());
                     }
                     Err(e)
                 }

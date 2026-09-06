@@ -78,6 +78,24 @@ pub enum DbError {
     NoSuchRevision { id: String, number: String },
     #[error("the plan declaration of {0} is fixed by its Disposition")]
     DeclarationFixed(String),
+    #[error("Entity {0} cannot depend on itself")]
+    SelfDependency(String),
+    #[error("{source}\nApplied: {applied}")]
+    Partial {
+        applied: String,
+        #[source]
+        source: Box<DbError>,
+    },
+    #[error("{0}")]
+    Initialization(#[source] Box<DbError>),
+    #[error("{path} {phase}: {source}\n{result}: storage update at {path}")]
+    Boundary {
+        path: String,
+        phase: &'static str,
+        result: &'static str,
+        #[source]
+        source: Box<DbError>,
+    },
     #[error("invalid axon schema: {0}")]
     InvalidSchema(String),
     #[error("unsupported axon schema version {found}; expected {expected}")]
@@ -463,10 +481,17 @@ impl Store {
         E: From<DbError>,
         F: FnOnce(StoreSnapshot) -> std::result::Result<(T, StoreSnapshot), E>,
     {
+        let path = self.conn.path().unwrap_or(":memory:").to_string();
+        let boundary = |source, phase, result| DbError::Boundary {
+            path: path.clone(),
+            phase,
+            result,
+            source: Box::new(source),
+        };
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(DbError::from)?;
+            .map_err(|e| boundary(DbError::from(e), "begin transaction", "Not applied"))?;
         let before = read_state(&tx, self.evaluation.clone()).map_err(E::from)?;
         let (value, desired) = build(before.declaration.clone())?;
         let result = before
@@ -481,9 +506,11 @@ impl Store {
                 },
             )
             .map_err(DbError::from)?;
-        publish(&tx, &before, &result).map_err(E::from)?;
+        publish(&tx, &before, &result)
+            .map_err(|e| boundary(e, "save transaction", "Not applied"))?;
         let after = read_snapshot(&tx, self.evaluation.clone()).map_err(E::from)?;
-        tx.commit().map_err(DbError::from)?;
+        tx.commit()
+            .map_err(|e| boundary(DbError::from(e), "commit transaction", "Result unknown"))?;
         Ok((value, after))
     }
 
@@ -548,9 +575,17 @@ impl Store {
     }
 
     fn mutate(&mut self, operation: core::Operation, ctx: &Ctx) -> Result<core::ValidatedChange> {
+        let path = self.conn.path().unwrap_or(":memory:").to_string();
+        let boundary = |source, phase, result| DbError::Boundary {
+            path: path.clone(),
+            phase,
+            result,
+            source: Box::new(source),
+        };
         let tx = self
             .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| boundary(DbError::from(e), "begin transaction", "Not applied"))?;
         let before = read_state(&tx, self.evaluation.clone())?;
         let result = before.execute(
             operation,
@@ -562,8 +597,10 @@ impl Store {
                 ids: &mut RecordId::new,
             },
         )?;
-        publish(&tx, &before, &result)?;
-        tx.commit()?;
+        publish(&tx, &before, &result)
+            .map_err(|e| boundary(e, "save transaction", "Not applied"))?;
+        tx.commit()
+            .map_err(|e| boundary(DbError::from(e), "commit transaction", "Result unknown"))?;
         Ok(result)
     }
 
@@ -1126,6 +1163,7 @@ impl From<core::Error> for DbError {
             core::Error::InvalidImport(e) => Self::InvalidImport(e),
             core::Error::EmptyNote => Self::EmptyNote,
             core::Error::DeclarationFixed(e) => Self::DeclarationFixed(e),
+            core::Error::SelfDependency(e) => Self::SelfDependency(e),
             core::Error::InvalidState(e) => Self::InvalidSchema(e),
         }
     }
@@ -1449,7 +1487,7 @@ mod tests {
             Ok::<_, DbError>(((), desired))
         });
         assert!(
-            matches!(result, Err(DbError::Sqlite(ref error)) if error.to_string().contains("injected import failure"))
+            matches!(result, Err(DbError::Boundary { result: "Not applied", ref source, .. }) if source.to_string().contains("injected import failure"))
         );
         assert!(store.all().unwrap().is_empty());
         let revisions: i64 = store
@@ -1881,7 +1919,10 @@ mod tests {
             .unwrap();
         assert!(matches!(
             store.apply(&id("i"), Change::Decide(Disposition::Accepted), &ctx()),
-            Err(DbError::Sqlite(_))
+            Err(DbError::Boundary {
+                result: "Not applied",
+                ..
+            })
         ));
         assert_eq!(
             store.get(&id("i")).unwrap().disposition,
