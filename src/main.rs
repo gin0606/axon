@@ -690,6 +690,9 @@ fn migration_guidance(failure: &db::migration::Failure) -> String {
 fn error_guidance(error: &(dyn std::error::Error + 'static)) -> Option<String> {
     use db::DbError;
 
+    if let Some(guidance) = merge_cli::error_guidance(error) {
+        return Some(guidance.to_string());
+    }
     if let Some(error) = error.downcast_ref::<DbError>() {
         return Some(match error {
             DbError::Migration(failure) => migration_guidance(failure),

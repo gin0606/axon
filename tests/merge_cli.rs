@@ -366,6 +366,47 @@ fn driver_preserves_every_available_original_on_missing_input() {
         }
     }
 }
+#[cfg(unix)]
+#[test]
+fn driver_marker_write_failure_retains_original_failure_and_workspace() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = TestDir::new("merge-marker-write-fault");
+    fixtures(&d, false);
+    fs::remove_file(d.path().join("base")).unwrap();
+    let directory = d.path().join("readonly");
+    fs::create_dir(&directory).unwrap();
+    fs::rename(d.path().join("ours"), directory.join("ours")).unwrap();
+    let ours = fs::read(directory.join("ours")).unwrap();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o555)).unwrap();
+    let output = d.axon_in(
+        d.path(),
+        &["merge", "driver", "base", "readonly/ours", "theirs"],
+    );
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let workspace = fs::read_dir(d.path().join(".axon/merge"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let diagnostic = stderr(&output);
+    assert!(diagnostic.contains("input preservation failed"));
+    assert!(diagnostic.contains("Applied: workspace directory created at"));
+    assert!(diagnostic.contains(workspace.to_str().unwrap()));
+    assert!(diagnostic.contains("Conflict marker handling failed:"));
+    assert!(diagnostic.contains("Not applied: file replacement at readonly/ours"));
+    assert_eq!(diagnostic.matches("Help:").count(), 1);
+    assert!(diagnostic.lines().last().unwrap().starts_with("Help:"));
+    assert_eq!(fs::read(directory.join("ours")).unwrap(), ours);
+    assert_eq!(fs::read(workspace.join("ours.jsonl")).unwrap(), ours);
+    assert_eq!(
+        fs::read(workspace.join("theirs.jsonl")).unwrap(),
+        fs::read(d.path().join("theirs")).unwrap()
+    );
+}
+
 #[test]
 fn repair_evaluates_conditions_at_management_root_from_subdirectory() {
     let d = TestDir::new("merge-context");
@@ -425,6 +466,53 @@ fn deleted_original_is_reported_as_input_drift() {
 }
 
 #[test]
+fn check_report_failure_retains_the_input_drift_cause() {
+    let d = TestDir::new("merge-report-fault");
+    fixtures(&d, false);
+    assert_success(&prep(&d, "work"));
+    let before = fs::read(state(d.path())).unwrap();
+    fs::remove_file(d.path().join("work/base.jsonl")).unwrap();
+    fs::remove_file(d.path().join("work/report.json")).unwrap();
+    fs::create_dir(d.path().join("work/report.json")).unwrap();
+    let output = d.axon_in(d.path(), &["merge", "check", "work"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let diagnostic = stderr(&output);
+    assert!(diagnostic.contains("input drift"));
+    assert!(diagnostic.contains("base.jsonl"));
+    assert!(diagnostic.contains("Error report update failed:"));
+    assert!(diagnostic.contains("work/report.json publish:"));
+    assert!(diagnostic.contains("Not applied: file replacement at work/report.json"));
+    assert_eq!(diagnostic.matches("Help:").count(), 1);
+    assert!(diagnostic.lines().last().unwrap().starts_with("Help:"));
+    assert_eq!(fs::read(state(d.path())).unwrap(), before);
+    assert!(d.path().join("work/report.json").is_dir());
+    assert!(!d.path().join("work/checked.json").exists());
+}
+
+#[test]
+fn conflict_report_failure_retains_the_unresolved_result() {
+    let d = TestDir::new("merge-conflict-report-fault");
+    fixtures(&d, true);
+    assert_failure(&prep(&d, "work"));
+    let before = fs::read(state(d.path())).unwrap();
+    fs::remove_file(d.path().join("work/report.json")).unwrap();
+    fs::create_dir(d.path().join("work/report.json")).unwrap();
+    let output = d.axon_in(d.path(), &["merge", "check", "work"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let diagnostic = stderr(&output);
+    assert!(diagnostic.contains("unresolved conflicts"));
+    assert!(diagnostic.contains("Conflict report update failed:"));
+    assert!(diagnostic.contains("Error report update failed:"));
+    assert!(diagnostic.contains("Not applied: file replacement at work/report.json"));
+    assert_eq!(diagnostic.matches("Help:").count(), 1);
+    assert!(diagnostic.lines().last().unwrap().starts_with("Help:"));
+    assert_eq!(fs::read(state(d.path())).unwrap(), before);
+    assert!(!d.path().join("work/checked.json").exists());
+}
+
+#[test]
 fn destination_symlinks_cannot_bypass_store_binding() {
     use std::os::unix::fs::symlink;
     for directory_link in [false, true] {
@@ -459,6 +547,18 @@ fn relative_driver_output_preserves_original_conflict_diagnostic() {
     assert_failure(&output);
     assert!(stderr(&output).contains("unresolved conflicts"));
     assert!(!stderr(&output).contains("No such file or directory"));
+    let diagnostic = stderr(&output);
+    assert_eq!(diagnostic.matches("Help:").count(), 1);
+    assert!(
+        diagnostic.find("Applied: conflict marker").unwrap() < diagnostic.find("Help:").unwrap()
+    );
+    assert!(
+        diagnostic
+            .lines()
+            .last()
+            .unwrap()
+            .starts_with("Help: Resolve using preserved inputs")
+    );
 }
 #[test]
 fn apply_rejects_destination_symlink_introduced_after_check() {
@@ -595,6 +695,10 @@ fn setup_reports_saved_configuration_when_attributes_cannot_be_read() {
     assert_success(&config);
     assert_eq!(stdout(&config).trim(), "binary");
     assert!(d.path().join(".gitattributes").is_dir());
+    let diagnostic = stderr(&output);
+    assert_eq!(diagnostic.matches("Help:").count(), 1);
+    assert!(diagnostic.find("Applied:").unwrap() < diagnostic.find("Help:").unwrap());
+    assert!(!diagnostic.contains("workspace"));
 }
 
 #[test]

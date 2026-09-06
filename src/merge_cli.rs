@@ -17,6 +17,13 @@ struct ArtifactFailure {
     #[source]
     source: Box<dyn std::error::Error>,
     details: String,
+    guidance: String,
+}
+
+pub fn error_guidance<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a str> {
+    error
+        .downcast_ref::<ArtifactFailure>()
+        .map(|failure| failure.guidance.as_str())
 }
 
 #[derive(Subcommand)]
@@ -195,6 +202,21 @@ fn output_path(path: &Path, workspace: &Path) -> Result<PathBuf> {
     }
     Ok(output)
 }
+fn save_failure_report(
+    path: &Path,
+    report: &serde_json::Value,
+    original: Box<dyn std::error::Error>,
+) -> Box<dyn std::error::Error> {
+    match save(path, report) {
+        Ok(()) => original,
+        Err(followup) => crate::operation_error(
+            "merge validation",
+            original,
+            format!("\nError report update failed: {followup}"),
+        ),
+    }
+}
+
 fn optional(path: &Path) -> Result<Option<Vec<u8>>> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
@@ -217,6 +239,13 @@ fn lock(path: &Path) -> Result<File> {
     Ok(f)
 }
 fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    atomic_with(path, bytes, |parent| File::open(parent)?.sync_all())
+}
+fn atomic_with(
+    path: &Path,
+    bytes: &[u8],
+    sync: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<()> {
     let publication = (|| -> Result<()> {
         let temporary =
             path.with_file_name(format!(".merge-{}.tmp", RecordId::new(RecordKind::Store)));
@@ -240,8 +269,12 @@ fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    File::open(parent).and_then(|directory| directory.sync_all()).map_err(|e| {
-        format!("result unknown after replace at {}: {e}\nResult unknown: file durability at {}\nHelp: Preserve the workspace and inspect the destination before retrying.", path.display(), path.display())
+    sync(parent).map_err(|e| {
+        Box::new(ArtifactFailure {
+            source: format!("result unknown after replace at {}: {e}", path.display()).into(),
+            details: format!("Result unknown: file durability at {}", path.display()),
+            guidance: "Preserve the destination and inspect its contents before retrying.".into(),
+        }) as Box<dyn std::error::Error>
     })?;
     Ok(())
 }
@@ -281,7 +314,8 @@ fn prepare(
     fs::create_dir(workspace)?;
     prepare_created(base, ours, theirs, output, workspace, driver, preserved_ours).map_err(|source| Box::new(ArtifactFailure {
         source,
-        details: format!("Applied: workspace directory created at {}\nResult unknown: completeness of workspace artifacts at {}\nNot applied: merge candidate publication at {}\nHelp: Preserve the partial workspace and inspect its artifacts. Correct the reported cause and use a new workspace path for merge prepare.", workspace.display(), workspace.display(), output.display()),
+        details: format!("Applied: workspace directory created at {}\nResult unknown: completeness of workspace artifacts at {}\nNot applied: merge candidate publication at {}", workspace.display(), workspace.display(), output.display()),
+        guidance: "Preserve the partial workspace and inspect its artifacts. Correct the reported cause and use a new workspace path for merge prepare.".into(),
     }) as Box<dyn std::error::Error>)
 }
 
@@ -319,16 +353,17 @@ fn prepare_created(
         }
     }
     if !failures.is_empty() {
-        save(
-            &workspace.join("report.json"),
-            &serde_json::json!({"status":"invalid", "errors":failures}),
-        )?;
-        return Err(format!(
+        let original = format!(
             "input preservation failed; inspect {}: {}",
             workspace.display(),
             failures.join("; ")
         )
-        .into());
+        .into();
+        return Err(save_failure_report(
+            &workspace.join("report.json"),
+            &serde_json::json!({"status":"invalid", "errors":failures}),
+            original,
+        ));
     }
     let output = output_path(output, &workspace).map_err(|e| {
         crate::operation_error(format!("{} resolve destination", output.display()), e, "")
@@ -491,7 +526,8 @@ fn compute(workspace: &Path, manifest: &Manifest, bytes: [Vec<u8>; 3]) -> Result
 fn check(workspace: &Path) -> Result<()> {
     check_inner(workspace).map_err(|source| Box::new(ArtifactFailure {
         source,
-        details: format!("Result unknown: workspace artifact updates at {}\nNot applied: merge candidate publication\nHelp: Preserve the workspace, inspect its original snapshots and generated artifacts, and resolve the reported cause before running merge check again.", workspace.display()),
+        details: format!("Result unknown: workspace artifact updates at {}\nNot applied: merge candidate publication", workspace.display()),
+        guidance: "Preserve the workspace, inspect its original snapshots and generated artifacts, and resolve the reported cause before running merge check again.".into(),
     }) as Box<dyn std::error::Error>)
 }
 fn check_inner(workspace: &Path) -> Result<()> {
@@ -527,28 +563,37 @@ fn check_inner(workspace: &Path) -> Result<()> {
                 Ok(())
             }
             merge::Outcome::Conflicts(conflicts) => {
-                let choices: serde_json::Value = read(&workspace.join("choices.json"))?;
-                let conflicts: Vec<_> = conflicts.into_iter().map(|conflict| {
-                    let kind = if choices.as_array().is_some_and(|items| items.iter().any(|c| c["id"] == conflict.id)) { "entity_bundle" } else { "structure" };
-                    serde_json::json!({"id":conflict.id,"kind":kind,"owner":conflict.owner,"message":conflict.message,"inputs":["base.jsonl","ours.jsonl","theirs.jsonl"]})
-                }).collect();
-                save(
-                    &workspace.join("report.json"),
-                    &serde_json::json!({"status":"unresolved","conflicts":conflicts}),
-                )?;
-                Err("unresolved conflicts; inspect choices.json, report.json and the original snapshots".into())
+                let original: Box<dyn std::error::Error> = "unresolved conflicts; inspect choices.json, report.json and the original snapshots".into();
+                let report = (|| -> Result<()> {
+                    let choices: serde_json::Value = read(&workspace.join("choices.json"))?;
+                    let conflicts: Vec<_> = conflicts.into_iter().map(|conflict| {
+                        let kind = if choices.as_array().is_some_and(|items| items.iter().any(|c| c["id"] == conflict.id)) { "entity_bundle" } else { "structure" };
+                        serde_json::json!({"id":conflict.id,"kind":kind,"owner":conflict.owner,"message":conflict.message,"inputs":["base.jsonl","ours.jsonl","theirs.jsonl"]})
+                    }).collect();
+                    save(
+                        &workspace.join("report.json"),
+                        &serde_json::json!({"status":"unresolved","conflicts":conflicts}),
+                    )
+                })();
+                Err(match report {
+                    Ok(()) => original,
+                    Err(followup) => crate::operation_error(
+                        "merge validation",
+                        original,
+                        format!("\nConflict report update failed: {followup}"),
+                    ),
+                })
             }
         }
     })();
-    if let Err(e) = &result
-        && !e.to_string().starts_with("unresolved")
-    {
-        save(
+    match result {
+        Err(e) if !e.to_string().starts_with("unresolved") => Err(save_failure_report(
             &workspace.join("report.json"),
             &serde_json::json!({"status":if e.to_string().contains("drift") {"input_drift"} else {"invalid"},"error":e.to_string()}),
-        )?;
+            e,
+        )),
+        result => result,
     }
-    result
 }
 fn apply(workspace: &Path) -> Result<()> {
     apply_with(workspace, |_| Ok(()))
@@ -655,11 +700,16 @@ fn setup() -> Result<()> {
         Ok(())
     })();
     attributes_result.map_err(|e| {
-        format!(
-            "{} .gitattributes setup: {e}\nApplied: Git config {}",
-            root.display(),
-            applied.join(", ")
-        )
+        Box::new(ArtifactFailure {
+            source: crate::operation_error(
+                format!("{} .gitattributes setup", root.display()),
+                e,
+                "",
+            ),
+            details: format!("Applied: Git config {}", applied.join(", ")),
+            guidance: "Inspect local Git configuration and .gitattributes before retrying setup."
+                .into(),
+        }) as Box<dyn std::error::Error>
     })?;
     crate::write_mutation_output(
         "Registered driver; review .gitattributes and ignore .axon/merge/\n",
@@ -697,25 +747,163 @@ pub fn run(command: MergeCmd) -> Result<()> {
             .and_then(|()| apply(&workspace))
             {
                 Ok(()) => Ok(()),
-                Err(e) => {
-                    if !e.to_string().starts_with("result unknown")
-                        && preserved_ours.is_some()
-                        && optional(&ours)? == preserved_ours
-                    {
-                        atomic(&ours,format!("<<<<<<< Axon unresolved\nWorkspace: {}\n{}\n=======\nUse preserved base/ours/theirs with merge prepare to resolve explicitly.\n>>>>>>> Axon unresolved\n",workspace.display(),e).as_bytes())?;
-                        return Err(format!("{e}\nApplied: conflict marker at {}\nHelp: Resolve using preserved inputs in {}.", ours.display(), workspace.display()).into());
-                    }
-                    Err(e)
-                }
+                Err(e) => driver_conflict(&ours, &workspace, preserved_ours, e),
             }
         }
     }
+}
+
+fn driver_conflict(
+    ours: &Path,
+    workspace: &Path,
+    preserved_ours: Option<Vec<u8>>,
+    original: Box<dyn std::error::Error>,
+) -> Result<()> {
+    if original.to_string().starts_with("result unknown") || preserved_ours.is_none() {
+        return Err(original);
+    }
+    let observed = match optional(ours) {
+        Ok(bytes) => bytes,
+        Err(error) => return Err(driver_followup_failure(original, error, workspace)),
+    };
+    if observed != preserved_ours {
+        return Err(original);
+    }
+    let marker = format!(
+        "<<<<<<< Axon unresolved\nWorkspace: {}\n{}\n=======\nUse preserved base/ours/theirs with merge prepare to resolve explicitly.\n>>>>>>> Axon unresolved\n",
+        workspace.display(),
+        original
+    );
+    if let Err(error) = atomic(ours, marker.as_bytes()) {
+        return Err(driver_followup_failure(original, error, workspace));
+    }
+    Err(Box::new(ArtifactFailure {
+        source: original,
+        details: format!("Applied: conflict marker at {}", ours.display()),
+        guidance: format!("Resolve using preserved inputs in {}.", workspace.display()),
+    }))
+}
+
+fn driver_followup_failure(
+    original: Box<dyn std::error::Error>,
+    followup: Box<dyn std::error::Error>,
+    workspace: &Path,
+) -> Box<dyn std::error::Error> {
+    Box::new(ArtifactFailure {
+        source: original,
+        details: format!("Conflict marker handling failed: {followup}"),
+        guidance: format!(
+            "Preserve the inputs in {} and inspect the conflict marker destination before retrying.",
+            workspace.display()
+        ),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::tests as f;
+    #[test]
+    fn prepare_report_failure_keeps_input_preservation_errors() {
+        let root = std::env::temp_dir().join(format!(
+            "axon-prepare-report-{}",
+            RecordId::new(RecordKind::Store)
+        ));
+        fs::create_dir(&root).unwrap();
+        let workspace = root.join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        fs::create_dir(workspace.join("report.json")).unwrap();
+        fs::write(root.join("ours"), b"ours").unwrap();
+        fs::write(root.join("theirs"), b"theirs").unwrap();
+        let error = prepare_created(
+            &root.join("missing-base"),
+            &root.join("ours"),
+            &root.join("theirs"),
+            &root.join("output"),
+            &workspace,
+            false,
+            &mut None,
+        )
+        .unwrap_err();
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("input preservation failed"));
+        assert!(diagnostic.contains("missing-base"));
+        assert!(diagnostic.contains("Error report update failed:"));
+        assert!(diagnostic.contains("Not applied: file replacement"));
+        assert_eq!(fs::read(workspace.join("ours.jsonl")).unwrap(), b"ours");
+        assert_eq!(fs::read(workspace.join("theirs.jsonl")).unwrap(), b"theirs");
+        assert!(!root.join("output").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn driver_destination_read_failure_retains_the_original_context() {
+        let root = std::env::temp_dir().join(format!(
+            "axon-driver-read-{}",
+            RecordId::new(RecordKind::Store)
+        ));
+        fs::create_dir(&root).unwrap();
+        let error = driver_conflict(
+            &root,
+            &root.join("workspace"),
+            Some(b"original".to_vec()),
+            "original input failure\nApplied: preserved inputs".into(),
+        )
+        .unwrap_err();
+        let diagnostic = error.to_string();
+        assert!(diagnostic.starts_with("original input failure\nApplied: preserved inputs"));
+        assert!(diagnostic.contains("Conflict marker handling failed:"));
+        assert!(diagnostic.contains("read destination:"));
+        assert!(!diagnostic.contains("Help:"));
+        assert!(
+            crate::error_guidance(error.as_ref())
+                .unwrap()
+                .contains("workspace")
+        );
+        assert!(root.is_dir());
+        fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn published_file_failure_keeps_guidance_out_of_nested_stage_details() {
+        let root = std::env::temp_dir().join(format!(
+            "axon-merge-guidance-{}",
+            RecordId::new(RecordKind::Store)
+        ));
+        fs::create_dir(&root).unwrap();
+        let path = root.join(".gitattributes");
+        let failure = atomic_with(&path, b"saved", |_| {
+            Err(std::io::Error::other("injected directory sync failure"))
+        })
+        .unwrap_err();
+        assert_eq!(fs::read(&path).unwrap(), b"saved");
+        assert!(
+            failure
+                .to_string()
+                .contains("Result unknown: file durability")
+        );
+        assert!(!failure.to_string().contains("Help:"));
+        assert!(
+            !crate::error_guidance(failure.as_ref())
+                .unwrap()
+                .contains("workspace")
+        );
+        let failure = ArtifactFailure {
+            source: failure,
+            details: "Applied: Git config merge.axon.name".into(),
+            guidance: "Inspect local Git configuration and .gitattributes before retrying setup."
+                .into(),
+        };
+        let diagnostic = format!(
+            "Error: {failure}\nHelp: {}",
+            crate::error_guidance(&failure).unwrap()
+        );
+        assert_eq!(diagnostic.matches("Help:").count(), 1);
+        assert!(diagnostic.find("Applied:").unwrap() < diagnostic.find("Help:").unwrap());
+        assert!(!diagnostic.contains("workspace"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn publish_faults_preserve_inputs_and_allow_reconciliation() {
         for checkpoint in ["before-replace", "after-replace"] {

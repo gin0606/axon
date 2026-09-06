@@ -397,6 +397,8 @@ init の設定公開前に state を保存した場合、merge setup の属性�
 
 時点・確認経路・維持/修正の処分は
 [2026-09-06 の更新系診断棚卸し](../development/audits/mutation-diagnostics-2026-09-06.md)を参照する。
+成功側との対応、端末条件、残る検証範囲は
+[同日の横断確認](../development/audits/mutation-output-crosscheck-2026-09-06.md)を参照する。
 
 #### 実装への対応
 
