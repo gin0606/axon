@@ -781,6 +781,7 @@ fn linked_worktrees_share_entity_state_and_claims() {
     repo.init("test");
     let group = repo.group_plan("shared plan");
     let worktree = repo.add_worktree();
+    assert_success(&repo.axon_in(&worktree, &["init"]));
     assert_success(&repo.axon_in(&worktree, &["start", &group]));
     let claims = repo.axon(&["claims"]);
     assert_success(&claims);
@@ -868,7 +869,7 @@ fn git_and_non_git_management_roots_keep_their_boundaries() {
     fs::create_dir(&nested).unwrap();
     let created = dir.axon_in(&nested, &["group", "plan", "nested plan"]);
     assert_success(&created);
-    assert!(repository.join(".axon/axon.db").is_file());
+    assert!(repository.join(".git/axon/state.db").is_file());
     assert!(!nested.join(".axon").exists());
 }
 
@@ -1067,7 +1068,7 @@ fn schema_mismatch_explains_recovery_without_changing_the_database() {
     let snapshot = repo.snapshot(&id);
     for version in [0, 7, 999] {
         repo.execute_batch(&format!("PRAGMA user_version = {version}"));
-        let path = repo.root().join(".axon/axon.db");
+        let path = repo.root().join(".git/axon/state.db");
         let before = fs::read(&path).unwrap();
         let output = repo.axon(&["list"]);
         assert_failure(&output);

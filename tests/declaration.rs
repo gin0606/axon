@@ -486,7 +486,7 @@ fn builtin_example_applies_without_editing_and_preserves_its_plan_structure() {
     assert_eq!(yaml.matches("base: null").count(), 3);
 
     repo.init("test");
-    let db_path = repo.root().join(".axon/axon.db");
+    let db_path = repo.root().join(".git/axon/state.db");
     let before = fs::read(&db_path).unwrap();
     for args in [
         &["docs", "declaration"][..],

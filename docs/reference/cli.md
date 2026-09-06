@@ -263,12 +263,12 @@ actor、worktree、外部command、pathも値全体を意味色で塗らない�
 
 `export` と completion は生成内容そのものを標準出力へ書き、人向けの装飾を加えない。
 
-Git 配下では common Git directory の親を管理 root とし、全 worktree で `.axon/axon.db` を共有する。Git 外ではカレントから祖先へ最も近い DB を探す。Issue と Group は同じ `<prefix>-<ランダム 6 文字>` namespace を使い、完全 ID または一意な suffix で解決する。
+Git 配下では active worktree root の `.axon/config.json`、Git 外では最寄りの設定を持つ祖先を使う。`init --backend file` は `.axon/state.jsonl` を正本とし、既定の SQLite は common Git directory の `axon/state.db`（Git 外は `.axon/state.db`）を使う。設定・正本の欠落や不正で fallback しない。Issue と Group は同じ `<prefix>-<ランダム 6 文字>` namespace を使い、完全 ID または一意な suffix で解決する。
 
 ## DBの互換性検査
 
 通常openはv13と既知DDLを検査し、旧版・未来版・未知構造を変更せず拒否する。
-`init`は新規作成専用で、既存DBのresetやupgradeをしない。help、docs、version、completionはDB不要。
+`init`は既存正本をreset/upgradeせず、有効な設定・正本への再実行はno-op。保存成功境界とinit復旧は[backendとfile保存](file-storage.md)を参照。help、docs、version、completionはDB不要。
 手動変換は明示したv11/v12入力から別directoryへ出力し、元DBの切替はしない。
 診断はpath、版、処理段階、原因、backup先と出力の適用状態を示す。失敗時の途中成果を上書きせず、
 結果不明なら出力とbackupを調べてから再開する。具体的な手順は[手動移行](migration.md)。

@@ -283,6 +283,7 @@ fn command_uses_worktree_root_and_inherits_environment_without_shell_startup() {
     repo.init("test");
     let id = repo.plan("environment");
     let worktree = repo.add_worktree();
+    assert_success(&repo.axon_in(&worktree, &["init"]));
     let nested = worktree.join("nested");
     fs::create_dir(&nested).unwrap();
     let startup = repo.root().join("startup.sh");
@@ -390,11 +391,14 @@ fn import_shares_observation_before_and_after_and_aborts_on_failure() {
     let current = fs::read_to_string(&path).unwrap();
     fs::write(&path, current.replace("third title", "fourth title")).unwrap();
     fs::write(repo.root().join("broken"), "").unwrap();
-    let before = fs::read(repo.root().join(".axon/axon.db")).unwrap();
+    let before = fs::read(repo.root().join(".git/axon/state.db")).unwrap();
     let output = repo.axon(&["import", "apply", file]);
     assert_failure(&output);
     assert!(stderr(&output).contains("8"));
-    assert_eq!(fs::read(repo.root().join(".axon/axon.db")).unwrap(), before);
+    assert_eq!(
+        fs::read(repo.root().join(".git/axon/state.db")).unwrap(),
+        before
+    );
     assert_eq!(calls(&repo), 3);
 }
 

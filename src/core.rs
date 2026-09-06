@@ -531,6 +531,7 @@ pub struct Context<'a> {
     pub ids: &'a mut dyn FnMut(RecordKind) -> RecordId,
 }
 
+#[derive(Clone)]
 pub enum Operation {
     Insert(Entity),
     Change(EntityId, Change),

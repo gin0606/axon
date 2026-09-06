@@ -169,7 +169,7 @@ fn old_open_never_migrates_and_unknown_inputs_are_unchanged() {
         let before = fs::read(&source).unwrap();
         let result = repo.axon(&["list"]);
         assert_failure(&result);
-        assert!(stderr(&result).contains("unsupported axon schema"));
+        assert!(stderr(&result).contains("manual migration"));
         assert_eq!(fs::read(&source).unwrap(), before);
         if schema != 11 {
             assert_failure(&migrate(&repo, &source, &repo.root().join("out")));
@@ -219,7 +219,10 @@ fn converted_database_supports_normal_commands_without_remapping_ids() {
     let out = repo.root().join("out");
     assert_success(&migrate(&repo, &source, &out));
     fs::rename(&source, repo.root().join("old.db")).unwrap();
+    let source = repo.root().join(".git/axon/state.db");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
     fs::copy(out.join("axon.db"), &source).unwrap();
+    assert_success(&repo.axon(&["init"]));
     for args in [
         &["list"][..],
         &["show", "accepted"],
@@ -279,7 +282,7 @@ fn ambiguous_ids_and_duplicate_record_identity_are_rejected() {
         (2, "note-abcd0000000000000000000000000002"),
     ] {
         let old = repo.note_id(&id, number);
-        let conn = Connection::open(repo.root().join(".axon/axon.db")).unwrap();
+        let conn = Connection::open(repo.root().join(".git/axon/state.db")).unwrap();
         conn.execute(
             "UPDATE causal_links SET record_id=?2 WHERE record_id=?1",
             [&old, new],
@@ -296,7 +299,7 @@ fn ambiguous_ids_and_duplicate_record_identity_are_rejected() {
     assert_failure(&result);
     assert!(stderr(&result).contains("ambiguous"));
     assert_success(&repo.axon(&["note", "show", &id, "note-abcd0000000000000000000000000001"]));
-    let conn = Connection::open(repo.root().join(".axon/axon.db")).unwrap();
+    let conn = Connection::open(repo.root().join(".git/axon/state.db")).unwrap();
     assert!(conn.execute("UPDATE entity_notes SET record_id='note-abcd0000000000000000000000000001' WHERE note=2",[]).is_err());
 }
 
@@ -309,7 +312,7 @@ fn v12_upgrade_preserves_all_tables_ids_and_known_stream_order() {
     repo.accept(&issue);
     assert_success(&repo.axon(&["start", &issue]));
     assert_success(&repo.axon(&["note", "add", &issue, "-m", "preserved"]));
-    let source = repo.root().join(".axon/axon.db");
+    let source = repo.root().join(".git/axon/state.db");
     let conn = Connection::open(&source).unwrap();
     conn.execute_batch("DROP TABLE history_baselines; DROP TABLE history_merges; DROP TABLE causal_links; DROP TABLE history_lineage; PRAGMA user_version=12;").unwrap();
     drop(conn);

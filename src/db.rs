@@ -15,7 +15,6 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::rc::Rc;
 
 #[derive(Debug, thiserror::Error)]
@@ -24,6 +23,8 @@ pub enum DbError {
     Migration(#[from] migration::Failure),
     #[error("{0}")]
     Evaluation(#[from] EvaluationError),
+    #[error("storage: {0}")]
+    Storage(String),
     #[error("SQLite: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("I/O: {0}")]
@@ -294,72 +295,6 @@ fn require_current_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-enum ResolveFor {
-    Init,
-    Open,
-}
-
-fn management_root(resolve_for: ResolveFor) -> Result<PathBuf> {
-    let current_dir = std::env::current_dir()?;
-    if let Some(root) = git_management_root(&current_dir)? {
-        return Ok(root);
-    }
-    if let Some(root) = current_dir
-        .ancestors()
-        .find(|root| database_path(root).is_file())
-    {
-        return match resolve_for {
-            ResolveFor::Init => Err(DbError::AlreadyInitialized(root.to_path_buf())),
-            ResolveFor::Open => Ok(root.to_path_buf()),
-        };
-    }
-    match resolve_for {
-        ResolveFor::Init => Ok(current_dir),
-        ResolveFor::Open => Err(DbError::NotInitialized),
-    }
-}
-
-fn git_management_root(current_dir: &Path) -> Result<Option<PathBuf>> {
-    let output = Command::new("git")
-        .current_dir(current_dir)
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .output();
-    let output = match output {
-        Ok(output) => output,
-        Err(_) if !has_git_marker(current_dir) => return Ok(None),
-        Err(error) => return Err(DbError::GitRoot(error.to_string())),
-    };
-    if !output.status.success() {
-        if has_git_marker(current_dir) {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let detail = if stderr.is_empty() {
-                output.status.to_string()
-            } else {
-                stderr
-            };
-            return Err(DbError::GitRoot(detail));
-        }
-        return Ok(None);
-    }
-    let git_dir = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
-    git_dir
-        .parent()
-        .map(Path::to_path_buf)
-        .map(Some)
-        .ok_or_else(|| DbError::GitRoot("Git returned a common directory without a parent".into()))
-}
-
-fn has_git_marker(current_dir: &Path) -> bool {
-    current_dir
-        .ancestors()
-        .any(|directory| directory.join(".git").exists())
-}
-
-fn database_path(root: &Path) -> PathBuf {
-    root.join(".axon").join("axon.db")
-}
-
 pub struct Store {
     conn: Connection,
     evaluation: Rc<Evaluation>,
@@ -413,51 +348,34 @@ impl Store {
         })
     }
 
-    pub fn init(prefix: Option<&str>) -> Result<(PathBuf, String)> {
-        let root = management_root(ResolveFor::Init)?;
-        let path = database_path(&root);
-        if path.exists() {
-            return Err(DbError::AlreadyInitialized(root));
-        }
-        let prefix = prefix.map(str::to_owned).unwrap_or_else(|| {
-            root.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "axon".to_string())
-        });
-        std::fs::create_dir_all(path.parent().expect("database path has a parent"))?;
-        let mut conn = Connection::open(&path)?;
+    pub fn init_at(path: &Path, prefix: &str) -> Result<()> {
+        let mut conn = Connection::open(path)?;
         initialize_schema(&mut conn)?;
         conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('prefix', ?1)",
+            "INSERT INTO meta (key,value) VALUES ('prefix',?1)",
             params![prefix],
         )?;
-        Ok((path, prefix))
+        conn.close().map_err(|(_, error)| error)?;
+        Ok(())
     }
 
-    pub fn open(trace_conditions: bool, report: impl FnOnce(&migration::Outcome)) -> Result<Self> {
-        let root = management_root(ResolveFor::Open)?;
-        let path = database_path(&root);
-        if !path.exists() {
-            return Err(DbError::NotInitialized);
-        }
-        let (conn, outcome) = migration::open(&path)?;
+    pub fn open_at(
+        path: &Path,
+        evaluation: Rc<Evaluation>,
+        report: impl FnOnce(&migration::Outcome),
+    ) -> Result<Self> {
+        let (conn, outcome) = migration::open(path)?;
         report(&outcome);
         let mut store = Self::from_conn(conn)?;
-        let output = Command::new("git")
-            .args(["rev-parse", "--show-toplevel"])
-            .output();
-        let command_root = match output {
-            Ok(output) if output.status.success() => {
-                PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
-            }
-            _ => root,
-        };
-        store.evaluation = Rc::new(if trace_conditions {
-            Evaluation::tracing(command_root)
-        } else {
-            Evaluation::new(command_root)
-        });
+        store.evaluation = evaluation;
         Ok(store)
+    }
+
+    pub fn state(&self) -> Result<core::StateSnapshot> {
+        let tx = self.conn.unchecked_transaction()?;
+        let state = read_state(&tx, self.evaluation.clone())?;
+        tx.commit()?;
+        Ok(state)
     }
 
     #[cfg(test)]
@@ -470,6 +388,24 @@ impl Store {
             params![prefix],
         )?;
         Ok(store)
+    }
+
+    #[cfg(test)]
+    pub fn contract_step(
+        &mut self,
+        op: core::Operation,
+        tick: u64,
+    ) -> std::result::Result<(ApplyOutcome, core::StateSnapshot), String> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        let before = read_state(&tx, self.evaluation.clone()).unwrap();
+        let change = core::tests::execute(&before, op, tick).map_err(|e| e.to_string())?;
+        publish(&tx, &before, &change).unwrap();
+        let state = read_state(&tx, self.evaluation.clone()).unwrap();
+        tx.commit().unwrap();
+        Ok((change.outcome, state))
     }
 
     pub fn prefix(&self) -> Result<String> {

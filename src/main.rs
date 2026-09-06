@@ -14,7 +14,9 @@ use anstyle::{AnsiColor, Color, Style};
 use chrono::{NaiveDate, Utc};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
-use db::{Change, Ctx, Store};
+use db::{Change, Ctx};
+use storage::Store;
+mod storage;
 use derived::{TriageReason, View};
 use domain::*;
 
@@ -177,6 +179,9 @@ enum Command {
     },
     /// Initialize axon at the management root
     Init {
+        /// Storage backend (default: sqlite)
+        #[arg(long, value_enum)]
+        backend: Option<storage::Backend>,
         /// Prefix for generated Entity IDs; defaults to the management-root directory name
         prefix: Option<String>,
     },
@@ -653,7 +658,7 @@ fn error_guidance(error: &(dyn std::error::Error + 'static)) -> Option<String> {
             DbError::DeclarationFixed(id) => format!(
                 "Inspect `axon show {id}`. If changing the plan is intended, `axon decide undecide {id}` makes its declaration editable and withdraws its current disposition; edit, review the full declaration, then decide separately. Supplemental information can be appended with `axon note add {id}` without changing the plan."
             ),
-            DbError::NoSuchEntity(_) => "Use `axon list` to inspect Entity IDs in this management root; linked worktrees share their main repository's DB.".to_string(),
+            DbError::NoSuchEntity(_) => "Use `axon list` to inspect Entity IDs in this active root.".to_string(),
             DbError::AmbiguousId { .. } => "Use one of the full candidate IDs to identify the intended Entity.".to_string(),
             DbError::NotGroup(_) => "Use `axon list --kind group` to inspect Group IDs. A parent must be a Group.".to_string(),
             DbError::NoSuchNote { id, .. } => format!("Use `axon note list {id}` to inspect this Entity's Note IDs."),
@@ -692,7 +697,7 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
             }
             Ok(())
         }
-        Command::Init { prefix } => cmd_init(prefix),
+        Command::Init { prefix, backend } => cmd_init(prefix, backend),
         Command::Completion { shell } => write_completion(shell).map_err(Into::into),
         Command::Docs { topic } => cmd_docs(topic),
         Command::Plan {
@@ -820,8 +825,11 @@ fn decorate_import_report(report: &str, decoration: OutputDecoration) -> String 
         .collect()
 }
 
-fn cmd_init(prefix: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-    let (path, prefix) = Store::init(prefix.as_deref())?;
+fn cmd_init(
+    prefix: Option<String>,
+    backend: Option<storage::Backend>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (path, prefix) = Store::init(prefix.as_deref(), backend)?;
     let decoration = current_output_decoration();
     write_output(
         &format!(
@@ -2843,7 +2851,7 @@ fn render_docs(decoration: OutputDecoration) -> String {
     )
     .unwrap();
     writeln!(output, "\nUse axon docs declaration for declaration fields and the import workflow.\nUse axon docs declaration --example for a complete new-plan YAML example.").unwrap();
-    writeln!(output, "\nStorage recovery\n  DB commands require schema v13 and do not migrate old databases implicitly.\n  Use axon migrate --source <v11-or-v12-db> --output <new-directory> to create a new DB,\n  an intact source backup and an ID mapping manifest. The source is not switched.\n  v9/v10 must first be migrated to v11 using an older compatible build.\n  Keep an old binary, stop writers, verify copies, then switch all affected roots.\n  Failed outputs may be incomplete; preserve and inspect them before retry.\n  Unknown schemas are rejected. init only creates new DBs; init cannot upgrade.\n  --version identifies the executable release, not its DB schema.\n  Before recovery stop all writers and preserve .axon with SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  export also requires a compatible build and is not a complete database backup.\n  In Git, .axon/axon.db is at the parent of the common Git directory; outside Git,\n  axon uses the nearest ancestor containing .axon/axon.db.\n  help, docs, version and completion do not open the DB.\n").unwrap();
+    writeln!(output, "\nStorage recovery\n  DB commands require schema v13 and do not migrate old databases implicitly.\n  Use axon migrate --source <v11-or-v12-db> --output <new-directory> to create a new DB,\n  an intact source backup and an ID mapping manifest. The source is not switched.\n  v9/v10 must first be migrated to v11 using an older compatible build.\n  Keep an old binary, stop writers, verify copies, then switch all affected roots.\n  Failed outputs may be incomplete; preserve and inspect them before retry.\n  Unknown schemas are rejected. init only creates new DBs; init cannot upgrade.\n  --version identifies the executable release, not its DB schema.\n  Before recovery stop all writers and preserve .axon with SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  export also requires a compatible build and is not a complete database backup.\n  .axon/config.json selects backend and store ID at the active worktree root.\n  Outside Git, use the nearest ancestor config. Missing/invalid files never fall back.\n  init --backend file creates .axon/state.jsonl; the default backend is sqlite.\n  SQLite uses Git common directory/axon/state.db, or .axon/state.db outside Git.\n  Track file state and config in Git; ignore .axon/write.lock and temporary files.\n  File writers lock, read, validate, sync a temporary, compare original bytes, replace,\n  and sync the directory before success. No-op preserves bytes.\n  Failure before replace is not applied; failure after replace is result unknown.\n  Inspect state before retrying an unknown result; do not repeat an append blindly.\n  init publishes state before config. Preserve partial files and restore a matching\n  config/state pair; init never regenerates missing state or overwrites existing data.\n  Valid shared SQLite can be registered with init in another worktree.\n  Do not overlap Git checkout/merge or editor writes with Axon writes in one worktree.\n  OS locks are local; network filesystem/distributed guarantees are not provided.\n  help, docs, version and completion do not open the DB.\n").unwrap();
     output
 }
 

@@ -1,6 +1,7 @@
-use crate::db::{DbError, Store, StoreSnapshot};
+use crate::db::{DbError, StoreSnapshot};
 use crate::derived::{EvaluationError, View};
 use crate::domain::*;
+use crate::storage::Store;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_saphyr::options::{DuplicateKeyPolicy, MergeKeyPolicy};

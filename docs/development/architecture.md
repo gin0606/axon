@@ -12,19 +12,25 @@ DB から読んだ Entity の値を型に変換する境界は `RawEntity::into_
 
 ## 保存先と管理 root
 
-| | 内容 |
-| --- | --- |
-| 用途 | **個人のタスク分解・管理**に絞る。プロダクト全体の ITS としては使わない (別ツールにする) |
-| git | **管理しない** (ignore) |
-| 保存形式 | **SQLite 単体**。git 用のエクスポートを持たない (二重持ちをしない) |
-| 配置 | 管理 root ごとに `.axon/axon.db` を 1 つ置く。Git リポジトリでは全 worktree から同じ DB を共有する |
-| Git 配下での解決 | `git rev-parse --git-common-dir` で共通ディレクトリを求め、その親を管理 root にする |
-| Git 外での解決 | `init` はカレントディレクトリを管理 root にする。通常操作はカレントから祖先へ最寄りの `.axon/axon.db` を探す |
-| 同期 | 不要 (1 マシン・1 DB) |
+active root の `.axon/config.json`（schema 1、backend、store_id）が正本を選ぶ。
+Git 内では active worktree root、Git 外では最寄りの設定を持つ祖先を使う。
+設定なし・不正・正本欠落で他 root や空 state へ fallback しない。
+file は root の `.axon/state.jsonl`、SQLite は Git common directory の
+`axon/state.db`（Git 外では root の `.axon/state.db`）に保存する。
+旧 `.axon/axon.db` は通常 open/init で移行しない。
 
-状態モデルは Git に依存しないため、Git 外でも同じ DB と操作を使える。Git 外ではサブディレクトリから祖先を探索し、候補が複数あれば最も近い管理 root を選ぶ。ただし通常の `init` は既存の管理 root 配下に暗黙の入れ子を作らず、その root を示して失敗する。
+file と設定は Git で追跡する。stable sidecar `.axon/write.lock` は追跡せず、
+OS lock の取得後に正本を読み、共通 core を適用する。同じ directory の temporary file を
+sync し、元 bytes と設定を再照合して atomic replace、directory sync の順に公開する。
+no-op は bytes を保持する。replace 前の失敗は未適用、replace 後の同期失敗は結果不明。
+成功表示は公開後に限る。init は正本を先、設定を最後に公開し、片側だけの生成を診断する。
+既存 valid shared SQLite の worktree 登録では設定だけを作る。
 
-Git リポジトリ内では common root を管理境界として常に優先する。外側に Git 外の axon DB があってもフォールバックしないため、Git リポジトリの issue が別の管理単位へ紛れ込まない。
+Git index の設定・正本に unmerged entry があれば通常操作を拒否する。
+Git/editor は lock に従わないため、同じ worktree の checkout/merge と Axon write を
+同時実行しない。分散 lock、network filesystem の保証、全 worktree scan は提供しない。
+状態・Group・情報所有・因果履歴の意味は維持する。filesystem の障害と並行性は
+既存 Quint model の対象外なので、Rust の fault/process/CLI tests で検証する。
 
 ## スキーマ
 
@@ -74,7 +80,7 @@ SQLite adapter は immediate transaction 内で完全な snapshot を読み、�
 RecordId の SQL 変換も adapter 内に置く。
 
 この境界はSQLite単独でも使う。v13はv12の全tableを維持し、`history_lineage`、`causal_links`、
-`history_baselines`、`history_merges`を追加する。管理rootは維持し、v11/v12から明示的に手動変換する。
+`history_baselines`、`history_merges`を追加する。v11/v12から明示的に手動変換する。
 新しい因果関係とcurrent/lastの検証は[分岐履歴](branch-history.md)に定める。
 通常操作の情報所有モデルと分岐履歴モデルを検証し、共通操作契約をメモリとSQLiteで検証する。
 CLI・Command・migrationテストで実装の境界を確認する。
