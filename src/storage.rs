@@ -1007,6 +1007,14 @@ mod tests {
             .env("GIT_CONFIG_GLOBAL", "/dev/null");
         command
     }
+    fn crash_child_command() -> Command {
+        let mut command = child_command();
+        // An intentionally interrupted process cannot produce a mergeable coverage profile.
+        if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+            command.env("LLVM_PROFILE_FILE", "/dev/null");
+        }
+        command
+    }
     fn load(root: &Path) -> FileStore {
         let (config, config_bytes) = config(&root.join(".axon/config.json")).unwrap();
         FileStore {
@@ -1169,7 +1177,7 @@ mod tests {
             let fixture = Fixture::new();
             let store = fixture.store();
             let before = fs::read(&store.path).unwrap();
-            let status = child_command()
+            let status = crash_child_command()
                 .args(["--exact", "storage::tests::crash_child", "--ignored"])
                 .env("AXON_TEST_CRASH_ROOT", &fixture.root)
                 .env("AXON_TEST_CRASH_STAGE", stage)
@@ -1309,7 +1317,12 @@ mod tests {
             fs::remove_file(fixture.root.join(".axon/config.json")).unwrap();
             fs::remove_file(fixture.root.join(".axon/state.jsonl")).unwrap();
             let child = |stage: &str| {
-                child_command()
+                let mut command = if stage == "after-state" {
+                    crash_child_command()
+                } else {
+                    child_command()
+                };
+                command
                     .args(["--exact", "storage::tests::init_crash_child", "--ignored"])
                     .env("AXON_TEST_CRASH_ROOT", &fixture.root)
                     .env("AXON_TEST_CRASH_STAGE", stage)

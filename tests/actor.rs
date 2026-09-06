@@ -1,11 +1,16 @@
 mod common;
 
 use common::{TestDir, TestRepo, assert_success, stderr, stdout};
-use std::{collections::BTreeMap, fs, path::Path, process::Command};
+use std::{collections::BTreeMap, env, fs, path::Path, process::Command};
 
 fn command(directory: &Path) -> Command {
+    let coverage_profile = env::var_os("LLVM_PROFILE_FILE");
     let mut command = Command::new(env!("CARGO_BIN_EXE_axon"));
     command.current_dir(directory).env_clear();
+    // Keep coverage output outside the isolated directory whose contents this test asserts.
+    if let Some(profile) = coverage_profile {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
     command
 }
 

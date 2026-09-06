@@ -155,6 +155,10 @@ fn init_size_limit_failure_reports_retained_marker_and_unpublished_state() {
         fs::create_dir(&root).unwrap();
         let mut command = dir.axon_command_in(&root);
         command.args(["init", "--backend", backend, "t"]);
+        // RLIMIT_FSIZE must constrain only Axon's files, not the coverage runtime's profile.
+        if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+            command.env("LLVM_PROFILE_FILE", "/dev/null");
+        }
         let size_limit = if backend == "sqlite" { 1024 } else { 100 };
         unsafe {
             command.pre_exec(move || {

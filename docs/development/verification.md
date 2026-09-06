@@ -12,6 +12,16 @@ MSRV は「この version 以降なら必ず永久に動く」という互換性
 cargo +1.89.0 check --locked --all-targets --all-features
 ```
 
+## Rust coverage
+
+`mise.toml` で固定した `cargo-llvm-cov` を使い、全target・全featureを次の一つのcommandで計測する。数値thresholdは設けず、未到達箇所を次の改善判断へ使う。
+
+```sh
+cargo llvm-cov --locked --all-targets --all-features --summary-only
+```
+
+全test targetを実行し、coverage用にtest自体をskipしない。`actor` testが起動する正常終了の子processにはharnessの `LLVM_PROFILE_FILE` を引き継ぎ、検査対象の一時directoryへprofileを作らない。意図的に途中終了する `storage::tests::crash_child` と `storage::tests::init_crash_child`、およびfile size上限を注入する `init_size_limit_failure_reports_retained_marker_and_unpublished_state` の子processだけは、merge不能なprofileを生成しないようcoverage出力を破棄する。親testは通常どおり実行し、終了code、lock解放、公開済みfileの完全性、size上限時の失敗境界を検証する。通常の `cargo test` ではこのprofile制御は作用しない。
+
 ## モデルの位置付けと保守方針
 
 `spec/axon.qnt` は必須の基礎状態モデルとして維持する。その対象となる A / B / C / D の意味や満足条件を変える場合は、モデルを更新・検証する。
