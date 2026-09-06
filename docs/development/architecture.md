@@ -182,3 +182,31 @@ lock 下で全 digest、設定 identity、preimage を再照合して atomic rep
 テストで検査し、既存 Quint の状態・履歴意味は変更しない。
 Git driver は backend discovery を使わず三つの raw 入力を保存する。空・欠落・不正な
 祖先を合成せず診断を残し、recursive driver は binary として曖昧な仮想祖先を拒否する。
+
+## ビルド時のソース由来
+
+`--version` / `-V` は package version を先頭に、ビルド時の完全 commit hash と
+`source clean|modified|unknown` を補足する。build script が文字列を埋め込み、実行時は
+Git・環境変数・DB を参照しない。canonical build も通常の Cargo build と同じ仕組みを使う。
+
+配布工程では `AXON_BUILD_COMMIT`（40 桁または 64 桁の ASCII 十六進数、または `unknown`）と
+`AXON_BUILD_SOURCE_STATE`（`clean`、`modified`、`unknown`）を指定できる。
+どちらか一方でも存在すれば明示指定モードとし、省略した項目は `unknown` にする。
+Git 自動取得とは混ぜない。不正値・空文字・非 Unicode 値は警告して当該項目を `unknown` とする。
+たとえば上流 commit に配布側パッチを当てる場合は、その commit と `modified` を明示する。
+
+指定がなければ Cargo package root 自身が Git worktree root の場合だけ自動取得する。
+linked worktree にも対応する。親 repository 内へ展開した source archive は親の HEAD を採用しない。
+Git を見つけられない場合や各照会が失敗した場合は、取得不能な項目を `unknown` にする。
+Git の repository/index/pathspec を切り替える環境変数は照会から除外する。
+
+modified は staged / unstaged の tracked file と Git が無視しない untracked file を対象にする。
+package root の `.axon`（管理データ）と `target`（標準 build artifact）は tracked でも除外する。
+その他の生成物は `.gitignore` 等で除外する。無視されたソース、Git の assume-unchanged /
+稼働中の並行編集などまで検知する保証はない。Git 照会は build 開始時の観測である。
+commit のみ、変更の有無のみ、metadata のみの変化でも情報を更新するため、build script は
+毎回の Cargo build で再実行する（由来の照会と axon crate 再コンパイルのコストがある）。
+
+これは完全なソース内容や binary の同一性の証明ではない。正式 release では version が通常の
+識別の主となり、commit は補助情報である。commit と modified だけでは配布側のパッチ、
+ビルド設定、未 commit 差分の内容を識別できない。厳密な監査では binary hash と package 情報も記録する。

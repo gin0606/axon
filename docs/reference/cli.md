@@ -301,3 +301,7 @@ showは分岐・統合を含む履歴について因果参照と採用先端を�
 `storage check`、`merge prepare/check/apply/driver/setup` の保存・競合・Git 契約は
 [file storage](file-storage.md#cli-workspace-と-git) を参照する。
 これらの明示 snapshot 操作は通常 Store を開かず、stage/commit を行わない。
+
+`--version` / `-V` は package version と、ビルド時の完全 commit hash・source 状態を表示する。
+取得不能な情報は `unknown` とし、実行場所から推定しない。metadata 指定と検知範囲は
+[ビルド時のソース由来](../development/architecture.md#ビルド時のソース由来)を参照。

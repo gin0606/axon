@@ -143,7 +143,7 @@ fn write_output_to(mut stream: impl std::io::Write, output: &str) -> std::io::Re
 #[derive(Parser)]
 #[command(
     name = "axon",
-    version,
+    version = env!("AXON_VERSION"),
     about = "A local issue tracker with independent state axes"
 )]
 struct Cli {
