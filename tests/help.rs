@@ -343,3 +343,45 @@ fn declaration_docs_ignore_a_broken_database() {
     }
     assert_eq!(std::fs::read_dir(db_dir).unwrap().count(), 1);
 }
+
+#[test]
+fn free_text_help_distinguishes_positional_titles_and_option_values() {
+    for path in [
+        vec!["plan"],
+        vec!["capture"],
+        vec!["group", "plan"],
+        vec!["group", "capture"],
+    ] {
+        let mut args = path;
+        args.push("--help");
+        let help = help_stdout(&args);
+        assert!(help.contains("Put options before --"), "{help}");
+        assert!(help.contains("-m='body' -- '--color text'"), "{help}");
+        assert!(help.contains("--message='--help text'"), "{help}");
+    }
+    for path in [vec!["write"], vec!["note", "add"]] {
+        let mut args = path;
+        args.push("--help");
+        let help = help_stdout(&args);
+        assert!(help.contains("--message='--help text'"), "{help}");
+        assert!(help.contains("-m='--help text'"), "{help}");
+    }
+    assert!(help_stdout(&["write", "--help"]).contains("--title='--color text'"));
+    for path in [
+        vec!["release"],
+        vec!["decide", "accept"],
+        vec!["decide", "reject"],
+        vec!["decide", "undecide"],
+        vec!["when", "at"],
+        vec!["when", "after"],
+        vec!["when", "manual"],
+        vec!["when", "command"],
+        vec!["when", "clear"],
+    ] {
+        let mut args = path;
+        args.push("--help");
+        let help = help_stdout(&args);
+        assert!(help.contains("--reason='--help text'"), "{help}");
+        assert!(help.contains("-r='--help text'"), "{help}");
+    }
+}

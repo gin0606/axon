@@ -230,13 +230,13 @@ enum Command {
         /// Parent group ID or unique ID suffix
         #[arg(long)]
         parent: Option<String>,
-        /// Initial description; an empty value leaves it absent
+        /// Initial description; an empty value leaves it absent. For a leading hyphen, use --message='--help text' (or -m='--help text')
         #[arg(short = 'm', long)]
         message: Option<String>,
         /// File containing the initial description, or - for standard input
         #[arg(short = 'F', long)]
         file: Option<String>,
-        /// One or more words joined with spaces to form the issue title
+        /// One or more words joined with spaces to form the issue title. Put options before --, e.g. -m='body' -- '--color text'
         #[arg(required = true, value_name = "TITLE")]
         title: Vec<String>,
     },
@@ -245,13 +245,13 @@ enum Command {
         /// Parent group ID or unique ID suffix
         #[arg(long)]
         parent: Option<String>,
-        /// Initial description; an empty value leaves it absent
+        /// Initial description; an empty value leaves it absent. For a leading hyphen, use --message='--help text' (or -m='--help text')
         #[arg(short = 'm', long)]
         message: Option<String>,
         /// File containing the initial description, or - for standard input
         #[arg(short = 'F', long)]
         file: Option<String>,
-        /// One or more words joined with spaces to form the issue title
+        /// One or more words joined with spaces to form the issue title. Put options before --, e.g. -m='body' -- '--color text'
         #[arg(required = true, value_name = "TITLE")]
         title: Vec<String>,
     },
@@ -307,7 +307,7 @@ enum Command {
     Release {
         /// Entity ID or unique ID suffix
         id: String,
-        /// Release reason or handoff recorded in progress history
+        /// Release reason or handoff recorded in progress history. For a leading hyphen, use --reason='--help text' (or -r='--help text')
         #[arg(short, long)]
         reason: Option<String>,
     },
@@ -315,10 +315,10 @@ enum Command {
     Write {
         /// Entity ID or unique ID suffix
         id: String,
-        /// Replacement title
+        /// Replacement title. For a leading hyphen, use --title='--color text'
         #[arg(long)]
         title: Option<String>,
-        /// Replacement description; an empty value removes it
+        /// Replacement description; an empty value removes it. For a leading hyphen, use --message='--help text' (or -m='--help text')
         #[arg(short = 'm', long)]
         message: Option<String>,
         /// File containing the replacement description, or - for standard input
@@ -401,13 +401,13 @@ enum GroupCmd {
         /// Parent group ID or unique ID suffix
         #[arg(long)]
         parent: Option<String>,
-        /// Initial description; an empty value leaves it absent
+        /// Initial description; an empty value leaves it absent. For a leading hyphen, use --message='--help text' (or -m='--help text')
         #[arg(short = 'm', long)]
         message: Option<String>,
         /// File containing the initial description, or - for standard input
         #[arg(short = 'F', long)]
         file: Option<String>,
-        /// One or more words joined with spaces to form the group title
+        /// One or more words joined with spaces to form the group title. Put options before --, e.g. -m='body' -- '--color text'
         #[arg(required = true, value_name = "TITLE")]
         title: Vec<String>,
     },
@@ -416,13 +416,13 @@ enum GroupCmd {
         /// Parent group ID or unique ID suffix
         #[arg(long)]
         parent: Option<String>,
-        /// Initial description; an empty value leaves it absent
+        /// Initial description; an empty value leaves it absent. For a leading hyphen, use --message='--help text' (or -m='--help text')
         #[arg(short = 'm', long)]
         message: Option<String>,
         /// File containing the initial description, or - for standard input
         #[arg(short = 'F', long)]
         file: Option<String>,
-        /// One or more words joined with spaces to form the group title
+        /// One or more words joined with spaces to form the group title. Put options before --, e.g. -m='body' -- '--color text'
         #[arg(required = true, value_name = "TITLE")]
         title: Vec<String>,
     },
@@ -489,7 +489,7 @@ enum DecideCmd {
 struct DecisionArgs {
     /// Entity ID or unique ID suffix whose Disposition is changed
     id: String,
-    /// Reason recorded in decision history
+    /// Reason recorded in decision history. For a leading hyphen, use --reason='--help text' (or -r='--help text')
     #[arg(short, long)]
     reason: Option<String>,
 }
@@ -500,7 +500,7 @@ enum WhenCmd {
     Manual {
         /// Entity ID or unique ID suffix
         id: String,
-        /// Reason recorded in decision history
+        /// Reason recorded in decision history. For a leading hyphen, use --reason='--help text' (or -r='--help text')
         #[arg(short, long)]
         reason: Option<String>,
     },
@@ -510,7 +510,7 @@ enum WhenCmd {
         id: String,
         /// Resurface date in YYYY-MM-DD format
         date: String,
-        /// Reason recorded in decision history
+        /// Reason recorded in decision history. For a leading hyphen, use --reason='--help text' (or -r='--help text')
         #[arg(short, long)]
         reason: Option<String>,
     },
@@ -520,7 +520,7 @@ enum WhenCmd {
         id: String,
         /// Entity whose terminal state satisfies the condition
         reference: String,
-        /// Reason recorded in decision history
+        /// Reason recorded in decision history. For a leading hyphen, use --reason='--help text' (or -r='--help text')
         #[arg(short, long)]
         reason: Option<String>,
     },
@@ -533,7 +533,7 @@ enum WhenCmd {
         id: String,
         /// Shell string passed as one argument to /bin/sh -c
         command: String,
-        /// Reason recorded in decision history
+        /// Reason recorded in decision history. For a leading hyphen, use --reason='--help text' (or -r='--help text')
         #[arg(short, long)]
         reason: Option<String>,
     },
@@ -541,7 +541,7 @@ enum WhenCmd {
     Clear {
         /// Entity ID or unique ID suffix
         id: String,
-        /// Reason recorded in decision history
+        /// Reason recorded in decision history. For a leading hyphen, use --reason='--help text' (or -r='--help text')
         #[arg(short, long)]
         reason: Option<String>,
     },
@@ -573,7 +573,7 @@ enum NoteCmd {
     Add {
         /// Entity ID or unique ID suffix
         id: String,
-        /// Note body
+        /// Note body. For a leading hyphen, use --message='--help text' (or -m='--help text')
         #[arg(short = 'm', long)]
         message: Option<String>,
         /// File containing the note body, or - for standard input
@@ -807,7 +807,12 @@ fn mutation_context(matches: &clap::ArgMatches) -> Option<String> {
 }
 
 fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut matches = cli_command().get_matches_from(args);
+    let mut matches = cli_command()
+        .try_get_matches_from(&args)
+        .unwrap_or_else(|mut error| {
+            free_text_error_guidance(&args, &mut error);
+            error.exit()
+        });
     let context = mutation_context(&matches);
     let result = (|| match Cli::from_arg_matches_mut(&mut matches)?.command {
         Command::Migrate {
@@ -3132,6 +3137,66 @@ fn cli_command() -> clap::Command {
     Cli::command()
         .styles(cli_styles())
         .override_help(render_root_help(OutputDecoration::Ansi))
+}
+
+fn free_text_error_guidance(args: &[std::ffi::OsString], error: &mut clap::Error) {
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
+
+    if !matches!(
+        error.kind(),
+        ErrorKind::UnknownArgument | ErrorKind::InvalidValue
+    ) {
+        return;
+    }
+    for (index, token) in args.iter().enumerate().skip(1) {
+        let (option, label) = match token.to_str() {
+            Some("--title") => ("--title", "TITLE"),
+            Some("--message" | "-m") => ("--message", "MESSAGE"),
+            Some("--reason" | "-r") => ("--reason", "REASON"),
+            _ => continue,
+        };
+        if args.get(index + 1).is_some_and(|next| {
+            next.to_str()
+                .is_none_or(|value| !value.starts_with('-') || value == "-")
+        }) {
+            continue;
+        }
+        // Let Clap distinguish options from values and tokens after the positional separator.
+        let Err(prefix_error) = cli_command().try_get_matches_from(&args[..=index]) else {
+            continue;
+        };
+        if prefix_error.kind() != ErrorKind::InvalidValue
+            || prefix_error.get(ContextKind::InvalidArg)
+                != Some(&ContextValue::String(format!("{option} <{label}>")))
+            || prefix_error.get(ContextKind::InvalidValue)
+                != Some(&ContextValue::String(String::new()))
+        {
+            continue;
+        }
+        error.remove(ContextKind::SuggestedArg);
+        error.remove(ContextKind::Suggested);
+        error.remove(ContextKind::TrailingArg);
+        error.insert(ContextKind::Suggested, ContextValue::StyledStrs(vec![format!(
+            "if a value begins with '-', attach it with '=': {option}='--help text'. Quoting alone does not stop option parsing; '--' separates positional arguments and cannot supply this option's value"
+        ).into()]));
+        return;
+    }
+    if error.kind() == ErrorKind::UnknownArgument {
+        let creation = matches!(
+            args.get(1).and_then(|arg| arg.to_str()),
+            Some("plan" | "capture")
+        ) || (args.get(1).is_some_and(|arg| arg == "group")
+            && matches!(
+                args.get(2).and_then(|arg| arg.to_str()),
+                Some("plan" | "capture")
+            ));
+        if creation {
+            error.remove(ContextKind::TrailingArg);
+            error.insert(ContextKind::Suggested, ContextValue::StyledStrs(vec![
+                "if the positional title begins with '-', put all options before '--', e.g. -m='body' -- '--color text'. Quoting alone does not stop option parsing".into(),
+            ]));
+        }
+    }
 }
 
 fn cli_styles() -> clap::builder::Styles {

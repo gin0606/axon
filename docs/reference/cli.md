@@ -15,6 +15,32 @@ axon の操作対象は `Issue` と `Group` の 2 kind を持つ Entity であ�
 
 分類内では、対になる操作と同じ対象を扱う namespace を隣接させる。namespace 内は `group plan|capture|set|unset`、`dep add|rm`、`decide accept|reject|undecide`、`when at|after|manual|command|clear`、`note add|list|show`、`revision list|show|diff`、`import prepare|check|apply` の順とする。
 
+## ハイフンで始まる自由記述
+
+位置引数の title は `--` でオプション解釈を終えてから渡す。他のオプションは
+必ずその前へ置く。Issue/Group の plan/capture で同じ規則を使う。
+
+```sh
+axon capture -m='説明' -- '--color フラグを扱う'
+axon group plan -m='説明' -- '--help を整理する'
+```
+
+自由記述のオプション値は `=` で結ぶ。write の `--title`、作成/write/Note の
+`--message` (`-m`)、decide/when/release の `--reason` (`-r`) が該当する。
+
+```sh
+axon write <id> --title='--color フラグを扱う'
+axon write <id> --message='--help から始まる本文'
+axon decide accept <id> --reason='--help の仕様を採用する'
+axon note add <id> -m='--help'
+```
+
+引用符は shell が処理するため、引用だけではオプション解釈を止められない。
+`--title -- '本文'` はオプション値を渡す記法ではない。値の欠落位置を検出した
+構文エラーでは `=` を案内し、位置引数用の tip や類似オプションの tip を置換する。
+既存オプションと同形の本文にも `=` を使う。`--help` を独立した引数として渡す
+従来の help 動作は維持する。受け入れ規則、空値の意味、title の正規化は変えない。
+
 ## 現在の actor
 
 `axon actor` は引数を取らず、現在の actor ラベルだけを改行付きで stdout に返す。

@@ -6,6 +6,29 @@ This guide explains everyday use. For exact contracts, see the Japanese
 [state model](../reference/state-model.md), [information model](../reference/information-model.md),
 [CLI reference](../reference/cli.md), and [declaration format](../reference/declaration-file.md).
 
+## Text beginning with a hyphen
+
+For a positional title in `plan`, `capture`, `group plan`, or `group capture`,
+put other options before `--`:
+
+```sh
+axon capture -m='description' -- '--color flag handling'
+```
+
+Attach free-text option values with `=`. This applies to `write --title`,
+`--message`/`-m` on creation, write and Note commands, and `--reason`/`-r`
+on decide, when and release commands:
+
+```sh
+axon write <id> --title='--color flag handling' --message='--help text'
+axon note add <id> -m='--help'
+axon decide accept <id> --reason='--help behavior agreed'
+```
+
+Shell quoting keeps spaces together but does not prevent option parsing.
+`--title -- 'text'` cannot supply the option value. Use `=` even when the
+text exactly matches an existing option such as `--help`.
+
 ## State model
 
 An Entity is either an `Issue` or a `Group`. Both kinds have the same generated public ID, title, description, claim, and three independent axes.
