@@ -2,8 +2,5 @@
 /mise.local.toml
 /_apalache-out/
 *.itf.json
-.axon/*
-!.axon/config.json
-!.axon/state.jsonl
 !/.gw/
 !/.gw/**
