@@ -14,9 +14,9 @@ Do not use one axis as a proxy for another. A command that changes Progress must
 
 An Entity is terminal when its Progress is `Ended` or its Disposition is `Rejected`. `ready`, `blocked`, `orphaned`, `surfaced`, `terminal`, active scope, blocking causes, and Group completion facts are derived from stored state and relationships; do not treat them as independently editable data.
 
-`ready` means that an Entity is in active scope, `NotStarted`, `Accepted`, surfaced, not blocked, and not orphaned. `triage` is the active, non-terminal decision frontier: an Entity is there when it is `Undecided` or orphaned. These definitions do not assign the decision or work to a human or an agent.
+`ready` means that an Entity is in active scope, `NotStarted`, `Accepted`, surfaced, not blocked, and not orphaned. `triage` includes an Entity only when all four conditions hold: it is non-terminal, its own Resurface condition is satisfied (surfaced), it is in active scope (all ancestor Group activation gates are open), and it is `Undecided` or orphaned. These definitions do not assign the decision or work to a human or an agent.
 
-`Manual` remains unsurfaced until explicitly replaced or cleared with `axon when clear`. It has no payload and changes neither Progress, Disposition, nor claim. A Manual Group closes descendant active scope without changing descendant state.
+`Manual` remains unsurfaced until explicitly replaced or cleared with `axon when clear`. It has no payload and changes neither Progress, Disposition, nor claim. A Manual Group closes descendant active scope without changing descendant state. A root Entity is always in active scope but is absent from `triage` while its own condition is Manual; a surfaced child is absent while an ancestor gate is closed. Undecided or orphaned Entities enter `triage` when all four conditions hold.
 
 `Command` stores a shell string, not its observed result. Queries that need derived status can run it: exit 0 satisfies the condition, exit 1 does not, and other exits, signals, or spawn failures fail the Axon command. Results are shared within one invocation and reevaluated next time; satisfaction can revert without changing Progress, Disposition, or claim. Clearing or correcting the condition does not require successful evaluation. See `axon when command --help` for the execution contract.
 
@@ -39,7 +39,7 @@ Each accepted or rejected declaration is preserved as an immutable Declaration R
 
 Before changing an existing Entity, read `axon show <id>` and inspect the fields relevant to the requested operation. Read Declaration Revisions, Notes, and typed history when the request changes or depends on the information they preserve. Do not infer missing context from a frontier listing.
 
-Inspect related Entities when their state or declaration can change the operation's validity or a consequence the caller needs to understand. Use `axon list` only when a complete inventory, including inactive Entities, is required; `ready` and `triage` are frontiers, not complete inventories.
+Inspect related Entities when their state or declaration can change the operation's validity or a consequence the caller needs to understand. Use `axon list` only when a complete inventory, including inactive Entities, is required; `ready` and `triage` are frontiers, not complete inventories. Absence from `triage` does not mean an Entity is missing or its creation/update failed; do not repeat creation on that evidence. Use `axon show <id>` for saved state and unsurfaced/inactive reasons. `status` summarizes plans, saved claims, candidates, and waits; it is not a complete inventory.
 
 ## Relationships and Groups
 

@@ -154,7 +154,7 @@ group を依存元または when の主体にした論理辺は group の全子�
 | 前提喪失 (orphaned) | Entity 自身または祖先 group の依存先に B=不採用 のものがある (依存の鎖は**推移しない**) |
 | 浮上中 (surfaced) | Resurface condition が満たされている |
 | 終端 (terminal) | A=`Ended` または B=`Rejected` |
-| triage frontier | active scope 内かつ非終端で、B=未判断または orphaned の Entity。gate が閉じた group の子孫は含めない |
+| triage frontier | 非終端かつ自身が surfaced かつ active scope 内で、B=未判断または orphaned の Entity。gate が閉じた group の子孫は含めない |
 | group 完了可能 | group 自身が `InProgress` で、全子孫 Entity が terminal |
 | 阻害の根本原因 (blocking cause) | Entity 間依存だけを遡り、前提喪失 / 後送り中 / active scope 外 / それ以上依存を持たない Entity に到達した地点。包含による非 active の理由は別に示す |
 
@@ -169,4 +169,13 @@ group の保存済み Progress と、配下の状況は別々に表示する。�
 - InProgress の子孫数
 - group を現在 done できるかと、妨げている非 terminal 子孫
 
-`triage` は active scope 内かつ非 terminal で、Undecided または orphaned の Entity だけを返す。親 group が Undecided / orphaned なら親だけが frontier になり、その判断と start を経て子が active scope 内になった後に子側の判断を見せる。全件と inactive 理由を確認する経路は `list` と `show` が担う。
+`triage` は次の4条件をすべて満たす Entity だけを返す。
+
+1. 非 terminal である。
+2. 自身の Resurface condition が成立している（surfaced）。
+3. 全祖先 Group の activation gate が開き、active scope 内にいる。
+4. Undecided または orphaned である。
+
+root Entity は常に active scope 内だが、自身が Manual なら未浮上のため含まれない。一方、祖先 gate が閉じている子 Entity は、自身が surfaced でも active scope 外のため含まれない。親 Group が Undecided / orphaned なら子孫の gate は閉じ、親自身も残りの条件を満たす場合だけ frontier に入る。子が active scope 内になり、自身も surfaced なら、Undecided / orphaned の子が対象に入る。
+
+非表示は Entity の不存在や作成・更新の失敗を意味しない。非表示だけを根拠に作成を再実行せず、管理 root 全体の棚卸しには `list`、個別の保存状態と未浮上・inactive 等の理由には `show` を使う。`ready` は着手候補、`status` は進行中の作業や待ちを含む状況把握を担い、`status` は全件一覧ではない。

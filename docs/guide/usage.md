@@ -39,7 +39,7 @@ A Note is append-only information learned after an Entity was defined: investiga
 3. Add an Entity to a plan with `axon group set <entity-id> <parent-group-id>`. Start the parent Group when its plan scope should become active.
 4. Use `axon ready` to find startable Entities and `axon start <id>` to claim one explicit target.
 5. Use `axon done <id>` when work ends. Finish all descendants before ending a Group.
-6. Use `axon triage` for the active frontier of Undecided and orphaned Entities. Use `axon show <group-id>` to inspect the Group's complete subtree, including inactive and terminal descendants, or `axon list` for the complete management-root inventory.
+6. Use `axon triage` for non-terminal, surfaced Entities in active scope that are Undecided or orphaned. Use `axon show <group-id>` to inspect the Group's complete subtree, including inactive and terminal descendants, or `axon list` for the complete management-root inventory.
 
 Use `--parent <group-id>` on any creation command to create an Entity inside a Group atomically. Use `--kind issue|group` on list queries when only one kind is relevant.
 
@@ -92,6 +92,18 @@ Treat an exported declaration as a working snapshot. After a successful apply, k
 | `axon log <id>` | Why did its Disposition or resurface condition change? |
 | `axon note list|show` | What supplemental information has been appended to this Entity? |
 | `axon revision list|show|diff` | Which declaration was decided, and how did decided declarations differ? |
+
+`triage` requires all four conditions: non-terminal, the Entity's own Resurface
+condition satisfied (surfaced), active scope (all ancestor Group gates open), and
+Undecided or orphaned. A root Entity with Manual is active but unsurfaced; a
+surfaced child below a closed ancestor gate is inactive. Neither appears until
+all conditions hold. See the [state model](../reference/state-model.md#observed-情報と-triage-frontier)
+for the full definition.
+
+Absence from `triage` does not mean an Entity is missing or its creation/update
+failed. Do not repeat creation on that evidence. Use `axon list` for the complete
+management-root inventory and `axon show <id>` for saved state and unsurfaced or
+inactive reasons. `status` is a summary, not a complete inventory.
 
 `status` keeps root plans separate and shows nested Group membership. It includes a
 plan when its root is non-terminal or its subtree has a saved claim. A rejected root

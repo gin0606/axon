@@ -263,6 +263,9 @@ enum Command {
         trace: TraceConditionsArgs,
     },
     /// List the active decision frontier
+    #[command(
+        long_about = "List Entities that satisfy all four conditions: non-terminal, their own Resurface condition is satisfied (surfaced), in active scope (all ancestor Group gates open), and Undecided or orphaned. A root Entity with Manual is active but unsurfaced; a surfaced child below a closed ancestor gate is inactive. Absence does not mean creation/update failed or an Entity is missing; do not repeat creation on that evidence. Use axon list for the complete management-root inventory and axon show <ID> for saved state and unsurfaced/inactive reasons. ready lists startable candidates; status summarizes plans, saved claims, and waits, not a complete inventory."
+    )]
     Triage {
         /// Include only one Entity kind
         #[arg(long, value_enum)]
@@ -3061,6 +3064,8 @@ fn render_docs(decoration: OutputDecoration) -> String {
         "  A dependency requires another Entity's result. An Ended non-Rejected Entity satisfies\n  it; a Rejected dependency makes its dependent orphaned. AfterEntity instead finishes\n  waiting when its reference is Ended or Rejected.\n\n  Containment places an Issue or Group under one parent Group. ready, blocked, orphaned,\n  surfaced, terminal, and active scope are derived when data is read; they are not stored.\n  An Entity is terminal when it is Ended or Rejected.\n"
     )
     .unwrap();
+
+    writeln!(output, "  triage requires all four conditions: non-terminal, the Entity's own Resurface\n  condition satisfied (surfaced), active scope (all ancestor Group gates open),\n  and Undecided or orphaned. A root Entity with Manual is active but unsurfaced;\n  a surfaced child below a closed ancestor gate is inactive. Neither appears\n  until all four conditions hold. Absence does not mean creation/update failed\n  or an Entity is missing; do not repeat creation on that evidence.\n  Use axon list for the complete management-root inventory and axon show <ID>\n  for saved state and unsurfaced/inactive reasons. ready lists startable candidates;\n  status summarizes plans, saved claims, and waits, not a complete inventory.\n").unwrap();
 
     writeln!(output, "{}", decoration.paint(OUTPUT_HEADING, "Groups")).unwrap();
     writeln!(

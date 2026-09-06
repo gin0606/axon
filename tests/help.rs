@@ -112,6 +112,21 @@ fn leaf_help_documents_common_entity_inputs_and_kind_filters() {
     assert!(after.contains("Entity whose terminal state"));
     let set = help_stdout(&["group", "set", "--help"]);
     assert!(set.contains("Parent group ID"));
+    let triage = help_stdout(&["triage", "--help"]);
+    for required in [
+        "all four conditions: non-terminal",
+        "own Resurface condition is satisfied (surfaced)",
+        "active scope (all ancestor Group gates open)",
+        "Undecided or orphaned",
+        "root Entity with Manual is active but unsurfaced",
+        "surfaced child below a closed ancestor gate is inactive",
+        "do not repeat creation",
+        "axon list",
+        "axon show <ID>",
+        "not a complete inventory",
+    ] {
+        assert!(triage.contains(required), "missing {required:?}: {triage}");
+    }
     let show = help_stdout(&["show", "--help"]);
     assert!(show.contains("situation and waits"), "{show}");
 }
@@ -177,6 +192,15 @@ fn docs_explains_the_model_in_terminal_text_without_opening_a_database() {
         "Disposition",
         "Resurface condition",
         "Relationships and derived state",
+        "triage requires all four conditions: non-terminal",
+        "condition satisfied (surfaced), active scope (all ancestor Group gates open)",
+        "and Undecided or orphaned",
+        "root Entity with Manual is active but unsurfaced",
+        "surfaced child below a closed ancestor gate is inactive",
+        "do not repeat creation",
+        "axon list for the complete management-root inventory",
+        "axon show <ID>",
+        "not a complete inventory",
         "Basic workflow",
         "axon plan / axon capture      Create an Issue",
         "axon help <COMMAND PATH>",
