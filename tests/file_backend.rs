@@ -49,6 +49,122 @@ fn config(root: &Path) -> PathBuf {
 fn state(root: &Path) -> PathBuf {
     root.join(".axon/state.jsonl")
 }
+
+#[test]
+fn init_gitignore_limits_additions_and_repairs_only_missing_files() {
+    let dir = TestDir::new("backend-ignore");
+    let root = dir.path();
+    dir.init_git(root);
+    run(&dir, root, &["init", "--backend", "file", "t"]);
+    let ignore = root.join(".axon/.gitignore");
+    let original = fs::read(&ignore).unwrap();
+    let config_before = fs::read(config(root)).unwrap();
+    for name in [
+        "state.db",
+        "state.db-wal",
+        "init.pending",
+        ".state.tmp",
+        "backup.db",
+    ] {
+        fs::write(root.join(".axon").join(name), "private").unwrap();
+    }
+    fs::create_dir_all(root.join(".axon/merge/work")).unwrap();
+    fs::write(root.join(".axon/merge/work/input"), "private").unwrap();
+    git(root, &["add", ".axon"]);
+    let output = git_command(root)
+        .args(["ls-files", ".axon"])
+        .output()
+        .unwrap();
+    assert_success(&output);
+    let expected = ".axon/.gitignore\n.axon/config.json\n.axon/state.jsonl\n";
+    assert_eq!(stdout(&output), expected);
+    fs::remove_file(&ignore).unwrap();
+    run(&dir, root, &["init"]);
+    assert_eq!(fs::read(&ignore).unwrap(), original);
+    assert_eq!(fs::read(config(root)).unwrap(), config_before);
+    fs::write(&ignore, "# user rules\n").unwrap();
+    run(&dir, root, &["init"]);
+    assert_eq!(fs::read(&ignore).unwrap(), b"# user rules\n");
+}
+
+#[test]
+fn sqlite_init_excludes_local_state_without_tracked_files() {
+    let dir = TestDir::new("sqlite-ignore");
+    let root = dir.path();
+    dir.init_git(root);
+    let exclude = root.join(".git/info/exclude");
+    fs::write(&exclude, "# user rules\nprivate/").unwrap();
+    run(&dir, root, &["init", "t"]);
+    assert!(!root.join(".axon/.gitignore").exists());
+    let expected = b"# user rules\nprivate/\n/.axon/\n";
+    assert_eq!(fs::read(&exclude).unwrap(), expected);
+    let config_before = fs::read(config(root)).unwrap();
+    run(&dir, root, &["init"]);
+    assert_eq!(fs::read(&exclude).unwrap(), expected);
+    assert_eq!(fs::read(config(root)).unwrap(), config_before);
+    let output = git_command(root)
+        .args(["ls-files", "--others", "--exclude-standard", "--", ".axon"])
+        .output()
+        .unwrap();
+    assert_success(&output);
+    assert!(stdout(&output).is_empty());
+    fs::remove_file(&exclude).unwrap();
+    run(&dir, root, &["init"]);
+    assert_eq!(fs::read(&exclude).unwrap(), b"/.axon/\n");
+}
+
+#[test]
+fn sqlite_worktree_exclusion_allows_file_worktree_override() {
+    let dir = TestDir::new("mixed-ignore");
+    let root = dir.path();
+    dir.init_git(root);
+    git(root, &["commit", "--allow-empty", "-qm", "seed"]);
+    let sql = root.join("sql-worktree");
+    git(
+        root,
+        &["worktree", "add", "-qb", "sql", sql.to_str().unwrap()],
+    );
+    run(&dir, &sql, &["init", "t"]);
+    assert!(
+        fs::read_to_string(root.join(".git/info/exclude"))
+            .unwrap()
+            .contains("/.axon/")
+    );
+    assert_success(
+        &git_command(&sql)
+            .args(["check-ignore", ".axon/config.json"])
+            .output()
+            .unwrap(),
+    );
+    run(&dir, root, &["init", "--backend", "file", "t"]);
+    fs::write(root.join(".gitignore"), "!/.axon/\n").unwrap();
+    git(root, &["add", ".axon"]);
+    let output = git_command(root)
+        .args(["ls-files", ".axon"])
+        .output()
+        .unwrap();
+    assert_success(&output);
+    assert_eq!(
+        stdout(&output),
+        ".axon/.gitignore\n.axon/config.json\n.axon/state.jsonl\n"
+    );
+    assert_success(
+        &git_command(&sql)
+            .args(["check-ignore", ".axon/config.json"])
+            .output()
+            .unwrap(),
+    );
+}
+
+#[test]
+fn init_outside_git_does_not_create_gitignore() {
+    for backend in ["sqlite", "file"] {
+        let dir = TestDir::new("no-git-ignore");
+        run(&dir, dir.path(), &["init", "--backend", backend, "t"]);
+        assert!(!dir.path().join(".axon/.gitignore").exists());
+    }
+}
+
 #[test]
 fn all_normal_commands_and_import_use_file_without_sqlite() {
     let dir = TestDir::new("file-commands");

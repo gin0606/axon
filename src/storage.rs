@@ -7,7 +7,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::Command,
     rc::Rc,
@@ -199,6 +199,59 @@ fn create(path: &Path, bytes: &[u8]) -> Result<()> {
         .map_err(|e| boundary(path, "sync published file", "Result unknown", e))
 }
 
+fn ensure_gitignore(directory: &Path, is_git: bool, backend: Backend) -> Result<()> {
+    if !is_git {
+        return Ok(());
+    }
+    if backend == Backend::File {
+        let path = directory.join(".gitignore");
+        if present(&path)? {
+            return Ok(());
+        }
+        return create(&path, b"*\n!.gitignore\n!config.json\n!state.jsonl\n");
+    }
+    let root = directory.parent().unwrap();
+    let path = PathBuf::from(
+        git(
+            root,
+            &[
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                "info/exclude",
+            ],
+        )?
+        .ok_or_else(|| invalid("missing Git exclude path"))?,
+    );
+    fs::create_dir_all(path.parent().unwrap())?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create(true)
+        .open(&path)
+        .map_err(|e| boundary(&path, "open Git exclude", "Not applied", e.into()))?;
+    file.lock()
+        .map_err(|e| boundary(&path, "lock Git exclude", "Not applied", e.into()))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    if bytes.split(|b| *b == b'\n').any(|line| {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        line == b"/.axon/" || line == b".axon/"
+    }) {
+        return Ok(());
+    }
+    let rule: &[u8] = if bytes.is_empty() || bytes.ends_with(b"\n") {
+        b"/.axon/\n"
+    } else {
+        b"\n/.axon/\n"
+    };
+    file.write_all(rule)
+        .and_then(|_| file.sync_all())
+        .map_err(|e| boundary(&path, "append Git exclude", "Result unknown", e.into()))?;
+    sync_dir(path.parent().unwrap())
+        .map_err(|e| boundary(&path, "sync Git exclude directory", "Result unknown", e))
+}
+
 pub enum Store {
     Sqlite(db::Store),
     File(FileStore),
@@ -337,6 +390,7 @@ impl Store {
                 return Err(invalid("init cannot change an existing prefix"));
             }
             let _ = existing.snapshot()?;
+            ensure_gitignore(&directory, is_git, cfg.backend)?;
             return Ok((data_path(&root, is_git, cfg.backend)?, actual_prefix));
         }
         let pending = directory.join("init.pending");
@@ -529,6 +583,7 @@ impl Store {
                         )
                     })?;
             }
+            ensure_gitignore(&directory, is_git, backend)?;
             let actual_prefix = match &state.metadata["prefix"] {
                 MetadataValue::Text(p) => p.clone(),
                 _ => return Err(invalid("invalid prefix")),

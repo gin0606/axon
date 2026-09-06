@@ -74,7 +74,9 @@ v11 からの直出力も v12 を経由するため、同じ v12 から段階移
    正本を先、対応する設定を最後に配置し、ファイルと directory を同期する。元 WAL/SHM を新 DB と
    混ぜない。SQLite を共有する worktree は同じ store ID の設定を使う。旧 `.axon/axon.db` を新 CLI が
    通常利用することはない。既存 root の切替に `init` で空 state を作らない。
-   file の設定と正本は Git で追跡し、`.axon/write.lock`、temporary file、merge workspace は ignore する。
+   切替後の `axon init` は backend に応じた ignore を補完できる。既存の ignore がある場合は
+   切替先 backend の対象に合わせて更新する（[backendとfile保存](file-storage.md)）。
+   file の設定と正本、`.axon/.gitignore` は Git で追跡し、その他は ignore する。
 3. 各利用 directory から新版で意図した root と全情報を読めることを確認する。全共有利用先が
    互換な組になってから writer を再開する。旧バイナリ・backup・対応表・台帳は保管する。
 

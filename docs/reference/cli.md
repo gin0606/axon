@@ -504,7 +504,7 @@ Git 配下では active worktree root の `.axon/config.json`、Git 外では最
 ## DBの互換性検査
 
 通常openはv13と既知DDLを検査し、旧版・未来版・未知構造を変更せず拒否する。
-`init`は既存正本をreset/upgradeせず、有効な設定・正本への再実行はno-op。保存成功境界とinit復旧は[backendとfile保存](file-storage.md)を参照。help、docs、version、completionはDB不要。
+`init`は既存正本をreset/upgradeせず、有効な設定・正本への再実行はそれらを保持する。Git 内では SQLite の `info/exclude` または file の `.axon/.gitignore` を補完する。保存成功境界とinit復旧は[backendとfile保存](file-storage.md)を参照。help、docs、version、completionはDB不要。
 手動変換は明示したv11/v12/v13入力から別directoryへ出力し、元DBの切替はしない。
 診断はpath、版、処理段階、原因、backup先と出力の適用状態を示す。失敗時の途中成果を上書きせず、
 結果不明なら出力とbackupを調べてから再開する。具体的な手順は[手動移行](migration.md)。

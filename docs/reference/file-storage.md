@@ -25,8 +25,23 @@ SQLite は Git common directory の `axon/state.db`、Git 外では `.axon/state
 別 worktree の file と共有 SQLite は共存できる。別 worktree から既存 valid SQLite を
 登録するときは `axon init --backend sqlite` が設定だけを作る。DB を再初期化しない。
 
-file の設定と正本を Git へ追加し、`.axon/write.lock`、`.axon/init.pending`、
-`.axon/.*.tmp` は ignore する。init は Git の設定・index を変更しない。
+Git 内の `init` は backend に応じて ignore を補完する。SQLite は Git の
+`info/exclude` に `/.axon/` を追加し、設定も含めてローカルだけに保持する。
+`.axon/.gitignore` は作らず、コミットは不要。既存の exclude の内容は保持し、
+同じ除外を重複追加しない。linked worktree では `git rev-parse --git-path info/exclude`
+が指す共有先を使う。
+
+file は `.axon/.gitignore` がなければ作る。全項目を除外し、`.gitignore` 自身と
+`config.json`、`state.jsonl` を例外にする。再実行でも欠落を補完するが、既存の
+`.gitignore` は上書きしない。Git 外ではどちらの ignore も作らない。
+親やグローバル、共有 `info/exclude` が `.axon/` 自体を除外している場合は、内部の例外は
+効かないため、その除外を取り除くか、file 側の root の `.gitignore` に `!/.axon/` を指定する。
+SQLite と file の worktree が混在する場合もこの例外が必要になる。
+既に追跡されたファイルは ignore だけでは追跡解除されない。backend の手動切替時は
+追跡対象と ignore も切替先に合わせる。
+file の設定と正本、`.axon/.gitignore` を Git へ追加する。init は Git の設定・index を変更しない。
+ignore の保存に失敗した場合はエラーを返す。公開済みの設定・正本は保持し、原因解消後の
+`init` 再実行で補完する。
 clone 済みの設定と正本はそのまま利用でき、共有 binding は不要。
 同じ Issue を別 worktree で start でき、変更はその worktree 内だけに保存される。
 

@@ -24,7 +24,10 @@ OS lock の取得後に正本を読み、共通 core を適用する。同じ di
 sync し、元 bytes と設定を再照合して atomic replace、directory sync の順に公開する。
 no-op は bytes を保持する。replace 前の失敗は未適用、replace 後の同期失敗は結果不明。
 成功表示は公開後に限る。init は正本を先、設定を最後に公開し、片側だけの生成を診断する。
-既存 valid shared SQLite の worktree 登録では設定だけを作る。
+既存 valid shared SQLite の worktree 登録では DB を保持して設定を作る。
+Git 内の init は SQLite では共有 `info/exclude` に `.axon` の除外を補完し、
+file では追跡対象を例外にした `.axon/.gitignore` を欠落時に作る。
+既存設定への再実行でも補完し、利用者の既存 ignore は保持する。
 
 Git index の設定・正本に unmerged entry があれば通常操作を拒否する。
 Git/editor は lock に従わないため、同じ worktree の checkout/merge と Axon write を
