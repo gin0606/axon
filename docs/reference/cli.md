@@ -106,7 +106,16 @@ Git 外では Axon 管理 root とし、起動元の環境変数を継承する�
 
 これは既存ツール一般の終了コード規約ではない。必要な終了コード変換は利用者のスクリプトが担う。
 判定失敗の診断は対象 Entity、シェル文字列、終了理由、取得できた stdout / stderr を示す。
-正常時の外部出力は通常の Axon 出力へ混ぜない。
+正常時の外部出力は通常の Axon 出力へ混ぜない。`ready`、`triage`、`status`、`start`、
+`list`、`show`、`import check`、`import apply` は `--trace-conditions` を受け付ける。
+指定時は、その操作が実際に評価した終了 0 / 1 の Command ごとに Entity ID、cwd、成立可否と
+終了コード、取得した stdout / stderr を一つの block として stderr へ評価順に表示する。
+空 stream は `(empty)` と表示する。memoized 結果は再表示せず、判定失敗は既存診断だけを出す。
+
+trace は取得した出力を省略・redactionせず、非 UTF-8 byteを lossy UTF-8 として表示するため、
+元の byte列を完全には再現しない。秘密情報を除去する保証はなく、利用者が子processの出力を
+公開する明示的な診断操作である。trace blockのstderrへの書き込みまたはflushに失敗した場合は、
+その評価を失敗としてAxonの呼び出しも失敗させる。状態変更前の評価で失敗するため、変更は適用しない。
 
 評価するのは surfaced などの導出状態が必要になったときだけであり、単なる Entity の DB 読取を
 実行トリガーにしない。list / show、ready / triage、start の成立検査や import の導出差分でも、

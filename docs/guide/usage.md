@@ -176,6 +176,7 @@ Use a Command condition when a script can observe the event you are waiting for:
 ```sh
 axon when command <id> './check-release.sh' -r 'Wait for the library release'
 axon show <id>
+axon show <id> --trace-conditions
 axon when clear <id>
 ```
 
@@ -183,6 +184,9 @@ The script must return 0 when satisfied, 1 while waiting, and another status on 
 Axon can run it when a query needs derived status, and checks again on the next invocation.
 Correct or clear a failing condition with `when`; no successful evaluation is required.
 These commands work for Issues and Groups and preserve progress, disposition, and claims.
+Use `--trace-conditions` on a condition-evaluating command when you need to inspect the
+captured child stdout/stderr. The trace is written to stderr and can expose secrets exactly
+as the child emitted them; Axon does not redact or truncate it.
 
 The script owns timeouts and caching; Axon waits if it does not finish. See the
 [CLI execution contract](../reference/cli.md#外部条件の評価) for the working directory,

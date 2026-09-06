@@ -2,6 +2,7 @@ use crate::domain::*;
 use chrono::Utc;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::rc::Rc;
@@ -15,6 +16,7 @@ pub type Result<T> = std::result::Result<T, EvaluationError>;
 pub struct Evaluation {
     root: PathBuf,
     results: RefCell<HashMap<EntityId, Result<bool>>>,
+    trace: Option<RefCell<Box<dyn Write>>>,
 }
 
 impl Evaluation {
@@ -22,6 +24,19 @@ impl Evaluation {
         Self {
             root,
             results: RefCell::new(HashMap::new()),
+            trace: None,
+        }
+    }
+
+    pub fn tracing(root: PathBuf) -> Self {
+        Self::with_trace_writer(root, Box::new(std::io::stderr()))
+    }
+
+    fn with_trace_writer(root: PathBuf, writer: Box<dyn Write>) -> Self {
+        Self {
+            root,
+            results: RefCell::new(HashMap::new()),
+            trace: Some(RefCell::new(writer)),
         }
     }
 
@@ -50,8 +65,10 @@ impl Evaluation {
                 ))
             })?;
         match output.status.code() {
-            Some(0) => Ok(true),
-            Some(1) => Ok(false),
+            Some(code @ (0 | 1)) => {
+                self.write_trace(entity, code, &output.stdout, &output.stderr)?;
+                Ok(code == 0)
+            }
             _ => Err(EvaluationError(format!(
                 "{}: Command({script:?}) failed: {}\nstdout:\n{}\nstderr:\n{}",
                 entity.id,
@@ -60,6 +77,49 @@ impl Evaluation {
                 String::from_utf8_lossy(&output.stderr)
             ))),
         }
+    }
+
+    fn write_trace(&self, entity: &Entity, code: i32, stdout: &[u8], stderr: &[u8]) -> Result<()> {
+        let Some(writer) = &self.trace else {
+            return Ok(());
+        };
+        let result = if code == 0 {
+            "satisfied"
+        } else {
+            "not satisfied"
+        };
+        let mut block = format!(
+            "Condition trace: {}\ncwd: {}\nresult: {result} (exit {code})\n",
+            entity.id,
+            self.root.display()
+        );
+        append_trace_stream(&mut block, "stdout", stdout);
+        append_trace_stream(&mut block, "stderr", stderr);
+        block.push_str(&format!("End condition trace: {}\n", entity.id));
+
+        let mut writer = writer.borrow_mut();
+        writer
+            .write_all(block.as_bytes())
+            .and_then(|()| writer.flush())
+            .map_err(|error| {
+                EvaluationError(format!(
+                    "{}: Command condition trace could not be written: {error}",
+                    entity.id
+                ))
+            })
+    }
+}
+
+fn append_trace_stream(block: &mut String, label: &str, bytes: &[u8]) {
+    block.push_str(label);
+    block.push_str(":\n");
+    if bytes.is_empty() {
+        block.push_str("(empty)\n");
+        return;
+    }
+    block.push_str(&String::from_utf8_lossy(bytes));
+    if !bytes.ends_with(b"\n") {
+        block.push('\n');
     }
 }
 
@@ -390,6 +450,7 @@ pub struct GroupSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
 
     fn entity(
         id: &str,
@@ -445,6 +506,48 @@ mod tests {
         assert!(first.contains("command"));
         assert!(first.contains("could not start"));
         assert!(first.contains("exit 0"));
+        assert_eq!(
+            evaluation
+                .command(&entity, "exit 0")
+                .unwrap_err()
+                .to_string(),
+            first
+        );
+        assert_eq!(evaluation.results.borrow().len(), 1);
+    }
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("trace sink failed"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn command_trace_write_failure_is_an_evaluation_error_and_is_shared() {
+        let entity = entity(
+            "command",
+            EntityKind::Issue,
+            Progress::NotStarted,
+            Disposition::Accepted,
+            None,
+        );
+        let evaluation = Evaluation::with_trace_writer(
+            std::env::current_dir().unwrap(),
+            Box::new(FailingWriter),
+        );
+        let first = evaluation
+            .command(&entity, "exit 0")
+            .unwrap_err()
+            .to_string();
+        assert!(first.contains("command"));
+        assert!(first.contains("trace could not be written"));
+        assert!(first.contains("trace sink failed"));
         assert_eq!(
             evaluation
                 .command(&entity, "exit 0")

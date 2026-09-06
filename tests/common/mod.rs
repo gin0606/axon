@@ -189,6 +189,22 @@ impl TestRepo {
             .unwrap()
     }
 
+    #[cfg(unix)]
+    pub fn axon_with_closed_stderr(&self, args: &[&str]) -> Output {
+        use std::os::fd::{FromRawFd, OwnedFd};
+
+        let mut pipe = [0; 2];
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        assert_eq!(unsafe { libc::close(pipe[0]) }, 0);
+        let writer = unsafe { OwnedFd::from_raw_fd(pipe[1]) };
+        axon_command(&self.root, &self.dir.git_config)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::from(writer))
+            .output()
+            .unwrap()
+    }
+
     pub fn axon_with_stdin(&self, args: &[&str], input: &str) -> Output {
         let mut child = axon_command(&self.root, &self.dir.git_config)
             .args(args)

@@ -2,8 +2,8 @@ use crate::*;
 use std::collections::HashSet;
 use std::fmt::Write;
 
-pub fn run(group: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    let (id, view) = open_store()?.status_snapshot(group)?;
+pub fn run(group: Option<&str>, trace_conditions: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let (id, view) = open_store(trace_conditions)?.status_snapshot(group)?;
     let decoration = current_output_decoration();
     let output = render(&view, id.as_ref(), decoration)?;
     write_rows(

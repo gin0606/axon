@@ -524,7 +524,7 @@ impl Store {
         Ok((path, prefix))
     }
 
-    pub fn open(report: impl FnOnce(&migration::Outcome)) -> Result<Self> {
+    pub fn open(trace_conditions: bool, report: impl FnOnce(&migration::Outcome)) -> Result<Self> {
         let root = management_root(ResolveFor::Open)?;
         let path = database_path(&root);
         if !path.exists() {
@@ -542,7 +542,11 @@ impl Store {
             }
             _ => root,
         };
-        store.evaluation = Rc::new(Evaluation::new(command_root));
+        store.evaluation = Rc::new(if trace_conditions {
+            Evaluation::tracing(command_root)
+        } else {
+            Evaluation::new(command_root)
+        });
         Ok(store)
     }
 

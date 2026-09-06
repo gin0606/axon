@@ -135,6 +135,16 @@ struct Cli {
     command: Command,
 }
 
+#[derive(clap::Args)]
+struct TraceConditionsArgs {
+    /// Trace evaluated Command conditions to stderr, including unredacted child output
+    #[arg(
+        long,
+        long_help = "Trace each Command condition actually evaluated by this invocation to stderr. Each block includes the Entity ID, working directory, exit result, and captured stdout/stderr. Captured output is not redacted or truncated; non-UTF-8 bytes are rendered lossily, empty streams are marked (empty), and a trace write failure fails the Axon invocation. Memoized references and abnormal exits do not produce a trace block."
+    )]
+    trace_conditions: bool,
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 enum KindFilter {
     Issue,
@@ -203,12 +213,16 @@ enum Command {
         /// Include only one Entity kind
         #[arg(long, value_enum)]
         kind: Option<KindFilter>,
+        #[command(flatten)]
+        trace: TraceConditionsArgs,
     },
     /// List the active decision frontier
     Triage {
         /// Include only one Entity kind
         #[arg(long, value_enum)]
         kind: Option<KindFilter>,
+        #[command(flatten)]
+        trace: TraceConditionsArgs,
     },
     /// Summarize plans, saved claims, candidates, and waits
     #[command(
@@ -218,6 +232,8 @@ enum Command {
         /// Group ID or unique ID suffix; include its complete descendant scope
         #[arg(long)]
         group: Option<String>,
+        #[command(flatten)]
+        trace: TraceConditionsArgs,
     },
     /// List every active claim
     Claims {
@@ -229,6 +245,8 @@ enum Command {
     Start {
         /// Entity ID or unique ID suffix
         id: String,
+        #[command(flatten)]
+        trace: TraceConditionsArgs,
     },
     /// Mark one InProgress Entity as Ended
     Done {
@@ -267,11 +285,15 @@ enum Command {
         /// Include only one Entity kind
         #[arg(long, value_enum)]
         kind: Option<KindFilter>,
+        #[command(flatten)]
+        trace: TraceConditionsArgs,
     },
     /// Inspect one Entity from situation and waits to its full details
     Show {
         /// Entity ID or unique ID suffix
         id: String,
+        #[command(flatten)]
+        trace: TraceConditionsArgs,
     },
     /// Add and inspect durable notes
     #[command(subcommand)]
@@ -379,11 +401,15 @@ Save axon docs declaration --example output to a file, then pass it to prepare."
     Check {
         /// Canonical YAML declaration file
         file: std::path::PathBuf,
+        #[command(flatten)]
+        trace: TraceConditionsArgs,
     },
     /// Validate and atomically apply a canonical declaration
     Apply {
         /// Canonical YAML declaration file to apply and refresh
         file: std::path::PathBuf,
+        #[command(flatten)]
+        trace: TraceConditionsArgs,
     },
 }
 
@@ -554,8 +580,8 @@ fn main() {
     }
 }
 
-fn open_store() -> db::Result<Store> {
-    Store::open(|outcome| {
+fn open_store(trace_conditions: bool) -> db::Result<Store> {
+    Store::open(trace_conditions, |outcome| {
         if let db::migration::Outcome::Migrated {
             from, to, backup, ..
         } = outcome
@@ -668,11 +694,11 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
             message,
             file,
         ),
-        Command::Ready { kind } => cmd_ready(kind),
-        Command::Triage { kind } => cmd_triage(kind),
+        Command::Ready { kind, trace } => cmd_ready(kind, trace.trace_conditions),
+        Command::Triage { kind, trace } => cmd_triage(kind, trace.trace_conditions),
         Command::Claims { kind } => cmd_claims(kind),
-        Command::Status { group } => status::run(group.as_deref()),
-        Command::Start { id } => cmd_start(&id),
+        Command::Status { group, trace } => status::run(group.as_deref(), trace.trace_conditions),
+        Command::Start { id, trace } => cmd_start(&id, trace.trace_conditions),
         Command::Done { id } => cmd_done(&id),
         Command::Release { id, reason } => cmd_release(&id, reason),
         Command::Write {
@@ -682,8 +708,8 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
             file,
         } => cmd_write(&id, title, message, file),
         Command::Log { id } => cmd_log(&id),
-        Command::List { kind } => cmd_list(kind),
-        Command::Show { id } => cmd_show(&id),
+        Command::List { kind, trace } => cmd_list(kind, trace.trace_conditions),
+        Command::Show { id, trace } => cmd_show(&id, trace.trace_conditions),
         Command::Note(command) => cmd_note(command),
         Command::Revision(command) => cmd_revision(command),
         Command::Export {
@@ -704,16 +730,16 @@ fn cmd_export(
     groups: Vec<String>,
     recursive: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store()?;
+    let mut store = open_store(false)?;
     write_plain_output(&declaration::export(&mut store, &ids, &groups, recursive)?)?;
     Ok(())
 }
 
 fn cmd_import(command: ImportCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store()?;
     let decoration = current_output_decoration();
     match command {
         ImportCmd::Prepare { file } => {
+            let mut store = open_store(false)?;
             declaration::prepare(&mut store, &file)?;
             write_output(
                 &format!(
@@ -724,13 +750,15 @@ fn cmd_import(command: ImportCmd) -> Result<(), Box<dyn std::error::Error>> {
                 decoration,
             )?;
         }
-        ImportCmd::Check { file } => {
+        ImportCmd::Check { file, trace } => {
+            let mut store = open_store(trace.trace_conditions)?;
             write_output(
                 &decorate_import_report(&declaration::check(&mut store, &file)?, decoration),
                 decoration,
             )?;
         }
-        ImportCmd::Apply { file } => {
+        ImportCmd::Apply { file, trace } => {
+            let mut store = open_store(trace.trace_conditions)?;
             let mut output =
                 decorate_import_report(&declaration::apply(&mut store, &file)?, decoration);
             output.push_str(&format!(
@@ -790,7 +818,7 @@ fn cmd_create(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let title = normalize_title(&title.join(" "))?;
     let description = read_description(message, file)?.and_then(normalize_description);
-    let mut store = open_store()?;
+    let mut store = open_store(false)?;
     let parent = parent
         .as_deref()
         .map(|value| store.resolve_id(value))
@@ -854,7 +882,7 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             file,
         ),
         GroupCmd::Set { id, parent } => {
-            let mut store = open_store()?;
+            let mut store = open_store(false)?;
             let id = store.resolve_id(&id)?;
             let parent = store.resolve_id(&parent)?;
             store.apply(&id, Change::SetParent(Some(parent.clone())), &ctx(None))?;
@@ -869,7 +897,7 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         GroupCmd::Unset { id } => {
-            let mut store = open_store()?;
+            let mut store = open_store(false)?;
             let id = store.resolve_id(&id)?;
             store.apply(&id, Change::SetParent(None), &ctx(None))?;
             write_confirmation(&id, "Parent: (none)".to_string(), Style::new())?;
@@ -878,8 +906,8 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-fn load() -> Result<(Store, View), Box<dyn std::error::Error>> {
-    let mut store = open_store()?;
+fn load(trace_conditions: bool) -> Result<(Store, View), Box<dyn std::error::Error>> {
+    let mut store = open_store(trace_conditions)?;
     let view = store.view()?;
     Ok((store, view))
 }
@@ -909,8 +937,11 @@ fn write_confirmation(id: &EntityId, result: String, style: Style) -> std::io::R
     )
 }
 
-fn cmd_ready(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>> {
-    let (_, view) = load()?;
+fn cmd_ready(
+    kind: Option<KindFilter>,
+    trace_conditions: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_, view) = load(trace_conditions)?;
     let decoration = current_output_decoration();
     let rows = view
         .ready(|entity| included(kind, entity))?
@@ -925,8 +956,11 @@ fn cmd_ready(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-fn cmd_triage(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>> {
-    let (_, view) = load()?;
+fn cmd_triage(
+    kind: Option<KindFilter>,
+    trace_conditions: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_, view) = load(trace_conditions)?;
     let decoration = current_output_decoration();
     let mut rows = String::new();
     for (entity, reason) in view.triage(|entity| included(kind, entity))? {
@@ -972,7 +1006,7 @@ fn render_triage_row(
 }
 
 fn cmd_claims(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>> {
-    let (_, view) = load()?;
+    let (_, view) = load(false)?;
     let decoration = current_output_decoration();
     let rows = view
         .claims()
@@ -1013,8 +1047,8 @@ fn claim_details(claim: &Claim, decoration: OutputDecoration) -> String {
     )
 }
 
-fn cmd_start(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store()?;
+fn cmd_start(raw: &str, trace_conditions: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let mut store = open_store(trace_conditions)?;
     let id = store.resolve_id(raw)?;
     let claim = Claim {
         actor: actor::actor(),
@@ -1037,7 +1071,7 @@ fn cmd_start(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_done(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store()?;
+    let mut store = open_store(false)?;
     let id = store.resolve_id(raw)?;
     store.apply(&id, Change::Done, &ctx(None))?;
     write_confirmation(&id, "Ended".to_string(), OUTPUT_MUTED)?;
@@ -1045,15 +1079,18 @@ fn cmd_done(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_release(raw: &str, reason: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store()?;
+    let mut store = open_store(false)?;
     let id = store.resolve_id(raw)?;
     store.apply(&id, Change::Release, &ctx(reason))?;
     write_confirmation(&id, "Released".to_string(), Style::new())?;
     Ok(())
 }
 
-fn cmd_list(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>> {
-    let (_, view) = load()?;
+fn cmd_list(
+    kind: Option<KindFilter>,
+    trace_conditions: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_, view) = load(trace_conditions)?;
     let decoration = current_output_decoration();
     let mut rows = String::new();
     for entity in view.iter().filter(|entity| included(kind, entity)) {
@@ -1114,8 +1151,8 @@ fn render_entity_marks(
     })
 }
 
-fn cmd_show(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store()?;
+fn cmd_show(raw: &str, trace_conditions: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let mut store = open_store(trace_conditions)?;
     let db::ShowSnapshot {
         id,
         view,
@@ -1869,7 +1906,7 @@ fn disposition_style(disposition: Disposition) -> Style {
 }
 
 fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store()?;
+    let mut store = open_store(false)?;
     let decoration = current_output_decoration();
     match command {
         NoteCmd::Add { id, message, file } => {
@@ -1928,7 +1965,7 @@ fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_revision(command: RevisionCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store()?;
+    let mut store = open_store(false)?;
     let decoration = current_output_decoration();
     match command {
         RevisionCmd::List { id } => {
@@ -2293,7 +2330,7 @@ fn cmd_decide(command: DecideCmd) -> Result<(), Box<dyn std::error::Error>> {
         DecideCmd::Reject(args) => (args, Disposition::Rejected),
         DecideCmd::Undecide(args) => (args, Disposition::Undecided),
     };
-    let mut store = open_store()?;
+    let mut store = open_store(false)?;
     let id = store.resolve_id(&args.id)?;
     store.apply(&id, Change::Decide(disposition), &ctx(args.reason))?;
     let decoration = current_output_decoration();
@@ -2312,7 +2349,7 @@ fn cmd_decide(command: DecideCmd) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store()?;
+    let mut store = open_store(false)?;
     match command {
         WhenCmd::Command {
             id,
@@ -2389,7 +2426,7 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_dep(command: DepCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store()?;
+    let mut store = open_store(false)?;
     match command {
         DepCmd::Add { id, needs } => {
             let id = store.resolve_id(&id)?;
@@ -2424,7 +2461,7 @@ fn cmd_dep(command: DepCmd) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_log(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let store = open_store()?;
+    let store = open_store(false)?;
     let id = store.resolve_id(raw)?;
     let events = store.events(&id)?;
     let decoration = current_output_decoration();
@@ -2514,7 +2551,7 @@ fn cmd_write(
         return Err("nothing to write; provide --title, -m, or -F".into());
     }
 
-    let mut store = open_store()?;
+    let mut store = open_store(false)?;
     let id = store.resolve_id(raw)?;
     let current = store.get(&id)?;
     let mut changed = Vec::new();

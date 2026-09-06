@@ -47,6 +47,99 @@ fn command_is_observed_once_per_invocation_and_can_stop_surfacing() {
 }
 
 #[test]
+fn trace_reports_normal_results_without_changing_default_output() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let id = repo.plan("trace output");
+    let script = "printf 'child-out'; printf '\\377child-err' >&2; exit 0";
+    assert_success(&repo.axon(&["when", "command", &id, script]));
+
+    let ordinary = repo.axon(&["ready"]);
+    assert_success(&ordinary);
+    assert!(stderr(&ordinary).is_empty());
+
+    let traced = repo.axon(&["ready", "--trace-conditions"]);
+    assert_success(&traced);
+    assert!(stdout(&traced).contains(&id));
+    let trace = stderr(&traced);
+    for expected in [
+        &format!("Condition trace: {id}"),
+        &format!("cwd: {}", repo.root().display()),
+        "result: satisfied (exit 0)",
+        "stdout:\nchild-out\n",
+        "stderr:\n�child-err\n",
+        &format!("End condition trace: {id}"),
+    ] {
+        assert!(trace.contains(expected), "{trace}");
+    }
+
+    assert_success(&repo.axon(&["when", "command", &id, "exit 1"]));
+    let waiting = repo.axon(&["ready", "--trace-conditions"]);
+    assert_success(&waiting);
+    assert!(stdout(&waiting).is_empty());
+    let trace = stderr(&waiting);
+    assert!(trace.contains("result: not satisfied (exit 1)"), "{trace}");
+    assert_eq!(trace.matches("(empty)").count(), 2, "{trace}");
+}
+
+#[test]
+fn trace_follows_evaluation_order_and_skips_memoized_references() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let first = repo.plan("first trace");
+    let second = repo.plan("second trace");
+    assert_success(&repo.axon(&["when", "command", &first, "echo first; exit 0"]));
+    assert_success(&repo.axon(&["when", "command", &second, "echo second; exit 0"]));
+
+    let listed = repo.axon(&["list", "--trace-conditions"]);
+    assert_success(&listed);
+    let trace = stderr(&listed);
+    assert_eq!(trace.matches("Condition trace:").count(), 2, "{trace}");
+    assert!(
+        trace.find(&format!("Condition trace: {first}")).unwrap()
+            < trace.find(&format!("Condition trace: {second}")).unwrap(),
+        "{trace}"
+    );
+
+    let shown = repo.axon(&["show", &first, "--trace-conditions"]);
+    assert_success(&shown);
+    let trace = stderr(&shown);
+    assert_eq!(
+        trace.matches(&format!("Condition trace: {first}")).count(),
+        1,
+        "{trace}"
+    );
+    assert_eq!(calls(&repo), 0);
+}
+
+#[test]
+fn condition_evaluating_leaf_commands_enable_the_shared_trace() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let ready = repo.plan("ready trace");
+    let triage = repo.capture("triage trace");
+    assert_success(&repo.axon(&["when", "command", &ready, "exit 0"]));
+    assert_success(&repo.axon(&["when", "command", &triage, "exit 0"]));
+
+    for args in [
+        vec!["ready", "--trace-conditions"],
+        vec!["triage", "--trace-conditions"],
+        vec!["status", "--trace-conditions"],
+        vec!["list", "--trace-conditions"],
+        vec!["show", &ready, "--trace-conditions"],
+    ] {
+        let output = repo.axon(&args);
+        assert_success(&output);
+        assert!(stderr(&output).contains("Condition trace:"), "{args:?}");
+    }
+
+    let started = repo.axon(&["start", &ready, "--trace-conditions"]);
+    assert_success(&started);
+    assert!(stderr(&started).contains(&format!("Condition trace: {ready}")));
+    assert_eq!(repo.snapshot(&ready).progress, "in_progress");
+}
+
+#[test]
 fn evaluation_failure_is_diagnostic_and_start_is_not_written() {
     let repo = TestRepo::new();
     repo.init("test");
@@ -55,10 +148,10 @@ fn evaluation_failure_is_diagnostic_and_start_is_not_written() {
     assert_success(&repo.axon(&["when", "command", &id, script]));
     let before = repo.snapshot(&id);
     for args in [
-        vec!["show", &id],
-        vec!["list"],
-        vec!["ready"],
-        vec!["start", &id],
+        vec!["show", &id, "--trace-conditions"],
+        vec!["list", "--trace-conditions"],
+        vec!["ready", "--trace-conditions"],
+        vec!["start", &id, "--trace-conditions"],
     ] {
         let output = repo.axon(&args);
         assert_failure(&output);
@@ -67,6 +160,7 @@ fn evaluation_failure_is_diagnostic_and_start_is_not_written() {
         for expected in [&id, script, "23", "diagnostic-out", "diagnostic-err"] {
             assert!(error.contains(expected), "{error}");
         }
+        assert!(!error.contains("Condition trace:"), "{error}");
         assert_eq!(repo.snapshot(&id), before);
     }
     assert_eq!(calls(&repo), 4);
@@ -77,6 +171,19 @@ fn evaluation_failure_is_diagnostic_and_start_is_not_written() {
     assert_success(&repo.axon(&["when", "clear", &id]));
     assert!(repo.snapshot(&id).resurface_command.is_none());
     assert_success(&repo.axon(&["show", &id]));
+}
+
+#[cfg(unix)]
+#[test]
+fn trace_write_failure_aborts_start_before_state_change() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let id = repo.plan("closed trace sink");
+    assert_success(&repo.axon(&["when", "command", &id, "exit 0"]));
+    let before = repo.snapshot(&id);
+    let output = repo.axon_with_closed_stderr(&["start", &id, "--trace-conditions"]);
+    assert_failure(&output);
+    assert_eq!(repo.snapshot(&id), before);
 }
 
 #[cfg(unix)]
@@ -249,10 +356,14 @@ fn import_shares_observation_before_and_after_and_aborts_on_failure() {
     let file = path.to_str().unwrap();
     assert_success(&repo.axon(&["import", "prepare", file]));
     assert_eq!(calls(&repo), 0);
-    assert_success(&repo.axon(&["import", "check", file]));
+    let checked = repo.axon(&["import", "check", file, "--trace-conditions"]);
+    assert_success(&checked);
+    assert!(stderr(&checked).is_empty());
     // An Undecided root has no ready or active-scope observation to perform.
     assert_eq!(calls(&repo), 0);
-    assert_success(&repo.axon(&["import", "apply", file]));
+    let applied = repo.axon(&["import", "apply", file, "--trace-conditions"]);
+    assert_success(&applied);
+    assert!(stderr(&applied).is_empty());
     assert_eq!(calls(&repo), 0);
 
     let group = repo.group_plan("gate");
@@ -268,9 +379,13 @@ fn import_shares_observation_before_and_after_and_aborts_on_failure() {
         stdout(&exported).replace("after title", "third title"),
     )
     .unwrap();
-    assert_success(&repo.axon(&["import", "check", file]));
+    let checked = repo.axon(&["import", "check", file, "--trace-conditions"]);
+    assert_success(&checked);
+    assert!(stderr(&checked).contains(&format!("Condition trace: {group}")));
     assert_eq!(calls(&repo), 1);
-    assert_success(&repo.axon(&["import", "apply", file]));
+    let applied = repo.axon(&["import", "apply", file, "--trace-conditions"]);
+    assert_success(&applied);
+    assert!(stderr(&applied).contains(&format!("Condition trace: {group}")));
     assert_eq!(calls(&repo), 2);
     let current = fs::read_to_string(&path).unwrap();
     fs::write(&path, current.replace("third title", "fourth title")).unwrap();

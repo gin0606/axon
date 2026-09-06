@@ -117,6 +117,46 @@ fn leaf_help_documents_common_entity_inputs_and_kind_filters() {
 }
 
 #[test]
+fn condition_evaluating_leaf_help_documents_trace_contract() {
+    for args in [
+        &["ready", "--help"][..],
+        &["triage", "--help"][..],
+        &["status", "--help"][..],
+        &["start", "--help"][..],
+        &["list", "--help"][..],
+        &["show", "--help"][..],
+        &["import", "check", "--help"][..],
+        &["import", "apply", "--help"][..],
+    ] {
+        let help = help_stdout(args);
+        assert!(help.contains("--trace-conditions"), "{args:?}: {help}");
+        assert!(
+            help.contains("not redacted or truncated"),
+            "{args:?}: {help}"
+        );
+        assert!(
+            help.contains("non-UTF-8 bytes are rendered lossily"),
+            "{args:?}: {help}"
+        );
+        assert!(
+            help.contains("trace write failure fails"),
+            "{args:?}: {help}"
+        );
+    }
+    for args in [
+        &["claims", "--help"][..],
+        &["log", "--help"][..],
+        &["export", "--help"][..],
+        &["import", "prepare", "--help"][..],
+    ] {
+        assert!(
+            !help_stdout(args).contains("--trace-conditions"),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
 fn help_command_drills_into_nested_command_help() {
     assert_eq!(
         help_stdout(&["help", "group", "plan"]),
