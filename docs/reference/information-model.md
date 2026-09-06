@@ -74,10 +74,14 @@ Rejected も固定するのは、不採用も特定の declaration に対する�
 
 Note、Declaration Revision、判断履歴、進行履歴は、生成時の種類付き128-bit安定IDで識別する。
 同内容・同actor・同時刻でも独立した記録は異なるIDを持つ。current Revisionと判断履歴の
-Revision参照はこのIDを使う。IDは順序を表さず、各streamの線形保存順を別に保持する。
-Revisionの再利用は保存順で直前のRevisionと比較する。過去の同内容へ巻き戻らない。
+Revision参照はこのIDを使う。IDは順序を表さず、streamごとの先行IDで因果関係を保持する。
+Entityはcurrentとlast Revisionを持つ。Undecided化でcurrentだけを解除し、再判断は採用系統のlastと比較する。
+他branchの新しい時刻や表示順を再利用の根拠にしない。
 表示番号・SQLiteの内部順序キーは公開参照にしない。本文内の旧番号は移行時に書き換えず、
-移行manifestの対応表で解決する。この段階では履歴の分岐は導入しない。
+移行manifestの対応表で解決する。並行記録は両方を保持し、表示・canonical出力では因果順、並行時はID順に置く。
+統合後の現在値の根拠は選択した系統の先端またはMergeRecordであり、全記録の時刻順の末尾ではない。
+MergeRecordは入力identityと候補bundle、先行記録、採用結果を保持し、通常の判断・進行を捏造しない。
+保存モデルと検証境界は[分岐履歴](../development/branch-history.md)を参照する。
 
 ### Declaration Revision
 
@@ -101,7 +105,7 @@ Revisionの再利用は保存順で直前のRevisionと比較する。過去の�
 - 各記録は対象内で安定して参照できる識別子、本文、actor、時刻を持つ
 - 追加は原子的に行い、並行した追加を上書きしない
 - 繰り返し実行は同じ記録への no-op ではなく、新しい記録の追加として扱う
-- 保存順を正とし、並行操作で前後しうる入力時刻から順序を推測しない
+- 先行Noteの参照で因果順を保持し、並行操作で前後しうる入力時刻から順序を推測しない
 - declaration、Control state、関係、Derived facts を変更しない
 - 記録の古さから重要度を推定しない
 

@@ -49,22 +49,22 @@ Git リポジトリ内では common root を管理境界として常に優先す
 - **C の直和型は CHECK 制約で整合性を保つ**。`resurface_kind` が取る値ごとに、どの列が埋まっているべきかを縛る
 - **待機関係は DAG に保つ**。dependency、`AfterEntity`、包含を activation / completion の 2 つの wait graph に射影し、両方を同じ write transaction で検査する。group を待機元にした辺は全子孫へ展開する
 - **決定済み declaration と Revision の参照を DB 制約でも一致させる**。Undecided は `current_revision IS NULL`、Accepted / Rejected は同じ Entity の Revision を必ず参照する
-- **Revision と判断は同じ transaction で確定する**。直前と同じ declaration は Revision を再利用し、違う場合だけ 新しい安定IDと内部順序キーを追加する
+- **Revision と判断は同じ transaction で確定する**。採用系統のlast Revisionと同じ declaration は Revision を再利用し、違う場合だけ 新しい安定IDと内部順序キーを追加する
 - **Note の追加は immediate transaction で安定IDと保存順を確定する**。入力時刻ではなくこの保存順を正にし、空白だけの本文は Store の書き込み境界で拒否する。DB の `NOT NULL` / `CHECK` 制約も NULL、空文字、U+0020 だけの本文を拒否する
 - **複数テーブルの詳細表示は一つの read transaction から作る**。現在 Entity、関係、履歴、Revision、Note、件数を異なる時点から混ぜない
-- **スキーマは `user_version` と既知 DDL の両方で識別する**。v12の通常openは旧版を変換せず、手動変換はv11を入力とし、未知版・未知構造を変更しない
+- **スキーマは `user_version` と既知 DDL の両方で識別する**。v13の通常openは旧版を変換せず、手動変換はv11/v12を入力とし、未知版・未知構造を変更しない
 
 ## 状態更新と履歴
 
 状態更新と履歴の記録判定は SQL に依存しない `core::StateSnapshot::execute` に集約する。
 `StateSnapshot` は Entity、dependency、metadata と、所有 Entity ごとの Revision、Note、
-判断履歴、進行履歴を持つ。履歴の vector 順を線形保存順とし、SQLite の row ID や順序番号を
+判断履歴、進行履歴を持つ。因果参照を正とし、履歴のvectorは因果順（並行時はID順）の表示用の並びとして、SQLite の row ID や順序番号を
 コアへ渡さない。`StoreSnapshot` は宣言編集・表示に使う Entity と dependency の射影である。
 
 操作 context は時刻、actor、reason、ID 生成関数、Command の評価 context を明示する。
 Start の入力には作業場所と取得時刻を含む claim を渡す。コアは入力 snapshot を変更せず、
 ガードを検査し、成功した操作だけを `ValidatedChange` として返す。生成 ID の種別と重複も検査する。
-直前の Revision との比較、履歴を追加する条件、設定の no-op と遷移の反復失敗、
+採用系統のlast Revisionとの比較、履歴を追加する条件、設定の no-op と遷移の反復失敗、
 既存の不整合を修復する辺の削除は、コアで決定する。
 
 SQLite adapter は immediate transaction 内で完全な snapshot を読み、コアを呼び出し、
@@ -73,13 +73,15 @@ SQLite adapter は immediate transaction 内で完全な snapshot を読み、�
 保存順の整数キーは adapter が割り当て、既存の番号の欠番や日時の文字列表現を上書きしない。
 RecordId の SQL 変換も adapter 内に置く。
 
-この境界は SQLite 単独でも使う構造であり、schema v12、管理 root、公開操作の意味を変更しない。
-既存 v12 DB の変換は不要で、v11 からの明示的な手動変換も維持する。
-基礎・補助モデルの状態の意味を変えないため、モデル変更は行わず、共通操作契約を
-メモリと SQLite で検証し、CLI・Command・migration テストで境界を確認する。
+この境界はSQLite単独でも使う。v13はv12の全tableを維持し、`history_lineage`、`causal_links`、
+`history_baselines`、`history_merges`を追加する。管理rootは維持し、v11/v12から明示的に手動変換する。
+新しい因果関係とcurrent/lastの検証は[分岐履歴](branch-history.md)に定める。
+通常操作の情報所有モデルと分岐履歴モデルを検証し、共通操作契約をメモリとSQLiteで検証する。
+CLI・Command・migrationテストで実装の境界を確認する。
 判断履歴は Disposition / Resurface condition の変更について、時刻、actor、対象軸、old / new、
 任意の reason を保存する。Progress の操作は別の型付き進行履歴へ保存する。
-進行履歴の順序は入力時刻ではなく、同じ transaction で保存された順序を正とする。
+進行履歴は先行IDで因果順を保持する。同じtransactionでの逐次保存は先行関係になり、
+並行するbranchの記録を入力時刻から直列化しない。
 契約変更前の done reason は過去の事実として保持し、show で読み続けるため reason 列を残す。
 
 start は対象を明示して ready の検査と claim の取得を同じ write transaction で行う。
@@ -132,13 +134,14 @@ actor は一覧と調査の手掛かりであり、排他制御や `release` の
 
 ## schema 切り替えの境界
 
-v12の通常openは版と既知DDLを検査し、旧版を暗黙に更新しない。
-`axon migrate --source <v11-db> --output <未使用directory>` はSQLite backup APIでWALを含む
+v13の通常openは版と既知DDLを検査し、旧版を暗黙に更新しない。
+`axon migrate --source <v11-or-v12-db> --output <未使用directory>` はSQLite backup APIでWALを含む
 一貫した入力を出力directory内に固定し、新しいSQLiteと対応表を作る。元DBのpathは切り替えない。
 v9/v10は旧版でv11にしてから手動変換する。
 
 論理digestは既知tableの列名・SQLite値の型・値を決定的に符号化して計算する。
-そのdigestと旧table/keyからstoreとrecordのIDを生成し、元の番号を内部保存順として残す。
+v11ではそのdigestと旧table/keyからstoreとrecordのIDを生成し、元の番号を内部保存順として残す。
+v12では既存IDと旧tableの全値を維持し、因果関係とmigration baselineを追加する。
 元の全field、claim、日時、legacy reason、baseline、metadataと関係を保持する。
 出力の全rowと参照・schema・整合性を検査し、manifestを最後に同期して成功を返す。
 出力先を上書きせず、失敗時も調査用の途中成果を残す。manifestがない途中成果は利用しない。

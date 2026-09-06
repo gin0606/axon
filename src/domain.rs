@@ -18,7 +18,8 @@ pub enum ParseError {
     UnexpectedClaim,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum EntityKind {
     Issue,
     Group,
@@ -48,7 +49,8 @@ impl EntityKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Claim {
     pub actor: String,
     pub worktree: String,
@@ -56,7 +58,8 @@ pub struct Claim {
 }
 
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum Progress {
     NotStarted,
     InProgress(Claim),
@@ -99,7 +102,8 @@ impl Progress {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum Disposition {
     Undecided,
     Accepted,
@@ -133,7 +137,8 @@ impl Disposition {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum ResurfaceCondition {
     Always,
     Manual,
@@ -188,7 +193,10 @@ impl ResurfaceCondition {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
 pub struct EntityId(String);
 
 const ID_ALPHABET: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
@@ -217,7 +225,8 @@ impl fmt::Display for EntityId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Entity {
     pub id: EntityId,
     pub kind: EntityKind,
@@ -238,7 +247,8 @@ impl Entity {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeclarationRevision {
     pub id: RecordId,
     pub title: String,
@@ -249,7 +259,8 @@ pub struct DeclarationRevision {
     pub baseline: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Note {
     pub id: RecordId,
     pub body: String,

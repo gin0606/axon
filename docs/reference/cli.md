@@ -267,9 +267,9 @@ Git 配下では common Git directory の親を管理 root とし、全 worktree
 
 ## DBの互換性検査
 
-通常openはv12と既知DDLを検査し、旧版・未来版・未知構造を変更せず拒否する。
+通常openはv13と既知DDLを検査し、旧版・未来版・未知構造を変更せず拒否する。
 `init`は新規作成専用で、既存DBのresetやupgradeをしない。help、docs、version、completionはDB不要。
-手動変換は明示したv11入力から別directoryへ出力し、元DBの切替はしない。
+手動変換は明示したv11/v12入力から別directoryへ出力し、元DBの切替はしない。
 診断はpath、版、処理段階、原因、backup先と出力の適用状態を示す。失敗時の途中成果を上書きせず、
 結果不明なら出力とbackupを調べてから再開する。具体的な手順は[手動移行](migration.md)。
 
@@ -279,4 +279,6 @@ status は各項目の identity を一度だけ表示し、Ready / Triage、保�
 
 ## 手動移行
 
-`axon migrate --source <v11-db> --output <未使用directory>` は、通常のroot探索を行わず指定DBを読み取り専用で開き、新しい保存先へ変換する。元DBの切替は行わない。詳細は[手動移行](migration.md)。
+`axon migrate --source <v11-or-v12-db> --output <未使用directory>` は、通常のroot探索を行わず指定DBを読み取り専用で開き、新しい保存先へ変換する。元DBの切替は行わない。詳細は[手動移行](migration.md)。
+
+showは分岐・統合を含む履歴について因果参照と採用先端を表示する。並行記録のID順は時刻の前後を意味しない。

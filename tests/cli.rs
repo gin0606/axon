@@ -806,6 +806,8 @@ fn human_timestamps_use_local_time_with_a_numeric_offset() {
     assert_success(&repo.axon(&["note", "add", &issue, "-m", "timestamped note"]));
     repo.execute_batch(&format!(
         "UPDATE entities SET claimed_at = '2026-09-01T17:55:00Z' WHERE id = '{issue}';
+         UPDATE causal_links SET payload = json_set(payload, '$.result.progress.InProgress.at', '2026-09-01T17:55:00Z')
+           WHERE json_extract(payload,'$.owner') = '{issue}' AND json_type(payload,'$.result.progress.InProgress') IS NOT NULL;
          UPDATE entity_events SET at = '2026-09-01T17:55:00Z' WHERE entity_id = '{issue}';
          UPDATE entity_progress_events SET at = '2026-09-01T17:55:00Z' WHERE entity_id = '{issue}';
          UPDATE entity_notes SET at = '2026-09-01T17:55:00Z' WHERE entity_id = '{issue}';

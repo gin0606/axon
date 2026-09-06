@@ -80,6 +80,7 @@ module information_model {
     entities: Id -> Entity,
     snapshots: Id -> List[SnapshotRecord],
     currentSnapshot: Id -> int,
+    lastSnapshot: Id -> int,
     decisionHistory: List[DecisionRecord],
     progressHistory: List[ProgressRecord],
     supplemental: List[SupplementalRecord],
@@ -177,6 +178,7 @@ module information_model {
     snapshots: ENTITIES.mapBy(i =>
       if (i == BASELINE_ENTITY) List({ ref: -1, declaration: initialDeclaration(i) }) else List()),
     currentSnapshot: ENTITIES.mapBy(i => if (i == BASELINE_ENTITY) -1 else NO_SNAPSHOT),
+    lastSnapshot: ENTITIES.mapBy(i => if (i == BASELINE_ENTITY) -1 else NO_SNAPSHOT),
     decisionHistory: List(),
     progressHistory: List(),
     supplemental: List(),
@@ -298,14 +300,13 @@ module information_model {
   pure def isBaselineSnapshot(i: Id, k: int): bool = i == BASELINE_ENTITY and k == -1
 
   pure def latestSnapshotMatchesCurrent(s: State, i: Id): bool = {
-    val snaps = snapshotsOf(s, i)
-    if (snaps.length() == 0) false else snaps.nth(snaps.length() - 1).declaration == decl(s, i)
+    val last = s.lastSnapshot.get(i)
+    last != NO_SNAPSHOT and snapshotAt(s, i, last) == decl(s, i)
   }
 
   // declaration が前回の決定済み snapshot と同じなら、同じ snapshot に別の判断を結び付ける。
   pure def snapshotIndexOnDecide(s: State, i: Id): int = {
-    val snaps = snapshotsOf(s, i)
-    if (latestSnapshotMatchesCurrent(s, i)) snaps.nth(snaps.length() - 1).ref else freshRef(s)
+    if (latestSnapshotMatchesCurrent(s, i)) s.lastSnapshot.get(i) else freshRef(s)
   }
 
   pure def declarationDiff(a: Declaration, b: Declaration): Set[DeclarationField] =
@@ -370,6 +371,7 @@ module information_model {
       entities: s.entities.set(i, {...entity(s, i), control: {...control(s, i), disposition: choice}}),
       snapshots: nextSnapshots,
       currentSnapshot: s.currentSnapshot.set(i, nextSnapshot),
+      lastSnapshot: if (decided) s.lastSnapshot.set(i, nextSnapshot) else s.lastSnapshot,
       decisionHistory: s.decisionHistory.append(record),
     }
   }
@@ -656,6 +658,14 @@ module information_model {
   // ---- 決定済み declaration の記録 ----
 
   // 決定済みだけが現在 snapshot を参照し、Undecided は参照しない。
+  val invLastSnapshot: bool = ENTITIES.forall(i => {
+    val last = state.lastSnapshot.get(i)
+    and {
+      last == NO_SNAPSHOT or validSnapshotIndex(state, i, last),
+      isDecided(control(state, i).disposition) implies currentSnapshotOf(state, i) == last,
+    }
+  })
+
   val invCurrentSnapshotByDisposition: bool =
     ENTITIES.forall(i => {
       val current = currentSnapshotOf(state, i)

@@ -1,12 +1,14 @@
 use std::{fmt, str::FromStr};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum RecordKind {
     Note,
     Revision,
     Decision,
     Progress,
     Store,
+    Merge,
+    Baseline,
 }
 impl RecordKind {
     fn prefix(self) -> &'static str {
@@ -16,11 +18,13 @@ impl RecordKind {
             Self::Decision => "decision",
             Self::Progress => "progress",
             Self::Store => "store",
+            Self::Merge => "merge",
+            Self::Baseline => "baseline",
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RecordId {
     kind: RecordKind,
     value: u128,
@@ -73,6 +77,8 @@ impl FromStr for RecordId {
             "decision" => RecordKind::Decision,
             "progress" => RecordKind::Progress,
             "store" => RecordKind::Store,
+            "merge" => RecordKind::Merge,
+            "baseline" => RecordKind::Baseline,
             _ => return Err(invalid()),
         };
         if hex.len() != 32
@@ -86,6 +92,17 @@ impl FromStr for RecordId {
             kind,
             value: u128::from_str_radix(hex, 16).map_err(|_| invalid())?,
         })
+    }
+}
+impl serde::Serialize for RecordId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+impl<'de> serde::Deserialize<'de> for RecordId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
     }
 }
 #[cfg(test)]

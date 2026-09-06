@@ -126,7 +126,8 @@ fn decision_event(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Event {
     pub id: RecordId,
     pub field: String,
@@ -138,7 +139,8 @@ pub struct Event {
     pub at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum ProgressEventKind {
     Start,
     Done,
@@ -154,7 +156,8 @@ fn progress_event_kind(change: &Change) -> Option<ProgressEventKind> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProgressEvent {
     pub id: RecordId,
     pub kind: ProgressEventKind,
@@ -480,14 +483,35 @@ pub struct StateSnapshot {
     pub declaration: StoreSnapshot,
     pub metadata: BTreeMap<String, MetadataValue>,
     pub histories: BTreeMap<EntityId, History>,
+    pub causal: crate::history::CausalState,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum MetadataValue {
     Text(String),
     Integer(i64),
-    Real(f64),
+    Real(#[serde(with = "metadata_float")] f64),
     Bytes(Vec<u8>),
+}
+
+mod metadata_float {
+    pub fn serialize<S: serde::Serializer>(
+        value: &f64,
+        s: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_u64(value.to_bits())
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> std::result::Result<f64, D::Error> {
+        let bits = <u64 as serde::Deserialize>::deserialize(d)?;
+        let value = f64::from_bits(bits);
+        if value.is_nan() {
+            return Err(serde::de::Error::custom("NaN metadata is not supported"));
+        }
+        Ok(value)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -567,7 +591,7 @@ impl StateSnapshot {
                 || h.decisions.iter().any(|r| r.id == id)
                 || h.progress.iter().any(|r| r.id == id)
         });
-        if id.kind() != kind || exists {
+        if id.kind() != kind || exists || self.causal.links.contains_key(&id) {
             return Err(Error::InvalidState(format!(
                 "invalid or duplicate generated ID {id}"
             )));
@@ -582,7 +606,18 @@ impl StateSnapshot {
     ) -> Result<RecordId> {
         let entity = self.entity(id)?;
         let dependencies = direct_dependency_ids(&self.view(), id);
-        if let Some(last) = self.histories.get(id).and_then(|h| h.revisions.last())
+        if let Some(last) = self
+            .causal
+            .owners
+            .get(id)
+            .and_then(|l| l.last_revision)
+            .and_then(|last| {
+                self.histories
+                    .get(id)?
+                    .revisions
+                    .iter()
+                    .find(|r| r.id == last)
+            })
             && last.title == entity.title
             && last.description == entity.description
             && last.parent == entity.parent
@@ -651,6 +686,9 @@ impl StateSnapshot {
             }
             Operation::Import(desired) => state.import(desired, ctx)?,
         };
+        if outcome == ApplyOutcome::Changed {
+            state.append_causality(self, ctx)?;
+        }
         Ok(ValidatedChange { state, outcome })
     }
     fn insert(&mut self, entity: Entity, ctx: &mut Context<'_>) -> Result<()> {
@@ -986,6 +1024,11 @@ impl StateSnapshot {
     }
 }
 
+pub fn validate_snapshot_structure(snapshot: &StoreSnapshot) -> Result<()> {
+    validate_structure(&snapshot.view())?;
+    validate_relations(&snapshot.view())
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1020,6 +1063,7 @@ pub(crate) mod tests {
             },
             metadata: BTreeMap::new(),
             histories: BTreeMap::new(),
+            causal: Default::default(),
         }
     }
     pub fn execute(

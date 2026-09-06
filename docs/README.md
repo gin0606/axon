@@ -19,7 +19,7 @@ axon の利用手順、現在の契約、開発方法、設計経緯を目的別
 | --- | --- |
 | [状態モデル](reference/state-model.md) | Entity、各軸、claim、包含、依存、Group の進行、導出値 |
 | [情報モデル](reference/information-model.md) | 情報分類、declaration の所有と固定、Revision、Note、履歴、観測 |
-| [手動移行](reference/migration.md) | v11から安定ID SQLiteへの変換・検証・切替 |
+| [手動移行](reference/migration.md) | v11/v12から分岐履歴SQLiteへの変換・検証・切替 |
 | [CLI 契約](reference/cli.md) | コマンド境界、反復実行、原子性、入出力、管理 root と ID の解決 |
 | [宣言ファイル](reference/declaration-file.md) | strict YAML、所有範囲、競合検査、export / prepare / check / apply |
 
@@ -31,6 +31,7 @@ axon の利用手順、現在の契約、開発方法、設計経緯を目的別
 | 文書 | 読む目的 |
 | --- | --- |
 | [アーキテクチャ](development/architecture.md) | 型境界、SQLite、管理 root、状態更新と履歴、actor |
+| [分岐履歴](development/branch-history.md) | 因果参照、current/last Revision、codecと移行の境界 |
 | [検証方針](development/verification.md) | 設計変更時の手順、モデルの担当範囲、検査コマンド、過去の検査条件と結果 |
 
 形式モデルは [core](../spec/axon.qnt)、[Group](../spec/group_plan.qnt)、

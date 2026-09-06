@@ -17,6 +17,7 @@ const SCHEMAS: &[&str] = &[
     include_str!("schema_v9.sql"),
     include_str!("schema_v10.sql"),
     include_str!("schema_v11.sql"),
+    include_str!("schema_v12.sql"),
     FRESH_SCHEMA,
 ];
 
@@ -160,6 +161,12 @@ pub fn open(database: &Path) -> Result<(Connection, Outcome), Failure> {
         }
         validate_schema(&conn, found)?;
         validate_record_ids(&conn)?;
+        super::read_state(
+            &conn,
+            std::rc::Rc::new(crate::derived::Evaluation::new(
+                database.parent().unwrap_or(Path::new(".")).to_owned(),
+            )),
+        )?;
         conn.execute_batch("COMMIT")?;
         Ok((
             conn,
@@ -337,6 +344,16 @@ fn copy_database(source: &Connection, destination: &Path) -> super::Result<()> {
 /// The source is read-only; only a newly created output directory is written.
 /// A failed output is retained for diagnosis and must not be used as a live store.
 pub fn migrate(source_path: &Path, output: &Path) -> Result<Outcome, Failure> {
+    let probe = Connection::open_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY);
+    if let Ok(conn) = &probe
+        && version(conn).ok() == Some(12)
+    {
+        return migrate_v12(source_path, output);
+    }
+    drop(probe);
+    migrate_v11(source_path, output)
+}
+fn migrate_v11(source_path: &Path, output: &Path) -> Result<Outcome, Failure> {
     let mut failure = Failure {
         database: source_path.to_owned(),
         stage: "opening source",
@@ -526,7 +543,9 @@ pub fn migrate(source_path: &Path, output: &Path) -> Result<Outcome, Failure> {
                 return Err(invalid(format!("full data comparison failed for {name}")));
             }
         }
+        let canonical = add_causality(&tx, 11)?;
         tx.commit()?;
+        write_new(&output.join("snapshot.jsonl"), &canonical)?;
         target.close().map_err(|(_, e)| DbError::from(e))?;
         file.sync_all()?;
         let manifest = Manifest {
@@ -566,6 +585,105 @@ pub fn migrate(source_path: &Path, output: &Path) -> Result<Outcome, Failure> {
         Ok(Outcome::Migrated {
             database: destination,
             from: 11,
+            to: SCHEMA_VERSION,
+            backup,
+        })
+    })();
+    result.map_err(|source| {
+        *failure.source = source;
+        failure
+    })
+}
+
+fn add_causality(conn: &Connection, source_schema: u32) -> super::Result<Vec<u8>> {
+    let evaluation = std::rc::Rc::new(crate::derived::Evaluation::new(PathBuf::from(".")));
+    let mut state = super::read_linear_state(conn, evaluation.clone())?;
+    state.migrate_causality(source_schema)?;
+    super::publish_causal(conn, &Default::default(), &state.causal)?;
+    let canonical = crate::codec::encode(&state)?;
+    let decoded = crate::codec::decode(&canonical, evaluation)?;
+    if crate::codec::encode(&decoded)? != canonical {
+        return Err(invalid("canonical round-trip mismatch"));
+    }
+    Ok(canonical)
+}
+fn write_new(path: &Path, bytes: &[u8]) -> super::Result<()> {
+    use std::io::Write;
+    let mut f = OpenOptions::new().write(true).create_new(true).open(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    Ok(())
+}
+fn migrate_v12(source_path: &Path, output: &Path) -> Result<Outcome, Failure> {
+    let mut failure = Failure {
+        database: source_path.to_owned(),
+        stage: "opening v12 source",
+        from: Some(12),
+        to: SCHEMA_VERSION,
+        backup: None,
+        applied: ApplicationState::NotApplied,
+        source: Box::new(invalid("conversion not run")),
+    };
+    let result = (|| -> super::Result<Outcome> {
+        let source = Connection::open_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        source.busy_timeout(std::time::Duration::from_secs(5))?;
+        source.execute_batch("BEGIN")?;
+        if version(&source)? != 12 {
+            return Err(invalid("source version changed"));
+        }
+        validate_schema(&source, 12)?;
+        integrity(&source)?;
+        validate_record_ids(&source)?;
+        fs::create_dir(output)?;
+        let backup = output.join("source-v12.db");
+        failure.backup = Some(backup.clone());
+        failure.stage = "saving v12 snapshot";
+        copy_database(&source, &backup)?;
+        source.execute_batch("COMMIT")?;
+        let fixed = Connection::open_with_flags(&backup, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let original = tables(&fixed)?;
+        let destination = output.join("axon.db");
+        copy_database(&fixed, &destination)?;
+        let mut target =
+            Connection::open_with_flags(&destination, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        configure(&target)?;
+        let tx = target.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        failure.stage = "adding causal history";
+        tx.execute_batch(include_str!("schema_causal.sql"))?;
+        let canonical = add_causality(&tx, 12)?;
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        validate_schema(&tx, SCHEMA_VERSION)?;
+        integrity(&tx)?;
+        let after = tables(&tx)?;
+        for (name, table) in &original {
+            if logical_digest(&BTreeMap::from([(name.clone(), table.clone())]))
+                != logical_digest(&BTreeMap::from([(name.clone(), after[name].clone())]))
+            {
+                return Err(invalid(format!("v12 table changed: {name}")));
+            }
+        }
+        tx.commit()?;
+        target.close().map_err(|(_, e)| DbError::from(e))?;
+        File::open(&destination)?.sync_all()?;
+        write_new(&output.join("snapshot.jsonl"), &canonical)?;
+        let manifest = serde_json::json!({"format":1,"source_schema":12,"target_schema":SCHEMA_VERSION,
+            "source_logical_digest":logical_digest(&original),"source_backup_blake3":blake3::hash(&fs::read(&backup)?).to_hex().to_string(),
+            "target_blake3":blake3::hash(&fs::read(&destination)?).to_hex().to_string(),
+            "snapshot_blake3":blake3::hash(&canonical).to_hex().to_string(),
+            "identity":"all existing store and record IDs preserved", "verification":"all original tables unchanged; causal integrity and canonical round-trip passed"});
+        failure.stage = "publishing manifest";
+        failure.applied = ApplicationState::Unknown;
+        write_new(
+            &output.join("manifest.yaml"),
+            serde_saphyr::to_string(&manifest)
+                .map_err(|e| invalid(e.to_string()))?
+                .as_bytes(),
+        )?;
+        File::open(output)?.sync_all()?;
+        File::open(output.parent().unwrap_or(Path::new(".")))?.sync_all()?;
+        Ok(Outcome::Migrated {
+            database: destination,
+            from: 12,
             to: SCHEMA_VERSION,
             backup,
         })

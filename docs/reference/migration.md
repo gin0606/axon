@@ -1,6 +1,7 @@
-# SQLite v11から安定IDへの手動移行
+# SQLite v11/v12から分岐履歴への手動移行
 
-v12は保存先とworktree間のSQLite共有を維持し、Note、Revision、判断・進行履歴に安定IDを導入する。
+v13は保存先とworktree間のSQLite共有を維持し、安定IDに因果参照・採用系統・baselineを追加する。
+v11入力には安定IDを生成し、v12入力のstore/record IDはそのまま保持する。
 通常openは旧DBを変更せず拒否する。v9/v10は旧版Axonでv11へ移行してから以下を行う。
 旧バイナリを新DBへ向けたり、`user_version`だけを変更して利用してはいけない。
 
@@ -15,8 +16,11 @@ v12は保存先とworktree間のSQLite共有を維持し、Note、Revision、判
    /absolute/path/to/new-axon migrate --source /root/.axon/axon.db --output /backup/new-conversion
    ```
 
-   出力は`source-v11.db`（WALを含む整合した旧DB）、`axon.db`（v12）、`manifest.yaml`。
-   manifestはstore ID、入力の論理digest、ファイルのdigest、旧番号→安定ID対応、件数と検査結果を持つ。
+   出力は`source-v11.db`または`source-v12.db`（WALを含む整合した旧DB）、
+   `axon.db`（v13）、`snapshot.jsonl`（検証済みcanonical snapshot）、`manifest.yaml`。
+   v11のmanifestはstore ID、入力の論理digest、ファイルのdigest、旧番号→安定ID対応、件数と検査結果を持つ。
+   v12のmanifestは入力・出力・snapshotのdigestと全元table保持の検査結果を持つ。IDを付け直さないため番号対応表は不要。
+   各旧table内の保存順だけを先行参照へ写し、別table間の順序を推測しない。移行時現在値をbaselineへ保存する。
    元DB・本文・legacy reasonを変更しない。既存出力先は拒否し、途中成果も削除しない。
 5. 成功終了とmanifest、出力のdigestを確認する。別のGit外の検証rootの`.axon/axon.db`へ
    新DBをコピーし、一覧・Note・Revision・履歴・更新を検証する。Command条件を実行する検査は

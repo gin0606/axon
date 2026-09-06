@@ -1,10 +1,12 @@
 mod actor;
+mod codec;
 mod core;
 mod db;
 mod declaration;
 mod derived;
 mod display;
 mod domain;
+mod history;
 mod record_id;
 mod status;
 
@@ -164,9 +166,9 @@ impl KindFilter {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Convert a v11 SQLite snapshot to stable IDs without modifying the source
+    /// Convert a v11/v12 SQLite snapshot to causal history without modifying the source
     Migrate {
-        /// Existing v11 database (stop its writers before the final conversion)
+        /// Existing v11 or v12 database (stop its writers before the final conversion)
         #[arg(long)]
         source: std::path::PathBuf,
         /// New directory for the backup, converted database and ID mapping manifest
@@ -624,7 +626,7 @@ fn migration_guidance(failure: &db::migration::Failure) -> String {
         db::DbError::UnsupportedSchema { found, expected } if found > expected =>
             format!("Use a newer axon build that supports DB schema {found}; automatic downgrade is not supported."),
         db::DbError::UnsupportedSchema { found, .. } =>
-            format!("Manual migration requires schema v11: `axon migrate --source <v11-db> --output <new-directory>`. For v9/v10, first use a v11 build. Use a build that supports DB schema {found} to inspect this older database."),
+            format!("Manual migration accepts schema v11/v12: `axon migrate --source <v11-or-v12-db> --output <new-directory>`. For v9/v10, first use a v11 build. Use a build that supports DB schema {found} to inspect this older database."),
         db::DbError::InvalidSchema(_) => "Preserve the database; its schema or stored data did not pass validation. Inspect the reported structure/integrity error with SQLite tooling.".to_string(),
         db::DbError::Sqlite(rusqlite::Error::SqliteFailure(error, _))
             if matches!(error.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) =>
@@ -1187,6 +1189,7 @@ fn cmd_show(raw: &str, trace_conditions: bool) -> Result<(), Box<dyn std::error:
         revisions,
         notes,
         counts,
+        causal,
     } = store.show_snapshot(raw)?;
     debug_assert_eq!(counts.decisions, decision_events.len());
     debug_assert_eq!(counts.progressions, progress_events.len());
@@ -1194,10 +1197,9 @@ fn cmd_show(raw: &str, trace_conditions: bool) -> Result<(), Box<dyn std::error:
     debug_assert_eq!(counts.notes, notes.len());
     let entity = view.get(&id).ok_or("entity not found")?;
     let decoration = current_output_decoration();
-    write_output(
-        &render_show(&view, entity, &progress_events, &notes, counts, decoration)?,
-        decoration,
-    )?;
+    let mut output = render_show(&view, entity, &progress_events, &notes, counts, decoration)?;
+    output.push_str(&causal.display(&id));
+    write_output(&output, decoration)?;
     Ok(())
 }
 
@@ -2841,7 +2843,7 @@ fn render_docs(decoration: OutputDecoration) -> String {
     )
     .unwrap();
     writeln!(output, "\nUse axon docs declaration for declaration fields and the import workflow.\nUse axon docs declaration --example for a complete new-plan YAML example.").unwrap();
-    writeln!(output, "\nStorage recovery\n  DB commands require schema v12 and do not migrate old databases implicitly.\n  Use axon migrate --source <v11-db> --output <new-directory> to create a new DB,\n  an intact source backup and an ID mapping manifest. The source is not switched.\n  v9/v10 must first be migrated to v11 using an older compatible build.\n  Keep an old binary, stop writers, verify copies, then switch all affected roots.\n  Failed outputs may be incomplete; preserve and inspect them before retry.\n  Unknown schemas are rejected. init only creates new DBs; init cannot upgrade.\n  --version identifies the executable release, not its DB schema.\n  Before recovery stop all writers and preserve .axon with SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  export also requires a compatible build and is not a complete database backup.\n  In Git, .axon/axon.db is at the parent of the common Git directory; outside Git,\n  axon uses the nearest ancestor containing .axon/axon.db.\n  help, docs, version and completion do not open the DB.\n").unwrap();
+    writeln!(output, "\nStorage recovery\n  DB commands require schema v13 and do not migrate old databases implicitly.\n  Use axon migrate --source <v11-or-v12-db> --output <new-directory> to create a new DB,\n  an intact source backup and an ID mapping manifest. The source is not switched.\n  v9/v10 must first be migrated to v11 using an older compatible build.\n  Keep an old binary, stop writers, verify copies, then switch all affected roots.\n  Failed outputs may be incomplete; preserve and inspect them before retry.\n  Unknown schemas are rejected. init only creates new DBs; init cannot upgrade.\n  --version identifies the executable release, not its DB schema.\n  Before recovery stop all writers and preserve .axon with SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  export also requires a compatible build and is not a complete database backup.\n  In Git, .axon/axon.db is at the parent of the common Git directory; outside Git,\n  axon uses the nearest ancestor containing .axon/axon.db.\n  help, docs, version and completion do not open the DB.\n").unwrap();
     output
 }
 

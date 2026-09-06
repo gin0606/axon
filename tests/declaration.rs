@@ -349,7 +349,10 @@ fn export_rejects_stored_titles_outside_the_declaration_contract() {
     repo.init("test");
     let issue = repo.plan("valid title");
     repo.execute_batch(&format!(
-        "UPDATE entities SET title = 'line one' || char(10) || 'line two' WHERE id = '{issue}';"
+        "UPDATE entities SET title = 'line one' || char(10) || 'line two' WHERE id = '{issue}';
+         UPDATE declaration_revisions SET title = 'line one' || char(10) || 'line two' WHERE entity_id = '{issue}';
+         UPDATE history_baselines SET payload = json_set(payload, '$.bundle.entity.title', 'line one' || char(10) || 'line two')
+           WHERE json_extract(payload, '$.bundle.entity.id') = '{issue}';"
     ));
 
     let export = repo.axon(&["export", &issue]);

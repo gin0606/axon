@@ -274,6 +274,23 @@ fn ambiguous_ids_and_duplicate_record_identity_are_rejected() {
     let id = repo.plan("task");
     assert_success(&repo.axon(&["note", "add", &id, "-m", "same"]));
     assert_success(&repo.axon(&["note", "add", &id, "-m", "same"]));
+    for (number, new) in [
+        (1, "note-abcd0000000000000000000000000001"),
+        (2, "note-abcd0000000000000000000000000002"),
+    ] {
+        let old = repo.note_id(&id, number);
+        let conn = Connection::open(repo.root().join(".axon/axon.db")).unwrap();
+        conn.execute(
+            "UPDATE causal_links SET record_id=?2 WHERE record_id=?1",
+            [&old, new],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE causal_links SET payload=replace(payload,?1,?2)",
+            [&old, new],
+        )
+        .unwrap();
+    }
     repo.execute_batch("UPDATE entity_notes SET record_id=CASE note WHEN 1 THEN 'note-abcd0000000000000000000000000001' ELSE 'note-abcd0000000000000000000000000002' END");
     let result = repo.axon(&["note", "show", &id, "abcd"]);
     assert_failure(&result);
@@ -281,4 +298,53 @@ fn ambiguous_ids_and_duplicate_record_identity_are_rejected() {
     assert_success(&repo.axon(&["note", "show", &id, "note-abcd0000000000000000000000000001"]));
     let conn = Connection::open(repo.root().join(".axon/axon.db")).unwrap();
     assert!(conn.execute("UPDATE entity_notes SET record_id='note-abcd0000000000000000000000000001' WHERE note=2",[]).is_err());
+}
+
+#[test]
+fn v12_upgrade_preserves_all_tables_ids_and_known_stream_order() {
+    let repo = TestRepo::new();
+    repo.init("linear");
+    let issue = repo.plan("linear history");
+    repo.undecide(&issue);
+    repo.accept(&issue);
+    assert_success(&repo.axon(&["start", &issue]));
+    assert_success(&repo.axon(&["note", "add", &issue, "-m", "preserved"]));
+    let source = repo.root().join(".axon/axon.db");
+    let conn = Connection::open(&source).unwrap();
+    conn.execute_batch("DROP TABLE history_baselines; DROP TABLE history_merges; DROP TABLE causal_links; DROP TABLE history_lineage; PRAGMA user_version=12;").unwrap();
+    drop(conn);
+    let before = snapshot(&source, 12);
+    let original = fs::read(&source).unwrap();
+    let a = repo.root().join("branch-a");
+    let b = repo.root().join("branch-b");
+    assert_success(&migrate(&repo, &source, &a));
+    assert_success(&migrate(&repo, &source, &b));
+    assert_eq!(version(&source), 12);
+    assert_eq!(version(&a.join("axon.db")), 13);
+    assert_eq!(fs::read(&source).unwrap(), original);
+    let after = snapshot(&a.join("axon.db"), 13);
+    for (name, rows) in &before {
+        assert_eq!(rows, &after[name], "{name}");
+    }
+    assert_eq!(
+        fs::read(a.join("snapshot.jsonl")).unwrap(),
+        fs::read(b.join("snapshot.jsonl")).unwrap()
+    );
+    let conn = Connection::open(a.join("axon.db")).unwrap();
+    let links = conn
+        .prepare("SELECT payload FROM causal_links")
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let baseline = links
+        .iter()
+        .map(|s| serde_json::from_str::<serde_json::Value>(s).unwrap())
+        .find(|v| v["result"].is_object())
+        .unwrap();
+    assert_eq!(baseline["parents"].as_array().unwrap().len(), 2); // separate decision and progress tails
+    fs::copy(a.join("axon.db"), &source).unwrap();
+    assert_success(&repo.axon(&["release", &issue, "-r", "after migration"]));
+    assert_success(&repo.axon(&["show", &issue]));
 }

@@ -103,7 +103,7 @@ quint run spec/group_plan.qnt --main group_plan \
 
 quint typecheck spec/information_model.qnt
 quint run spec/information_model.qnt --main information_model \
-  --invariants invDecidedDeclarationFrozen invOnlyOwnerDeclarationChanges \
+  --invariants invLastSnapshot invDecidedDeclarationFrozen invOnlyOwnerDeclarationChanges \
     invChildSetOwnedByChild invIncomingDependencyOwnedBySource invParentsAcyclic \
     invCurrentSnapshotByDisposition invDecidedMatchesSnapshot \
     invLatestDecisionMatchesCurrentSnapshot invSnapshotOnlyForDecided \
@@ -159,3 +159,23 @@ quint run spec/information_model.qnt --main information_model \
 Rust の migration tests は公開履歴の v9 / v10 DDL と合成データを使い、全旧列・全行と backup を比較する。最新 no-op、未知 schema、backup 失敗、途中 SQL エラー、子 process の強制終了、並行移行と通常書き込み、WAL、再実行を検証する。実データを fixture に使わない。
 
 2026-09-06、安定IDと線形順序を分離した情報モデルをQuint 0.32.0 / Rust backend、1,000 samples、80 steps、8 threads、seed 2026090601で検査した。全invariantに反例はなく、全27 witnessが1 trace以上で観測された。ID生成は衝突しない負数で抽象化し、乱数・SQLite移行はRustテストで扱う。
+
+## 分岐履歴
+
+`information_model.qnt`は通常操作の所有範囲を維持し、再判断の参照を明示的なlastSnapshotへ変更した。
+`branch_history.qnt`は2つのsnapshot、衝突しないID割当、原子的な通常操作と明示統合を抽象化する。
+記録保持、因果循環の不在、参照整合、現在値の根拠、Undecided化でのlast保持を検査する。
+SQLite・codec・実際のID生成・mergeの自動選択はモデルの対象外である。
+
+```sh
+quint typecheck spec/branch_history.qnt
+quint run spec/branch_history.qnt --main branch_history \
+  --invariants invReferences invCausal invRetained invCurrentProof invLastSurvivesUndecide \
+  --witnesses wEdit wDecide wUndecide wNote wMerge wNonLatestSelected wBothNotes \
+  --max-samples 1000 --max-steps 80 --backend rust --seed 2026090603 --verbosity 1
+```
+
+2026-09-06、Quint 0.32.0 / Rust backendで各1,000 samples、80 stepsを検査した。
+情報モデルはseed 2026090602、全invariantに反例なし・全27 witness到達。
+分岐履歴モデルは上記条件で5 invariantに反例なし・全7 witness到達。
+bounded random simulationであり、全状態の証明ではない。

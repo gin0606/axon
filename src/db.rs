@@ -85,7 +85,7 @@ pub enum DbError {
 
 pub type Result<T> = std::result::Result<T, DbError>;
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 
 #[cfg(test)]
 const SCHEMA_V1: &str = r#"
@@ -253,110 +253,10 @@ DROP TABLE issues;
 DROP TABLE groups;
 "#;
 
-const FRESH_SCHEMA: &str = r#"
-CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-CREATE TABLE entities (
-  id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL CHECK (kind IN ('issue','group')),
-  title TEXT NOT NULL,
-  description TEXT,
-  progress TEXT NOT NULL CHECK (progress IN ('not_started','in_progress','ended')),
-  disposition TEXT NOT NULL CHECK (disposition IN ('undecided','accepted','rejected')),
-  current_revision TEXT,
-  resurface_kind TEXT CHECK (resurface_kind IN ('date','after_entity','manual','command')),
-  resurface_date TEXT,
-  resurface_ref TEXT,
-  resurface_command TEXT,
-  parent_id TEXT REFERENCES entities(id),
-  claimed_actor TEXT,
-  claimed_worktree TEXT,
-  claimed_at TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  CHECK (id <> parent_id),
-  CHECK ((disposition = 'undecided' AND current_revision IS NULL) OR
-         (disposition IN ('accepted','rejected') AND current_revision IS NOT NULL)),
-  CHECK ((progress = 'in_progress' AND claimed_actor IS NOT NULL AND
-          claimed_worktree IS NOT NULL AND claimed_at IS NOT NULL) OR
-         (progress <> 'in_progress' AND claimed_actor IS NULL AND
-          claimed_worktree IS NULL AND claimed_at IS NULL)),
-  CHECK ((resurface_kind IS NULL AND resurface_date IS NULL AND resurface_ref IS NULL AND resurface_command IS NULL) OR
-         (resurface_kind IS NOT NULL AND ((resurface_kind = 'date' AND resurface_date IS NOT NULL AND resurface_ref IS NULL AND resurface_command IS NULL) OR
-         (resurface_kind = 'after_entity' AND resurface_ref IS NOT NULL AND resurface_date IS NULL AND resurface_command IS NULL) OR
-         (resurface_kind = 'manual' AND resurface_command IS NULL AND resurface_date IS NULL AND resurface_ref IS NULL) OR
-         (resurface_kind = 'command' AND resurface_command IS NOT NULL AND resurface_date IS NULL AND resurface_ref IS NULL)))),
-  FOREIGN KEY (id,current_revision)
-    REFERENCES declaration_revisions(entity_id,revision) DEFERRABLE INITIALLY DEFERRED
+const FRESH_SCHEMA: &str = concat!(
+    include_str!("db/schema_v12.sql"),
+    include_str!("db/schema_causal.sql")
 );
-
-CREATE TABLE entity_deps (
-  entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-  depends_on_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-  PRIMARY KEY (entity_id, depends_on_id), CHECK (entity_id <> depends_on_id)
-);
-
-CREATE TABLE declaration_revisions (
-  entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-  revision TEXT NOT NULL UNIQUE CHECK (revision GLOB 'rev-*'),
-  sequence INTEGER NOT NULL CHECK (sequence > 0),
-  title TEXT NOT NULL,
-  description TEXT,
-  parent_id TEXT REFERENCES entities(id),
-  created_at TEXT NOT NULL,
-  baseline INTEGER NOT NULL DEFAULT 0 CHECK (baseline IN (0,1)),
-  PRIMARY KEY (entity_id, revision),
-  UNIQUE (entity_id, sequence)
-);
-
-CREATE TABLE revision_dependencies (
-  entity_id TEXT NOT NULL,
-  revision TEXT NOT NULL,
-  depends_on_id TEXT NOT NULL REFERENCES entities(id),
-  PRIMARY KEY (entity_id, revision, depends_on_id),
-  FOREIGN KEY (entity_id,revision)
-    REFERENCES declaration_revisions(entity_id,revision) ON DELETE CASCADE
-);
-
-CREATE TABLE entity_events (
-  id INTEGER PRIMARY KEY,
-  record_id TEXT NOT NULL UNIQUE,
-  entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-  field TEXT NOT NULL CHECK (field IN ('disposition','resurface_condition')),
-  old_value TEXT,
-  new_value TEXT,
-  revision TEXT,
-  actor TEXT NOT NULL,
-  reason TEXT,
-  at TEXT NOT NULL,
-  CHECK ((field = 'disposition' AND new_value = 'undecided' AND revision IS NULL) OR
-         (field = 'disposition' AND new_value IN ('accepted','rejected') AND revision IS NOT NULL) OR
-         (field = 'resurface_condition' AND revision IS NULL)),
-  FOREIGN KEY (entity_id,revision)
-    REFERENCES declaration_revisions(entity_id,revision)
-);
-CREATE INDEX idx_entity_events_entity ON entity_events (entity_id, id);
-
-CREATE TABLE entity_progress_events (
-  id INTEGER PRIMARY KEY,
-  record_id TEXT NOT NULL UNIQUE,
-  entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN ('start','done','release')),
-  actor TEXT NOT NULL,
-  reason TEXT,
-  at TEXT NOT NULL
-);
-CREATE INDEX idx_entity_progress_events_entity ON entity_progress_events (entity_id, id);
-
-CREATE TABLE entity_notes (
-  record_id TEXT NOT NULL UNIQUE,
-  entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-  note INTEGER NOT NULL CHECK (note > 0),
-  body TEXT NOT NULL CHECK (length(trim(body)) > 0),
-  actor TEXT NOT NULL,
-  at TEXT NOT NULL,
-  PRIMARY KEY (entity_id,note)
-);
-"#;
 
 #[cfg(test)]
 const MIGRATIONS: &[&str] = &[
@@ -473,6 +373,7 @@ pub struct ShowSnapshot {
     pub revisions: Vec<DeclarationRevision>,
     pub notes: Vec<Note>,
     pub counts: RecordCounts,
+    pub causal: crate::history::CausalState,
 }
 
 pub struct RevisionSnapshot {
@@ -661,7 +562,12 @@ impl Store {
     pub fn notes(&self, id: &EntityId) -> Result<Vec<Note>> {
         let tx = self.conn.unchecked_transaction()?;
         read_entity(&tx, id)?;
-        let notes = read_notes(&tx, id)?;
+        let notes = read_state(&tx, self.evaluation.clone())?
+            .histories
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
+            .notes;
         tx.commit()?;
         Ok(notes)
     }
@@ -769,7 +675,16 @@ impl Store {
     }
 
     pub fn events(&self, id: &EntityId) -> Result<Vec<Event>> {
-        read_events(&self.conn, id)
+        let tx = self.conn.unchecked_transaction()?;
+        read_entity(&tx, id)?;
+        let records = read_state(&tx, self.evaluation.clone())?
+            .histories
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
+            .decisions;
+        tx.commit()?;
+        Ok(records)
     }
 
     #[cfg(test)]
@@ -1016,9 +931,16 @@ fn read_revisions(conn: &Connection, id: &EntityId) -> Result<Vec<DeclarationRev
 }
 
 fn read_revision_snapshot(conn: &Connection, id: &EntityId) -> Result<RevisionSnapshot> {
+    let entity = read_entity(conn, id)?;
+    let state = read_state(conn, Rc::new(Evaluation::new(PathBuf::from("."))))?;
     Ok(RevisionSnapshot {
-        entity: read_entity(conn, id)?,
-        revisions: read_revisions(conn, id)?,
+        entity,
+        revisions: state
+            .histories
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
+            .revisions,
     })
 }
 
@@ -1232,24 +1154,23 @@ fn read_show_snapshot(
     evaluation: Rc<Evaluation>,
 ) -> Result<ShowSnapshot> {
     let id = resolve_id(conn, input)?;
-    let decision_events = read_events(conn, &id)?;
-    let progress_events = read_progress_events(conn, &id)?;
-    let revisions = read_revisions(conn, &id)?;
-    let notes = read_notes(conn, &id)?;
+    let state = read_state(conn, evaluation)?;
+    let history = state.histories.get(&id).cloned().unwrap_or_default();
     let counts = RecordCounts {
-        notes: notes.len(),
-        revisions: revisions.len(),
-        decisions: decision_events.len(),
-        progressions: progress_events.len(),
+        notes: history.notes.len(),
+        revisions: history.revisions.len(),
+        decisions: history.decisions.len(),
+        progressions: history.progress.len(),
     };
     Ok(ShowSnapshot {
-        view: read_view(conn, evaluation)?,
-        decision_events,
-        progress_events,
-        revisions,
-        notes,
-        counts,
         id,
+        view: state.declaration.view(),
+        decision_events: history.decisions,
+        progress_events: history.progress,
+        revisions: history.revisions,
+        notes: history.notes,
+        counts,
+        causal: state.causal,
     })
 }
 
@@ -1274,7 +1195,7 @@ impl From<core::Error> for DbError {
     }
 }
 
-fn read_state(conn: &Connection, evaluation: Rc<Evaluation>) -> Result<core::StateSnapshot> {
+fn read_linear_state(conn: &Connection, evaluation: Rc<Evaluation>) -> Result<core::StateSnapshot> {
     let declaration = read_snapshot(conn, evaluation)?;
     let mut metadata = std::collections::BTreeMap::new();
     let mut statement = conn.prepare("SELECT key,value FROM meta ORDER BY key")?;
@@ -1312,7 +1233,24 @@ fn read_state(conn: &Connection, evaluation: Rc<Evaluation>) -> Result<core::Sta
         declaration,
         metadata,
         histories,
+        causal: Default::default(),
     })
+}
+fn read_state(conn: &Connection, evaluation: Rc<Evaluation>) -> Result<core::StateSnapshot> {
+    let mut state = read_linear_state(conn, evaluation)?;
+    state.causal = read_causal(conn)?;
+    state.validate_history()?;
+    let ranks = state
+        .causal
+        .order()?
+        .into_iter()
+        .enumerate()
+        .map(|(i, id)| (id, i))
+        .collect();
+    for history in state.histories.values_mut() {
+        crate::codec::order_history(history, &ranks);
+    }
+    Ok(state)
 }
 
 fn publish(
@@ -1374,6 +1312,7 @@ fn publish(
                 params![owner.as_str(), event.kind.as_db(), event.actor, event.reason, event.at.to_rfc3339(), event.id])?;
         }
     }
+    publish_causal(conn, &before.causal, &after.causal)?;
     Ok(())
 }
 
@@ -1439,6 +1378,80 @@ fn update_entity(conn: &Connection, before: &Entity, after: &Entity) -> Result<(
             &format!("UPDATE entities SET {} WHERE id=?1", columns.join(",")),
             rusqlite::params_from_iter(values),
         )?;
+    }
+    Ok(())
+}
+
+fn read_causal(conn: &Connection) -> Result<crate::history::CausalState> {
+    fn rows<K: std::str::FromStr + Ord, V: serde::de::DeserializeOwned>(
+        conn: &Connection,
+        table: &str,
+        key: &str,
+    ) -> Result<std::collections::BTreeMap<K, V>> {
+        let mut stmt = conn.prepare(&format!("SELECT {key},payload FROM {table}"))?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        rows.map(|r| {
+            let (key, payload) = r?;
+            Ok((
+                key.parse()
+                    .map_err(|_| DbError::InvalidSchema("invalid causal key".into()))?,
+                serde_json::from_str(&payload)
+                    .map_err(|e| DbError::InvalidSchema(e.to_string()))?,
+            ))
+        })
+        .collect()
+    }
+    let mut owners = std::collections::BTreeMap::new();
+    let mut stmt = conn.prepare("SELECT entity_id,payload FROM history_lineage")?;
+    for r in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+        let (id, payload) = r?;
+        owners.insert(
+            EntityId::from_stored(&id),
+            serde_json::from_str(&payload).map_err(|e| DbError::InvalidSchema(e.to_string()))?,
+        );
+    }
+    Ok(crate::history::CausalState {
+        owners,
+        links: rows(conn, "causal_links", "record_id")?,
+        baselines: rows(conn, "history_baselines", "record_id")?,
+        merges: rows(conn, "history_merges", "record_id")?,
+    })
+}
+fn publish_causal(
+    conn: &Connection,
+    before: &crate::history::CausalState,
+    after: &crate::history::CausalState,
+) -> Result<()> {
+    fn append<V: serde::Serialize>(
+        conn: &Connection,
+        table: &str,
+        old: &std::collections::BTreeMap<RecordId, V>,
+        new: &std::collections::BTreeMap<RecordId, V>,
+    ) -> Result<()> {
+        for (id, value) in new.iter().filter(|(id, _)| !old.contains_key(id)) {
+            let payload =
+                serde_json::to_string(value).map_err(|e| DbError::InvalidSchema(e.to_string()))?;
+            conn.execute(
+                &format!("INSERT INTO {table}(record_id,payload) VALUES (?1,?2)"),
+                params![id, payload],
+            )?;
+        }
+        Ok(())
+    }
+    append(conn, "causal_links", &before.links, &after.links)?;
+    append(
+        conn,
+        "history_baselines",
+        &before.baselines,
+        &after.baselines,
+    )?;
+    append(conn, "history_merges", &before.merges, &after.merges)?;
+    for (id, lineage) in &after.owners {
+        if before.owners.get(id) != Some(lineage) {
+            let payload = serde_json::to_string(lineage)
+                .map_err(|e| DbError::InvalidSchema(e.to_string()))?;
+            conn.execute("INSERT INTO history_lineage(entity_id,payload) VALUES (?1,?2) ON CONFLICT(entity_id) DO UPDATE SET payload=excluded.payload",params![id.as_str(),payload])?;
+        }
     }
     Ok(())
 }
@@ -1875,6 +1888,49 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_preserves_branches_and_continues_from_the_merge_head() {
+        let mut store = Store::in_memory("t").unwrap();
+        let tx = store
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        let before = read_state(&tx, store.evaluation.clone()).unwrap();
+        let mut branch = crate::history::tests::branching();
+        branch.metadata = before.metadata.clone();
+        let result = core::tests::execute(
+            &branch,
+            core::Operation::AddNote {
+                owner: id("i"),
+                body: "persist branches".into(),
+            },
+            20,
+        )
+        .unwrap();
+        publish(&tx, &before, &result).unwrap();
+        tx.commit().unwrap();
+        let selected = store.get(&id("i")).unwrap().current_revision;
+        store
+            .apply(&id("i"), Change::Decide(Disposition::Undecided), &ctx())
+            .unwrap();
+        store
+            .apply(&id("i"), Change::Decide(Disposition::Accepted), &ctx())
+            .unwrap();
+        let snapshot = store.show_snapshot("i").unwrap();
+        assert_eq!(
+            snapshot.view.get(&id("i")).unwrap().current_revision,
+            selected
+        );
+        assert_eq!(snapshot.revisions.len(), 2);
+        assert_eq!(snapshot.notes.len(), 3);
+        assert!(
+            snapshot
+                .causal
+                .display(&id("i"))
+                .contains("Merge selected input")
+        );
+    }
+
+    #[test]
     fn publication_failure_rolls_back_control_revision_and_history() {
         let mut store = Store::in_memory("t").unwrap();
         store
@@ -1930,7 +1986,7 @@ mod tests {
         store
             .conn
             .execute_batch(
-                "UPDATE entities SET created_at='2020-01-02T03:04:05.000Z';
+                "UPDATE entities SET created_at='2026-01-02T03:04:05.000Z';
             UPDATE entity_notes SET note=17, at='2020-01-02T03:04:05.000Z';
             INSERT INTO meta VALUES ('custom',x'00ff');",
             )
@@ -1946,7 +2002,7 @@ mod tests {
                     r.get::<_, String>(0)
                 })
                 .unwrap(),
-            "2020-01-02T03:04:05.000Z"
+            "2026-01-02T03:04:05.000Z"
         );
         assert_eq!(
             store
@@ -2093,7 +2149,7 @@ mod tests {
         reader
             .insert(&entity("i", EntityKind::Issue, None))
             .unwrap();
-        let writer = Store::from_conn(Connection::open(&path).unwrap()).unwrap();
+        let writer_path = path.clone();
         let write_attempted = Arc::new(AtomicBool::new(false));
         let write_error = Arc::new(Mutex::new(None));
         let attempted_from_hook = Arc::clone(&write_attempted);
@@ -2109,18 +2165,13 @@ mod tests {
                         ..
                     }
                 ) && !attempted_from_hook.swap(true, Ordering::SeqCst)
-                    && let Err(error) = writer.conn.execute_batch(
-                        "BEGIN IMMEDIATE;
-                         UPDATE entities SET disposition='undecided',current_revision=NULL
-                           WHERE id='i';
-                         UPDATE entities SET title='changed' WHERE id='i';
-                         INSERT INTO declaration_revisions
-                           (entity_id,revision,title,created_at,baseline,sequence)
-                           VALUES ('i','rev-00000000000000000000000000000002','changed','2026-09-03T00:00:00Z',0,2);
-                         UPDATE entities SET disposition='accepted',current_revision='rev-00000000000000000000000000000002'
-                           WHERE id='i';
-                         COMMIT;",
-                    )
+                    && let Err(error) = (|| -> Result<()> {
+                        let mut writer = Store::from_conn(Connection::open(&writer_path)?)?;
+                        writer.apply(&id("i"), Change::Decide(Disposition::Undecided), &ctx())?;
+                        writer.apply(&id("i"), Change::SetTitle("changed".into()), &ctx())?;
+                        writer.apply(&id("i"), Change::Decide(Disposition::Accepted), &ctx())?;
+                        Ok(())
+                    })()
                 {
                     *error_from_hook.lock().unwrap() = Some(error.to_string());
                 }
@@ -2250,6 +2301,12 @@ mod tests {
                 )
                 .unwrap();
         }
+
+        // Build a consistent history boundary for this deliberately cyclic stored fixture.
+        let mut fixture = read_linear_state(&store.conn, store.evaluation.clone()).unwrap();
+        fixture.migrate_causality(12).unwrap();
+        store.conn.execute_batch("DELETE FROM history_baselines; DELETE FROM history_merges; DELETE FROM causal_links; DELETE FROM history_lineage;").unwrap();
+        publish_causal(&store.conn, &Default::default(), &fixture.causal).unwrap();
 
         store
             .apply(

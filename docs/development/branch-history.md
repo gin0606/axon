@@ -1,0 +1,31 @@
+# 分岐履歴の保存境界
+
+Entityの現在値と記録の集合を分ける。履歴のIDは維持し、各記録に所有者、先行ID、originを付ける。
+NoteとRevisionはそれぞれのstream、判断・進行・統合・baselineは状態streamを持つ。
+Noteと状態記録は同じstreamの先端全体へ追記し、Revisionは採用系統のlast Revisionだけを親にする。
+並行記録を日時で直列化しない。
+現在の採用系統はEntityごとの状態先端とlast Revisionで表す。Undecidedでcurrentを解除しても
+lastは残し、再判断はそのRevisionだけと比較する。別branchの新しいRevisionは再利用根拠にしない。
+
+状態先端のproofはProgress、Disposition、Resurface、current/last Revisionを保持する。
+通常のdraft編集は履歴を作らないため、proofから宣言全文を再生しない。
+決定済み宣言はcurrent Revisionと別途照合する。MergeRecordは入力identity、候補bundle、
+入力先端、採用結果を不変に保持し、通常操作の記録を代用生成しない。
+
+v12からの手動変換では元DBの全tableを保持し、追加の因果関係だけを作る。
+旧Note、Revision、判断、進行の各stream内の順序を先行参照へ写し、別table間の順序は推測しない。
+所有者ごとのmigration baselineを各状態stream先端の後へ置いて移行時現在値に接続する。
+既存store/record IDは変更しない。元の日時文字列表現や整数キーもSQLiteの旧tableに保持する。
+変換先は未使用directoryだけとし、元DBの切替は行わない。
+
+canonical JSONLはheader、所有者付きEntity/Revision/Note/判断/進行、MergeRecord、baselineを持つ。
+評価contextは保存しない。未知version/field、重複ID、参照切れ、異種streamや別ownerへの先行参照、
+因果循環、current/last/proof不整合を拒否する。集合を決定的に整列し、記録は因果順、並行時はID順とする。
+
+形式モデルは通常の情報所有操作をinformation_model.qnt、2つのsnapshotの記録統合と採用系統を
+branch_history.qntで検証する。各操作と統合は原子的で、ID割当は衝突しない抽象値とする。
+後者はshared snapshotの操作であり、通信・時刻・SQLite・JSONL・mergeの自動選択をモデル化しない。
+実装のcodec、DB transaction、変換の全情報保持はRustのテストが担当する。
+
+codecのMetadataValueはtext/integer/bytesと、IEEE754のbit列で表すrealを区別する。
+SQLiteの拡張metadataに含まれる値をJSONの数値丸めや非有限値のnull化で失わない。
