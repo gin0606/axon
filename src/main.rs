@@ -326,6 +326,12 @@ enum Command {
         /// Include only one Entity kind
         #[arg(long, value_enum)]
         kind: Option<KindFilter>,
+        /// Read saved information without running any Command conditions; unknown values are unevaluated
+        #[arg(
+            long,
+            long_help = "Read saved information without executing Command conditions, including ancestors, descendants, and related Entities. Derived values needing Command results are marked unevaluated; other conditions are still evaluated. May be combined with --trace-conditions, which emits no Command trace in this mode."
+        )]
+        skip_command_evaluation: bool,
         #[command(flatten)]
         trace: TraceConditionsArgs,
     },
@@ -333,6 +339,12 @@ enum Command {
     Show {
         /// Entity ID or unique ID suffix
         id: String,
+        /// Read saved information without running any Command conditions; unknown values are unevaluated
+        #[arg(
+            long,
+            long_help = "Read saved information without executing Command conditions, including ancestors, descendants, and related Entities. Derived values needing Command results are marked unevaluated; other conditions are still evaluated. May be combined with --trace-conditions, which emits no Command trace in this mode."
+        )]
+        skip_command_evaluation: bool,
         #[command(flatten)]
         trace: TraceConditionsArgs,
     },
@@ -700,7 +712,7 @@ fn error_guidance(error: &(dyn std::error::Error + 'static)) -> Option<String> {
 }
 
 fn evaluation_guidance() -> &'static str {
-    "See `axon when command --help` for the exit-status contract. Correcting a Command condition, or explicitly replacing or clearing it, does not evaluate the failing condition; replacing or clearing it changes when the Entity surfaces."
+    "Read saved information without executing conditions with `axon list --skip-command-evaluation` or `axon show <id> --skip-command-evaluation`. See `axon when command --help` for the exit-status contract. Correcting a Command condition, or explicitly replacing or clearing it, does not evaluate the failing condition; replacing or clearing it changes when the Entity surfaces."
 }
 
 fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> {
@@ -769,8 +781,16 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
             file,
         } => cmd_write(&id, title, message, file),
         Command::Log { id } => cmd_log(&id),
-        Command::List { kind, trace } => cmd_list(kind, trace.trace_conditions),
-        Command::Show { id, trace } => cmd_show(&id, trace.trace_conditions),
+        Command::List {
+            kind,
+            trace,
+            skip_command_evaluation,
+        } => cmd_list(kind, trace.trace_conditions, skip_command_evaluation),
+        Command::Show {
+            id,
+            trace,
+            skip_command_evaluation,
+        } => cmd_show(&id, trace.trace_conditions, skip_command_evaluation),
         Command::Note(command) => cmd_note(command),
         Command::Revision(command) => cmd_revision(command),
         Command::Export {
@@ -1154,15 +1174,198 @@ fn cmd_release(raw: &str, reason: Option<String>) -> Result<(), Box<dyn std::err
 fn cmd_list(
     kind: Option<KindFilter>,
     trace_conditions: bool,
+    skip_command_evaluation: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (_, view) = load(trace_conditions)?;
+    let view = if skip_command_evaluation {
+        view.without_command_evaluation()
+    } else {
+        view
+    };
     let decoration = current_output_decoration();
     let mut rows = String::new();
     for entity in view.iter().filter(|entity| included(kind, entity)) {
-        rows.push_str(&render_list_row(&view, entity, decoration)?);
+        if skip_command_evaluation {
+            rows.push_str(&render_skipped_row(&view, entity, decoration));
+        } else {
+            rows.push_str(&render_list_row(&view, entity, decoration)?);
+        }
     }
     write_rows(&rows, "No entities", decoration)?;
     Ok(())
+}
+
+fn observed_label(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "unevaluated (Command evaluation skipped)",
+    }
+}
+
+fn render_skipped_row(view: &View, entity: &Entity, decoration: OutputDecoration) -> String {
+    format!(
+        "{}  {}  [{}/{}]  {}  Surfaced: {}  Active scope: {}  Ready: {}  Blocked: {}  Orphaned: {}\n",
+        decoration.paint(OUTPUT_ID, &entity.id),
+        entity.kind.label(),
+        entity.progress.label(),
+        entity.disposition.label(),
+        entity.title,
+        observed_label(view.observed_surfaced(entity)),
+        observed_label(view.observed_active_scope(&entity.id)),
+        observed_label(view.observed_ready(entity)),
+        yes_no(view.is_blocked(&entity.id)),
+        yes_no(view.is_orphaned(&entity.id))
+    )
+}
+
+fn render_skipped_show(
+    view: &View,
+    entity: &Entity,
+    progress_events: &[db::ProgressEvent],
+    notes: &[Note],
+    counts: RecordCounts,
+    decoration: OutputDecoration,
+) -> String {
+    let mut blocks = vec![vec![
+        format!(
+            "{}  {}  {}",
+            decoration.paint(OUTPUT_ID, &entity.id),
+            entity.kind.label(),
+            entity.title
+        ),
+        "Command evaluation skipped; unevaluated values are not false.".to_string(),
+    ]];
+    let mut details = vec![
+        format!(
+            "Progress: {}  Disposition: {}  Resurface condition: {}",
+            entity.progress.label(),
+            entity.disposition.label(),
+            entity.resurface_condition.label()
+        ),
+        format!(
+            "Active scope: {}  Surfaced: {}  Ready: {}  Blocked: {}  Orphaned: {}",
+            observed_label(view.observed_active_scope(&entity.id)),
+            observed_label(view.observed_surfaced(entity)),
+            observed_label(view.observed_ready(entity)),
+            yes_no(view.is_blocked(&entity.id)),
+            yes_no(view.is_orphaned(&entity.id))
+        ),
+    ];
+    if let Some(claim) = entity.progress.claim() {
+        details.push(format!("Claim: {}", claim_details(claim, decoration)));
+    }
+    details.push(format!(
+        "Plan declaration: {}{}",
+        entity
+            .current_revision
+            .map(|revision| format!("fixed at Revision {revision}"))
+            .unwrap_or_else(|| "draft".to_string()),
+        entity
+            .parent
+            .as_ref()
+            .map(|parent| format!("  Parent: {parent}"))
+            .unwrap_or_default()
+    ));
+    details.push(format!(
+        "Records: Notes: {}  Revisions: {}  Decision history: {}  Progress history: {}",
+        counts.notes, counts.revisions, counts.decisions, counts.progressions
+    ));
+    blocks.push(render_section(decoration, "Details", details));
+
+    let ancestors = view
+        .ancestors(&entity.id)
+        .into_iter()
+        .map(|ancestor| {
+            format!(
+                "{}  Resurface condition: {}  Surfaced: {}  Descendant gate open: {}",
+                render_related_entity(ancestor, decoration),
+                ancestor.resurface_condition.label(),
+                observed_label(view.observed_surfaced(ancestor)),
+                observed_label(view.observed_gate(ancestor))
+            )
+        })
+        .collect::<Vec<_>>();
+    if !ancestors.is_empty() {
+        blocks.push(render_section(decoration, "Ancestor scope", ancestors));
+    }
+    if entity.kind == EntityKind::Group {
+        let summary = view.group_summary(&entity.id);
+        let mut group = vec![
+            format!(
+                "Descendant gate open: {}",
+                observed_label(view.observed_gate(entity))
+            ),
+            format!(
+                "Can complete: {}",
+                yes_no(view.can_complete_group(&entity.id))
+            ),
+        ];
+        group.extend(render_entity_counts(
+            "Direct children",
+            &summary.direct,
+            decoration,
+        ));
+        group.extend(render_entity_counts(
+            "Descendants",
+            &summary.descendants,
+            decoration,
+        ));
+        blocks.push(render_section(decoration, "Group", group));
+        let subtree = ordered_subtree(view, &entity.id);
+        let rows = subtree
+            .iter()
+            .map(|(depth, child)| {
+                format!(
+                    "{}{}  Resurface condition: {}",
+                    "  ".repeat(*depth),
+                    render_skipped_row(view, child, decoration).trim_end(),
+                    child.resurface_condition.label()
+                )
+            })
+            .collect();
+        blocks.push(render_section(decoration, "Subtree", rows));
+        let dependencies = render_subtree_dependencies(view, entity, &subtree, decoration);
+        if !dependencies.is_empty() {
+            blocks.push(render_section(decoration, "Dependencies", dependencies));
+        }
+    }
+    let mut relations = Vec::new();
+    for target in view.dependency_targets(&entity.id) {
+        let label = if target.disposition == Disposition::Rejected {
+            "Orphaned"
+        } else if target.is_terminal() {
+            "Satisfied dependency"
+        } else {
+            "Dependency"
+        };
+        relations.push(format!(
+            "{label}: {}",
+            render_related_entity(target, decoration)
+        ));
+    }
+    for dependent in view.direct_dependents(&entity.id) {
+        relations.push(format!(
+            "Dependent: {}",
+            render_related_entity(dependent, decoration)
+        ));
+    }
+    match view.observed_blocking_causes(&entity.id) {
+        Some(causes) => {
+            for cause in causes {
+                relations.push(format!(
+                    "Root cause: {}",
+                    render_related_entity(cause, decoration)
+                ));
+            }
+        }
+        None => relations.push("Root causes: unevaluated (Command evaluation skipped)".to_string()),
+    }
+    if !relations.is_empty() {
+        blocks.push(render_section(decoration, "Relationships", relations));
+    }
+    append_saved_records(&mut blocks, entity, progress_events, notes, decoration);
+    render_blocks(blocks)
 }
 
 fn render_list_row(
@@ -1216,7 +1419,11 @@ fn render_entity_marks(
     })
 }
 
-fn cmd_show(raw: &str, trace_conditions: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_show(
+    raw: &str,
+    trace_conditions: bool,
+    skip_command_evaluation: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = open_store(trace_conditions)?;
     let db::ShowSnapshot {
         id,
@@ -1232,9 +1439,18 @@ fn cmd_show(raw: &str, trace_conditions: bool) -> Result<(), Box<dyn std::error:
     debug_assert_eq!(counts.progressions, progress_events.len());
     debug_assert_eq!(counts.revisions, revisions.len());
     debug_assert_eq!(counts.notes, notes.len());
+    let view = if skip_command_evaluation {
+        view.without_command_evaluation()
+    } else {
+        view
+    };
     let entity = view.get(&id).ok_or("entity not found")?;
     let decoration = current_output_decoration();
-    let mut output = render_show(&view, entity, &progress_events, &notes, counts, decoration)?;
+    let mut output = if skip_command_evaluation {
+        render_skipped_show(&view, entity, &progress_events, &notes, counts, decoration)
+    } else {
+        render_show(&view, entity, &progress_events, &notes, counts, decoration)?
+    };
     output.push_str(&causal.display(&id));
     write_output(&output, decoration)?;
     Ok(())
@@ -1611,6 +1827,17 @@ fn render_show(
         ));
     }
 
+    append_saved_records(&mut blocks, entity, progress_events, notes, decoration);
+    Ok(render_blocks(blocks))
+}
+
+fn append_saved_records(
+    blocks: &mut Vec<Vec<String>>,
+    entity: &Entity,
+    progress_events: &[db::ProgressEvent],
+    notes: &[Note],
+    decoration: OutputDecoration,
+) {
     if let Some(description) = &entity.description {
         blocks.push(render_section(
             decoration,
@@ -1659,8 +1886,10 @@ fn render_show(
         }
         blocks.push(render_section(decoration, "Progress history", history));
     }
+}
 
-    Ok(format!(
+fn render_blocks(blocks: Vec<Vec<String>>) -> String {
+    format!(
         "{}\n",
         blocks
             .into_iter()
@@ -1668,7 +1897,7 @@ fn render_show(
             .map(|block| block.join("\n"))
             .collect::<Vec<_>>()
             .join("\n\n")
-    ))
+    )
 }
 
 fn ordered_subtree<'a>(view: &'a View, root: &EntityId) -> Vec<(usize, &'a Entity)> {

@@ -89,6 +89,19 @@ Accepted / Rejected への判断時には declaration 全文を 安定IDを持�
 全 Progress / Disposition への適用、軸の独立性と Group への作用は
 [状態モデル](state-model.md#resurface-condition) に従う。
 
+### Commandを実行しない閲覧
+
+`list --skip-command-evaluation` と `show <id> --skip-command-evaluation` は、
+対象・祖先・子孫・関係先の Command を一切実行せず保存情報を読む。`list --kind` は併用できる。
+Progress、Disposition、宣言、条件文字列、claim、Note、進行履歴、関係を保持して表示する。
+外部実行なしで確定する導出値は通常どおり計算し、Command が必要な Surfaced、Active scope、
+Ready や root cause は `unevaluated` と明示する。別の確定した要因だけで false と決まる値は `no` とする。
+これは閲覧時の観測であり、保存状態や永続キャッシュには追加しない。正常な読取は exit 0、
+DB読取失敗などはエラーとする。通常モードの評価・表示と状態変更の成立判定は変えない。
+`--trace-conditions` と併用できるが、実行する Command がないため trace block は出ない。
+Note・履歴・Revision の専用閲覧経路も維持する。観測の省略は既存形式モデルの状態や成立意味を
+変更しないため、非実行・未評価表示・通常評価の維持は Rust のテストで検証する。
+
 ### 外部条件の評価
 
 `when command` はシェル文字列を設定し、`when clear` は Always に戻す。条件の設定・訂正・

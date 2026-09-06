@@ -40,3 +40,13 @@ Run `axon done <id>` as a standalone mutation. Verify the target's ended state, 
 ## Return
 
 Return the requested lifecycle effect, final Progress and claim, relevant frontier and relationship impact, and `DB applied` classification. Never continue into external work or a later lifecycle effect on your own.
+
+## Inspect without executing external conditions
+
+If a Command condition fails or does not finish, use `axon list --skip-command-evaluation`
+or `axon show <id> --skip-command-evaluation` to inspect saved information without
+executing any Command, including ancestor, descendant, and related conditions.
+`unevaluated` is a read-time observation, not false or a stored state. Other conditions
+remain evaluable. This option can be combined with `--trace-conditions` but emits no
+Command trace; it does not establish readiness for a lifecycle mutation. Normal reads
+and lifecycle checks continue to evaluate conditions.

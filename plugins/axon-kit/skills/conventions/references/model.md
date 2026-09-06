@@ -48,3 +48,13 @@ Dependencies are prerequisites. A dependency is satisfied when its target is `En
 A Group is an explicit plan Entity, not a tag. Starting it opens its activation gate but does not start descendants. A Group can be done only while `InProgress` and after every descendant is terminal. Releasing a Group requires zero `InProgress` descendants. Rejecting a Group makes the Group terminal and closes its active scope but does not mutate descendant state. Non-terminal descendants below it can remain as a stable inactive saved state; their visibility alone does not require rejection, release, or other cleanup. When a saved claim or its external work actually needs a disposition, report the observed claim and the available per-Entity choices without changing descendants automatically.
 
 Do not automatically start descendants, finish an ancestor Group, move children, or rewrite dependencies as a side effect of another capability. Return those possible next operations to the calling workflow.
+
+## Inspect without executing external conditions
+
+If a Command condition fails or does not finish, use `axon list --skip-command-evaluation`
+or `axon show <id> --skip-command-evaluation` to inspect saved information without
+executing any Command, including ancestor, descendant, and related conditions.
+`unevaluated` is a read-time observation, not false or a stored state. Other conditions
+remain evaluable. This option can be combined with `--trace-conditions` but emits no
+Command trace; it does not establish readiness for a lifecycle mutation. Normal reads
+and lifecycle checks continue to evaluate conditions.

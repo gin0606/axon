@@ -15,6 +15,7 @@ pub type Result<T> = std::result::Result<T, EvaluationError>;
 
 pub struct Evaluation {
     root: PathBuf,
+    commands_enabled: bool,
     results: RefCell<HashMap<EntityId, Result<bool>>>,
     trace: Option<RefCell<Box<dyn Write>>>,
 }
@@ -23,6 +24,7 @@ impl Evaluation {
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
+            commands_enabled: true,
             results: RefCell::new(HashMap::new()),
             trace: None,
         }
@@ -35,12 +37,16 @@ impl Evaluation {
     fn with_trace_writer(root: PathBuf, writer: Box<dyn Write>) -> Self {
         Self {
             root,
+            commands_enabled: true,
             results: RefCell::new(HashMap::new()),
             trace: Some(RefCell::new(writer)),
         }
     }
 
     fn command(&self, entity: &Entity, script: &str) -> Result<bool> {
+        if !self.commands_enabled {
+            return Err(EvaluationError("Command evaluation skipped".to_string()));
+        }
         if let Some(result) = self.results.borrow().get(&entity.id) {
             return result.clone();
         }
@@ -161,6 +167,96 @@ impl View {
         }
     }
 
+    pub fn without_command_evaluation(mut self) -> Self {
+        let mut evaluation = Evaluation::new(self.evaluation.root.clone());
+        evaluation.commands_enabled = false;
+        self.evaluation = Rc::new(evaluation);
+        self
+    }
+
+    pub fn observed_surfaced(&self, entity: &Entity) -> Option<bool> {
+        match &entity.resurface_condition {
+            ResurfaceCondition::Command(_) => None,
+            ResurfaceCondition::Always => Some(true),
+            ResurfaceCondition::Manual => Some(false),
+            ResurfaceCondition::AtDate(date) => {
+                Some(*date <= self.date.unwrap_or_else(|| Utc::now().date_naive()))
+            }
+            ResurfaceCondition::AfterEntity(target) => {
+                Some(self.get(target).is_none_or(Entity::is_terminal))
+            }
+        }
+    }
+
+    pub fn observed_gate(&self, entity: &Entity) -> Option<bool> {
+        observed_all([
+            Some(
+                entity.kind == EntityKind::Group
+                    && matches!(entity.progress, Progress::InProgress(_))
+                    && entity.disposition == Disposition::Accepted
+                    && !self.is_blocked(&entity.id)
+                    && !self.is_orphaned(&entity.id),
+            ),
+            self.observed_surfaced(entity),
+        ])
+    }
+
+    pub fn observed_active_scope(&self, id: &EntityId) -> Option<bool> {
+        observed_all(
+            self.ancestors(id)
+                .into_iter()
+                .map(|group| self.observed_gate(group)),
+        )
+    }
+
+    pub fn observed_ready(&self, entity: &Entity) -> Option<bool> {
+        observed_all([
+            Some(
+                matches!(entity.progress, Progress::NotStarted)
+                    && entity.disposition == Disposition::Accepted
+                    && !self.is_blocked(&entity.id)
+                    && !self.is_orphaned(&entity.id),
+            ),
+            self.observed_surfaced(entity),
+            self.observed_active_scope(&entity.id),
+        ])
+    }
+
+    pub fn observed_blocking_causes(&self, id: &EntityId) -> Option<Vec<&Entity>> {
+        fn walk<'a>(
+            view: &'a View,
+            id: &EntityId,
+            seen: &mut HashSet<EntityId>,
+            result: &mut Vec<&'a Entity>,
+        ) -> Option<()> {
+            for target in view.dependency_targets(id) {
+                if target.is_terminal() || !seen.insert(target.id.clone()) {
+                    continue;
+                }
+                let not_root = observed_all([
+                    Some(!view.is_orphaned(&target.id)),
+                    view.observed_surfaced(target),
+                    view.observed_active_scope(&target.id),
+                    Some(
+                        !view
+                            .dependency_targets(&target.id)
+                            .into_iter()
+                            .all(Entity::is_terminal),
+                    ),
+                ])?;
+                if !not_root {
+                    result.push(target);
+                } else {
+                    walk(view, &target.id, seen, result)?;
+                }
+            }
+            Some(())
+        }
+        let mut result = Vec::new();
+        walk(self, id, &mut HashSet::new(), &mut result)?;
+        Some(result)
+    }
+
     pub fn at(mut self, at: chrono::DateTime<Utc>) -> Self {
         self.date = Some(at.date_naive());
         self
@@ -249,17 +345,12 @@ impl View {
     }
 
     pub fn is_surfaced(&self, entity: &Entity) -> Result<bool> {
-        Ok(match &entity.resurface_condition {
-            ResurfaceCondition::Always => true,
-            ResurfaceCondition::Manual => false,
-            ResurfaceCondition::Command(script) => self.evaluation.command(entity, script)?,
-            ResurfaceCondition::AtDate(date) => {
-                *date <= self.date.unwrap_or_else(|| Utc::now().date_naive())
-            }
-            ResurfaceCondition::AfterEntity(target) => {
-                self.get(target).is_none_or(Entity::is_terminal)
-            }
-        })
+        match &entity.resurface_condition {
+            ResurfaceCondition::Command(script) => self.evaluation.command(entity, script),
+            _ => Ok(self
+                .observed_surfaced(entity)
+                .expect("non-Command condition is known")),
+        }
     }
 
     pub fn is_blocked(&self, id: &EntityId) -> bool {
@@ -403,6 +494,19 @@ impl View {
         }
         Ok(())
     }
+}
+
+fn observed_all(values: impl IntoIterator<Item = Option<bool>>) -> Option<bool> {
+    let mut result = Some(true);
+    for value in values {
+        if value == Some(false) {
+            return Some(false);
+        }
+        if value.is_none() {
+            result = None;
+        }
+    }
+    result
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

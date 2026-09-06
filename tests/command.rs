@@ -443,3 +443,138 @@ fn kind_filters_skip_unrelated_commands_but_still_observe_ancestor_gates() {
     assert!(stderr(&output).contains(&group));
     assert_eq!(calls(&repo), 1);
 }
+
+#[test]
+fn skipped_reads_never_execute_commands_across_the_graph_and_preserve_records() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let group = repo.group_plan("external gate");
+    let child = repo.capture("saved child");
+    assert_success(&repo.axon(&["group", "set", &child, &group]));
+    assert_success(&repo.axon(&["write", &child, "-m", "saved declaration body"]));
+    repo.accept(&child);
+    let prerequisite = repo.capture("related prerequisite");
+    let root = repo.plan("prerequisite root");
+    assert_success(&repo.axon(&["dep", "add", &prerequisite, "--needs", &root]));
+    repo.accept(&prerequisite);
+    let dependent = repo.capture("dependent");
+    assert_success(&repo.axon(&["dep", "add", &dependent, "--needs", &prerequisite]));
+    repo.accept(&dependent);
+    assert_success(&repo.axon(&["start", &group]));
+    assert_success(&repo.axon(&["start", &child]));
+    assert_success(&repo.axon(&["release", &child, "-r", "saved release reason"]));
+    assert_success(&repo.axon(&["start", &child]));
+    let ended = repo.plan("ended with condition");
+    assert_success(&repo.axon(&["start", &ended]));
+    assert_success(&repo.axon(&["done", &ended]));
+    let rejected = repo.plan("rejected with condition");
+    assert_success(&repo.axon(&["decide", "reject", &rejected, "-r", "not adopted"]));
+    let note = repo.axon(&["note", "add", &child, "-m", "saved supplemental note"]);
+    assert_success(&note);
+    let ids = [
+        &group,
+        &child,
+        &prerequisite,
+        &root,
+        &dependent,
+        &ended,
+        &rejected,
+    ];
+    for id in ids {
+        assert_success(&repo.axon(&["when", "command", id, "echo called >> calls; exit 23"]));
+    }
+    let before = ids.map(|id| repo.snapshot(id));
+    for trace in [false, true] {
+        let mut args = vec!["list", "--skip-command-evaluation"];
+        if trace {
+            args.push("--trace-conditions");
+        }
+        let list = repo.axon(&args);
+        assert_success(&list);
+        assert!(stderr(&list).is_empty());
+        for id in ids {
+            assert!(stdout(&list).contains(id));
+        }
+        for id in ids {
+            let mut args = vec!["show", id, "--skip-command-evaluation"];
+            if trace {
+                args.push("--trace-conditions");
+            }
+            let shown = repo.axon(&args);
+            assert_success(&shown);
+            assert!(stderr(&shown).is_empty());
+            assert!(stdout(&shown).contains("Surfaced: unevaluated"));
+            assert!(stdout(&shown).contains("Command("));
+            assert!(stdout(&shown).contains("Plan declaration: fixed at Revision"));
+        }
+    }
+    let shown = stdout(&repo.axon(&["show", &child, "--skip-command-evaluation"]));
+    for expected in [
+        "Active scope: unevaluated",
+        "Claim:",
+        "Worktree:",
+        "saved declaration body",
+        "saved supplemental note",
+        "saved release reason",
+        "Progress history",
+        &group,
+    ] {
+        assert!(shown.contains(expected), "{expected}: {shown}");
+    }
+    let shown = stdout(&repo.axon(&["show", &dependent, "--skip-command-evaluation"]));
+    assert!(shown.contains("Root causes: unevaluated"), "{shown}");
+    assert!(shown.contains("Blocked: yes"));
+    assert!(shown.contains("Ready: no"));
+    let listed = repo.axon(&["list", "--kind", "group", "--skip-command-evaluation"]);
+    assert_success(&listed);
+    assert!(stdout(&listed).contains(&group));
+    assert!(!stdout(&listed).contains(&child));
+    assert_eq!(calls(&repo), 0);
+    assert_eq!(ids.map(|id| repo.snapshot(id)), before);
+    let failed = repo.axon(&["show", &child]);
+    assert_failure(&failed);
+    assert!(stderr(&failed).contains("--skip-command-evaluation"));
+    assert_eq!(calls(&repo), 1);
+}
+
+#[test]
+fn skipped_observations_keep_known_conditions_and_closed_gates_definitive() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let group = repo.group_plan("unknown gate");
+    let child = repo.capture("child");
+    assert_success(&repo.axon(&["group", "set", &child, &group]));
+    repo.accept(&child);
+    assert_success(&repo.axon(&["start", &group]));
+    assert_success(&repo.axon(&["when", "command", &group, "echo called >> calls; exit 23"]));
+    let shown = stdout(&repo.axon(&["show", &child, "--skip-command-evaluation"]));
+    assert!(shown.contains("Active scope: unevaluated"), "{shown}");
+    assert!(shown.contains("Surfaced: yes"));
+    assert!(shown.contains("Ready: unevaluated"));
+    assert_success(&repo.axon(&["when", "manual", &child]));
+    let shown = stdout(&repo.axon(&["show", &child, "--skip-command-evaluation"]));
+    assert!(shown.contains("Surfaced: no"));
+    assert!(shown.contains("Ready: no"));
+    assert_success(&repo.axon(&["release", &group]));
+    assert_success(&repo.axon(&["when", "command", &child, "echo called >> calls; exit 23"]));
+    let shown = stdout(&repo.axon(&["show", &child, "--skip-command-evaluation"]));
+    assert!(shown.contains("Active scope: no"), "{shown}");
+    assert!(shown.contains("Ready: no"));
+    assert!(shown.contains("Surfaced: unevaluated"));
+    let date = repo.plan("date condition");
+    for (value, expected) in [("2000-01-01", "yes"), ("2999-01-01", "no")] {
+        assert_success(&repo.axon(&["when", "at", &date, value]));
+        let shown = repo.axon(&["show", &date, "--skip-command-evaluation"]);
+        assert_success(&shown);
+        assert!(stdout(&shown).contains(&format!("Surfaced: {expected}")));
+    }
+    let waiter = repo.plan("after condition");
+    assert_success(&repo.axon(&["when", "after", &waiter, &date]));
+    let shown = stdout(&repo.axon(&["show", &waiter, "--skip-command-evaluation"]));
+    assert!(shown.contains("Surfaced: no"));
+    assert_success(&repo.axon(&["decide", "reject", &date, "-r", "finished deciding"]));
+    let shown = stdout(&repo.axon(&["show", &waiter, "--skip-command-evaluation"]));
+    assert!(shown.contains("Surfaced: yes"));
+    assert!(shown.contains("Ready: yes"));
+    assert_eq!(calls(&repo), 0);
+}
