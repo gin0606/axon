@@ -7,6 +7,7 @@ mod derived;
 mod display;
 mod domain;
 mod history;
+mod merge;
 mod record_id;
 mod status;
 

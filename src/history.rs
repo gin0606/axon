@@ -171,7 +171,7 @@ impl CausalState {
     }
 }
 impl StateSnapshot {
-    fn bundle(&self, entity: &Entity) -> Bundle {
+    pub(crate) fn bundle(&self, entity: &Entity) -> Bundle {
         Bundle {
             entity: entity.clone(),
             dependencies: self

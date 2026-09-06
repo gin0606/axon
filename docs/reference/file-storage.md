@@ -76,3 +76,32 @@ init は既存正本を上書きしない。新規生成は pending marker を�
 
 これは上記条件の観測値であり性能上限の保証ではない。read は完全な snapshot を検査する。
 merge 性能は merge engine の実装段階で測定する。
+
+## 三方向統合 engine
+
+共通 engine (`src/merge.rs`) は base / ours / theirs の完全 bytes を所有し、
+入力 digest と Entity ごとの選択 ID を返す。入力を差し替えた古い選択、重複選択、
+存在しない選択元を拒否する。Entity 選択の一覧には自動選択も含まれ、
+循環などの全体競合を解決するときは自動選択も明示的に変更できる。
+
+選択は入力 digest を指す。通常修正は共通 core の Operation と、artifact 内で固定した
+日時・actor・reason・ID allocator、必要な評価 context を渡す。
+同じ artifact の再計算では同じ ID 列を再現する。engine は修正候補を外へ返さず、
+検証済みの結果または競合診断を返す。CLI workspace と Git driver、原子的な publish は
+この API の呼び出し側が所有する。
+
+Ended と未終了の選択でも全記録を保持し、MergeRecord は元の両候補、入力 digest、
+親先端、選択元と結果を保存する。取り込み済み候補は因果的に到達できる MergeRecord
+から判定し、後から入力側に加わった draft 変更まで取り込み済みとはみなさない。
+Note と Revision の表示順は因果順を優先し、並行記録だけを ID 順に並べる。
+
+2026-09-06、ローカル release test build、各 Entity に作成 baseline 1件の合成 snapshot、
+両側で別 Entity の Resurface を変更、完全な三入力 decode・prepare・resolve・encode を
+5回計測した中央値。ファイル I/O と Git process は含まない。
+
+| Entity 数 | base bytes | merge |
+| --- | ---: | ---: |
+| 100 | 100,237 | 9.72 ms |
+| 1,000 | 1,001,137 | 312.05 ms |
+
+再現: `cargo test --release --bin axon merge::additional_tests::measure_merge -- --ignored --nocapture`。
