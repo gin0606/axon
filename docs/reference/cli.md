@@ -264,6 +264,140 @@ help、一覧、詳細、成功確認は stdout、エラーは stderr に出す�
 
 人向け出力は、Entity一覧、履歴と索引、一件の詳細、状態変更の確認という役割ごとに共通の文字構造と語彙を使う。一覧と履歴は1 recordを1行に置き、一件の詳細では短い metadata を長文やdiffより先に置く。状態変更の確認は対象IDから始め、保存されたsnapshot全体を繰り返さない。Note / Revision一覧は安定IDから始める。照会・diffはIDまたは4文字以上の一意な接頭辞を受け付け、旧番号を参照として受け付けない。判断・進行履歴にもIDを表示する。
 
+### 更新結果の共通契約
+
+更新系の確認・診断は、対象、結果と変更内容または原因、適用範囲、必要な補足案内の順に読む。
+以下は個別コマンドの表示を実装する際の正本であり、代表例は期待する表示を示す。
+状態遷移、設定、追加の意味、保存境界、原子性を変更するものではない。
+
+| 要素 | 語彙と配置 |
+| --- | --- |
+| 対象 | Entity の成功確認は完全 ID を先頭に置く。関係の相手 ID は変更内容に置く。診断は既存の `Error:` に続けて、判明している対象 ID または path と操作を示す。ID 解決前は入力された識別子、保存先の問題は path を使い、未確定 ID を作らない。 |
+| 実変更・追加 | `Title updated`、`Description updated` / `Description removed`、`Dependency added:` / `Dependency removed:`、`Parent:` と最終値を使う。追加は `Created` または `Note <stable-id> recorded`、遷移は `Started` / `Ended` / `Released` など既存の状態確認語を使う。これらは保存処理の成功後だけ表示する。 |
+| 成功 no-op | `No changes` を結果とし、関係操作では `Dependency already present:` / `Dependency already absent:` と相手 ID、または `Parent:` と最終値（親なしは `(none)`）を添える。状態遷移の同値拒否には使わない。 |
+| 拒否・失敗 | `Error:` の本文は原因となる事実を示す。`cannot depend on itself` のような制約違反と、I/O・外部評価失敗や保存データ異常を分ける。結果だけの `Failed` や、入力誤りを `invalid schema` とする表示では代替しない。 |
+| 適用範囲 | 誤解の余地がある場合に `Applied:` / `Not applied:` / `Result unknown:` を使い、項目、Entity、DB、file のどの範囲かを示す。既存診断が同じ事実を本文で明示している場合は重ねない。部分適用は適用済みと未適用または不明を併記する。 |
+| 補足案内 | 確認・復旧方法が必要な場合だけ末尾の `Help:` に置く。原因や適用済み範囲を Help だけへ隠さない。単純な原因で次の行動が分かる場合は省く。 |
+
+単一対象で短い結果は `ID  結果  補足` の一行にする（項目間は空白2つ）。
+複数項目も短ければ同じ行に置ける。複数対象、長い原因、段階結果は複数行とし、
+先頭に対象と結果・原因、続いて必要なラベル付きの行を置く。各行の対象が曖昧になる場合は
+ID または path を添える。同じ情報を埋めるためだけに空欄や全件の snapshot を追加しない。
+
+成功確認は stdout / 終了0、アプリケーションの拒否・実行失敗は stderr / 終了1、
+Clap の構文・引数検証エラーは既存の stderr / 終了2を維持する。
+Clap の `error:`、Usage、help tip の既定構造はアプリケーション診断へ作り直さない。
+一つの呼び出しが途中まで適用された場合も全体は失敗であり、段階結果は stderr の診断で説明する。
+既に出力した成功情報は取り消せないため、終了コードと段階結果を合わせて読む。
+外部 Command の終了値を Axon 自身の終了値と混同しない。既存の BrokenPipe 成功扱いも維持する。
+
+保存処理が返した変更有無を表示へ使い、事前読取だけで実変更を推測しない。
+`write` は実際に保存した項目だけを列挙し、一部項目のみ変更なら全体を `No changes` としない。
+複数段階の操作で後段が失敗しても、前段の成功を未適用と断定しない。
+結果不明は成功でも未適用でもなく、照合が必要な状態として示す。
+診断を作るためだけの追加 mutation、外部 Command 評価は行わない。
+非 idempotent な作成・Note 追記の無条件再実行を案内せず、対象の保存情報と記録 ID を照合させる。
+
+#### 代表出力
+
+以下の ID と path は説明用。短い成功は stdout / 終了0で、例えば次のように読む。
+
+```text
+axon-a1b2c3  Title updated  Description removed
+axon-a1b2c3  Dependency added: axon-d4e5f6
+axon-a1b2c3  Parent: axon-g7h8i9
+axon-a1b2c3  No changes
+axon-a1b2c3  No changes  Dependency already present: axon-d4e5f6
+axon-a1b2c3  No changes  Dependency already absent: axon-d4e5f6
+axon-a1b2c3  No changes  Parent: (none)
+axon-j1k2l3  Created  Issue  [Accepted]  新しい計画
+axon-a1b2c3  Note note-0123456789abcdef0123456789abcdef recorded
+```
+
+新規追加の再実行は別 ID の追加である。`Created` は既存 Entity の再利用を表さない。
+単純な入力制約拒否と同値遷移拒否の例（stderr / 終了1、保存変更なし）:
+
+```text
+Error: axon-a1b2c3 dep add: Entity axon-a1b2c3 cannot depend on itself
+Error: axon-a1b2c3 decide accept: Disposition is already Accepted; no transition was applied
+```
+
+適用前の I/O 失敗（置換前と確認できる場合、stderr / 終了1）:
+
+```text
+Error: /work/.axon/state.jsonl write: permission denied while creating temporary file
+Not applied: state file replacement
+Help: Check directory permissions before retrying.
+```
+
+`write --title ... -m ...` の title 保存後に description 保存が失敗した場合
+（段階ごとの保存境界は維持、stderr / 終了1）:
+
+```text
+Error: axon-a1b2c3 write: description save failed: permission denied
+Applied: axon-a1b2c3 Title updated
+Not applied: axon-a1b2c3 Description update
+Help: Inspect the saved Entity before deciding which fields to retry.
+```
+
+`import apply` は既存の `Plan is valid.`、`Changes:`、`Derived changes (...)`、
+`Applied  <path>` の順と diff 構造を維持する。`Changes:` は DB の差分で、
+`none` は DB の成功 no-op に対応する。`check` の同じ表示は予測であり保存成功を表さない。
+`Applied  <path>` は DB の適用と宣言 file の更新の両方が完了した確認であり、
+DB の実変更があるという意味ではない。複数 Entity の差分は ID ごとに示す。
+例として、導出値に差分のない複数 Entity の title 更新は stdout / 終了0で次の形になる。
+
+```text
+Plan is valid.
+Changes:
+  axon-a1b2c3: title updated
+  axon-d4e5f6: title updated
+Derived changes (ready, blocked, orphaned, active_scope, group_completable):
+  none
+Applied  /work/plan.yml
+```
+
+DB 全体の適用後、宣言 file の置換前に失敗した場合（stderr / 終了1）:
+
+```text
+Error: /work/plan.yml import apply: declaration file refresh failed: permission denied
+Applied: DB declaration changes
+Not applied: declaration file refresh at /work/plan.yml
+Help: Inspect the DB and preserve the file; retry the same file only after verifying the declared final values match the DB.
+```
+
+file backend の置換後の同期失敗など、保存結果を確定できない場合（stderr / 終了1）:
+
+```text
+Error: /work/.axon/state.jsonl note add: directory sync failed after replace
+Result unknown: Note append in /work/.axon/state.jsonl
+Help: Confirm the writer has stopped, then inspect saved Note IDs and bodies before retrying.
+```
+
+DB が no-op でも file 更新は別の段階であり、その失敗は成功に変わらない。
+init、migration、merge の複数保存先も同じ規則で、既知の保存先、phase、backup と
+適用状態を示す。個別の保存保証・復旧条件は[保存契約](file-storage.md)と
+[手動移行](migration.md)に従い、この表示規則から全体の原子性を推測しない。
+
+#### 実装への対応
+
+契約策定時点（2026-09-06、`e21b20f` のソース確認）の引継ぎは次のとおり。
+これは実装済みの保証ではなく、後続 Issue が照合する対象の対応表である。
+
+| 対象 | 契約への対応・後続担当 |
+| --- | --- |
+| `write` | 保存結果から変更項目と no-op を確定する。事前読取のみの表示判定を axon-1x115z で修正。複数保存段階の失敗範囲は axon-1ag24h で棚卸しする。 |
+| `dep add/rm`、`group set/unset` | 相手 ID / Parent を保ち、保存時の no-op に `No changes` を付ける。axon-1x115z が担当。 |
+| `plan/capture`、Group 作成、`note add` | 新規追加と ID の意味を維持。入力・保存失敗は axon-1ag24h の棚卸し対象。 |
+| `start/done/release`、`decide`、`when` | 同値は拒否のまま。固定宣言、成立条件、循環・包含、外部評価失敗とともに axon-1ag24h で診断を確認する。 |
+| 自己依存 | `invalid axon schema` という誤分類を axon-1ag24h で修正し、宣言経由と原因の語彙を揃える。 |
+| `import prepare/apply` | DB 差分と file 更新を区別。既存成功 report は axon-1x115z で整合確認し、拒否・段階失敗は axon-1ag24h で棚卸しする。外部参照例・固有診断は axon-50qc1t が担当。 |
+| `init`、migration、merge と共通入力・保存境界 | 既存の適切な診断は維持し、誤分類、適用結果、復旧案内を axon-1ag24h で棚卸しする。parser の自由記述 tip は axon-nnb208 の担当を維持。 |
+
+axon-2b4xyp で両実装の成功、no-op、拒否、段階結果と保存状態を横断確認する。
+
+### 装飾
+
 `show` を含む人向け出力は、stdout が対話 terminal なら状態の識別を補助する ANSI style を使う。非対話出力と `NO_COLOR` では同じ文字、空白、改行、順序を無装飾で出し、状態の違いを色だけでは表さない。title、description、Note本文、reasonなど利用者が保存した文字列は装飾・省略・整形しない。下流でpipeが閉じた場合は成功として扱う。
 
 装飾は保存状態の値ごとではなく、その情報が利用者の現在の操作に持つ意味で決める。
