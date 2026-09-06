@@ -60,3 +60,9 @@ executing any Command, including ancestor, descendant, and related conditions.
 remain evaluable. This option can be combined with `--trace-conditions` but emits no
 Command trace; it does not establish readiness for a lifecycle mutation. Normal reads
 and lifecycle checks continue to evaluate conditions.
+
+### Inventory state filters
+
+`axon list` without filters includes every Entity. Combine `--progress not-started|in-progress|ended`, `--disposition undecided|accepted|rejected`, `--terminal=true|false`, and `--kind issue|group` with AND; each option is accepted once. Terminal means Ended or Rejected (including their overlap). Omit `--terminal` to include both. Matches retain inactive and unsurfaced Entities: `--terminal=false` is not the ready/triage frontier or active scope. Empty matches succeed. Filters preserve saved state, history, claims, row format, and ordering.
+
+For example, use `axon list --progress not-started --disposition accepted` for unstarted accepted plans, `axon list --disposition rejected` for rejected Entities, or `axon list --progress ended` for ended work. Saved-state filters run before row/Command evaluation; required ancestors of retained rows can still be evaluated. Add `--skip-command-evaluation` to prevent all Command execution.

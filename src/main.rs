@@ -177,6 +177,73 @@ impl KindFilter {
     }
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum ProgressFilter {
+    NotStarted,
+    InProgress,
+    Ended,
+}
+
+impl ProgressFilter {
+    fn matches(self, progress: &Progress) -> bool {
+        matches!(
+            (self, progress),
+            (Self::NotStarted, Progress::NotStarted)
+                | (Self::InProgress, Progress::InProgress(_))
+                | (Self::Ended, Progress::Ended)
+        )
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum DispositionFilter {
+    Undecided,
+    Accepted,
+    Rejected,
+}
+
+impl DispositionFilter {
+    fn matches(self, disposition: Disposition) -> bool {
+        matches!(
+            (self, disposition),
+            (Self::Undecided, Disposition::Undecided)
+                | (Self::Accepted, Disposition::Accepted)
+                | (Self::Rejected, Disposition::Rejected)
+        )
+    }
+}
+
+#[derive(clap::Args)]
+struct ListFilters {
+    /// Include only one Entity kind
+    #[arg(long, value_enum)]
+    kind: Option<KindFilter>,
+    /// Include only this saved Progress
+    #[arg(long, value_enum)]
+    progress: Option<ProgressFilter>,
+    /// Include only this saved Disposition
+    #[arg(long, value_enum)]
+    disposition: Option<DispositionFilter>,
+    /// Include terminal (Ended or Rejected) or non-terminal Entities; omit for both
+    #[arg(long, action = clap::ArgAction::Set, require_equals = true)]
+    terminal: Option<bool>,
+}
+
+impl ListFilters {
+    fn matches(&self, entity: &Entity) -> bool {
+        included(self.kind, entity)
+            && self
+                .progress
+                .is_none_or(|value| value.matches(&entity.progress))
+            && self
+                .disposition
+                .is_none_or(|value| value.matches(entity.disposition))
+            && self
+                .terminal
+                .is_none_or(|value| value == entity.is_terminal())
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Print the current actor label without opening a database
@@ -336,11 +403,13 @@ enum Command {
         /// Entity ID or unique ID suffix
         id: String,
     },
-    /// List every Entity regardless of state
+    /// List all Entities, optionally filtered by saved state
+    #[command(
+        long_about = "List every Entity by default, including inactive, unsurfaced, ended, and rejected Entities. Explicit filters combine with AND before display/Command evaluation; each option may be supplied once. Non-terminal means neither Ended nor Rejected, not ready, triage, or active scope. Retained rows still evaluate required ancestors normally unless --skip-command-evaluation is set. Empty matches succeed without rows."
+    )]
     List {
-        /// Include only one Entity kind
-        #[arg(long, value_enum)]
-        kind: Option<KindFilter>,
+        #[command(flatten)]
+        filters: ListFilters,
         /// Read saved information without running any Command conditions; unknown values are unevaluated
         #[arg(
             long,
@@ -958,10 +1027,10 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
         } => cmd_write(&id, title, message, file),
         Command::Log { id } => cmd_log(&id),
         Command::List {
-            kind,
+            filters,
             trace,
             skip_command_evaluation,
-        } => cmd_list(kind, trace.trace_conditions, skip_command_evaluation),
+        } => cmd_list(filters, trace.trace_conditions, skip_command_evaluation),
         Command::Show {
             id,
             trace,
@@ -1403,7 +1472,7 @@ fn cmd_release(raw: &str, reason: Option<String>) -> Result<(), Box<dyn std::err
 }
 
 fn cmd_list(
-    kind: Option<KindFilter>,
+    filters: ListFilters,
     trace_conditions: bool,
     skip_command_evaluation: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1415,7 +1484,7 @@ fn cmd_list(
     };
     let decoration = current_output_decoration();
     let mut rows = String::new();
-    for entity in view.iter().filter(|entity| included(kind, entity)) {
+    for entity in view.iter().filter(|entity| filters.matches(entity)) {
         if skip_command_evaluation {
             rows.push_str(&render_skipped_row(&view, entity, decoration));
         } else {

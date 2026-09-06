@@ -221,6 +221,10 @@ Group などの評価は行う。履歴・Note・Revision の参照、claims、e
 
 `ready` / `triage` / `claims` / `list` は両 kind を同じ一覧に出し、`--kind issue|group` で任意に絞る。1 Entity を1行に出し、各行の第1列はID、第2列はkindとする。`triage` は `Reason:`、`claims` は `Claim:`、`Worktree:`、`Started:` をidentityの後に置く。`list` は Progress / Disposition と、該当する例外状態だけを表示する。
 
+`list` は無指定なら全Entityを含む。`--progress not-started|in-progress|ended`、`--disposition undecided|accepted|rejected`、`--terminal=true|false` と `--kind` をANDで組み合わせて絞れる。terminalはProgress=EndedまたはDisposition=Rejectedで、未指定なら両方を含む。各optionは一度だけ指定できる。不正値や反復は入力エラー、矛盾する組合せは成功の空結果とする。
+
+保存状態filterに一致すればManual等の未浮上やinactiveなEntityも含む。`--terminal=false` はready / triage / active scopeを意味しない。filterは保存情報・履歴・claimを変更せず、表示順と1 Entity 1行の契約を維持する。保存情報で除外したEntityの行のためにCommandを評価しないが、残した候補の表示に必要な祖先等は通常どおり評価する。`--skip-command-evaluation` と併用できる。
+
 `triage` は非 terminal・自身が surfaced・active scope 内・Undecided または orphaned の4条件をすべて満たす Entity を返す。完全定義と自身の未浮上／祖先 gate による inactive の区別は[状態モデル](state-model.md#observed-情報と-triage-frontier)を参照する。非表示は作成・更新の失敗や不存在を意味しないため、作成を再実行する根拠にはしない。管理 root 全体の棚卸しは `list`、個別の保存状態と非表示理由は `show` で確認する。`status` は状況の要約であり全件一覧ではない。
 
 `claims` は claim の経過時間やプロセス状態から staleness を推定しない。表示された保存済み事実を基に人が判断し、必要な claim だけ `release` で明示的に解放する。

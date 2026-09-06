@@ -249,3 +249,9 @@ axon plan --parent <group-id> --needs <first-id> --needs <second-id> --after <wa
 Creation saves the complete initial state atomically. Plan creates Accepted with a first Revision containing its dependencies; capture creates Undecided without a Revision. Both remain NotStarted without a claim or invented transition history. A rejected input leaves no partial Entity. Known dependencies and timing no longer require capture/edit/accept staging. Existing fixed declarations still require explicit undecide, editing, and redecision.
 
 An initial Command string is saved without running it, even for confirmation. Verify the returned ID with `axon show <id> --skip-command-evaluation` and inspect the first Revision for Accepted creation. Normal derived queries evaluate Command as usual. Every create invocation allocates a new Entity: reconcile an uncertain result before retrying.
+
+### Inventory state filters
+
+`axon list` without filters includes every Entity. Combine `--progress not-started|in-progress|ended`, `--disposition undecided|accepted|rejected`, `--terminal=true|false`, and `--kind issue|group` with AND; each option is accepted once. Terminal means Ended or Rejected (including their overlap). Omit `--terminal` to include both. Matches retain inactive and unsurfaced Entities: `--terminal=false` is not the ready/triage frontier or active scope. Empty matches succeed. Filters preserve saved state, history, claims, row format, and ordering.
+
+For example, use `axon list --progress not-started --disposition accepted` for unstarted accepted plans, `axon list --disposition rejected` for rejected Entities, or `axon list --progress ended` for ended work. Saved-state filters run before row/Command evaluation; required ancestors of retained rows can still be evaluated. Add `--skip-command-evaluation` to prevent all Command execution.
