@@ -1,5 +1,17 @@
 # 検証方針とモデル検査
 
+## Rust toolchain
+
+通常の開発と検証には `mise.toml` で固定した Rust 1.98 を使う。source build の最低対応 Rust version（MSRV）は Rust 1.89 で、`Cargo.toml` の `rust-version` を契約の正本とする。1.89 は実装が使う `std::fs::File::lock` と、lockfile 内の依存関係が要求する最低 version を満たす。
+
+MSRV は「この version 以降なら必ず永久に動く」という互換性保証ではなく、現在の lockfile と source を build できる最低 compiler version である。dependency 更新や Rust API の採用で引き上げる場合は、manifest、README、この文書を同じ変更で更新する。
+
+リリース前には通常 toolchain の全検証に加え、次を実行する。
+
+```sh
+cargo +1.89.0 check --locked --all-targets --all-features
+```
+
 ## モデルの位置付けと保守方針
 
 `spec/axon.qnt` は必須の基礎状態モデルとして維持する。その対象となる A / B / C / D の意味や満足条件を変える場合は、モデルを更新・検証する。

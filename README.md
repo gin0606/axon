@@ -2,6 +2,23 @@
 
 ローカルで動く個人用 issue tracker。issue と明示的な計画 group を共通 Entity として扱い、進行、採否、時期を別の軸に保つ。
 
+> [!WARNING]
+> axon 0.1.0 は、かなり WIP な preview である。CLI、挙動、保存形式には破壊的変更があり得る。
+
+## 開発状況と対応環境
+
+macOS をサポート対象とし、現在は Apple Silicon macOS で開発・検証している。Linux と WSL2 は未検証の best effort、native Windows は非対応である。PowerShell の補完スクリプトを生成できることは、native Windows での動作保証を意味しない。
+
+WSL2 では Linux 版としての動作を想定する。Git worktree と filesystem の挙動・性能差を避けるため、repository と Axon のデータは `/mnt/c` 等ではなく WSL の Linux filesystem に置くことを推奨する。
+
+Git repository 内で使う場合は `git` が必要で、linked worktree 間の共有や file backend の merge 機能にも使う。`Command` 条件は `/bin/sh -c` で評価するため、その機能には `/bin/sh` が必要である。
+
+### 互換性とデータ保全
+
+preview 期間中は後方互換性を保証しない。保存形式を変更するときは可能な限り migration を用意してデータを保つが、無損失の自動移行は保証しない。upgrade 前には Axon のデータと旧 binary を backup すること。自動移行できない場合は、手作業または coding agent を使った変換が必要になることがある。
+
+source build の最低対応 Rust version（MSRV）は 1.89 である。開発・通常検証には Rust 1.98 を使う。crates.io への公開はまだ行わず、Cargo manifest でも publish を禁止している。
+
 ## 使う
 
 ```sh
@@ -67,3 +84,7 @@ title、description、parent、outgoing dependency は Entity の plan declarati
 **個人のタスク分解・管理に絞る。** プロダクト全体の ITS としては使わない。
 
 両者は要件が違う (共有の要否、PR からの参照、保存形式の制約) ため、混ぜると設計が引きずられる。プロダクト用途が必要なら別のツールを使う。
+
+## ライセンス
+
+[MIT License](LICENSE)
