@@ -2,6 +2,32 @@
 
 よくある場面に沿って、axonの使い方を紹介します。以下の`<id>`などは、作成時や一覧に表示されたIDに山括弧ごと置き換えます。
 
+## 状況や記録を確認する
+
+agentに任せた仕事の状況や、以前に残した情報を自分で確認するときは、知りたいことからコマンドを選べます。
+
+| 知りたいこと | コマンド |
+| --- | --- |
+| 計画全体の状況、進行中の仕事や待ち | `axon status` |
+| 特定の計画の状況 | `axon status --group <group-id>` |
+| 今から着手できるもの | `axon ready` |
+| 採否や前提を判断する必要があるもの | `axon triage` |
+| 誰がどこで着手したままか | `axon claims` |
+| 一件の説明、状態、待つ理由、Note。Groupなら配下の構造も | `axon show <id>` |
+| 終了・不採用・後回しを含む全件 | `axon list` |
+| タイトル・説明・Note本文から探す | `axon list --search '設定'` |
+| 採否・再浮上条件の変更履歴 | `axon log <id>` |
+
+`status`は状況の要約、`ready`と`triage`は条件に合う候補です。そこに見つからない記録も、`list`で探せます。例えば、終了した仕事だけなら`axon list --progress ended`、採用済みで未着手の仕事なら`axon list --disposition accepted --progress not-started`です。後者には、待ち条件などでまだ着手できないものも含まれます。
+
+### 過去の結果や計画の変更を読む
+
+`show`には全Noteと進行履歴が出ます。Noteが多ければ`axon note list <id>`で一覧を見て、`axon note show <id> <note-id>`で一件を読めます。
+
+採否を決めた時点の計画はRevisionに残ります。`axon revision list <id>`でIDを確認し、`axon revision show <id> <revision-id>`で当時の全文、`axon revision diff <id> <古いrevision-id> <新しいrevision-id>`で変更点を確認できます。未判断の間の編集過程はRevisionには残りません。
+
+再浮上条件に設定されたコマンドを実行せずに確認したいときは、`axon list --skip-command-evaluation`や`axon show <id> --skip-command-evaluation`を使います。外部評価が必要な状態は`unevaluated`と表示されます。
+
 ## 今は扱わないことを残す
 
 作業中に「設定項目を減らせそう」と気づいたけれど、今の仕事は中断したくない。まずは気づきだけ残します。

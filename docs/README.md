@@ -7,13 +7,15 @@
 | 文書 | 読む目的 |
 | --- | --- |
 | [使い始める](guide/getting-started.md) | 導入、backendの選択、agentと使い始める入口 |
-| [日常の操作](guide/usage.md) | 後で扱うことの記録、次の仕事の選択、途中の仕事への復帰、計画の分解 |
+| [日常の操作](guide/usage.md) | 状況・記録の確認、後で扱うことの記録、次の仕事の選択、途中の仕事への復帰、計画の分解 |
 | [状態と用語](guide/concepts.md) | CLIに出る状態名、候補に出る条件、計画とNoteの区別 |
 | [backendとworktree](guide/storage.md) | SQLiteとfile、Gitでの管理、backendの切替 |
 
 まず「使い始める」を試し、その後は目的に合うページを参照できます。すべてを順番に読む必要はありません。CodexでSQLiteの共有DBへの書き込みがsandboxに阻まれる場合は、補足の[Codexでのアクセス設定に必要な情報](guide/codex.md)を参照してください。
 
 コマンドの構文と全optionは`axon help <command path>`または`axon <command path> --help`で確認できます。`axon docs`は端末で読む状態モデルと基本操作の説明です（英語）。
+
+状況や過去の記録を自分で見たいときは、[参照コマンドの使い分け](guide/usage.md#状況や記録を確認する)から選べます。
 
 ## 開発者向け
 
