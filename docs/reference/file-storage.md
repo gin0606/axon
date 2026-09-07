@@ -49,6 +49,19 @@ root の `.gitattributes`:
 実際に追跡するかは利用者の責任で、init は Git driver 登録、stage、commit を行わない。
 既に追跡された file は ignore で追跡解除されない。
 
+### Git で共有・公開される情報
+
+`.axon/state.jsonl` には、利用者が入力した本文に加えて、操作主体（actor）、
+作業場所の絶対パス、作成・更新・操作時刻が自動保存される。
+actor は実行環境によってエージェント名や `$USER@作業ディレクトリ名` になり、
+絶対パスには OS のユーザー名やローカルのディレクトリ構成が含まれる。
+取得規則は [actor と作業場所](../development/architecture.md#actor-と作業場所) を参照する。
+
+作業場所は claim だけでなく履歴にも保存されるため、`done` や `release` では
+過去の絶対パスは消えない。公開 repository で管理する場合は、これらの自動記録情報も
+公開されることを確認する。Git に commit 済みの情報は、現在の file から除去しても
+過去の commit に残る。
+
 ## 保存の保証と失敗時の確認
 
 file writer は stable sidecar の OS lock を取得してから、正本読取、core 操作、

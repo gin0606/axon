@@ -39,6 +39,9 @@ Codex の linked worktree から共有 DB を更新する場合は、[Codex の 
 ### file backend の Git driver 登録
 
 `axon init --backend file` は正本、`.axon/.gitignore`、`.gitattributes` を用意する。
+`.axon/state.jsonl` には操作主体、作業場所の絶対パス、操作時刻も自動保存され、
+作業完了後も履歴に残る。公開 repository で使う前に
+[共有・公開される情報](docs/reference/file-storage.md#git-で共有公開される情報) を確認する。
 install 後、利用する repository 内で driver を登録する（`axon` が PATH 上に必要）。
 
 ```sh
