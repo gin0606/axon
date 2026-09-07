@@ -1,19 +1,25 @@
-# ドキュメントの入口
+# ドキュメント
 
-axon の利用手順、現在の契約、開発方法、設計経緯を目的別に分ける。
-基本操作から知りたい場合は利用ガイド、実装を変更する場合は関係する契約と検証方針から読む。
+初めて使う場合は[使い始める](guide/getting-started.md)から読んでください。CLIと公式kitの導入、backendの選択、agentへの相談例をまとめています。axonを作った動機や設計のこだわりは[README](../README.md)にあります。
 
-## 使う
+## 利用者向け
 
 | 文書 | 読む目的 |
 | --- | --- |
-| [利用ガイド](guide/usage.md) (英語) | 初期化、Issue / Group の進行、判断、Note、宣言ファイルの操作 |
-| [Codex の設定](guide/codex.md) | linked worktree から共有 DB を使うための sandbox 設定 |
+| [使い始める](guide/getting-started.md) | 導入、backendの選択、agentと使い始める入口 |
+| [日常の操作](guide/usage.md) | 後で扱うことの記録、次の仕事の選択、途中の仕事への復帰、計画の分解 |
+| [状態と用語](guide/concepts.md) | CLIに出る状態名、候補に出る条件、計画とNoteの区別 |
+| [backendとworktree](guide/storage.md) | SQLiteとfile、Gitでの管理、backendの切替 |
 
-コマンド構文と option は `axon help <command path>` / `axon <command path> --help`、
-端末で読む状態モデルと基本 workflow は `axon docs` を使う。
+まず「使い始める」を試し、その後は目的に合うページを参照できます。すべてを順番に読む必要はありません。CodexでSQLiteの共有DBへの書き込みがsandboxに阻まれる場合は、補足の[Codexでのアクセス設定に必要な情報](guide/codex.md)を参照してください。
 
-## 仕様を確かめる
+コマンドの構文と全optionは`axon help <command path>`または`axon <command path> --help`で確認できます。`axon docs`は端末で読む状態モデルと基本操作の説明です（英語）。
+
+## 開発者向け
+
+以下は仕様の正確な確認、axon本体の変更、設計経緯の調査のための資料です。利用者向けガイドはこれらの要約であり、独立した仕様としては扱いません。
+
+### 仕様を確かめる
 
 | 文書 | 定義する範囲 |
 | --- | --- |
@@ -24,10 +30,9 @@ axon の利用手順、現在の契約、開発方法、設計経緯を目的別
 | [CLI 契約](reference/cli.md) | コマンド境界、反復実行、原子性、入出力、管理 root と ID の解決 |
 | [宣言ファイル](reference/declaration-file.md) | strict YAML、所有範囲、競合検査、export / prepare / check / apply |
 
-状態モデルと情報モデルが意味を定義し、CLI と宣言ファイルはその意味を操作へ対応させる。
-利用ガイドの要約や設計経緯を、追加の規範として扱わない。
+状態モデルと情報モデルが意味を定義し、CLI と宣言ファイルはその意味を操作へ対応させる。利用ガイドの要約や設計経緯を、追加の規範として扱わない。
 
-## 開発する
+### 開発する
 
 | 文書 | 読む目的 |
 | --- | --- |
@@ -35,11 +40,9 @@ axon の利用手順、現在の契約、開発方法、設計経緯を目的別
 | [分岐履歴](development/branch-history.md) | 因果参照、current/last Revision、codecと移行の境界 |
 | [検証方針](development/verification.md) | 設計変更時の手順、モデルの担当範囲、検査コマンド、過去の検査条件と結果 |
 
-形式モデルは [core](../spec/axon.qnt)、[Group](../spec/group_plan.qnt)、
-[情報モデル](../spec/information_model.qnt)。対象範囲と更新条件は検証方針に従う。
-DB schema の正は [src/db.rs](../src/db.rs)、CLI の Usage は Clap の定義に置く。
+形式モデルは [core](../spec/axon.qnt)、[Group](../spec/group_plan.qnt)、[情報モデル](../spec/information_model.qnt)。対象範囲と更新条件は検証方針に従う。DB schema の正は [src/db.rs](../src/db.rs)、CLI の Usage は Clap の定義に置く。
 
-## 設計理由を調べる
+### 設計理由を調べる
 
 | 文書 | 読む目的 |
 | --- | --- |
@@ -56,3 +59,4 @@ DB schema の正は [src/db.rs](../src/db.rs)、CLI の Usage は Clap の定義
 - 検証方法は development、検証結果には実施時点と対象・条件を記す。
 - 未決事項の採否や作業状況は Axon で管理し、docs に現況一覧を複製しない。
 - 文書を移動・分割したら、README、AGENTS.md、モデル冒頭などの参照元も更新する。
+- 利用者向け文書は日本語で書き、CLIの識別子は実際の表記を併記する。段落内には手動改行を入れず、表示幅による折り返しに任せる。

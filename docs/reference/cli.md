@@ -4,7 +4,7 @@
 
 axon の操作対象は `Issue` と `Group` の 2 kind を持つ Entity である。どちらも同じ公開 ID、文面、Progress、Disposition、Resurface condition、claim を持つ。対象 kind を先に選ばせる namespace は作らず、ID を受け取る top-level command が kind を解決する。
 
-英語の操作手順は [利用ガイド](../guide/usage.md)、状態の意味は [状態モデル](state-model.md)、設計理由は [設計判断](../design/decisions.md) に置く。この文書はコマンドの境界、反復、原子性、入出力の契約を定める。Usage、引数、option、コマンドツリーは Clap の定義から生成する。引数なしの `axon`、`axon help`、`axon -h`、`axon --help` は、次に調べる command をすぐ選べる同一の root help を返す。`axon help <command path>` と各 command の `--help` は Clap による個別の詳細を返す。全 command の help を連結する入口は持たない。`axon docs` は状態モデルと基本 workflow を Markdown ではない端末向け形式で返す。
+Usage、引数、option、コマンドツリーは Clap の定義から生成する。引数なしの `axon`、`axon help`、`axon -h`、`axon --help` は、次に調べる command をすぐ選べる同一の root help を返す。`axon help <command path>` と各 command の `--help` は Clap による個別の詳細を返す。全 command の help を連結する入口は持たない。`axon docs` は状態モデルと基本 workflow を Markdown ではない端末向け形式で返す。
 
 | 分類 | command 順序 |
 | --- | --- |

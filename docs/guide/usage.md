@@ -1,259 +1,176 @@
-# Using axon
+# 日常の操作
 
-axon is a local-first tracker for issues and explicit plan groups. It stores one SQLite database per management root and shares a Git repository's database across all worktrees.
+よくある場面に沿って、axonの使い方を紹介します。以下の`<id>`などは、作成時や一覧に表示されたIDに山括弧ごと置き換えます。
 
-This guide explains everyday use. For exact contracts, see the Japanese
-[state model](../reference/state-model.md), [information model](../reference/information-model.md),
-[CLI reference](../reference/cli.md), and [declaration format](../reference/declaration-file.md).
+## 今は扱わないことを残す
 
-## Text beginning with a hyphen
-
-For a positional title in `plan`, `capture`, `group plan`, or `group capture`,
-put other options before `--`:
+作業中に「設定項目を減らせそう」と気づいたけれど、今の仕事は中断したくない。まずは気づきだけ残します。
 
 ```sh
-axon capture -m='description' -- '--color flag handling'
+axon capture '設定項目を減らせないか考える'
 ```
 
-Attach free-text option values with `=`. This applies to `write --title`,
-`--message`/`-m` on creation, write and Note commands, and `--reason`/`-r`
-on decide, when and release commands:
+これで未判断のIssueができます。登録しただけでは、やると決めたことにはなりません。後で`axon triage`を開くと判断対象として確認できます。
+
+### 判断する時期も後にする
+
+「記録だけしておく」ことと、「その時期まで判断対象にも出さない」ことは別です。今作ったIssueを指定した日まで見送るなら、再浮上条件を設定します。日付は自分が見直したい日に置き換えてください。
 
 ```sh
-axon write <id> --title='--color flag handling' --message='--help text'
-axon note add <id> -m='--help'
-axon decide accept <id> --reason='--help behavior agreed'
+axon when at <id> 2026-12-01
 ```
 
-Shell quoting keeps spaces together but does not prevent option parsing.
-`--title -- 'text'` cannot supply the option value. Use `=` even when the
-text exactly matches an existing option such as `--help`.
+その日までは`triage`に出ず、日付を迎えると未判断のまま再び判断対象になります。日付は締切でも、着手の予約でもありません。
 
-## State model
+### やると決めているが、今はやらない
 
-An Entity is either an `Issue` or a `Group`. Both kinds have the same generated public ID, title, description, claim, and three independent axes.
-
-| Axis or relationship | Meaning |
-| --- | --- |
-| Progress | `NotStarted`, `InProgress`, or `Ended`. `Ended` means no more work will be performed. |
-| Disposition | `Undecided`, `Accepted`, or `Rejected`. This records whether the work or result should be pursued. |
-| Resurface condition | `Always`, `AtDate`, `AfterEntity`, `Manual`, or `Command`. It controls when the Entity returns to attention without changing another axis. |
-| Dependency | Any Entity may require any other Entity's result. |
-| Containment | An Issue or Group may have one parent Group. The resulting structure is a tree. |
-
-`ready`, `blocked`, `orphaned`, `surfaced`, `terminal`, active scope, blocking causes, and Group summaries are derived when data is read. They are never stored.
-
-A root Entity is in active scope. A Group opens its descendants only while it is `InProgress`, `Accepted`, surfaced, and neither blocked nor orphaned. Starting a Group does not start its descendants. A Group can end only when every descendant is terminal; it can be released only when no descendant is `InProgress`.
-
-A dependency is satisfied only by an `Ended` non-Rejected target. A Rejected target makes the dependent orphaned. In contrast, an `AfterEntity` condition is satisfied by either `Ended` or `Rejected`, because waiting has ended even when no result will be produced.
-
-## Plan declarations, revisions, and notes
-
-An Entity owns a plan declaration consisting of its title, description, parent Group, and outgoing dependencies. `Undecided` declarations are drafts. `Accepted` and `Rejected` declarations are fixed because the Disposition is a decision about that exact definition. To change a fixed declaration, use `axon decide undecide <id> -r <reason>`, edit it, inspect the complete result, and decide it again.
-
-Each decision to `Accepted` or `Rejected` records the complete declaration as an immutable Declaration Revision. An unchanged declaration reuses its previous Revision. Use `axon revision list <id>`, `axon revision show <id> <number>`, and `axon revision diff <id> <from> <to>` to inspect the decision targets and their structural differences.
-
-A Note is append-only information learned after an Entity was defined: investigation evidence, results, corrections, or handoff context. Add one with `axon note add <id> -m <body>` or `axon note add <id> -F <file>`. Notes can be added to either kind in every state without changing the declaration or control state. `note list` and `note show` use stable Entity-local numbers. `axon show` displays the description and every Note in save order without truncation; axon does not infer importance from age.
-
-## Basic workflow
-
-1. Run `axon init` once at the management root.
-2. Create accepted work with `axon plan <title>` or an accepted plan scope with `axon group plan <title>`. Use `capture` instead of `plan` when Disposition should begin as `Undecided`.
-3. Add an Entity to a plan with `axon group set <entity-id> <parent-group-id>`. Start the parent Group when its plan scope should become active.
-4. Use `axon ready` to find startable Entities and `axon start <id>` to claim one explicit target.
-5. Use `axon done <id>` when work ends. Finish all descendants before ending a Group.
-6. Use `axon triage` for non-terminal, surfaced Entities in active scope that are Undecided or orphaned. Use `axon show <group-id>` to inspect the Group's complete subtree, including inactive and terminal descendants, or `axon list` for the complete management-root inventory.
-
-Use `--parent <group-id>` on any creation command to create an Entity inside a Group atomically. Use `--kind issue|group` on list queries when only one kind is relevant.
-
-## Editing a plan declaration
-
-Use a declaration file when several Issues, Groups, containment edges, and dependencies need to be reviewed and changed as one plan. A declaration edits only the Entities listed under `issues` and `groups`; relationships do not expand that edit set.
-
-For offline instructions, run `axon docs declaration`. To start a new plan, save
-the complete example (one Group, two child Issues, and one dependency) and edit it:
+採用済みの仕事として登録するなら`plan`を使います。例えば、互換性対応を終えた後に旧設定を削除すると決めている場合です。
 
 ```sh
-axon docs declaration --example > plan.yml
-axon import prepare plan.yml
-axon import check plan.yml
-axon import apply plan.yml
-axon import check plan.yml
+axon plan '旧設定の互換コードを削除する' -m '移行が済んだ旧形式の読み込み処理を削除する' --manual
 ```
 
-Review the example's titles and descriptions before preparing and applying it.
-The docs commands do not open a database or register or start work. The import
-commands need an initialized management root. Apply creates the new Entities as
-Accepted/NotStarted/Always; the final check should report no changes.
-See the [declaration format](../reference/declaration-file.md) for the full schema.
-
-For existing Entities, start from an export; never invent IDs, fingerprints, or
-observed snapshots. Return any fixed declaration you intend to change to
-Undecided before exporting it.
-
-1. Export an existing edit set with `axon export <id>...`, `axon export --group <group-id>`, or `axon export --group <group-id> --recursive`. Combine selectors to take their union.
-2. Add or edit Entity records and their owned relationships. New records use `id: null`, a unique `key`, `base: null`, and the initial Accepted/NotStarted observed state.
-3. Run `axon import prepare <file>` to assign final IDs and rewrite canonical YAML. This changes the file but not the database.
-4. Run `axon import check <file>` to inspect structural changes and changes to ready, blocked, orphaned, active-scope, and Group-completion facts.
-5. Run `axon import apply <file>` explicitly. It repeats validation under a write lock, applies every change in one SQLite transaction, and refreshes fingerprints and observed snapshots in the file.
-
-Progress, Disposition, resurface conditions, claims, external references, and incoming relationships are read-only in declarations. Use the ordinary transition commands for state changes. A stale fingerprint stops check/apply instead of merging concurrent changes.
-
-To add a dependency or parent outside the edit set, export that Entity separately,
-copy its id/base/title/observed into `references.entities`, and add kind from its
-source list; omit key/description. Include required recursive AfterEntity targets.
-Add the edge under editable for its listed owner; preserve destination readonly
-incoming edges. Adding/removing required snapshots does not edit external Entities.
-Use the [external snapshot procedure](../reference/declaration-file.md#611-新しい外部-dependency親の-snapshot-を用意する)
-or offline `axon docs declaration` for both new and existing owner examples.
-
-Treat an exported declaration as a working snapshot. After a successful apply, keep the rewritten file only when it is intentionally maintained elsewhere; otherwise remove the temporary working file after verifying the result. If the database commit succeeds but rewriting the file fails, retain the original file and run the same `apply` again: axon accepts the retry only when the database already matches the complete declared result.
-
-## Choosing a query
-
-| Command | Question answered |
-| --- | --- |
-| `axon status` | How do plans compare in saved claims, current candidates, and waits? |
-| `axon status --group <id>` | What is the summary for this Group and every descendant, including a finished plan? |
-| `axon ready` | Which active Entities can start now? |
-| `axon triage` | Which Entities are on the active decision frontier? |
-| `axon claims` | Which Entities are claimed, by whom, where, and since when? |
-| `axon list` | Which Entities exist, including inactive, blocked, deferred, ended, and rejected ones? |
-| `axon show <id>` | What has ended, what remains unfinished, and what is waiting? What are this Entity's full details? |
-| `axon log <id>` | Why did its Disposition or resurface condition change? |
-| `axon note list|show` | What supplemental information has been appended to this Entity? |
-| `axon revision list|show|diff` | Which declaration was decided, and how did decided declarations differ? |
-
-`triage` requires all four conditions: non-terminal, the Entity's own Resurface
-condition satisfied (surfaced), active scope (all ancestor Group gates open), and
-Undecided or orphaned. A root Entity with Manual is active but unsurfaced; a
-surfaced child below a closed ancestor gate is inactive. Neither appears until
-all conditions hold. See the [state model](../reference/state-model.md#observed-情報と-triage-frontier)
-for the full definition.
-
-Absence from `triage` does not mean an Entity is missing or its creation/update
-failed. Do not repeat creation on that evidence. Use `axon list` for the complete
-management-root inventory and `axon show <id>` for saved state and unsurfaced or
-inactive reasons. `status` is a summary, not a complete inventory.
-
-`status` keeps root plans separate and shows nested Group membership. It includes a
-plan when its root is non-terminal or its subtree has a saved claim. A rejected root
-with only unfinished saved descendants is omitted unless explicitly selected.
-Progress and Disposition counts stay separate; unfinished does not mean promised work.
-Ended and Rejected Groups omit completion and descendant-gate prompts. Explicit selection
-and saved claims still expose a Rejected Group's saved state, dependencies, and schedule.
-
-Candidates match `ready` and `triage`. A ready Group opens its descendants only
-after `start`. Shared waits appear at the owning Group scope; external references
-explain a wait without entering the selected counts. Claims remain visible under
-inactive scopes and describe saved actor, worktree, and start time, not agent health.
-Use `show <id>` for the complete subtree and long-form records. Output order is
-stable by ID within the containment hierarchy and does not assign priority.
-
-## Commands that change data
-
-- `start`, `done`, `release`, `decide`, and `when` are transitions. Repeating the current value fails without changing state, timestamps, or history.
-- `write`, `group set`, `group unset`, `dep add`, and `dep rm` are declaration settings. A real change requires an `Undecided` owner; repeating an already satisfied request succeeds without changing timestamps or history.
-- `plan`, `capture`, `group plan`, and `group capture` are additions and create a new Entity each time. `note add` is also an addition and always appends a new Note.
-- `show`, `write`, `start`, `done`, `release`, `decide`, `when`, `dep`, and `log` resolve the target kind from the common ID namespace.
-- `dep add` and `dep rm` support Issue-to-Issue, Issue-to-Group, Group-to-Issue, and Group-to-Group dependencies.
-- `group set` moves either kind below a Group; `group unset` removes its parent.
-- `import prepare` changes only its YAML file; `import apply` is the only declaration command that changes Entity data.
-
-`show` starts with the situation, descendant Ended / Rejected / Unfinished counts (with overlap stated), and the complete tree with waits beside their owning scope. Unfinished does not promise future work. A Rejected Group is already terminal, so `show` omits completion requirements; its inactive, non-terminal descendants are saved states that do not require follow-up by themselves. If saved claims remain, `show` reports their count so each claimed Entity's external work can be ended, released, or continued outside the Group by a separate decision. Closed ancestor gates are explained once per scope, and rejection never changes descendant state automatically. AfterEntity accepts either Ended or Rejected, unlike a dependency. Details follow the overview. `show` obtains its current state, declaration metadata, relationships, description, Notes, and history from one database read transaction. For a Group it also prints every descendant, including terminal Entities, as an ID-ordered containment tree with compact state markers. A following dependency section lists direct outgoing dependencies owned by the Group or its descendants, distinguishes satisfied, unresolved, and rejected targets, and labels targets outside the subtree without expanding them. Child descriptions, Notes, Revisions, histories, and claim details remain available through an individual `show` instead of being expanded into the Group view.
-
-An Ended Group cannot be moved, gain or lose descendants, or change its outgoing dependencies. A terminal descendant below an Ended Group cannot be made non-terminal. New follow-up work belongs outside that completed scope.
-
-## Safety and concurrency
-
-State transitions check their preconditions and write history in one transaction. `start` checks readiness while acquiring its claim. Group completion and release inspect descendants in that same transaction.
-
-Declaration apply validates the same containment and wait-graph invariants against a tentative full snapshot while holding an immediate write transaction. A parse, conflict, invariant, or SQLite failure leaves every Entity unchanged.
-
-Dependency, `AfterEntity`, and containment edges are projected into activation and completion wait graphs. Relation changes reject any cycle spanning those relationship types. Group-originated waits apply to the Group and all descendants. Edge-removing `dep rm`, `when clear`, `when at`, and `group unset` remain available to repair invalid legacy data.
-
-Claims record actor, worktree, and start time. axon does not decide that a claim is stale from its age or a process ID; inspect and release it explicitly.
-
-## Input, output, and exit status
-
-Successful results and mutation confirmations go to standard output. Errors go to standard error and return a non-zero status. Empty `ready`, `triage`, `claims`, and `list` queries keep standard output empty and write only a short note to standard error.
-
-Human-readable output uses consistent structures for Entity rows, history and index rows, single-record details, and mutation confirmations. Entity rows begin with ID and kind; Note and Revision indexes begin with their Entity-local number. Long-form content and diffs remain separate from one-line records, and mutation confirmations begin with the affected Entity ID.
-
-On an attended terminal, human-readable output uses restrained ANSI styling to reinforce generated identifiers, labels, states, and diff markers. Piped and redirected output is plain, `NO_COLOR` disables styling, and text structure never depends on color. Stored titles, descriptions, Note bodies, and reasons are preserved without styling. A downstream closed pipe is treated as successful output completion.
-
-Revision reads use one database snapshot, and optional descriptions label `present` or `absent` separately from their content. Note bodies are stored and displayed without trimming; a body containing only whitespace is rejected. `export` and completion output are generated content and never receive human-oriented styling.
-
-## Storage, worktrees, and identifiers
-
-axon stores `.axon/axon.db` at the management root. In Git, the management root is the parent of the common Git directory, so linked worktrees share the database. Outside Git, commands search ancestors for the nearest database.
-
-Ordinary commands automatically apply supported schema updates with a backup before continuing. The current baseline is schema v13; retired schema conversion paths are not retained. Use `axon migrate --source <current-schema-db> --output <new-directory> --backend <sqlite|file>` for backend conversion only. Schema mismatch is an error; the source is neither updated nor switched. All current IDs and stored information are retained. See [schema updates and backend conversion](../reference/migration.md).
-
-Stop all writers, preserve the old binary and `.axon` directory including journal/WAL files, verify the conversion on copies, then explicitly switch every root using the shared binary. The command does not switch the source path. Unknown schemas and existing output directories are rejected. Failed outputs are retained for inspection; do not use an output without its successful manifest. See the [manual migration procedure](../reference/migration.md).
-
-Help, docs, version and completion do not open the DB. `init` creates a database and cannot upgrade one. `--version` identifies the executable release rather than the storage schema. Do not change `user_version` to bypass compatibility checks. Declaration `export` is not a complete database backup.
-
-Every Issue and Group ID uses `<prefix>-<random six characters>`. The prefix comes from `axon init`; kind is not encoded in the ID. A full ID or a unique suffix may be used wherever an Entity ID is accepted. Group slugs do not exist.
-
-## Waiting until an explicit decision to resume
-
-Use Manual when there is no date or script that can tell you when to reconsider:
+この例は、採用済みで、明示的に解除するまで浮上しない状態で作ります。取りかかる時期になったら、作成されたIDに対して次を実行します。
 
 ```sh
-axon when manual <id> -r 'Wait for external preparation'
 axon when clear <id>
+axon ready
 ```
 
-Manual keeps the Entity unsurfaced until you change or clear its condition. It remains
-visible in `list` and `show`. Clearing preserves progress, disposition, and claims; it does
-not accept or start work automatically. See the
-[state model](../reference/state-model.md#resurface-condition) for the Group behavior.
+再浮上条件を取り除くと、このIssueは着手候補になります。既存のIssueを後回しにする場合も`when`を使えます。作業中でも、進行や採否はそのまま保ちます。
 
-## Waiting for an external condition
+### ライブラリのリリースを待つ
 
-Use a Command condition when a script can observe the event you are waiting for:
+必要な修正版が出たら対応したい場合は、リリースを確認するコマンドを条件にできます。
+
+まず、利用するパッケージレジストリのAPIなどを確認するスクリプトを自分やagentで用意します。以下の`./scripts/check-library-release.sh`はその例で、axonに付属するものではありません。期待するリリースが見つかれば終了コード`0`、まだなら`1`、通信や解析の失敗ならそれ以外を返すようにします。通信のタイムアウトもスクリプト側で設定します。
 
 ```sh
-axon when command <id> './check-release.sh' -r 'Wait for the library release'
+axon plan 'ライブラリの修正版を取り込む' -m '更新後に回避コードを外し、不具合が再現しないことを確認する' --command './scripts/check-library-release.sh'
+axon ready
+```
+
+`ready`などで条件の評価が必要になったときにスクリプトが動き、成立していれば着手候補に出ます。バックグラウンドで監視するわけではありません。相対パスはGit内では現在のworktree root、Git外ではaxonの管理rootを基準にします。
+
+問い合わせ頻度を抑えるなら、[cacheexec](https://github.com/gin0606/cacheexec)を入れ、作成したIssueの条件を次のように変更できます。
+
+```sh
+axon when command <id> 'cacheexec --ttl 5m --include-codes 0,1 -- ./scripts/check-library-release.sh'
+```
+
+成立・未成立の結果を5分間再利用し、判定失敗はキャッシュ対象から外します。その間のリリースは再評価まで反映されません。同じ仕組みで外部ITSのタスク状態なども待てます。実行環境や診断の詳細は[外部条件の評価](../reference/cli.md#外部条件の評価)を参照してください。
+
+## 次に扱うものを決めて進める
+
+作業を始める前に、残しておいた気づきからやるものを選びます。
+
+```sh
+axon triage
 axon show <id>
-axon show <id> --trace-conditions
-axon when clear <id>
 ```
 
-The script must return 0 when satisfied, 1 while waiting, and another status on failure.
-Axon can run it when a query needs derived status, and checks again on the next invocation.
-Correct or clear a failing condition with `when`; no successful evaluation is required.
-These commands work for Issues and Groups and preserve progress, disposition, and claims.
-Use `--trace-conditions` on a condition-evaluating command when you need to inspect the
-captured child stdout/stderr. The trace is written to stderr and can expose secrets exactly
-as the child emitted them; Axon does not redact or truncate it.
-
-The script owns timeouts and caching; Axon waits if it does not finish. See the
-[CLI execution contract](../reference/cli.md#外部条件の評価) for the working directory,
-environment, diagnostics, and evaluation sharing, and the
-[state model](../reference/state-model.md#resurface-condition) for resurfacing and Group behavior.
-
-status は所属なし Issue を一つの一覧にまとめ、各項目の候補・claim・待ちを近くに表示する。空セクションは省くが、冒頭の件数はゼロでも確認できる。Ended または Rejected の Group は完了可否と descendant gate を省き、Rejected Group は自身の保存 dependency と Resurface condition を表示する。Rejected root Group は subtree に保存済み claim がある場合だけ通常表示に残り、その場合は配下の未終了項目と inactive 理由も表示される。
-
-## Create a complete initial plan
-
-When adoption, dependencies, and timing are already decided, supply them together:
+`triage`には、未判断や依存の前提を失ったものなど、現在の範囲で判断が必要な対象が出ます。`show`で内容を読み、ここでは未判断のIssueを採用することにします。
 
 ```sh
-axon plan --parent <group-id> --needs <first-id> --needs <second-id> --after <wait-id> -m 'Purpose and completion criteria' 'Implement the agreed change'
+axon decide accept <id> -r '設定変更の負担を減らすため採用する'
 ```
 
-`capture`, `group plan`, and `group capture` accept the same inputs. Choose capture when adoption is unresolved. For the initial condition choose one of `--manual`, `--at YYYY-MM-DD`, `--after <entity-id>`, or `--command 'shell string'`; omitting them means Always. References accept full IDs or unique suffixes, and repeated `--needs` values are stored once. Existing title, `-m`, and `-F` input rules still apply.
+やらないと決めた場合は`axon decide reject <id>`です。記録を消さずに不採用として残せます。
 
-Creation saves the complete initial state atomically. Plan creates Accepted with a first Revision containing its dependencies; capture creates Undecided without a Revision. Both remain NotStarted without a claim or invented transition history. A rejected input leaves no partial Entity. Known dependencies and timing no longer require capture/edit/accept staging. Existing fixed declarations still require explicit undecide, editing, and redecision.
+次に、今から着手できるものを見ます。判断待ちを整理せず、ここから始めても構いません。
 
-An initial Command string is saved without running it, even for confirmation. Verify the returned ID with `axon show <id> --skip-command-evaluation` and inspect the first Revision for Accepted creation. Normal derived queries evaluate Command as usual. Every create invocation allocates a new Entity: reconcile an uncertain result before retrying.
+```sh
+axon ready
+axon show <着手するid>
+axon start <着手するid>
+```
 
-### Inventory state filters
+`start`で着手中になり、誰がどこで着手したかがclaimとして記録されます。実際の仕事は自分やagentが進め、終えたら結果を残します。
 
-`axon list` without filters includes every Entity. Combine `--progress not-started|in-progress|ended`, `--disposition undecided|accepted|rejected`, `--terminal=true|false`, and `--kind issue|group` with AND; each option is accepted once. Terminal means Ended or Rejected (including their overlap). Omit `--terminal` to include both. Matches retain inactive and unsurfaced Entities: `--terminal=false` is not the ready/triage frontier or active scope. Empty matches succeed. Filters preserve saved state, history, claims, row format, and ordering.
+```sh
+axon note add <着手するid> -m '設定項目を整理し、既存の設定ファイルでも起動できることを確認した'
+axon done <着手するid>
+```
 
-For example, use `axon list --progress not-started --disposition accepted` for unstarted accepted plans, `axon list --disposition rejected` for rejected Entities, or `axon list --progress ended` for ended work. Saved-state filters run before row/Command evaluation; required ancestors of retained rows can still be evaluated. Add `--skip-command-evaluation` to prevent all Command execution.
+Noteに作業結果が残り、`done`で進行が終了してclaimが解放されます。後から`show`で内容を読み返せます。
 
-Use `axon list --search '検索語' --terminal=false` to find literal text in current titles, descriptions, or any Note body, including older Notes. Search is case-sensitive, does not normalize Unicode or trim whitespace, and rejects an empty string. `%`, `_`, and regex symbols are ordinary characters. State/kind filters combine with AND before Command evaluation; required ancestors can still be evaluated. Each matching Entity appears once in the usual order, with `Matched:` listing title, description, and matching stable Note IDs (in ID order). Read full text with `axon show <id>` or `axon note show <id> <note-id>`. Actor labels, timestamps, old Revisions, and decision/progress history are excluded. For a leading hyphen use `--search='--help'`. Without `--search`, list output stays unchanged.
+## 途中の仕事に戻る
+
+セッションが切れたり、別の仕事に移ったりして、どこまで進めたか分からなくなったときは、全体の状況と着手記録から辿ります。
+
+```sh
+axon status
+axon claims
+axon show <気になるid>
+```
+
+`status`で計画ごとの状況、`claims`で着手したままの対象を見つけ、`show`で説明やNoteを読みます。claimは着手時の記録なので、そのagentが今も動いていることまでは分かりません。
+
+着手中の仕事をそのまま続けるなら、再び`start`する必要はありません。状態を確認して作業を続けます。
+
+いったん着手を取り消し、別の機会やagentに渡すなら、分かったことをNoteに残して解放します。
+
+```sh
+axon note add <id> -m '原因は旧設定の読み込み順序にありそう。修正は未着手'
+axon release <id> -r '別の作業を優先するため解放する'
+```
+
+未着手に戻り、claimが解放されます。進行状態を保ったまま見送りたい場合は、代わりに`when`で再浮上条件を設定します。
+
+気になるIssueが候補やclaimに見つからない場合は、`axon list --search '設定'`のように本文から探せます。全件を見るなら`axon list`です。後回し・終了・不採用の記録も確認できます。
+
+## まとまった仕事を計画する
+
+「設定の仕組みを整理する」という仕事を、既存設定の調査と、その結果を使った整理に分けるとします。自分やagentとの相談で内容が決まったら、Groupと子Issueとして登録します。
+
+まず計画全体を作ります。
+
+```sh
+axon group plan '設定の仕組みを整理する' -m '既存設定を調べ、必要な項目と移行方法を決めて整理する'
+```
+
+作成されたIDを`<group-id>`に置き換え、調査Issueを作ります。
+
+```sh
+axon plan '既存設定を調べる' -m '設定の利用箇所を調べ、残す項目と移行が必要な項目を整理する' --parent <group-id>
+```
+
+次のIssueには、その調査結果が必要だと記録します。`<調査issue-id>`は直前に作成されたIDです。
+
+```sh
+axon plan '設定を整理する' -m '調査結果に沿って設定と読み込み処理を変更し、移行を確認する' --parent <group-id> --needs <調査issue-id>
+axon show <group-id>
+```
+
+`show`で計画の構造と依存を確認します。`--needs`は「相手の成果が必要」という関係です。相手の決着まで見送るだけなら再浮上条件を使います。違いは[状態と用語](concepts.md#成果が必要なのか決着を待ちたいのか)を参照してください。
+
+計画を進めるときはGroupを開始します。
+
+```sh
+axon start <group-id>
+axon ready
+```
+
+まず調査Issueが着手候補になります。調査を開始・終了すると、整理Issueも着手候補になります。子Issueはそれぞれ`start`し、作業結果を残して`done`します。
+
+すべての子孫が終了または不採用になったら、計画全体を確認してGroupも終了します。
+
+```sh
+axon show <group-id>
+axon done <group-id>
+```
+
+### 途中で計画を見直す
+
+調査で想定が変わり、採用済みのIssueの説明を変えたくなったら、未判断に戻して編集・再判断します。
+
+```sh
+axon decide undecide <id> -r '調査結果を受けて範囲を見直す'
+axon write <id> -m '設定項目を整理し、旧形式からの移行処理も用意する'
+axon show <id>
+axon decide accept <id>
+```
+
+この操作で計画の変更を記録します。結果や申し送りの追記だけなら、未判断に戻さずNoteを使います。複数のIssueや関係をまとめて見直したい場合は、[宣言ファイル](../reference/declaration-file.md)で一括編集もできます。
+
+各コマンドの構文と全optionは`axon <command path> --help`、保存先やGitでの管理は[backendとworktree](storage.md)を参照してください。

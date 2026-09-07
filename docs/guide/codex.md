@@ -1,96 +1,33 @@
-# Codex の linked worktree から使う
+# Codexでのアクセス設定に必要な情報
 
-axon は Git の common directory の親にある `.axon/axon.db` を全 worktree で共有する。Codex の workspace-write sandbox では、この共有 DB が現在の linked worktree の外にあると書き込みを拒否されることがある。
+axonの操作がsandboxに阻まれる場合は、このページをCodexに読んでもらい、使っている環境に合う設定を相談してください。ここでは、設定方法を判断するためのaxon側の情報をまとめます。
 
-axon を PATH 上の `axon` としてインストールした後、ユーザー共通の `~/.codex/rules/axon.rules` を一度だけ作成する。
+## 実際の保存先
 
-```starlark
-prefix_rule(
-    pattern = [
-        "axon",
-        ["init", "plan", "capture", "start", "done", "release", "write"],
-    ],
-    decision = "allow",
-    justification = "Allow axon state changes to its shared local database",
-    match = [
-        "axon init",
-        "axon plan document sandbox setup",
-        "axon capture investigate failure",
-        "axon start axon-abc123",
-        "axon done axon-abc123",
-        "axon release axon-abc123 --reason handoff",
-        "axon write axon-abc123 --message description",
-    ],
-    not_match = [
-        "axon list",
-        "axon show axon-abc123",
-        "git status",
-    ],
-)
+SQLite backendでは、Git common directoryの親にある`.axon/axon.db`をlinked worktree間で共有します。作業中のworktreeの外に保存先があることが、アクセスを拒否される原因になり得ます。
 
-prefix_rule(
-    pattern = ["axon", "decide", ["accept", "reject", "undecide"]],
-    decision = "allow",
-    justification = "Allow axon state changes to its shared local database",
-    match = [
-        "axon decide accept axon-abc123 --reason approved",
-        "axon decide reject axon-abc123 --reason obsolete",
-        "axon decide undecide axon-abc123 --reason reconsider",
-    ],
-    not_match = ["axon decide unknown axon-abc123"],
-)
+Git common directoryの場所は、作業中のrepositoryで次のコマンドから確認できます。
 
-prefix_rule(
-    pattern = ["axon", "when", ["at", "after", "clear"]],
-    decision = "allow",
-    justification = "Allow axon state changes to its shared local database",
-    match = [
-        "axon when at axon-abc123 2026-09-03",
-        "axon when after axon-abc123 axon-def456",
-        "axon when clear axon-abc123",
-    ],
-    not_match = ["axon when unknown axon-abc123"],
-)
-
-prefix_rule(
-    pattern = ["axon", "dep", ["add", "rm"]],
-    decision = "allow",
-    justification = "Allow axon state changes to its shared local database",
-    match = [
-        "axon dep add axon-abc123 --needs axon-def456",
-        "axon dep rm axon-abc123 --needs axon-def456",
-    ],
-    not_match = ["axon dep unknown axon-abc123"],
-)
-
-prefix_rule(
-    pattern = ["axon", "group", ["plan", "capture", "set", "unset"]],
-    decision = "allow",
-    justification = "Allow axon state changes to its shared local database",
-    match = [
-        "axon group plan migration",
-        "axon group capture possible migration",
-        "axon group set axon-abc123 axon-def456",
-        "axon group unset axon-abc123",
-    ],
-    not_match = ["axon group unknown axon-abc123"],
-)
-
-prefix_rule(
-    pattern = ["axon", "note", "add"],
-    decision = "allow",
-    justification = "Allow axon to append Notes to its shared local database",
-    match = [
-        "axon note add axon-abc123 --message handoff",
-        "axon note add axon-abc123 --file result.md",
-    ],
-    not_match = [
-        "axon note list axon-abc123",
-        "axon revision show axon-abc123 1",
-    ],
-)
+```sh
+git rev-parse --path-format=absolute --git-common-dir
 ```
 
-Codex を再起動すると、列挙した axon の状態変更だけが確認なしで sandbox 外においてログインユーザーの権限で実行される。この Rule は `.axon` だけにファイル権限を与えるものではないため、PATH 上の信頼できる axon binary にだけ使う。`axon ready`、`axon show`、`axon list` などの読み取りコマンド、将来追加される未列挙の subcommand、axon 以外のコマンドには一致せず、通常の sandbox 制限が引き続き適用される。実行ファイルの絶対パスや wrapper 経由の呼び出しにも一致しないため、Codex からは `axon ...` の形で実行する。
+返されたディレクトリの親にある`.axon/`が共有データの保存先です。DB本体に加えて、ロックやSQLiteのjournal・WAL、保存形式の更新時のバックアップなども扱うため、必要な書き込み先をDBファイル一つだけと考えないでください。
 
-Codex Rules は実験的機能であり、形式や挙動が変わる可能性がある。現在の仕様と `codex execpolicy check` による確認方法は [Codex Rules の公式ドキュメント](https://developers.openai.com/codex/exec-policy) を参照する。
+file backendでは、現在のworktree rootの`.axon/state.jsonl`を使います。書き込み時には`.axon/`内のロックや一時ファイルも扱います。初期化時には`.axon/.gitignore`とrootの`.gitattributes`も作成・更新します。
+
+初期化時は、Git common directory内の`axon-init.lock`も使います。
+
+Git外では、どちらも管理rootの`.axon/`を使います。詳しい保存先の規則は[backendとworktree](storage.md)と[保存契約](../reference/file-storage.md)を参照してください。
+
+## 実行するもの
+
+Codexの実行環境から`axon`を呼び出せる必要があります。Git repository内の操作では`git`も使います。axon自体はGitのstage・commit・pushを行いません。
+
+コマンドを再浮上条件に設定している場合は、一覧などの読み取り操作でも、その外部コマンドを実行することがあります。`/bin/sh -c`を使い、現在のworktree root（Git外では管理root）で、axonの起動元の環境変数を引き継いで実行します。スクリプトや認証、ネットワーク、cacheexecのキャッシュ先など、必要なアクセスは設定したコマンドによって異なります。
+
+外部コマンドを実行せずに保存状態を確認したい場合は、`axon show <id> --skip-command-evaluation`や`axon list --skip-command-evaluation`を使えます。ただし、対応する保存形式の自動更新は通常の読み取りコマンドでも起こり得ます。詳細は[CLI契約](../reference/cli.md#外部条件の評価)と[保存形式の更新](../reference/migration.md#通常コマンドによる-schema-更新)を参照してください。
+
+## Codexに伝えること
+
+使っているbackend、作業中のworktree、実際の保存先、失敗したコマンドとエラーを伝えると、必要なアクセスを確認できます。コマンド条件を使っている場合は、その内容も併せて伝えてください。

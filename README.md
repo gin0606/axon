@@ -1,108 +1,84 @@
 # axon
 
-ローカルで動く個人用 issue tracker。issue と明示的な計画 group を共通 Entity として扱い、進行、採否、時期を別の軸に保つ。
+CLIで個人のIssueと作業計画を管理する、ローカルのissue trackerです。[beads](https://github.com/gastownhall/beads)、[beads_rust](https://github.com/Dicklesworthstone/beads_rust)を使う中で、自分の好みに合わせて変えたいことが積み重なって作りました。
+
+## 欲しかったもの
+
+- タスク管理ツールに、自動でcommitやpushをしてほしくない。常駐サービスも管理したくない。
+- 「後でやる」と「後で決める」を分けたい。作業中のものを後回しにしても、作業中だったことを残したい。
+- agentがIssueを登録したことと、自分がそれをやると決めたことを分けたい。
+- 外部ITSに登録するには細かすぎる計画を持ちたい。別のworktreeへ作業を移すたびに、計画ファイルを受け渡したくない。
+- 個人開発では、Issueの登録や確認も手元で済ませたい。必要なら、Issueの変更をコードと一緒にGitへ残したい。
+- 外部ITSのタスクやライブラリのアップデート、サービスの準備を待つことも、計画の中で扱いたい。
+
+## 作った経緯
+
+最初に欲しかったのは、CLIで個人のタスクを管理する道具でした。beadsを使っていましたが、利用していた当時、自動で行われるcommitや設定ファイルの変更、Doltの導入など、自分がタスク管理のために引き受けたい範囲を超えることがありました。
+
+そこで、Git操作を利用者に委ね、常駐サービスを持たないbeads_rustへ移りました。この[介入を抑える方針](https://github.com/Dicklesworthstone/beads_rust#design-philosophy)は、axonでも大事にしています。
+
+beads_rustを使い続ける中で、今度はタスクの状態や判断の扱いに小さな不満が積み重なりました。後回しにしたい、まだ採用したくない、作業は終わったけれど結果の扱いは決めていない。そうした違いを、自分が考えている通りに記録したくなったのがaxonの出発点です。
+
+作業を進めるのは主にcoding agentなので、操作を支えるskillも用意しています。計画や判断をどう扱いたいかを先に決め、その道具をagentにも使ってもらう、という順番です。
+
+## 進行・採否・再浮上条件を分ける
+
+axonの中心にあるのは、タスクについての異なる問いを別々の軸にすることです。
+
+| 軸 | 記録すること |
+| --- | --- |
+| 進行（Progress） | 未着手なのか、作業中なのか、もう作業を進めないのか |
+| 採否（Disposition） | この仕事や結果を採用するか、しないか、まだ決めていないか |
+| 再浮上条件（Resurface condition） | いつまた意識に上げるか |
+
+「やると決めたが来月まで見送る」と「来月になったらやるか決める」は、別の状態として残せます。作業中のIssueを後回しにしても、進行と採否は変わりません。「終了」も完遂だけを意味せず、採否と組み合わせて、打ち切りや調査終了後の判断待ちを表せます。
+
+agentと作業していると、気づきや改善案が次々にIssueになります。登録されたものすべてを、採用済みの仕事として抱えたくはありません。気づきを残すこと、やると決めること、実際に着手することを分けたい。Issueの整理そのものにはまだ改善の余地がありますが、採用・不採用を進行と別に記録できることは、自分の運用では扱いやすく感じています。
+
+再浮上条件は、締切や着手予約ではありません。条件を満たしたらもう一度見るためのもので、採用や着手を自動で行うこともありません。
+
+## 細かな計画と、個人開発のIssueを置く
+
+外部ITSに登録するほどではない、実装のための細かな計画を持ちたいことがあります。agentと計画を立て、作業を分解し、別のworktreeで進めるためのものです。
+
+こうした計画を`PLAN.md`のようなファイルに置くと、メインリポジトリで立てた計画を作業用worktreeへ渡すために、コピーやcommitが必要になります。既定のSQLite backendでは、linked worktree間で同じデータを共有します。計画と作業状態をその場で参照・更新でき、受け渡しのためのファイル操作を減らせます。
+
+一方、個人開発ではIssue管理そのものも手元で済ませたいことがあります。GitHubを開いてIssueを登録・確認する手間は省きたいけれど、IssueとPRがつながる便利さはあります。
+
+file backendでは、Issueや計画をGitで管理できます。GitHub Issueのような直接の紐付けではありませんが、Issueや計画の変更をコードと同じcommitやPRに含められます。何をする計画で、実装とともにどう変わったかを、一緒に残すための選択肢です。こちらはworktreeごとのデータを使い、Gitで変更を取り込みます。
+
+## 外で起きることも待つ
+
+細かな計画をaxonで管理していても、待っている出来事まで手元で完結するわけではありません。外部ITSのタスクが特定の状態になること、ライブラリの修正版や必要な機能を含むバージョンがリリースされること、別のサービスの準備が整うことを待ちたい場合があります。
+
+axonでは、日付や別のIssueの決着に加えて、コマンドを再浮上条件にできます。APIやCLIで外部の状態を確認できれば、その判定結果を使って、自分のIssueを再び見る条件にできます。個々のITSやパッケージレジストリとの連携をaxon本体に組み込む代わりに、自分の環境に合う判定コマンドを用意する形です。
+
+評価はaxonの操作時に必要になったところで行います。バックグラウンドで監視するものではありません。APIへの問い合わせ頻度を抑える用途には、[cacheexec](https://github.com/gin0606/cacheexec)で判定結果を再利用する使い方を想定しています。
+
+## ツールが行う範囲
+
+axon自体はGitのcommit・pushを行わず、常駐サービスも必要としません。agent向けの設定やskillは利用者が導入し、どこまでagentに任せるかも協業方針として別に扱います。
+
+ファイルへの変更や外部プロセスの実行が一切ない、という意味ではありません。例えばfile backendの初期化はignoreとattributeを用意し、利用者が設定したコマンド条件は、一覧などの読み取り操作でも必要に応じて実行します。そうした操作の範囲は、各コマンドのドキュメントに記します。
+
+## ドキュメントと開発状況
+
+使い始めるための案内と、仕様・開発資料は[docs/](docs/README.md)にまとめています。
+
+axonは個人のタスクと計画の管理を対象にしています。チームやプロダクト全体のITSに必要な運用機能を揃えることは目指していません。
 
 > [!WARNING]
-> axon 0.1.0 は、かなり WIP な preview である。CLI、挙動、保存形式には破壊的変更があり得る。
-
-## 開発状況と対応環境
-
-macOS をサポート対象とし、現在は Apple Silicon macOS で開発・検証している。Linux と WSL2 は未検証の best effort、native Windows は非対応である。PowerShell の補完スクリプトを生成できることは、native Windows での動作保証を意味しない。
-
-WSL2 では Linux 版としての動作を想定する。Git worktree と filesystem の挙動・性能差を避けるため、repository と Axon のデータは `/mnt/c` 等ではなく WSL の Linux filesystem に置くことを推奨する。
-
-Git repository 内で使う場合は `git` が必要で、linked worktree 間の共有や file backend の merge 機能にも使う。`Command` 条件は `/bin/sh -c` で評価するため、その機能には `/bin/sh` が必要である。
-
-### 互換性とデータ保全
-
-preview 期間中は後方互換性を保証しない。保存形式を変更するときは可能な限り migration を用意してデータを保つが、無損失の自動移行は保証しない。upgrade 前には Axon のデータと旧 binary を backup すること。自動移行できない場合は、手作業または coding agent を使った変換が必要になることがある。
-
-source build の最低対応 Rust version（MSRV）は 1.89 である。開発・通常検証には Rust 1.98 を使う。crates.io への公開はまだ行わず、Cargo manifest でも publish を禁止している。
-
-## 使う
-
-```sh
-cargo build --release
-axon init
-axon                            # 分類したコマンド概要
-axon help                       # axon、-h、--help と同じ概要
-axon docs                       # 状態モデルと基本 workflow
-axon completion zsh > _axon    # シェル補完スクリプトを生成
-```
-
-個別コマンドの Usage は `axon help <command path>` または `axon <command path> --help` で確認できる。`axon docs` は状態モデルと基本 workflow を端末向けに説明する。より詳しい英語の利用マニュアルは [利用ガイド](docs/guide/usage.md)、コマンドの振る舞いを定める日本語の開発者向け文書は [CLI 契約](docs/reference/cli.md) に分けている。
-
-`completion` は `bash`、`elvish`、`fish`、`powershell`、`zsh` を受け付ける。生成したスクリプトは各シェルの補完ディレクトリに置くか、そのシェルの方法で読み込む。
-
-Codex の linked worktree から共有 DB を更新する場合は、[Codex の sandbox 設定](docs/guide/codex.md)を一度だけ行う。
-
-### file backend の Git driver 登録
-
-`axon init --backend file` は正本、`.axon/.gitignore`、`.gitattributes` を用意する。
-`.axon/state.jsonl` には操作主体、作業場所の絶対パス、操作時刻も自動保存され、
-作業完了後も履歴に残る。公開 repository で使う前に
-[共有・公開される情報](docs/reference/file-storage.md#git-で共有公開される情報) を確認する。
-install 後、利用する repository 内で driver を登録する（`axon` が PATH 上に必要）。
-
-```sh
-git config merge.axon.name "Axon validated snapshot merge"
-git config merge.axon.driver "axon merge driver %O %A %B"
-git config merge.axon.recursive binary
-```
-
-これは repository-local 設定で、clone 先でも必要。全 repository 共通にしたい場合だけ
-`--global` を指定する。Axon は stage/commit を行わない。
-既定の SQLite init は `.axon/axon.db` を作り、ignore 設定は利用者に任せる。
-保存先・worktree・手動復旧は [保存契約](docs/reference/file-storage.md) を参照する。
-
-## Agent skills
-
-[`plugins/axon-kit`](plugins/axon-kit) は、axon の状態・情報モデルと安全な tracker 操作を提供する公式の Axon Skill Kit である。`$axon-kit:conventions`、`capture`、`plan`、`triage`、`work-state`、`add-note`、`declaration` に加え、backend初期化と検査を担う`storage`、手動変換を担う`migrate`、file snapshotの三方向統合を担う`merge`を、利用者固有の実装フローと分けて提供する。
-
-[`plugins/axon`](plugins/axon) は、公式 kit に個人用の判断と協業方針を重ねる。`conventions`、`register`、`triage`、`work-state`、`declaration` で、自律実行と重要な意思決定の境界、重複確認、構造整理、artifact 保護、申し送りを扱う。
-
-2 plugin は [repo-local marketplace](.agents/plugins/marketplace.json) から開発できる。ローカルの Codex 設定へ追加するときは repository root で次を実行する。
-
-```sh
-codex plugin marketplace add .
-codex plugin add axon-kit@axon
-codex plugin add axon@axon
-```
-
-ローカルの Claude Code 設定へ追加するときは repository root で次を実行する。
-
-```sh
-claude plugin marketplace add ./
-claude plugin install axon-kit@axon
-claude plugin install axon@axon
-```
-
-`axon` plugin は `axon-kit` plugin を前提とし、必要な kit skill を明示的に併用する。継承や同名 skill の上書きではない。
-
-## reason と履歴
-
-`-r` / `--reason` はすべて任意。状態から意図を復元できない操作だけが受け取る。`release` の理由は `show` の進行履歴に、`decide` / `when` の理由は `log` の判断履歴に保存される。`start` と `done` は reason を受け取らない。作業結果や申し送りは `axon note add <id> -m <body>` で追記し、Entity が何であるかを定める description とは分ける。
-
-title、description、parent、outgoing dependency は Entity の plan declaration である。Accepted / Rejected では固定され、変更には Undecided への戻しと再判断が必要になる。判断対象になった全文は Declaration Revision として残り、`axon revision list|show|diff` で確認できる。Note は状態を問わず追記でき、`axon show` では description と全 Note を省略せず表示する。
-
-## ドキュメント
-
-[ドキュメントの入口](docs/README.md) から、目的に合う文書を選べる。
-
-- 使う: [利用ガイド](docs/guide/usage.md)
-- 仕様を確かめる: [状態モデル](docs/reference/state-model.md)、[情報モデル](docs/reference/information-model.md)、[CLI](docs/reference/cli.md)、[宣言ファイル](docs/reference/declaration-file.md)
-- 開発する: [アーキテクチャ](docs/development/architecture.md)、[検証方針](docs/development/verification.md)
-- 設計理由を調べる: [設計判断](docs/design/decisions.md)
+> axonはかなりWIPです。CLIの使い方や挙動、保存形式には破壊的な変更が入ることがあります。
+>
+> 作者自身も日常的に使っているので、保存形式を変えるときは、できるだけ移行手段を用意してデータを保つつもりです。ただし、後方互換性や、データを失わずに自動移行できることは保証できません。手作業やcoding agentを使った変換が必要になる場合もあります。アップグレード前には、データをバックアップしてください。
 
 ## 名前
 
-`axon` は軸索。`axis` (軸) と同語源で、**軸を分解したことが設計の核心**であることによる。軸索が信号を一方向に伝えるのは、依存グラフの伝播とも重なる。
+`axon`は軸索。`axis`（軸）と同語源で、軸を分解したことが設計の核心であることによります。軸索が信号を一方向に伝えることは、依存グラフの伝播とも重なります。
 
-## 適用範囲
+## インストール
 
-**個人のタスク分解・管理に絞る。** プロダクト全体の ITS としては使わない。
-
-両者は要件が違う (共有の要否、PR からの参照、保存形式の制約) ため、混ぜると設計が引きずられる。プロダクト用途が必要なら別のツールを使う。
+WIP：配布方法とインストール手順はリリース準備中です。対応環境と使い始める手順は[導入ガイド](docs/guide/getting-started.md)を参照してください。
 
 ## ライセンス
 
