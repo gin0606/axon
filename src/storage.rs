@@ -76,7 +76,7 @@ pub(crate) fn merge_evaluation_root() -> Result<PathBuf> {
     }
 }
 
-fn check_index(root: &Path, is_git: bool) -> Result<()> {
+pub(crate) fn check_index(root: &Path, is_git: bool) -> Result<()> {
     if is_git
         && git(root, &["ls-files", "--unmerged", "--", ".axon/state.jsonl"])?
             .is_some_and(|s| !s.is_empty())
@@ -107,7 +107,7 @@ fn data_path(root: &Path, is_git: bool, backend: Backend) -> Result<PathBuf> {
         Backend::Sqlite => sqlite_root(root, is_git)?.join(".axon/axon.db"),
     })
 }
-fn discover(root: &Path, is_git: bool) -> Result<(Backend, PathBuf)> {
+pub(crate) fn discover(root: &Path, is_git: bool) -> Result<(Backend, PathBuf)> {
     let sql = data_path(root, is_git, Backend::Sqlite)?;
     let file = data_path(root, is_git, Backend::File)?;
     for marker in [
@@ -161,7 +161,7 @@ fn boundary(path: &Path, phase: &'static str, result: &'static str, source: DbEr
         source: Box::new(source),
     }
 }
-fn lock(path: &Path) -> Result<File> {
+pub(crate) fn lock(path: &Path) -> Result<File> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -173,11 +173,11 @@ fn lock(path: &Path) -> Result<File> {
         .map_err(|e| boundary(path, "acquire writer lock", "Not applied", e.into()))?;
     Ok(file)
 }
-fn sync_dir(path: &Path) -> Result<()> {
+pub(crate) fn sync_dir(path: &Path) -> Result<()> {
     File::open(path)?.sync_all()?;
     Ok(())
 }
-fn temporary(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
+pub(crate) fn temporary(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
     let temp = path.with_file_name(format!(
         ".{}-{}.tmp",
         path.file_name().unwrap().to_string_lossy(),
@@ -534,6 +534,7 @@ impl Store {
         });
         match backend {
             Backend::File => {
+                crate::file_upgrade::open(&path, &root, is_git, evaluation.clone())?;
                 let store = FileStore {
                     root,
                     is_git,

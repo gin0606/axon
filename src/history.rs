@@ -280,6 +280,7 @@ impl StateSnapshot {
         Ok(id)
     }
     /// v12 only knows within-table order; each chain remains independent until this baseline.
+    #[cfg(test)]
     pub fn migrate_causality(&mut self, source_schema: u32) -> Result<()> {
         if !self.causal.links.is_empty() || !self.causal.owners.is_empty() {
             return Err(invalid("already has causal history"));

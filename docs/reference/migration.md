@@ -1,98 +1,41 @@
-# SQLite v11/v12/v13 から SQLite/file への手動移行
+# Schema 更新と backend 変換
 
-`axon migrate --source <DB> --output <未使用directory> --backend <sqlite|file>` は、
-通常の root 探索を行わず指定 SQLite を読み取り専用で開く。元 DB・root は切り替えない。
-v11 は既存の安定 ID 変換で v12 にし、v12 の因果履歴変換で v13 にする。v13 は既存の
-store/record ID、baseline、MergeRecord、因果参照を保持する。最終 SQLite は schema v13、
-file は canonical JSONL format 1。未知の版・DDL は拒否する。v9/v10 は旧版で v11 にしてから使う。
+通常コマンドは、対応する schema 更新が必要ならバックアップを保存して更新し、成功後に要求された処理を続ける。利用者は backend 変換を実行する必要がない。
+現行の基点は SQLite schema v13、file format 1 / schema 13。移行済みの v9〜v12 の変換経路は保持しない。今後の schema 変更では通常起動の更新経路を追加する。未知・未来版・退役した形式は変更せず拒否し、自動 downgrade は行わない。
 
-## 入力の保全と変換
+## 通常コマンドによる schema 更新
 
-1. 旧版と候補版のバイナリを別 path に実体コピーし、版の由来と digest を残す。
-   共有 PATH のバイナリを更新する場合は、全利用 root と linked worktree、その backend と
-   実際の正本を棚卸しする。旧 config が選んでいた SQLite は Git common directory の
-   `axon/state.db`（Git 外では `.axon/state.db`）。残存する `.axon/axon.db` が最新とは限らない。
-   新版の SQLite は common directory の親（Git 外では管理 root）の `.axon/axon.db`。
-   一 repository で一 backend を選び、全 worktree の運用を揃える。
-2. 隔離したコピーで移行を試す。本切替ではすべての writer を止め、停止後の最新入力を使う。
-   元 DB と WAL/SHM、設定、バイナリを一組で保全する。Axon 自身の DB を移す間は、
-   実施台帳を対象 DB の外へ置き、旧 DB へ Note 等を追加しない。
-3. 固定した新版の絶対 path と未使用の出力先で変換する。
+SQLite は書込排他後に版を再確認し、WAL の確定情報を含む backup を `.axon/migration-backups/` に保存する。schema 更新は一つの transaction で行い、commit 後に元の操作へ進む。途中の失敗では更新を rollback し、backup は保持する。commit 自体の失敗は結果不明として診断する。
+file は通常 writer と同じ lock を使い、最新入力から変換・検証した候補と元 bytes の backup を作る。入力・backend・Git index を再照合し、atomic replace と directory sync 後に通常操作へ進む。置換前の失敗は未適用、置換後の同期失敗は結果不明となる。
+更新成功の版と backup 先は stderr へ通知する。通常操作が後から失敗しても、成功済み更新は取り消さない。現行形式なら backup や更新通知を追加しない。help、docs、version、completion は保存先を開かない。
 
-   ```sh
-   /absolute/path/to/new-axon migrate --source /root/.axon/axon.db \
-     --output /backup/new-conversion --backend file
-   ```
+各更新経路は入力形式の完全検証、全保存情報の保持、出力形式の完全検証を担当する。file の schema 更新は明示 snapshot 操作の codec へ混ぜず、通常起動だけで実行する。退役形式の復旧が必要なら対応する旧 binary と保全データで一度限りの変換を行う。schema 番号だけの書換えで検査を迂回しない。
 
-   SQLite を選ぶ場合は `--backend sqlite` とする。backend は省略できない。
-   SQLite backup API が WAL 内の確定済み書込を含む一貫した入力を固定する。
-   出力は以下を持つ。移行先は自動探索される管理 root ではない。
+## Backend 変換
 
-   | artifact | 内容 |
-   | --- | --- |
-   | `source-v11.db` / `source-v12.db` / `source-v13.db` | 固定した元入力。単独で整合した SQLite backup |
-   | `staging/linear/` | v11 入力時の v12 変換と旧番号対応表 |
-   | `staging/causal/` | v11/v12 入力時の v13 変換 |
-   | `axon.db` または `state.jsonl` | 選択 backend の正本 |
-   | `snapshot.jsonl` | 全最終状態の比較用 canonical snapshot |
-   | `manifest.yaml` | 最後に公開する format 2 の完了 manifest |
+```sh
+axon migrate --source /path/to/axon.db --output /backup/conversion --backend file
+```
 
-   最上位 manifest は source/target schema、backend、store ID、全元 table と最終 table の件数、
-   入力の論理 digest、backup・正本・snapshot の BLAKE3、対応表、検証結果を持つ。
-   各段階の manifest はその段階の記録であり、最上位 manifest の代用にはならない。
-   全旧 field/row の比較、参照と型、因果整合、canonical 往復、最終 backend の再読取を検査する。
+入力は現行 schema の SQLite のみ、出力は `sqlite` または `file`。通常の root 探索や自動 schema 更新は行わず、schema 不一致はエラーとする。元 DB を変更せず、出力先も自動で正本へ切り替えない。file 入力は扱わない。
 
-v11 の `mappings` は `table`・`entity`・`old_number`・`id` の組で旧参照を追跡する。
-たとえば本文が「Note 2」を参照するときは、その Entity と `table: entity_notes`、
-`old_number: 2` の行の `id` を使い、`axon note show <Entity> <id>` で読む。
-Revision は `declaration_revisions`、判断/進行履歴は各旧 table の row key に対応する。
-本文や legacy reason 自体を書き換えない。v12/v13 入力の `mappings` は空で、既存 ID を維持する。
-先行移行の番号対応表が必要なら、その manifest も一緒に保管する。
+最終切替前に全 writer を止め、元 DB と WAL/SHM、利用 binary を保全する。SQLite backup API で一貫した入力を固定し、未使用 directory に以下を出力する。
 
-各旧 stream 内の保存順だけを先行参照にし、別 table 間の時系列を推測しない。
-v11 からの直出力も v12 を経由するため、同じ v12 から段階移行した出力と ID・payload・参照が一致する。
-同じ固定 v11 入力は同じ ID を生成するが、別時点の v11 を独立変換したものを共通起点としない。
-一度作った成果を branch/worktree へ配布する。v12/v13 は入力 digest が変わっても既存 ID を付け直さない。
+| artifact | 内容 |
+| --- | --- |
+| `source-v13.db` | WAL の確定情報を含む単独で整合した元入力 backup |
+| `axon.db` または `state.jsonl` | 指定 backend の正本候補 |
+| `snapshot.jsonl` | 全保存情報を持つ canonical snapshot |
+| `manifest.yaml` | source/target schema、store ID、件数、digest、検証結果を持つ format 2 manifest |
 
-## 検証して root を切り替える
+store/record ID、Entity、関係、Revision、Note、typed history、因果情報と metadata を保持する。番号変換や履歴再生成は行わず、manifest の mappings は空。schema 変換用の staging は作らない。canonical 往復と最終 backend 再読取を検証し、manifest を最後に公開・同期して成功を返す。
 
-1. 成功終了と最上位 manifest を確認し、記載された artifact の digest を照合する。
-   `new-axon storage check /backup/new-conversion/snapshot.jsonl` でも全 snapshot を検査できる。
-   別の Git 外の検証 directory に `.axon` を作り、選んだ `axon.db` または
-   `state.jsonl` をコピーする。その directory から候補版で一覧・show・Note・Revision・履歴を読み、
-   コピーだけで通常更新も試す。更新した検証コピーを本番に配置しない。
-   `list` 等が Command 条件を評価する場合は、保存された実行内容を事前に確認する。
-   宣言 export は全情報 backup の代用にならない。
-2. writer 停止を維持して、必要な新版の配布・build を行う。各利用先で実行する binary を照合する。
-   旧 DB と WAL/SHM、既存設定を退避してから、検証済み・未更新の成果を次の場所に配置する。
+成功終了と manifest の digest を照合し、`axon storage check <output>/snapshot.jsonl` でも確認する。隔離コピーで通常の読み取り・更新を検証してよいが、更新したコピーを本番に配置しない。export は計画編集用で全情報 backup の代用ではない。
 
-   | backend | 正本の配置先 |
-   | --- | --- |
-   | file | active worktree root の `.axon/state.jsonl` |
-   | SQLite / Git | `git rev-parse --path-format=absolute --git-common-dir` の親の `.axon/axon.db` |
-   | SQLite / Git 外 | 管理 root の `.axon/axon.db` |
+## 切替と復旧
 
-   backend 設定は不要。旧 config と競合する正本は削除せず保全先へ移し、選んだ正本だけを置く。
-   過去の `.axon/axon.db` を最新版と誤認しないよう、writer 再開前に必ず確認する。
-   元 WAL/SHM と別 DB を混ぜない。ファイルと directory を同期し、既存 root の切替に
-   `init` で空 state を作らない。再 init は補完ではなく拒否される。
-   SQLite の ignore は利用者が選ぶ。file は[保存契約](file-storage.md)に示す ignore と
-   attribute を手動で整え、Git driver を通常の `git config` で登録する。
-   migrate 自体はこれらの Git integration を行わず、設定ファイルも出力しない。
-3. 各利用 directory から新版で意図した root と全情報を読めることを確認する。全共有利用先が
-   互換な組になってから writer を再開する。旧バイナリ・backup・対応表・台帳は保管する。
+writer 停止中に元データを退避し、検証済み・未更新の成果を配置する。SQLite は Git common directory の親の `.axon/axon.db`（Git 外は管理 root）、file は現在 worktree の `.axon/state.jsonl`。backend 設定は不要で、競合する正本を同時に置かない。全利用先を確認して writer を再開する。init で空の正本を作り直さない。
+file の ignore・attribute・Git driver は[保存契約](file-storage.md)に従って別途整える。migrate は設定・stage・commit を行わない。
 
-## 中断、再試行、旧データへの復帰
-
-出力先が存在すると再実行は拒否する。失敗時も backup と staging は削除しない。
-最上位 manifest 公開前の失敗は移行成果未適用、公開開始後の同期失敗は結果不明として診断する。
-いずれも元 root の切替は行われていない。manifest がない、読めない、digest が合わない成果を正本にしない。
-結果不明ならプロセス終了を確認し、出力・manifest・digest を照合して台帳へ記録する。
-必要なら保全された整合 backup を入力に、別の未使用 directory へ再変換する。同じ出力先を消して再利用しない。
-
-手動切替の中断は root ごとに未適用・適用済み・結果不明を記録する。writer を止めたまま現状を
-保全し、旧バイナリ・旧設定・旧 DB の組を元の配置先へ戻す。新 DB やその WAL/SHM を旧 DB と混ぜず、
-固定した単独 backup を復元するか、停止時に保全した DB/WAL/SHM 一式を整合した組で復元する。
-file に切り替えた root では新正本を保全先へ退避し、旧版が要求した配置・設定に戻す。
-新 CLI での書込再開後に古い backup へ戻す場合は、先に新状態全体を保全し、新規変更をどう引き継ぐか決める。
-旧バイナリを新 DB へ向けたり、`user_version` だけを変えて互換性検査を迂回しない。
+出力先は再利用・上書きしない。失敗しても backup と途中成果を保持する。manifest 公開前の失敗は未適用、公開開始後の同期失敗は結果不明。manifest の欠落や digest 不一致がある成果を採用しない。再試行は保全入力と別の未使用 directory を使う。
+切替を戻す場合は writer を停止し、現在の全情報を保全してから旧 binary と整合する backup を戻す。新旧 DB の WAL/SHM を混ぜない。書込再開後の新情報を古い backup で失わないよう、引継ぎを決めてから復元する。

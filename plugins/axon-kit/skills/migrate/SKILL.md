@@ -1,6 +1,6 @@
 ---
 name: migrate
-description: Convert a preserved Axon v11, v12, or v13 SQLite snapshot into a verified SQLite or file-backend output without switching the live root. Use for axon migrate and recovery of its artifacts; not for ordinary schema opening, root initialization, or merge conflicts.
+description: Convert a preserved Axon current-schema SQLite snapshot into a verified SQLite or file-backend output without switching the live root. Use for axon migrate and recovery of its artifacts; not for ordinary schema opening, root initialization, or merge conflicts.
 ---
 
 # Migrate a preserved Axon snapshot
@@ -9,7 +9,7 @@ Use `axon-kit:conventions` and read its mutation contract. Migration creates a n
 
 ## Freeze the migration boundary
 
-The caller supplies the exact source SQLite database, an unused output directory, and target backend `sqlite` or `file`. The source must be v11, v12, or v13; v9 or v10 requires a compatible older Axon conversion to v11 first.
+The caller supplies the exact source SQLite database, an unused output directory, and target backend `sqlite` or `file`. The source must match the current schema. This command does not run schema updates; ordinary commands own supported automatic updates. Retired formats require a compatible build or a separately planned one-time conversion.
 
 Before the final conversion, stop every writer to the source and preserve the source database together with any WAL/SHM files and the exact old and new binaries needed for investigation. Record their paths and digests. Do not add Notes or other bookkeeping to the source while it is frozen.
 
@@ -19,7 +19,7 @@ Choosing a target backend is a user or calling-workflow decision. File storage i
 
 Run `axon migrate --source <db> --output <unused-directory> --backend <sqlite|file>` as a standalone mutation. The output directory must not be deleted or reused after a failed or uncertain attempt.
 
-On success, verify the final manifest and every recorded digest. Require the expected preserved source backup, target `axon.db` or `state.jsonl`, canonical `snapshot.jsonl`, mapping artifacts when applicable, and completed validation results. Run `axon storage check <output>/snapshot.jsonl` as an independent read-only check.
+On success, verify the final manifest and every recorded digest. Require the expected preserved source backup, target `axon.db` or `state.jsonl`, canonical `snapshot.jsonl`,  and completed validation results. Run `axon storage check <output>/snapshot.jsonl` as an independent read-only check.
 
 When practical, copy the verified target store into a separate disposable root and inspect Entities, Notes, Revisions, and histories with the candidate binary. Do not use this validation copy as the live result.
 
@@ -33,4 +33,4 @@ If the top-level manifest is absent, unreadable, incomplete, or has a digest mis
 
 ## Return
 
-Return the source and binary identities, target backend, output path, manifest and validation results, mappings and backups that must be retained, storage-result classification, and whether live cutover remains outstanding.
+Return the source and binary identities, target backend, output path, manifest and validation results, backups that must be retained, storage-result classification, and whether live cutover remains outstanding.

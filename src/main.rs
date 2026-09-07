@@ -6,6 +6,7 @@ mod declaration;
 mod derived;
 mod display;
 mod domain;
+mod file_upgrade;
 mod history;
 mod merge;
 mod merge_cli;
@@ -265,12 +266,12 @@ enum Command {
         #[command(subcommand)]
         command: merge_cli::MergeCmd,
     },
-    /// Convert a v11/v12/v13 SQLite snapshot to SQLite or file without modifying the source
+    /// Convert a current-schema SQLite snapshot to SQLite or file without modifying the source
     Migrate {
-        /// Existing v11, v12 or v13 database (stop its writers before the final conversion)
+        /// Existing current-schema database (stop its writers before the final conversion)
         #[arg(long)]
         source: std::path::PathBuf,
-        /// New directory for the backup, backend, configuration and verification manifest
+        /// New directory for the backup, backend and verification manifest
         #[arg(long)]
         output: std::path::PathBuf,
         /// Output backend (required; does not switch the active root)
@@ -802,22 +803,36 @@ fn open_store(trace_conditions: bool) -> db::Result<Store> {
 
 fn migration_guidance(failure: &db::migration::Failure) -> String {
     use db::migration::ApplicationState;
-    let state = match failure.applied {
-        ApplicationState::NotApplied => {
-            "The source was not modified. Migration output publication did not complete; incomplete output, including converted state or temporary files, may remain."
+    let state = if failure.kind == db::migration::Kind::SchemaUpdate {
+        match failure.applied {
+            ApplicationState::NotApplied => {
+                "The database schema update was not applied; the requested operation did not run. Preserve the database and any backup."
+            }
+            ApplicationState::Applied => {
+                "The database schema update was committed at the reported database path; the requested operation did not run. Preserve the database and backup; no separate conversion output was created."
+            }
+            ApplicationState::Unknown => {
+                "The database schema update result is unknown. Preserve and inspect the database at the reported path and its backup before any retry; the requested operation did not run."
+            }
         }
-        ApplicationState::Applied => {
-            "Migration was committed to the output; the source was not switched. Preserve both databases."
-        }
-        ApplicationState::Unknown => {
-            "Migration output durability is unknown; the source was not switched. Preserve and inspect the output and backup before any retry."
+    } else {
+        match failure.applied {
+            ApplicationState::NotApplied => {
+                "The source was not modified. Migration output publication did not complete; incomplete output, including converted state or temporary files, may remain."
+            }
+            ApplicationState::Applied => {
+                "Migration was committed to the output; the source was not switched. Preserve both databases."
+            }
+            ApplicationState::Unknown => {
+                "Migration output durability is unknown; the source was not switched. Preserve and inspect the output and backup before any retry."
+            }
         }
     };
     let cause = match failure.source.as_ref() {
         db::DbError::UnsupportedSchema { found, expected } if found > expected =>
             format!("Use a newer axon build that supports DB schema {found}; automatic downgrade is not supported."),
         db::DbError::UnsupportedSchema { found, .. } =>
-            format!("Manual migration accepts schema v11/v12/v13: `axon migrate --source <v11-v12-v13-db> --output <new-directory> --backend <sqlite|file>`. For v9/v10, first use a v11 build. Use a build that supports DB schema {found} to inspect this older database."),
+            format!("No automatic update path is retained for schema {found}. Preserve it and use a build that supports DB schema {found} for inspection or a one-time data conversion. Backend conversion requires the current schema."),
         db::DbError::InvalidSchema(_) => "Preserve the database; its schema or stored data did not pass validation. Inspect the reported structure/integrity error with SQLite tooling.".to_string(),
         db::DbError::Sqlite(rusqlite::Error::SqliteFailure(error, _))
             if matches!(error.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) =>
@@ -846,7 +861,7 @@ fn error_guidance(error: &(dyn std::error::Error + 'static)) -> Option<String> {
             DbError::Initialization(_) => "Preserve the state and init.pending at the reported paths, along with temporary and Git integration files. Stop writers and inspect the retained files; normal Axon reads reject incomplete initialization. Complete or move aside the incomplete box manually without overwriting saved state, then remove init.pending only after verification. See `axon docs` for storage recovery guidance.".to_string(),
             DbError::Boundary { result: "Result unknown", .. } => "Confirm the writer has stopped, then inspect saved information with `axon list --skip-command-evaluation` / `axon show <id> --skip-command-evaluation` and Note IDs/bodies with `axon note list <id>` / `axon note show <id> <note-id>` before retrying. Creation and Note append are not idempotent.".to_string(),
             DbError::UnsupportedSchema { found, .. } => format!(
-                "Use an axon build that supports DB schema {found}. Use `axon migrate --source <v11-v12-v13-db> --output <new-directory> --backend <sqlite|file>` for manual conversion; for v9/v10 first use a v11 build. init cannot upgrade an existing DB. Preserve the database and do not change user_version to bypass this check. See `axon docs` for storage recovery guidance."
+                "Use an axon build that supports DB schema {found}. Ordinary commands automatically apply supported schema updates; retired formats require a compatible build or a one-time conversion. axon migrate only converts current-schema data between backends. init cannot upgrade an existing DB. Preserve the database and do not change user_version to bypass this check. See `axon docs` for storage recovery guidance."
             ),
             DbError::CannotStart { id, .. } | DbError::CannotProgress { id, .. } => format!(
                 "Inspect `axon show {id}` for state, relationships, and Group completion constraints. `axon docs` explains the operation prerequisites."
@@ -3566,7 +3581,7 @@ fn render_docs(decoration: OutputDecoration) -> String {
     )
     .unwrap();
     writeln!(output, "\nUse axon docs declaration for declaration fields and the import workflow.\nUse axon docs declaration --example for a complete new-plan YAML example.").unwrap();
-    writeln!(output, "\nStorage recovery\n  DB commands require schema v13 and do not migrate old databases implicitly.\n  Use axon migrate --source <v11-v12-v13-db> --output <new-directory> --backend <sqlite|file>\n  to create backend state, an intact backup and an ID mapping manifest. The source is not switched.\n  v9/v10 must first be migrated to v11 using an older compatible build.\n  Keep an old binary, stop writers, verify copies, then switch all affected roots.\n  Failed outputs may be incomplete; preserve and inspect them before retry.\n  Unknown schemas are rejected. init only creates new DBs; init cannot upgrade.\n  --version identifies the executable release, not its DB schema.\n  Before recovery stop all writers and preserve .axon with SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  export also requires a compatible build and is not a complete database backup.\n  No backend config: discover axon.db or state.jsonl at the prescribed paths.\n  Both present is an error; neither is uninitialized. Invalid/partial state stops discovery.\n  Outside Git, use the nearest ancestor state or init.pending; Git is a boundary.\n  init --backend file creates .axon/state.jsonl; the default backend is sqlite.\n  SQLite uses .axon/axon.db at the parent of the Git common directory, shared by worktrees;\n  outside Git it uses the management root. One backend per repository is supported.\n  SQLite init does not change ignore files. File init adds .axon/.gitignore and\n  /.axon/state.jsonl merge=axon to root .gitattributes, also outside Git.\n  File writers lock, read, validate, sync a temporary, compare original bytes, replace,\n  and sync the directory before success. No-op preserves bytes.\n  Failure before replace is not applied; failure after replace is result unknown.\n  Inspect state before retrying an unknown result; do not repeat an append blindly.\n  init creates new state only; existing state or init.pending is never repaired or replaced.\n  Preserve incomplete files, complete the box manually, then remove init.pending after verification.\n  Linked worktrees use shared SQLite without registration. Legacy paths are not discovered.\n  Do not overlap Git checkout/merge or editor writes with Axon writes in one worktree.\n  OS locks are local; network filesystem/distributed guarantees are not provided.\n  Use storage check <snapshot> to validate a complete JSONL file.\n  merge prepare/check/apply use an explicit workspace; edit resolution.json then check.\n  After installation, register the Git driver with git config merge.axon.driver\n  'axon merge driver %O %A %B' and git config merge.axon.recursive binary.\n  Conflicts preserve raw inputs; Axon never stages or commits Git files.\n  help, docs, version and completion do not open the DB.\n").unwrap();
+    writeln!(output, "\nStorage recovery\n  Ordinary commands apply supported schema updates with a backup before continuing.\n  Schema v13 is the current baseline; retired schema conversion paths are not retained.\n  Use axon migrate --source <current-schema-db> --output <new-directory> --backend <sqlite|file>\n  for backend conversion only. Schema mismatch is an error; the source is not updated or switched.\n  Keep an old binary, stop writers, verify copies, then switch all affected roots.\n  Failed outputs may be incomplete; preserve and inspect them before retry.\n  Unknown schemas are rejected. init only creates new DBs; init cannot upgrade.\n  --version identifies the executable release, not its DB schema.\n  Before recovery stop all writers and preserve .axon with SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  export also requires a compatible build and is not a complete database backup.\n  No backend config: discover axon.db or state.jsonl at the prescribed paths.\n  Both present is an error; neither is uninitialized. Invalid/partial state stops discovery.\n  Outside Git, use the nearest ancestor state or init.pending; Git is a boundary.\n  init --backend file creates .axon/state.jsonl; the default backend is sqlite.\n  SQLite uses .axon/axon.db at the parent of the Git common directory, shared by worktrees;\n  outside Git it uses the management root. One backend per repository is supported.\n  SQLite init does not change ignore files. File init adds .axon/.gitignore and\n  /.axon/state.jsonl merge=axon to root .gitattributes, also outside Git.\n  File writers lock, read, validate, sync a temporary, compare original bytes, replace,\n  and sync the directory before success. No-op preserves bytes.\n  Failure before replace is not applied; failure after replace is result unknown.\n  Inspect state before retrying an unknown result; do not repeat an append blindly.\n  init creates new state only; existing state or init.pending is never repaired or replaced.\n  Preserve incomplete files, complete the box manually, then remove init.pending after verification.\n  Linked worktrees use shared SQLite without registration. Legacy paths are not discovered.\n  Do not overlap Git checkout/merge or editor writes with Axon writes in one worktree.\n  OS locks are local; network filesystem/distributed guarantees are not provided.\n  Use storage check <snapshot> to validate a complete JSONL file.\n  merge prepare/check/apply use an explicit workspace; edit resolution.json then check.\n  After installation, register the Git driver with git config merge.axon.driver\n  'axon merge driver %O %A %B' and git config merge.axon.recursive binary.\n  Conflicts preserve raw inputs; Axon never stages or commits Git files.\n  help, docs, version and completion do not open the DB.\n").unwrap();
     output
 }
 
@@ -3819,6 +3834,7 @@ mod tests {
             (ApplicationState::Unknown, "before any retry"),
         ] {
             let failure = Failure {
+                kind: db::migration::Kind::BackendConversion,
                 database: "/fixture/.axon/axon.db".into(),
                 stage: "committing migration",
                 from: Some(9),
@@ -3834,6 +3850,32 @@ mod tests {
             if applied != ApplicationState::NotApplied {
                 assert!(!guidance.contains("Migration was not applied"));
             }
+        }
+    }
+
+    #[test]
+    fn schema_update_failure_guidance_identifies_live_database() {
+        use db::migration::{ApplicationState, Failure, Kind};
+        for applied in [
+            ApplicationState::NotApplied,
+            ApplicationState::Applied,
+            ApplicationState::Unknown,
+        ] {
+            let failure = Failure {
+                kind: Kind::SchemaUpdate,
+                database: "/fixture/.axon/axon.db".into(),
+                stage: "committing schema update",
+                from: Some(13),
+                to: 14,
+                backup: Some("/fixture/.axon/migration-backups/backup.db".into()),
+                applied,
+                source: Box::new(db::DbError::Io(std::io::Error::other("fault"))),
+            };
+            let guidance = migration_guidance(&failure);
+            assert!(guidance.contains("database schema update"));
+            assert!(guidance.contains("requested operation did not run"));
+            assert!(!guidance.contains("source was not switched"));
+            assert!(!guidance.contains("committed to the output"));
         }
     }
 

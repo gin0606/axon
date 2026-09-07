@@ -263,7 +263,9 @@ SQLite / file は一貫した read と原子的な保存を所有する。既存
 adapter の内部設計とし、core に SQL transaction 型や物理 row ID を漏らさない。
 汎用 plugin API や第三者 backend のための抽象化は追加しない。
 
-## 手動 migration
+## 手動 migration（導入時の設計）
+
+2026-09-07補足: 以下は導入時の段階移行の記録。現在の方針は[移行契約](../reference/migration.md)を正とし、通常の自動schema更新を維持する。backend変換は現行schemaのみを扱い、移行済み旧版の変換経路は保持しない。
 
 最低対応入力は現行 SQLite schema v11。v9 / v10 は既存の対応版 Axon で v11 にした後、
 この変換を使える。移行 tool は未知版・未知構造を変更せず拒否する。

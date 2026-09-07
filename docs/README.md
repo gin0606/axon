@@ -19,7 +19,7 @@ axon の利用手順、現在の契約、開発方法、設計経緯を目的別
 | --- | --- |
 | [状態モデル](reference/state-model.md) | Entity、各軸、claim、包含、依存、Group の進行、導出値 |
 | [情報モデル](reference/information-model.md) | 情報分類、declaration の所有と固定、Revision、Note、履歴、観測 |
-| [手動移行](reference/migration.md) | v11/v12/v13からSQLite/fileへの変換・検証・切替 |
+| [手動移行](reference/migration.md) | 通常操作のschema更新と現行SQLiteのbackend変換・検証・切替 |
 | [Backend と file 保存](reference/file-storage.md) | 設定なしの探索、init、Git integration、保存と merge の失敗境界 |
 | [CLI 契約](reference/cli.md) | コマンド境界、反復実行、原子性、入出力、管理 root と ID の解決 |
 | [宣言ファイル](reference/declaration-file.md) | strict YAML、所有範囲、競合検査、export / prepare / check / apply |

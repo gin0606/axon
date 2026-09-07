@@ -1,5 +1,6 @@
 pub mod migration;
 mod record_id;
+mod upgrade;
 use crate::core;
 pub use crate::core::{
     ApplyOutcome, Change, Ctx, Event, ProgressEvent, ProgressEventKind, StoreSnapshot,

@@ -508,9 +508,9 @@ Issue と Group は同じ `<prefix>-<ランダム 6 文字>` namespace を使い
 
 ## DBの互換性検査
 
-通常openはv13と既知DDLを検査し、旧版・未来版・未知構造を変更せず拒否する。
+通常操作は対応するschema更新をbackup付きで自動実行し、成功後に続行する。現行の基点はv13で、退役した旧版・未来版・未知構造は変更せず拒否する。
 `init` は新規作成専用で、既存正本や初期化途中への再実行を拒否する。既定は SQLite で ignore は変更しない。`--backend file` は Git 内外とも `.axon/.gitignore` と root `.gitattributes` を生成・補完する。Git driver の登録は利用者が通常の `git config` で行う。保存成功境界とinit復旧は[backendとfile保存](file-storage.md)を参照。help、docs、version、completionはDB不要。
-手動変換は明示したv11/v12/v13入力から別directoryへ出力し、元DBの切替はしない。
+backend変換は明示した現行schemaのSQLite入力から別directoryへ出力し、元DBの切替はしない。
 診断はpath、版、処理段階、原因、backup先と出力の適用状態を示す。失敗時の途中成果を上書きせず、
 結果不明なら出力とbackupを調べてから再開する。具体的な手順は[手動移行](migration.md)。
 
@@ -520,7 +520,7 @@ status は各項目の identity を一度だけ表示し、Ready / Triage、保�
 
 ## 手動移行
 
-`axon migrate --source <v11-v12-v13-db> --output <未使用directory> --backend <sqlite|file>` は、通常のroot探索を行わず指定DBを読み取り専用で開き、新しい保存先へ変換する。元DBの切替は行わない。詳細は[手動移行](migration.md)。
+`axon migrate --source <current-schema-db> --output <未使用directory> --backend <sqlite|file>` は、通常のroot探索を行わず指定DBを読み取り専用で開き、新しい保存先へ変換する。元DBの切替は行わない。詳細は[手動移行](migration.md)。
 
 showは分岐・統合を含む履歴について因果参照と採用先端を表示する。並行記録のID順は時刻の前後を意味しない。
 
