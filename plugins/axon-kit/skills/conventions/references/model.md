@@ -39,9 +39,9 @@ Each accepted or rejected declaration is preserved as an immutable Declaration R
 
 ## Entity context
 
-Before changing an existing Entity, read `axon show <id>` and inspect the fields relevant to the requested operation. Read Declaration Revisions, Notes, and typed history when the request changes or depends on the information they preserve. Do not infer missing context from a frontier listing.
+Before changing an existing Entity, read `axon show <id> --skip-command-evaluation` and inspect the saved fields relevant to the requested operation. Read Declaration Revisions, Notes, and typed history when the request changes or depends on the information they preserve. Evaluate derived conditions separately when the operation requires them. Do not infer missing context from a frontier listing.
 
-Inspect related Entities when their state or declaration can change the operation's validity or a consequence the caller needs to understand. Use `axon list` only when a complete inventory, including inactive Entities, is required; `ready` and `triage` are frontiers, not complete inventories. Absence from `triage` does not mean an Entity is missing or its creation/update failed; do not repeat creation on that evidence. Use `axon show <id>` for saved state and unsurfaced/inactive reasons. `status` summarizes plans, saved claims, candidates, and waits; it is not a complete inventory.
+Inspect related Entities when their state or declaration can change the operation's validity or a consequence the caller needs to understand. Use `axon list --skip-command-evaluation` when a complete saved-state inventory, including inactive Entities, is required; evaluate conditions separately only when the derived observation matters. `ready` and `triage` are frontiers, not complete inventories. Absence from `triage` does not mean an Entity is missing or its creation/update failed; do not repeat creation on that evidence. Use `axon show <id> --skip-command-evaluation` for saved state and then a normal derived query when readiness, surfacing, or active-scope evaluation is required. `status` summarizes plans, saved claims, candidates, and waits; it is not a complete inventory.
 
 ## Relationships and Groups
 
@@ -53,13 +53,19 @@ Do not automatically start descendants, finish an ancestor Group, move children,
 
 ## Inspect without executing external conditions
 
-If a Command condition fails or does not finish, use `axon list --skip-command-evaluation`
-or `axon show <id> --skip-command-evaluation` to inspect saved information without
-executing any Command, including ancestor, descendant, and related conditions.
+Use `axon list --skip-command-evaluation` or `axon show <id> --skip-command-evaluation`
+when only saved information is needed, or when a Command condition fails or does not finish.
+These forms execute no Command, including ancestor, descendant, and related conditions.
 `unevaluated` is a read-time observation, not false or a stored state. Other conditions
 remain evaluable. This option can be combined with `--trace-conditions` but emits no
 Command trace; it does not establish readiness for a lifecycle mutation. Normal reads
 and lifecycle checks continue to evaluate conditions.
+
+Use `--trace-conditions` only when the caller needs the evaluation evidence. It emits each executed shell string plus captured stdout and stderr without redaction or truncation; do not expose or persist sensitive output unnecessarily. An abnormal exit can fail the Axon invocation without producing a trace block.
+
+### Literal saved-text search
+
+`axon list --search <text>` searches the current title and description plus every Note body. It is case-sensitive literal matching: regex, `%`, and `_` have no special meaning, and actors, history, and Revisions are excluded. It combines with kind and saved-state filters before Command evaluation. Add `--skip-command-evaluation` for a pure saved-text search. Matched locations and stable Note IDs identify where to inspect the full content. Search can narrow candidates, but absence from one literal query does not prove semantic uniqueness.
 
 ### Inventory state filters
 

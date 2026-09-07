@@ -27,13 +27,13 @@ description: Axon公式kitの上に、自律実行とユーザー判断の境界
 
 ## 既存情報と波及を調べる
 
-既存Entityを変更するときは`axon show <id>`の全出力を読み、判断またはdeclarationに関係するDeclaration Revisionと`axon log <id>`を確認する。古いNoteやRevisionを年齢だけで無関係とみなさない。
+既存Entityを変更するときは、まず`axon show <id> --skip-command-evaluation`で保存情報を読み、判断またはdeclarationに関係するDeclaration Revisionと`axon log <id>`を確認する。readiness、surfaced、active scopeなどの導出値が判断に必要な場合だけ、通常の`show`やfrontierを別に評価する。古いNoteやRevisionを年齢だけで無関係とみなさない。
 
-terminal状態が変わるDisposition操作、`done`、または完全な波及確認が必要な操作では、dependent、Groupの祖先と子孫、active scope、`ready`、`triage`を必要な範囲で確認する。reverse `AfterEntity`の完全な影響があり得る場合は、`axon list`の全IDから参照元を調べる。
+terminal状態が変わるDisposition操作、`done`、または完全な波及確認が必要な操作では、dependent、Groupの祖先と子孫、active scope、`ready`、`triage`を必要な範囲で確認する。reverse `AfterEntity`の完全な影響があり得る場合は、`axon list --skip-command-evaluation`の全IDから参照元を調べる。
 
 ## 新規Entityの重複を扱う
 
-新規登録前に`axon list`と必要なfrontierを確認する。同じ目的、scope、完了条件、kind、構造的役割、Dispositionを持つ未終端Entityが一つだけあり、依頼が新しいIDではなく成果の記録を求めている場合は、そのEntityを再利用する。
+新規登録前に`axon list --terminal=false --skip-command-evaluation`と必要なfrontierを確認する。`--search`はtitle、description、Note本文のリテラル一致で候補を絞る用途に限り、一つの検索で該当しないことを意味的な重複なしの根拠にしない。同じ目的、scope、完了条件、kind、構造的役割、Dispositionを持つ未終端Entityが一つだけあり、依頼が新しいIDではなく成果の記録を求めている場合は、そのEntityを再利用する。
 
 Dispositionの不一致、Ended、cross-kind、scopeや構造的役割の差、複数候補がある場合は、再利用、再判断、新規作成をユーザーへ返す。部分的に重なるだけのEntityは登録を妨げない。ユーザーが新しいIDの作成を明示した場合は、その選択に従う。
 
@@ -47,4 +47,4 @@ Dispositionの不一致、Ended、cross-kind、scopeや構造的役割の差、�
 
 入力と現在状態を照合でき、同じ効果へ収束する再試行は自律して行う。結果不明、競合、重複作成の可能性、rollback、補償操作、別の最終状態が必要な場合は停止し、観測済みの状態と必要な判断を示す。
 
-Git linked worktreeで共有`.axon`へのmutationだけがsandboxに拒否された場合は、そのmutation commandだけをホストの許可機構で再実行する。読み取りcommandや他のprogramまで権限を広げない。再実行できなければ状態を推測せず、未反映として報告する。
+active backendの保存先へのmutationだけがsandboxに拒否された場合は、そのmutation commandだけをホストの許可機構で再実行する。特にGit内のSQLiteはcommon Git directoryの`axon/state.db`を共有し、current worktree外への書込みになり得る。file backendはcurrent worktreeのGit管理対象になり得る`.axon/state.jsonl`を変更するため、Axon操作の権限をstage、commit、merge、破棄の権限へ広げず、変更artifactを呼び出し元へ返す。別worktreeの未統合snapshotやclaimはcurrent worktreeから観測できない。読み取りcommandや他のprogramまで権限を広げず、再実行できなければ状態を推測せず未反映として報告する。

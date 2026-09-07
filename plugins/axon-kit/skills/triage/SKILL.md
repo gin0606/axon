@@ -19,7 +19,7 @@ Distinguish:
 - a declaration-only correction
 - a Resurface condition change
 
-Before proposing or applying a Disposition change, compare current and proposed terminal status. Inspect direct dependents, Group context, active scope, and relevant frontiers. When the caller needs complete reverse `AfterEntity` impact, use `axon list` because Axon has no direct reverse-waiter query.
+Before proposing or applying a Disposition change, compare current and proposed terminal status. Inspect direct dependents, Group context, active scope, and relevant frontiers. When the caller needs complete reverse `AfterEntity` impact, use `axon list --skip-command-evaluation` because Axon has no direct reverse-waiter query; evaluate affected frontiers separately when needed.
 
 For an orphaned Entity, do not treat prerequisite repair and rejection as the same operation.
 
@@ -54,4 +54,4 @@ A Group decision does not rewrite descendant state. Report effects on descendant
 
 Read each changed Entity and verify the requested declaration, Control state, relationships, and typed history. Verify related and derived effects that are relevant to the supplied change.
 
-Return all changed IDs, supplied reasons, created children, preserved claim state, relevant structural and derived impact, unresolved choices, and the `DB applied` classification. Do not begin implementation.
+Return all changed IDs, supplied reasons, created children, preserved claim state, relevant structural and derived impact, changed storage artifacts when relevant, unresolved choices, and the storage-result classification. Do not begin implementation.

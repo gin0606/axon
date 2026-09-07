@@ -36,4 +36,4 @@ For a newly created Entity, read the complete final Entity context and verify:
 
 A clear creation failure leaves no partial Entity. Reconcile an uncertain create through the creation contract before any retry; do not create a replacement merely because the Entity is absent from a frontier.
 
-Return the created ID, kind, complete declaration summary, and `DB applied` classification. Do not continue into adoption or work.
+Return the created ID, kind, complete declaration summary, changed storage artifacts when relevant, and storage-result classification. Do not continue into adoption or work.

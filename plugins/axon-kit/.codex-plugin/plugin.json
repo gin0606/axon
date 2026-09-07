@@ -1,6 +1,6 @@
 {
   "name": "axon-kit",
-  "version": "0.1.0+codex.20260904040245",
+  "version": "0.1.0+codex.20260907032457",
   "description": "Reusable Axon model and safe tracker-operation capabilities",
   "author": {
     "name": "gin0606"
@@ -10,7 +10,7 @@
   "interface": {
     "displayName": "Axon Skill Kit",
     "shortDescription": "Compose safe Axon tracker operations.",
-    "longDescription": "Provides Axon's state and information contracts plus focused capabilities for creating, triaging, recording, and progressing Entities without imposing an implementation workflow.",
+    "longDescription": "Provides Axon's state and information contracts plus focused capabilities for Entity operations, backend initialization, migration, and file-snapshot merge without imposing an implementation workflow.",
     "developerName": "gin0606",
     "category": "Productivity",
     "capabilities": [
@@ -20,7 +20,7 @@
     "defaultPrompt": [
       "Capture this concern in Axon without deciding it.",
       "Register this accepted plan in Axon.",
-      "Inspect this Axon Entity and explain the valid next operations."
+      "Safely initialize, migrate, or merge this Axon storage."
     ]
   }
 }

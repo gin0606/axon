@@ -31,4 +31,4 @@ Initial Command strings are saved without execution. Verify using `axon show <id
 
 On a clear creation failure, no partial Entity is left. Reconcile an uncertain outcome through the creation contract before any retry.
 
-After adoption, read the Entity context and the newly recorded Declaration Revision. Verify the fixed declaration, `Progress=NotStarted`, `Disposition=Accepted`, intended Resurface condition, parent, dependencies, no claim, and zero decision/progress transitions. Return the ID, kind, declaration summary, readiness impact, and `DB applied` classification. Do not start the Entity.
+After adoption, read the Entity context and the newly recorded Declaration Revision. Verify the fixed declaration, `Progress=NotStarted`, `Disposition=Accepted`, intended Resurface condition, parent, dependencies, no claim, and zero decision/progress transitions. Return the ID, kind, declaration summary, readiness impact, changed storage artifacts when relevant, and storage-result classification. Do not start the Entity.

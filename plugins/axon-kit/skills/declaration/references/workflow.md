@@ -8,7 +8,7 @@ A declaration edits only title, description, parent, and outgoing dependencies. 
 
 New records in a declaration represent `Accepted`, `NotStarted`, `Always` Entities with no claim. Use `axon-kit:plan` or `axon-kit:capture` with the supplied initial condition for single-Entity creation when the intended condition or adoption differs. Ordinary Control-state operations remain separate when later transitions are required. Do not normalize a caller's intended state merely to fit declaration import.
 
-If a combined workflow partially completes, stop at the first unresolved phase. Report the applied DB state and remaining phases; do not compensate or roll back automatically.
+If a combined workflow partially completes, stop at the first unresolved phase. Report the applied storage state and remaining phases; do not compensate or roll back automatically.
 
 ## Export and review
 
@@ -16,7 +16,7 @@ Use explicit IDs, `--group`, and `--recursive` selectors to define the editable 
 
 For export to a file, write to a temporary path, confirm that `axon export` succeeded, and run `axon import check` on the result before replacing an existing destination. Do not overwrite an existing caller-owned artifact unless the request includes that replacement.
 
-For a read-only check, run `axon import check <file>` without preparing or rewriting the file. For a read-only review, keep the original unchanged, prepare a temporary copy if necessary, and inspect both the declaration content and the reported structural and derived impact.
+For a read-only check, run `axon import check <file>` without preparing or rewriting the file. For a read-only review, keep the original unchanged, prepare a temporary copy if necessary, and inspect both the declaration content and the reported structural and derived impact. These checks may evaluate Command conditions needed for derived impact; use a separately reviewed environment and do not mistake them for saved-text-only inspection.
 
 ## Add an external dependency or parent snapshot
 
@@ -26,7 +26,7 @@ Include exactly the snapshots needed by destination relations and observed After
 
 New owners and existing Undecided owners can own editable edges to fixed external parents/prerequisites. After prepare/check/apply/check, require no remaining changes and verify external declaration/Control values are unchanged (new incoming edges may appear in their exports).
 
-A missing file ID is not proof of DB absence. Check the ID and export its snapshot. For DB absence verify the active root; for a stale/incorrect reference base preserve and compare a fresh export, and return unresolved conflicts. A matching-base snapshot mismatch requires restoring exported kind/title/observed, not changing external state.
+A missing file ID is not proof of absence from active storage. Check the ID and export its snapshot. To establish storage absence, verify the active root; for a stale or incorrect reference base preserve and compare a fresh export, and return unresolved conflicts. A matching-base snapshot mismatch requires restoring exported kind/title/observed, not changing external state.
 
 ## Canonicalize or apply
 
@@ -35,16 +35,16 @@ Work on a private temporary copy when the caller-owned source must remain recove
 1. Run `axon import prepare <working-file>` as a standalone artifact mutation.
 2. Inspect the rewritten YAML, including the editable set, allocated IDs, owned relationships, readonly relationships, and external snapshots.
 3. Run `axon import check <working-file>`. Review all errors, warnings, structural changes, and derived impact before continuing.
-4. For canonicalization only, replace the requested destination after verifying that the source has not changed. Report `DB applied: no` and stop.
-5. For DB application, confirm that the checked working file has not changed, then run `axon import apply <working-file>` as a standalone DB mutation.
+4. For canonicalization only, replace the requested destination after verifying that the source has not changed. Report `storage result: not applied` and stop.
+5. For storage application, confirm that the checked working file has not changed, then run `axon import apply <working-file>` as a standalone storage mutation.
 6. Run `axon import check <working-file>` again and require success with no remaining changes. Verify the changed Entities and relevant derived effects.
 
 ## Conflicts and uncertain results
 
 Do not run `prepare` over a stale file to conceal a fingerprint conflict. Preserve the stale file, obtain a fresh export, and return the conflicting declaration fields and relationships to the calling workflow. Do not invent an automatic merge policy.
 
-If the DB commit succeeded but the declaration-file rewrite failed, keep the exact file and run the same `axon import apply` again. Axon accepts that retry only when the DB already matches the complete declared result.
+If storage application succeeded but the declaration-file rewrite failed, keep the exact file and run the same `axon import apply` again. Axon accepts that retry only when active storage already matches the complete declared result.
 
-If command completion is unknown, first confirm that the process ended and keep the working file unchanged. Reconcile its readonly snapshots and owned values with the current DB. Retry only the same preserved apply file under Axon's recovery contract; otherwise report `DB applied: unknown`.
+If command completion is unknown, first confirm that the process ended and keep the working file unchanged. Reconcile its readonly snapshots and owned values with current storage. Retry only the same preserved apply file under Axon's recovery contract; otherwise report `storage result: unknown`.
 
-Delete only temporary files created by this operation, and only after their DB and artifact outcomes are known. Report the exact path and recovery purpose of any retained file.
+Delete only temporary files created by this operation, and only after their storage and artifact outcomes are known. Report the exact path and recovery purpose of any retained file.

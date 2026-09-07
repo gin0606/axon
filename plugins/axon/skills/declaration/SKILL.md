@@ -1,6 +1,6 @@
 ---
 name: declaration
-description: Axon declaration artifactを、依頼されたfileまたはDBへの反映範囲、ユーザー所有fileの保護、Control stateとの段階操作、競合時の再調整まで含めて扱う個人用ワークフロー。単純なread-only checkには公式kitだけを使う。
+description: Axon declaration artifactを、依頼されたfileまたはactive storageへの反映範囲、ユーザー所有fileの保護、Control stateとの段階操作、競合時の再調整まで含めて扱う個人用ワークフロー。単純なread-only checkには公式kitだけを使う。
 ---
 
 # Axon declarationを個人用方針で扱う

@@ -5,7 +5,7 @@ description: Provide Axon's shared state and information model plus the safety c
 
 # Axon operation contract
 
-Use this skill as the shared foundation for every Axon capability. It defines what Axon data means and how an authorized operation is executed without losing history, duplicating non-idempotent effects, or mistaking an uncertain result for success.
+Use this skill as the shared foundation for every Axon capability. It defines what Axon data means and how an authorized operation is executed without losing history, duplicating non-idempotent effects, or mistaking an uncertain storage result for success.
 
 ## Keep the layers separate
 
@@ -18,7 +18,7 @@ Use this skill as the shared foundation for every Axon capability. It defines wh
 
 Read [the model contract](references/model.md) before interpreting an Entity, changing its declaration or Control state, or reasoning about relationships and derived facts.
 
-Read [the mutation contract](references/mutations.md) before any command that changes the Axon DB. Read-only inspection does not require that reference unless a previous mutation has an uncertain outcome.
+Read [the mutation contract](references/mutations.md) before any command that changes Axon storage or a storage-related artifact. Read-only inspection does not require that reference unless a previous mutation has an uncertain outcome.
 
 For new Issue or Group creation, also read [the creation contract](references/creation.md).
 
@@ -28,4 +28,4 @@ Use `axon help` or the relevant `axon <command> --help` when command syntax or a
 
 ## Return a capability result
 
-Report the target IDs, the requested effect, the observed final state, and any relevant frontier or relationship impact. For a mutation, classify the DB result as applied, not applied, partially completed, or unknown. Do not hide unfinished phases behind a general success message.
+Report the target IDs or storage artifacts, the requested effect, the observed final state, and any relevant frontier or relationship impact. For a mutation, classify the storage result as applied, not applied, partially applied, or unknown. Do not hide unfinished phases behind a general success message.

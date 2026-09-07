@@ -38,7 +38,7 @@ Codex の linked worktree から共有 DB を更新する場合は、[Codex の 
 
 ## Agent skills
 
-[`plugins/axon-kit`](plugins/axon-kit) は、axon の状態・情報モデルと安全な tracker 操作を提供する公式の Axon Skill Kit である。`$axon-kit:conventions`、`capture`、`plan`、`triage`、`work-state`、`add-note`、`declaration` を、利用者固有の実装フローと分けて提供する。
+[`plugins/axon-kit`](plugins/axon-kit) は、axon の状態・情報モデルと安全な tracker 操作を提供する公式の Axon Skill Kit である。`$axon-kit:conventions`、`capture`、`plan`、`triage`、`work-state`、`add-note`、`declaration` に加え、backend初期化と検査を担う`storage`、手動変換を担う`migrate`、file snapshotの三方向統合を担う`merge`を、利用者固有の実装フローと分けて提供する。
 
 [`plugins/axon`](plugins/axon) は、公式 kit に個人用の判断と協業方針を重ねる。`conventions`、`register`、`triage`、`work-state`、`declaration` で、自律実行と重要な意思決定の境界、重複確認、構造整理、artifact 保護、申し送りを扱う。
 

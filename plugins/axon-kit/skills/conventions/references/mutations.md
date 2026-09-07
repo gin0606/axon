@@ -1,6 +1,16 @@
 # Axon mutation contract
 
-Read this reference before changing the Axon DB or when reconciling a mutation whose outcome is uncertain.
+Read this reference before changing Axon storage or a storage-related artifact, or when reconciling a mutation whose outcome is uncertain.
+
+## Respect the active backend
+
+Axon selects one authoritative store through the active root's configuration. Do not infer the backend or authoritative path from an old database, a nearby state file, or another worktree. When backend, root, permission, or Git consequences matter, inspect the active configuration and the paths reported by Axon before mutation.
+
+With the file backend, ordinary mutations change the active worktree's `.axon/state.jsonl`, which is intended for Git tracking and may already be tracked; configuration and `.axon/.gitignore` belong to the same worktree-local artifact set. The mutation does not authorize staging, committing, merging, or discarding those files. Preserve unrelated working-tree changes and report the storage artifacts changed by the operation. Reads in one worktree observe only its current snapshot: they do not prove that another worktree has no divergent state or claim.
+
+With SQLite in Git, the authoritative `axon/state.db` is under the common Git directory and may be outside the current sandbox or worktree. Escalate only the authorized Axon mutation when host permission is required. Do not broaden that permission to read-only commands or unrelated programs.
+
+If the file backend's Git index is unmerged, normal operations are intentionally rejected. Preserve the inputs and resolve and stage a validated snapshot through the storage or merge workflow; do not bypass the guard by writing the state file directly.
 
 ## Execute one effect at a time
 
@@ -10,15 +20,15 @@ Read this reference before changing the Axon DB or when reconciling a mutation w
 
 ## Verify observed state
 
-After a successful mutation, read the complete target state and verify the operation's postconditions. Re-read Revisions, Notes, relationships, claims, or frontiers when the capability's effect can change them. Treat command output as evidence, not as a substitute for the relevant postcondition.
+After a successful mutation, read the complete target or artifact state and verify the operation's postconditions. Re-read Revisions, Notes, relationships, claims, frontiers, configuration, or storage artifacts when the capability's effect can change them. Treat command output as evidence, not as a substitute for the relevant postcondition.
 
 If a multi-phase workflow completes only some mutations, stop at the first unresolved phase. Preserve the applied state and any recovery artifact, report completed and remaining phases separately, and do not automatically roll back with compensating mutations.
 
 ## Retry only after reconciliation
 
-A clear failure is not permission to repeat the same command without changing its cause. If command completion or DB application is unknown, first confirm that the process has ended and inspect current state using stable IDs, record counts, actor labels, payloads, and operation-specific postconditions.
+A clear failure is not permission to repeat the same command without changing its cause. If command completion or storage application is unknown, first confirm that the process has ended and inspect current state using stable IDs, record counts, actor labels, payloads, and operation-specific postconditions.
 
-Repeat a mutation only when its capability defines a safe reconciliation rule and the observations establish that repetition cannot duplicate the effect. In particular, Entity creation and Note addition need their own duplicate checks. If the evidence cannot distinguish applied from unapplied, report the DB outcome as unknown and stop.
+Repeat a mutation only when its capability defines a safe reconciliation rule and the observations establish that repetition cannot duplicate the effect. In particular, Entity creation and Note addition need their own duplicate checks. If the evidence cannot distinguish applied from unapplied, report the storage outcome as unknown and stop.
 
 ## Preserve input snapshots
 

@@ -1,6 +1,6 @@
 ---
 name: triage
-description: 既存Axon Entityの採否、時期、declaration、包含、dependencyを調査し、供給された判断と合意済み計画から確定できる変更を安全に反映する個人用ワークフロー。独立したNoteや実装には使わない。
+description: 既存Axon Entityの採否、Resurface condition、declaration、包含、dependencyを調査し、供給された判断と合意済み計画から確定できる変更を安全に反映する個人用ワークフロー。独立したNoteや実装には使わない。
 ---
 
 # 既存Axon Entityを判断する
@@ -9,11 +9,11 @@ description: 既存Axon Entityの採否、時期、declaration、包含、depend
 
 ## 判断材料を揃える
 
-対象の全情報、関係するDeclaration Revision、判断履歴、関連Entityとfrontierを読み、未判断、前提喪失、既存判断の見直し、declarationだけの修正、Resurface conditionの変更を区別する。
+対象の保存情報、関係するDeclaration Revision、判断履歴、関連Entityとfrontierを読み、未判断、前提喪失、既存判断の見直し、declarationだけの修正、Resurface conditionの変更を区別する。保存情報だけの調査ではCommand条件を実行せず、導出状態が判断を変える場合だけ別に評価する。
 
-現状維持を含む現実的な選択肢、Progress、Disposition、時期、関係、active scope、frontierへの影響、推奨と不確実性を示す。Dispositionの選択はユーザーの明示した結論だけを反映し、分析や推奨から採否を決めない。結論が供給されていなければ判断材料を返す。
+現状維持を含む現実的な選択肢、Progress、Disposition、Resurface condition、関係、active scope、frontierへの影響、推奨と不確実性を示す。Dispositionの選択はユーザーの明示した結論だけを反映し、分析や推奨から採否を決めない。結論が供給されていなければ判断材料を返す。
 
-Resurface conditionは、明示された日付または待機先をそのまま反映できる。いつ再浮上させるかを新たに選ぶ必要がある場合はユーザーへ返す。
+Resurface conditionは、明示されたAlwaysへの解除、日付、待機先Entity、Manual、Commandをそのまま反映できる。Command文字列は実行可能なControl stateであり、内容または実行影響を新たに決める必要がある場合はユーザーへ返す。どの条件で再浮上させるかを新たに選ぶ必要がある場合もユーザーへ返す。
 
 ## declarationと構造を整える
 

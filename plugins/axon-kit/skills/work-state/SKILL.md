@@ -33,20 +33,10 @@ Done means no further work will be performed for this Entity. The caller supplie
 
 For a Group, require every descendant to be terminal. Do not mutate descendants or automatically finish the Group when the last child becomes terminal.
 
-Before `done`, inspect dependencies, Group ancestry, and any waiter impact needed by the caller. Use `axon list` only when complete reverse `AfterEntity` impact is required.
+Before `done`, inspect dependencies, Group ancestry, and any waiter impact needed by the caller. Use `axon list --skip-command-evaluation` only when complete reverse `AfterEntity` impact is required, then evaluate relevant frontiers separately.
 
 Run `axon done <id>` as a standalone mutation. Verify the target's ended state, claim removal, progress history, direct dependents, relevant waiters, Group ancestry, and frontier impact. Do not automatically finish an ancestor Group; return any ancestor that has become completable.
 
 ## Return
 
-Return the requested lifecycle effect, final Progress and claim, relevant frontier and relationship impact, and `DB applied` classification. Never continue into external work or a later lifecycle effect on your own.
-
-## Inspect without executing external conditions
-
-If a Command condition fails or does not finish, use `axon list --skip-command-evaluation`
-or `axon show <id> --skip-command-evaluation` to inspect saved information without
-executing any Command, including ancestor, descendant, and related conditions.
-`unevaluated` is a read-time observation, not false or a stored state. Other conditions
-remain evaluable. This option can be combined with `--trace-conditions` but emits no
-Command trace; it does not establish readiness for a lifecycle mutation. Normal reads
-and lifecycle checks continue to evaluate conditions.
+Return the requested lifecycle effect, final Progress and claim, relevant frontier and relationship impact, changed storage artifacts when relevant, and storage-result classification. Never continue into external work or a later lifecycle effect on your own.

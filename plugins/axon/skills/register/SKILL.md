@@ -1,6 +1,6 @@
 ---
 name: register
-description: 新しいIssueまたはGroupの重複と計画の完成度を確認し、依頼から確定できるDisposition、declaration、構造、時期で登録する個人用ワークフロー。既存Entityの変更や実装には使わない。
+description: 新しいIssueまたはGroupの重複と計画の完成度を確認し、依頼から確定できるDisposition、declaration、構造、Resurface conditionで登録する個人用ワークフロー。既存Entityの変更や実装には使わない。
 ---
 
 # 新しいAxon Entityを登録する
@@ -9,11 +9,11 @@ description: 新しいIssueまたはGroupの重複と計画の完成度を確認
 
 ## 登録内容を確定する
 
-関連するコード、文書、Entityを必要な範囲で調べ、目的、scope、完了条件、kind、親Group、outgoing dependency、Resurface conditionを確定する。
+関連するコード、文書、Entityを必要な範囲で調べ、目的、scope、完了条件、kind、親Group、outgoing dependency、`Always`、`AtDate`、`AfterEntity`、`Manual`、`Command`のいずれかのResurface conditionを確定する。
 
 - ユーザーが実行または採用を明示していればAccepted、懸念や未解決事項の記録ならUndecidedとする。採否を読み取れない単独の「登録して」では確認する。
 - 一つの懸念または作業はIssue、複数Entityを含む明示的な計画範囲はGroupとする。合意済みscopeからkindを一意に決められない場合は確認する。
-- Resurface conditionは既定でAlwaysとする。明示された日付または待機先Entityは反映し、単に「後で」のように条件を選べない場合は確認する。
+- Resurface conditionは既定でAlwaysとする。明示された日付、待機先Entity、明示解除まで非浮上にするManual、または保存するshell commandをそのまま反映する。Commandは条件評価時に`/bin/sh -c`で実行されるため、文字列と実行影響が依頼から確定しない場合は作らない。単に「後で」のように条件を選べない場合は確認する。
 
 `axon:conventions`に従い、合意済みの目的、scope、完了条件から親、dependency、分解を自律して導く。計画の意味、採用、公開仕様、独立した完了単位を新たに決める必要がある場合だけユーザーへ返す。
 
