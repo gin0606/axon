@@ -461,18 +461,20 @@ orphaned など axon で有効な結果は警告と差分として出すが、im
 
 ### 6.4 apply
 
-apply は書き込み lock を取得したあと check と同じ検証を新しい一貫した snapshot で再実行し、全作成・更新・関係変更を一つの SQLite transaction で Store の状態更新境界を通して反映する。一件でも失敗すれば全件 rollback する。
+apply は書き込み lock を取得したあと check と同じ検証を新しい一貫した snapshot で再実行し、全作成・更新・関係変更を Store の状態更新境界を通して一括反映する。一件でも検証に失敗すれば、宣言の変更は全件適用しない。
 
-DB commit 後に同じ file を canonical rewrite する。
+SQLite backend は一つの transaction で保存し、commit 前の失敗では rollback する。file backend は検証済み snapshot を atomic replace し、directory sync まで完了して保存成功とする。SQLite の commit 自体の失敗や file の置換後の同期失敗は結果不明として扱い、全件未適用とは断定しない。詳細は[保存契約](file-storage.md#保存の保証と失敗時の確認)と[CLI の診断の保存境界](cli.md#診断の保存境界)に従う。
+
+保存成功後に同じ宣言 file を canonical rewrite する。
 
 - 新規 Entity の base を現在の fingerprint に置き換える
-- 既存 Entity と references の base / observed を commit 後 snapshot に更新する
+- 既存 Entity と references の base / observed を保存後 snapshot に更新する
 - key と key reference は残す
 - relation と list を canonical order に並べる
 
 fresh export では key を復元せず ID reference を使う。
 
-DB commit 後、file 更新だけに失敗した場合は、同じ宣言を再度 apply できる。base が古くても、DB の現在の所有値と読み取り専用値が宣言の最終値に完全一致すれば、直前の適用済み内容と判断して DB は no-op とし、file rewrite だけを完了する。一部だけ一致する場合や、その後に別の変更がある場合は競合として拒否する。
+保存成功後、宣言 file 更新だけに失敗した場合は、同じ宣言を再度 apply できる。base が古くても、Store の現在の所有値と読み取り専用値が宣言の最終値に完全一致すれば、直前の適用済み内容と判断して Store は no-op とし、宣言 file rewrite だけを完了する。一部だけ一致する場合や、その後に別の変更がある場合は競合として拒否する。
 
 ## 7. 拒否する入力
 
