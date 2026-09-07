@@ -440,7 +440,7 @@ SQLite は transaction の開始・保存・commit、file は置換前・置換�
 SQLite の commit 自体のエラーは保守的に `Result unknown` とし、保存前の拒否と混同しない。
 `Applied: storage declaration values` は import の保存値が確定したことを表し、DB no-op も含む。
 確認出力に失敗しても保存済みの結果は `Applied:` に残す。BrokenPipe の成功扱いは維持する。
-init の設定公開前に state を保存した場合、merge setup の属性更新前に Git config を設定した場合も、
+init の Git integration 完了前に state や一部の補助 file を保存した場合も、
 適用済みの段階を診断に残す。
 
 時点・確認経路・維持/修正の処分は
@@ -499,12 +499,17 @@ actor、worktree、外部command、pathも値全体を意味色で塗らない�
 
 `export` と completion は生成内容そのものを標準出力へ書き、人向けの装飾を加えない。
 
-Git 配下では active worktree root の `.axon/config.json`、Git 外では最寄りの設定を持つ祖先を使う。`init --backend file` は `.axon/state.jsonl` を正本とし、既定の SQLite は common Git directory の `axon/state.db`（Git 外は `.axon/state.db`）を使う。設定・正本の欠落や不正で fallback しない。Issue と Group は同じ `<prefix>-<ランダム 6 文字>` namespace を使い、完全 ID または一意な suffix で解決する。
+Git 配下の file 正本は現在の worktree root の `.axon/state.jsonl`、
+SQLite は common Git directory の親の `.axon/axon.db` を共有する。
+Git 外は最寄りの正本または pending marker がある管理 root の同じ二つの名前を使う。
+設定ファイルはなく、両方存在すれば混在エラー、どちらもなければ未初期化。
+破損・途中生成で fallback しない。一 repository 一 backend を想定し、全 worktree は走査しない。
+Issue と Group は同じ `<prefix>-<ランダム 6 文字>` namespace を使い、完全 ID または一意な suffix で解決する。
 
 ## DBの互換性検査
 
 通常openはv13と既知DDLを検査し、旧版・未来版・未知構造を変更せず拒否する。
-`init`は既存正本をreset/upgradeせず、有効な設定・正本への再実行はそれらを保持する。Git 内では SQLite の `info/exclude` または file の `.axon/.gitignore` を補完する。保存成功境界とinit復旧は[backendとfile保存](file-storage.md)を参照。help、docs、version、completionはDB不要。
+`init` は新規作成専用で、既存正本や初期化途中への再実行を拒否する。既定は SQLite で ignore は変更しない。`--backend file` は Git 内外とも `.axon/.gitignore` と root `.gitattributes` を生成・補完する。Git driver の登録は利用者が通常の `git config` で行う。保存成功境界とinit復旧は[backendとfile保存](file-storage.md)を参照。help、docs、version、completionはDB不要。
 手動変換は明示したv11/v12/v13入力から別directoryへ出力し、元DBの切替はしない。
 診断はpath、版、処理段階、原因、backup先と出力の適用状態を示す。失敗時の途中成果を上書きせず、
 結果不明なら出力とbackupを調べてから再開する。具体的な手順は[手動移行](migration.md)。

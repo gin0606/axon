@@ -36,6 +36,22 @@ axon completion zsh > _axon    # シェル補完スクリプトを生成
 
 Codex の linked worktree から共有 DB を更新する場合は、[Codex の sandbox 設定](docs/guide/codex.md)を一度だけ行う。
 
+### file backend の Git driver 登録
+
+`axon init --backend file` は正本、`.axon/.gitignore`、`.gitattributes` を用意する。
+install 後、利用する repository 内で driver を登録する（`axon` が PATH 上に必要）。
+
+```sh
+git config merge.axon.name "Axon validated snapshot merge"
+git config merge.axon.driver "axon merge driver %O %A %B"
+git config merge.axon.recursive binary
+```
+
+これは repository-local 設定で、clone 先でも必要。全 repository 共通にしたい場合だけ
+`--global` を指定する。Axon は stage/commit を行わない。
+既定の SQLite init は `.axon/axon.db` を作り、ignore 設定は利用者に任せる。
+保存先・worktree・手動復旧は [保存契約](docs/reference/file-storage.md) を参照する。
+
 ## Agent skills
 
 [`plugins/axon-kit`](plugins/axon-kit) は、axon の状態・情報モデルと安全な tracker 操作を提供する公式の Axon Skill Kit である。`$axon-kit:conventions`、`capture`、`plan`、`triage`、`work-state`、`add-note`、`declaration` に加え、backend初期化と検査を担う`storage`、手動変換を担う`migrate`、file snapshotの三方向統合を担う`merge`を、利用者固有の実装フローと分けて提供する。

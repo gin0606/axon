@@ -391,6 +391,7 @@ impl Store {
         Ok(store)
     }
 
+    #[cfg(test)]
     pub fn state(&self) -> Result<core::StateSnapshot> {
         let tx = self.conn.unchecked_transaction()?;
         let state = read_state(&tx, self.evaluation.clone())?;

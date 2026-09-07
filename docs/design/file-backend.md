@@ -207,9 +207,9 @@ active root へ保存する場合は設定の identity と digest も固定し�
 
 Git の標準テキスト merge の成功だけで正しい状態とは判断しない。通常 open も保存情報の
 検査を行う。driver がない環境では明示的な prepare / check / apply で解決できる。
-Git index 上で設定または正本が unmerged の間は、通常の Axon 操作を拒否する。
+Git index 上で正本が unmerged の間は、通常の Axon 操作を拒否する。
 marker がない片側の有効ファイルだけが残っていても、解決済みとはみなさない。
-driver の登録は明示的な setup とし、通常 init や読み書きで Git 設定を黙って変更しない。
+driver の登録は通常の Git config とし、通常 init や読み書きで Git 設定を黙って変更しない。
 未解決なら非 0 を返して conflict を残し、部分的に valid に見える snapshot を返さない。
 Git が渡す一時入力は失われ得るため、手動解決用の原本は別の作業 directory へ保持する。
 driver は通常の backend discovery を呼ばず、受け取ったファイルだけを処理する。
@@ -229,28 +229,10 @@ null と空集合の扱いを codec に集約する。未知 field / version、�
 reader は無害な record 順・空白の違いを受け入れ、writer が canonical bytes を生成する。
 no-op は正規化のためだけにファイルを書き換えない。
 
-backend の選択は active root の `.axon/config.json` に置き、Git ではその worktree に
-属する設定とする。設定は backend、設定 schema、接続する store ID を持ち、正本の
-store ID との一致を検査する。prefix や Entity の内容は設定に複写しない。
-file と設定は Git で追跡し、lock と merge workspace は追跡しない。
-
-- Git 配下では `--show-toplevel` の root を使う。祖先や別 worktree に fallback しない。
-- Git 外では最寄りの `.axon/config.json` を持つ祖先が root。壊れた設定で探索を続けない。
-- file 設定ならその root の state.jsonl だけを開く。欠落時は空 state や SQLite に fallback しない。
-- SQLite 設定なら Git では common directory 配下の `axon/state.db`、Git 外では
-  active root の `.axon/state.db` を使う。SQLite の共有は保存先の性質であり、file に持ち込まない。
-- 設定なしは未初期化。旧 `.axon/axon.db` があれば移行を案内し、通常 open で暗黙変換しない。
-- backend はコマンド単位の flag で変更しない。異なる backend のデータへ設定だけを
-  書き換えて転用する経路は migration として認めない。
-- 他 worktree の file と共有 SQLite の共存は、それだけでは異常としない。active root の
-  明示設定が一つの正本を選ぶ。全 worktree の保存物探索や共有 file binding を導入しない。
-
-`init` は明示指定、または省略時 SQLite を選ぶ。既存データを上書きせず、同じ有効な
-設定・正本が揃っていれば no-op。新規生成では complete data を先に、設定を最後に
-publish し、通常 open は設定と正本が両方 valid の場合だけ成功する。中断で一方だけが
-ある場合はその path と状況を示し、空データの自動再生成はしない。既存の valid な共有
-SQLite を別 worktree に登録するときは、その DB を再初期化せず設定だけを作る。
-clone で取得した file 設定と正本は追加の shared binding なしで使える。
+backend 選択・保存先・init は、2026-09-07 の
+[設定ファイルを持たない保存先と初期化](storage-discovery.md) で改訂した。
+設定による選択、worktree ごとの異種 backend 併用、既存 init の補完動作は採用しない。
+store ID は正本内に保持し、file writer と merge の identity 検査に使う。
 
 ## 更新の成功境界
 
@@ -302,7 +284,7 @@ v11 から最終形式へ直接出力する入口も同じ経路を順に適用�
 5. 新 SQLite または file と、入力 snapshot、schema・件数・ID 対応表・検査結果の manifest を
    新しい移行先へ出力する。既存の出力先を上書きしない。
 6. 全情報の比較と新 backend での読み取りを確認後、利用者が旧版の書込を止めたまま
-   設定・保存先を明示的に切り替える。tool が既存 root を自動で切り替えることはしない。
+   保存先と Git integration を手動で切り替える。tool が既存 root を自動で切り替えることはしない。
 
 同じ固定入力から別々に変換しても同じ store ID と記録 ID を得る。同じ DB の異なる
 時点から独立変換したものを merge 可能な共通起点とは扱わず、原則一度変換した成果を

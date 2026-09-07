@@ -4,11 +4,11 @@ Read this reference before changing Axon storage or a storage-related artifact, 
 
 ## Respect the active backend
 
-Axon selects one authoritative store through the active root's configuration. Do not infer the backend or authoritative path from an old database, a nearby state file, or another worktree. When backend, root, permission, or Git consequences matter, inspect the active configuration and the paths reported by Axon before mutation.
+Axon discovers the backend from prescribed canonical state paths, without a configuration file. File state is worktree-local; SQLite is shared across Git worktrees. Both paths present is an error; invalid or pending state stops discovery. One backend per repository is supported, without scanning other worktrees. Inspect the intended root and canonical paths before mutation; do not treat a legacy backup as authoritative.
 
-With the file backend, ordinary mutations change the active worktree's `.axon/state.jsonl`, which is intended for Git tracking and may already be tracked; configuration and `.axon/.gitignore` belong to the same worktree-local artifact set. The mutation does not authorize staging, committing, merging, or discarding those files. Preserve unrelated working-tree changes and report the storage artifacts changed by the operation. Reads in one worktree observe only its current snapshot: they do not prove that another worktree has no divergent state or claim.
+With the file backend, ordinary mutations change the active worktree's `.axon/state.jsonl`, which is intended for Git tracking and may already be tracked; `.gitattributes` and `.axon/.gitignore` belong to the same worktree-local artifact set. The mutation does not authorize staging, committing, merging, or discarding those files. Preserve unrelated working-tree changes and report the storage artifacts changed by the operation. Reads in one worktree observe only its current snapshot: they do not prove that another worktree has no divergent state or claim.
 
-With SQLite in Git, the authoritative `axon/state.db` is under the common Git directory and may be outside the current sandbox or worktree. Escalate only the authorized Axon mutation when host permission is required. Do not broaden that permission to read-only commands or unrelated programs.
+With SQLite in Git, the authoritative `.axon/axon.db` is under the parent of the common Git directory and may be outside the current sandbox or worktree. Escalate only the authorized Axon mutation when host permission is required. Do not broaden that permission to read-only commands or unrelated programs.
 
 If the file backend's Git index is unmerged, normal operations are intentionally rejected. Preserve the inputs and resolve and stage a validated snapshot through the storage or merge workflow; do not bypass the guard by writing the state file directly.
 
@@ -20,7 +20,7 @@ If the file backend's Git index is unmerged, normal operations are intentionally
 
 ## Verify observed state
 
-After a successful mutation, read the complete target or artifact state and verify the operation's postconditions. Re-read Revisions, Notes, relationships, claims, frontiers, configuration, or storage artifacts when the capability's effect can change them. Treat command output as evidence, not as a substitute for the relevant postcondition.
+After a successful mutation, read the complete target or artifact state and verify the operation's postconditions. Re-read Revisions, Notes, relationships, claims, frontiers, or storage artifacts when the capability's effect can change them. Treat command output as evidence, not as a substitute for the relevant postcondition.
 
 If a multi-phase workflow completes only some mutations, stop at the first unresolved phase. Preserve the applied state and any recovery artifact, report completed and remaining phases separately, and do not automatically roll back with compensating mutations.
 

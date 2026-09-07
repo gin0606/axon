@@ -20,11 +20,11 @@ Run `axon merge check <workspace>` after each resolution edit. It recomputes the
 
 ## Publish only the checked candidate
 
-Immediately before publication, verify that inputs, resolution, checked candidate, destination preimage, configuration, store identity, and output path still match the workspace. Run `axon merge apply <workspace>` as one standalone storage mutation.
+Immediately before publication, verify that inputs, resolution, checked candidate, destination preimage, backend, store identity, and output path still match the workspace. Run `axon merge apply <workspace>` as one standalone storage mutation.
 
 Apply publishes only the last checked valid candidate. It does not stage the result or continue Git. Verify the output bytes and store identity, run `axon storage check <output>`, and inspect the affected Entities. If the same candidate is already at the output, a verified repeat can be a no-op; do not infer that case without matching the preserved candidate and destination.
 
-If publication may have reached the destination but completion is unknown, preserve the entire workspace and output. Confirm the process ended and compare the candidate, destination, configuration, and recorded digests before any retry. Never replace the destination manually or regenerate the workspace to conceal drift.
+If publication may have reached the destination but completion is unknown, preserve the entire workspace and output. Confirm the process ended and compare the candidate, destination, backend, and recorded digests before any retry. Never replace the destination manually or regenerate the workspace to conceal drift.
 
 ## Recover a Git-driver conflict
 

@@ -1,63 +1,67 @@
 # Backend の選択と file 保存
 
-`axon init --backend file [prefix]` は active root の `.axon/state.jsonl` を作る。
-`axon init [prefix]` の既定は SQLite。Git では現在の worktree root、Git 外では
-init は現在 directory、通常操作は最寄りの `.axon/config.json` を持つ祖先を使う。
-既存管理 root の配下で Git 外の入れ子を暗黙には初期化しない。
+`axon init [prefix]` の既定は SQLite。`--backend file` は file を選ぶ。
+backend 設定ファイルは持たず、所定の正本の存在から判別する。
 
-設定 schema 1 の例:
+| 環境 | SQLite | file |
+| --- | --- | --- |
+| Git | Git common directory の親の `.axon/axon.db` | 現在の worktree root の `.axon/state.jsonl` |
+| Git 外 | 管理 root の `.axon/axon.db` | 管理 root の `.axon/state.jsonl` |
 
-```json
-{
-  "schema": 1,
-  "backend": "file",
-  "store_id": "store-0123456789abcdef0123456789abcdef"
-}
+Git では現在の repository が境界。SQLite は linked worktree 間で共有し、追加の init は不要。
+Git 外の通常操作は最寄りの正本または `init.pending` を持つ祖先が管理 root。
+空の `.axon` や lock だけでは探索を止めない。Git 外の init は現在 directory を使うが、
+既存管理 root 配下の入れ子 init は拒否する。
+
+観測する二つの正本が両方あれば混在エラー、どちらもなければ未初期化。
+破損・読取不能・途中生成はエラーにし、別 backend や祖先へ fallback しない。
+store ID は正本内に保持する。旧 config/state.db の互換探索や暗黙移行は行わない。
+既存データの採用・切替は[手動移行](migration.md)で扱う。
+
+一つの Git repository に一つの backend を使う。worktree ごとの異種 backend 混在は非対応。
+全 worktree は走査しないため、別 worktree だけにある file との混在は検出を保証しない。
+file は Git で取り込んだ snapshot だけを読み、同じ Issue を別 worktree で start できる。
+正本がない branch では未初期化となる。既存 store を使うならその正本を取り込む。
+
+## init と Git integration
+
+init は新規作成専用。既存正本が valid でも再実行は拒否し、修復・backend 切替はしない。
+SQLite init は ignore や attribute、Git config を変更しない。ignore 方法は利用者が選ぶ。
+file init は Git 内外とも、次を生成・補完する。
+
+`.axon/.gitignore`:
+
+```gitignore
+*
+!.gitignore
+!state.jsonl
 ```
 
-store ID は init が生成した正本の ID と一致する必要がある。prefix は設定へ複写しない。
-設定・正本が欠落、不正、異なる store ID の場合は他 root、SQLite、空 state を開かない。
-Git 外でも途中生成の正本・pending marker がある root を飛ばして祖先へ進まない。
-backend は通常操作の flag では変更しない。既存データの採用・切替は手動移行で扱う。
-旧 `.axon/axon.db` は通常 open/init で変換しない。
+root の `.gitattributes`:
 
-SQLite は Git common directory の `axon/state.db`、Git 外では `.axon/state.db` を使う。
-別 worktree の file と共有 SQLite は共存できる。別 worktree から既存 valid SQLite を
-登録するときは `axon init --backend sqlite` が設定だけを作る。DB を再初期化しない。
+```gitattributes
+/.axon/state.jsonl merge=axon
+```
 
-Git 内の `init` は backend に応じて ignore を補完する。SQLite は Git の
-`info/exclude` に `/.axon/` を追加し、設定も含めてローカルだけに保持する。
-`.axon/.gitignore` は作らず、コミットは不要。既存の exclude の内容は保持し、
-同じ除外を重複追加しない。linked worktree では `git rev-parse --git-path info/exclude`
-が指す共有先を使う。
-
-file は `.axon/.gitignore` がなければ作る。全項目を除外し、`.gitignore` 自身と
-`config.json`、`state.jsonl` を例外にする。再実行でも欠落を補完するが、既存の
-`.gitignore` は上書きしない。Git 外ではどちらの ignore も作らない。
-親やグローバル、共有 `info/exclude` が `.axon/` 自体を除外している場合は、内部の例外は
-効かないため、その除外を取り除くか、file 側の root の `.gitignore` に `!/.axon/` を指定する。
-SQLite と file の worktree が混在する場合もこの例外が必要になる。
-既に追跡されたファイルは ignore だけでは追跡解除されない。backend の手動切替時は
-追跡対象と ignore も切替先に合わせる。
-file の設定と正本、`.axon/.gitignore` を Git へ追加する。init は Git の設定・index を変更しない。
-ignore の保存に失敗した場合はエラーを返す。公開済みの設定・正本は保持し、原因解消後の
-`init` 再実行で補完する。
-clone 済みの設定と正本はそのまま利用でき、共有 binding は不要。
-同じ Issue を別 worktree で start でき、変更はその worktree 内だけに保存される。
+既存の無関係な行を保持し、同じ必要行を重複させない。直接対象を指定する競合行、
+読取不能、通常 file でない編集先ではエラーにする。
+親/global ignore が `.axon/` 全体を隠しても変更・拒否しない。
+実際に追跡するかは利用者の責任で、init は Git driver 登録、stage、commit を行わない。
+既に追跡された file は ignore で追跡解除されない。
 
 ## 保存の保証と失敗時の確認
 
 file writer は stable sidecar の OS lock を取得してから、正本読取、core 操作、
-temporary file 書込と sync、元 bytes と設定の再照合、atomic replace、directory sync
+temporary file 書込と sync、元 bytes と backendの再照合、atomic replace、directory sync
 を行う。成功はその後に返す。no-op は空白などの非 canonical な bytes も保持する。
 lock file は replace/unlink しない。終了した process の lock は OS が解放する。
 
 置換前の失敗は未適用。置換後の同期に失敗すると「result unknown」を返す。
-この場合は writer の終了を確認し、config と state、対象 Entity・記録 ID を読み、
+この場合は writer の終了を確認し、state と backend、対象 Entity・記録 ID を読み、
 変更が入ったか照合してから次の操作を判断する。Note 追加を推測で繰り返さない。
 残った temporary file は正本ではない。調査・退避してから削除する。
 
-Git index の設定または正本が unmerged の間は、内容が valid でも通常操作を拒否する。
+Git index の正本が unmerged の間は、内容が valid でも通常操作を拒否する。
 解決済みの内容を確認して stage してから操作する。
 Git/editor は sidecar lock に従わず、再照合後の非協調書込を完全には防げない。
 同じ worktree の checkout/merge、editor 保存と Axon 書込を同時に行わない。
@@ -65,16 +69,15 @@ Git/editor は sidecar lock に従わず、再照合後の非協調書込を完�
 
 ## init の中断からの復旧
 
-init は既存正本を上書きしない。新規生成は pending marker を残し、完全な正本を先に、
-設定を最後に公開する。設定と正本が有効なら再実行は no-op。
-片側しかない場合や、設定公開前に中断した場合は自動で空 state を作り直さない。
+init は backend 共通の OS lock 下で存在を確認する。pending marker を残し、
+完成した temporary を正本として公開してから Git integration を整え、最後に marker を除く。
+既存正本を上書きしない。途中失敗では path・操作・保存済み artifact を報告し、自動 rollback しない。
 
-まず writer を停止し、表示された root、設定、正本、pending marker と temporary file を
-まとめて保全する。正本が valid な場合は、その backend と store ID に一致する
-保全済み設定を復元する。設定しかない場合は一致する正本を backup から復元する。
-不完全な正本を使わない。入力が復元できない場合は既存物を保全したまま、別の空 directory
-で新規 init する。設定だけを書き換えて別 backend のデータを流用しない。
-有効な config/state が揃った後の残存 pending marker は調査後に削除できる。
+writer を止め、正本・marker・temporary・Git integration file を保全して診断を確認する。
+正本が完成していれば検証し、必要な補助 file を手動で整えてから marker を取り除く。
+JSONL は `storage check`、SQLite は整合性・schema を確認する。
+不完全な正本を採用しない。作り直す場合は残存物を保全先へ移してから新規 init する。
+init 再実行による修復や専用の復旧コマンドは提供しない。
 
 ## 検証と測定
 
@@ -138,7 +141,7 @@ workspace の親 directory は事前に用意し、workspace 自身は未使用�
 path の別名も解決して prepare/check/apply で拒否する。
 prepare は正本を変更せず、未解決でも原本と診断を残して非0を返す。
 `base.jsonl` / `ours.jsonl` / `theirs.jsonl` は原本、`preimage` は出力先の bytes、
-`manifest.json` は入力の絶対 path/digest・出力先・設定 binding、`context.json` は
+`manifest.json` は入力の絶対 path/digest・出力先・active root と入力の store identity、`context.json` は
 固定日時・actor・操作実行 directory・ID seed。これらは編集しない。
 原本 snapshots は全 Entity の辺・Revision・Note・typed history・因果参照を含み、
 `choices.json` は対象 Entity、stable choice ID、三側の bundle、自動選択 digest を示す。
@@ -170,15 +173,16 @@ change は共通 core の JSON 表現、例 `{"SetTitle":"新題名"}`、
 （管理外では起動 directory）。操作は core の guard と履歴生成を通り、必要な ready 検査だけが固定 root で Command
 条件を実行する。原本履歴の編集や claim 単独の置換は提供しない。
 編集後の check は候補を再計算し、失敗時は以前の適用許可を失効する。
-apply は最後に検査した組と入力・設定・出力先 preimage を lock 下で再照合する。
+apply は最後に検査した組と入力・backend・出力先 preimage を lock 下で再照合する。
 出力 file またはその `.axon` directory が symlink の場合は拒否する。
-設定の store identity 検査と通常 writer の lock を別 path への解決で外さないためである。
+入力の store identity 検査と通常 writer の lock を別 path への解決で外さないためである。
 原本 path の bytes も drift 検査するため、一時ファイルを削除しない。
 同じ候補が出力先にあれば再 apply は no-op。結果不明では原本と候補を保持して照合する。
 
-driver 登録は明示的な `axon merge setup`。現在の実行ファイルの絶対 path を Git local
-設定へ登録し、`.gitattributes` に `/.axon/state.jsonl merge=axon` を追加する。
-`.axon/merge/` も ignore する。init はこれらを変更しない。clone 先では setup を再実行する。
+driver は install 後に各 repository で通常の Git config に登録する。
+`axon` が PATH 上に必要。clone には Git config が引き継がれないので登録が必要になる。
+`--global` は必須ではなく、全 repository で使いたい場合の利用者の選択。
+`axon merge setup` は提供しない。attribute と ignore は file init が用意する。
 Git の内部祖先統合は binary driver を使い、空・不正・曖昧な祖先を推測して合成しない。
 add/add や delete/modify も、完全な共通入力を構成できなければ手動解決へ返す。
 Git が driver を呼ばない場合も通常 open は index の未解決を拒否し、snapshot を検証する。
@@ -186,9 +190,10 @@ Git が driver を呼ばない場合も通常 open は index の未解決を拒�
 ```sh
 # 一時 repository などの独立 fixture で試す例
 axon init --backend file t
-axon merge setup
-# .axon/write.lock と .axon/merge/ を ignore してから利用者が commit
-# 利用者: git add .axon/config.json .axon/state.jsonl .gitattributes; git commit ...
+git config merge.axon.name "Axon validated snapshot merge"
+git config merge.axon.driver "axon merge driver %O %A %B"
+git config merge.axon.recursive binary
+# 利用者: git add .axon/.gitignore .axon/state.jsonl .gitattributes; git commit ...
 # 利用者: git worktree add ../feature -b feature
 # feature 内の axon 操作は main の bytes を変えない
 # feature の変更を利用者が commit した後、main で git merge feature

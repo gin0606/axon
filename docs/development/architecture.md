@@ -12,24 +12,22 @@ DB から読んだ Entity の値を型に変換する境界は `RawEntity::into_
 
 ## 保存先と管理 root
 
-active root の `.axon/config.json`（schema 1、backend、store_id）が正本を選ぶ。
-Git 内では active worktree root、Git 外では最寄りの設定を持つ祖先を使う。
-設定なし・不正・正本欠落で他 root や空 state へ fallback しない。
-file は root の `.axon/state.jsonl`、SQLite は Git common directory の
-`axon/state.db`（Git 外では root の `.axon/state.db`）に保存する。
-旧 `.axon/axon.db` は通常 open/init で移行しない。
+backend 設定は持たない。Git の file は現在の worktree root の `.axon/state.jsonl`、
+SQLite は common directory の親の `.axon/axon.db`。Git 外は最寄りの正本または
+init.pending がある管理 root の同じ二つの名前を使う。両方なら混在、どちらもなければ
+未初期化。破損・途中生成で fallback しない。一 repository 一 backend を利用契約とし、
+見えない他 worktree の混在を検出するための selector や走査は持たない。
 
-file と設定は Git で追跡する。stable sidecar `.axon/write.lock` は追跡せず、
-OS lock の取得後に正本を読み、共通 core を適用する。同じ directory の temporary file を
-sync し、元 bytes と設定を再照合して atomic replace、directory sync の順に公開する。
+file writer は stable sidecar `.axon/write.lock` の OS lock 下で読取、core 操作、
+temporary の sync、元 bytes・backend・identity 再確認、atomic replace、directory sync を行う。
 no-op は bytes を保持する。replace 前の失敗は未適用、replace 後の同期失敗は結果不明。
-成功表示は公開後に限る。init は正本を先、設定を最後に公開し、片側だけの生成を診断する。
-既存 valid shared SQLite の worktree 登録では DB を保持して設定を作る。
-Git 内の init は SQLite では共有 `info/exclude` に `.axon` の除外を補完し、
-file では追跡対象を例外にした `.axon/.gitignore` を欠落時に作る。
-既存設定への再実行でも補完し、利用者の既存 ignore は保持する。
+init は backend 共通の排他、pending marker、完成正本の新規公開、補助 file 作成、
+marker 削除の順に進む。既存正本の再 init は拒否し、自動修復・rollback はしない。
+SQLite は ignore を変更しない。file は Git 内外とも ignore と attribute を生成・補完する。
+詳細と理由は [保存先の設計](../design/storage-discovery.md) と
+[保存契約](../reference/file-storage.md) を参照する。
 
-Git index の設定・正本に unmerged entry があれば通常操作を拒否する。
+Git index の正本に unmerged entry があれば通常操作を拒否する。
 Git/editor は lock に従わないため、同じ worktree の checkout/merge と Axon write を
 同時実行しない。分散 lock、network filesystem の保証、全 worktree scan は提供しない。
 状態・Group・情報所有・因果履歴の意味は維持する。filesystem の障害と並行性は
@@ -160,10 +158,10 @@ actor は一覧と調査の手掛かりであり、排他制御や `release` の
 
 v13の通常openは版と既知DDLを検査し、旧版を暗黙に更新しない。
 `axon migrate --source <v11-v12-v13-db> --output <未使用directory> --backend <sqlite|file>` はSQLite backup APIでWALを含む
-一貫した入力を出力directory内に固定し、新しい正本・設定と対応表を作る。元DBのpathは切り替えない。
+一貫した入力を出力directory内に固定し、新しい正本と対応表を作る。元DBのpathは切り替えない。
 v11は既存の安定ID変換でv12を作り、v12の因果変換を共通に通す。v13は因果履歴を再生成しない。
 途中段階はstagingに保全し、最上位manifestを最後に公開する。SQLite/fileともcanonical round-tripと
-最終正本の再読取を比較し、正本と設定のdigestをmanifestへ記録する。この接続は状態・履歴の意味を
+最終正本の再読取を比較し、正本のdigestをmanifestへ記録する。この接続は状態・履歴の意味を
 変えず、filesystem障害と経路同等性は合成fixtureのRustテストで検証する。
 v9/v10は旧版でv11にしてから手動変換する。
 
@@ -177,10 +175,10 @@ v12では既存IDと旧tableの全値を維持し、因果関係とmigration bas
 
 ## Merge workspace
 
-CLI adapter は独立 directory に原本、保存先 preimage、設定、固定 context を凍結する。
+CLI adapter は独立 directory に原本、保存先 preimage、active root と入力 store ID、固定 context を凍結する。
 `resolution.json` の選択と通常操作だけが編集対象で、check は候補と report、検査済みの
 manifest/resolution/candidate digest を更新する。apply は workspace と保存先の sidecar
-lock 下で全 digest、設定 identity、preimage を再照合して atomic replace する。
+lock 下で全 digest、store identity、preimage を再照合して atomic replace する。
 入力・context drift、未解決、domain error を区別する。障害は Rust の fixture と fault
 テストで検査し、既存 Quint の状態・履歴意味は変更しない。
 Git driver は backend discovery を使わず三つの raw 入力を保存する。空・欠落・不正な

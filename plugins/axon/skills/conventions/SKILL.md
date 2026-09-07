@@ -47,4 +47,4 @@ Dispositionの不一致、Ended、cross-kind、scopeや構造的役割の差、�
 
 入力と現在状態を照合でき、同じ効果へ収束する再試行は自律して行う。結果不明、競合、重複作成の可能性、rollback、補償操作、別の最終状態が必要な場合は停止し、観測済みの状態と必要な判断を示す。
 
-active backendの保存先へのmutationだけがsandboxに拒否された場合は、そのmutation commandだけをホストの許可機構で再実行する。特にGit内のSQLiteはcommon Git directoryの`axon/state.db`を共有し、current worktree外への書込みになり得る。file backendはcurrent worktreeのGit管理対象になり得る`.axon/state.jsonl`を変更するため、Axon操作の権限をstage、commit、merge、破棄の権限へ広げず、変更artifactを呼び出し元へ返す。別worktreeの未統合snapshotやclaimはcurrent worktreeから観測できない。読み取りcommandや他のprogramまで権限を広げず、再実行できなければ状態を推測せず未反映として報告する。
+active backendの保存先へのmutationだけがsandboxに拒否された場合は、そのmutation commandだけをホストの許可機構で再実行する。特にGit内のSQLiteはcommon Git directoryの親の`.axon/axon.db`を共有し、current worktree外への書込みになり得る。file backendはcurrent worktreeのGit管理対象になり得る`.axon/state.jsonl`を変更するため、Axon操作の権限をstage、commit、merge、破棄の権限へ広げず、変更artifactを呼び出し元へ返す。別worktreeの未統合snapshotやclaimはcurrent worktreeから観測できない。読み取りcommandや他のprogramまで権限を広げず、再実行できなければ状態を推測せず未反映として報告する。

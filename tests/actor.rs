@@ -94,11 +94,7 @@ fn actor_does_not_discover_or_open_storage_or_create_files() {
 
     let repo = TestRepo::new();
     repo.init("test");
-    fs::write(
-        repo.root().join(".git/axon/state.db"),
-        b"unreadable database",
-    )
-    .unwrap();
+    fs::write(repo.root().join(".axon/axon.db"), b"unreadable database").unwrap();
     let before = files(repo.root());
     assert_actor(
         command(repo.root()).env("AXON_ACTOR", "observed"),
@@ -124,7 +120,7 @@ fn actor_matches_the_first_note_without_recording_or_evaluating_conditions() {
     let notes = repo.axon(&["note", "list", &id]);
     assert_success(&notes);
     assert!(stdout(&notes).contains(stdout(&output).trim()));
-    let connection = rusqlite::Connection::open(repo.root().join(".git/axon/state.db")).unwrap();
+    let connection = rusqlite::Connection::open(repo.root().join(".axon/axon.db")).unwrap();
     let (count, actor): (i64, String) = connection
         .query_row("SELECT count(*), actor FROM entity_notes", [], |row| {
             Ok((row.get(0)?, row.get(1)?))

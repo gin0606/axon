@@ -43,126 +43,193 @@ fn git_command(root: &Path) -> Command {
 fn git(root: &Path, args: &[&str]) {
     assert_success(&git_command(root).args(args).output().unwrap());
 }
-fn config(root: &Path) -> PathBuf {
-    root.join(".axon/config.json")
-}
+
 fn state(root: &Path) -> PathBuf {
     root.join(".axon/state.jsonl")
 }
 
 #[test]
-fn init_gitignore_limits_additions_and_repairs_only_missing_files() {
-    let dir = TestDir::new("backend-ignore");
-    let root = dir.path();
-    dir.init_git(root);
-    run(&dir, root, &["init", "--backend", "file", "t"]);
-    let ignore = root.join(".axon/.gitignore");
-    let original = fs::read(&ignore).unwrap();
-    let config_before = fs::read(config(root)).unwrap();
-    for name in [
-        "state.db",
-        "state.db-wal",
-        "init.pending",
-        ".state.tmp",
-        "backup.db",
-    ] {
-        fs::write(root.join(".axon").join(name), "private").unwrap();
+fn file_init_integrates_git_files_without_config_or_registration() {
+    for git_repo in [false, true] {
+        let dir = TestDir::new("backend-ignore");
+        let root = dir.path();
+        if git_repo {
+            dir.init_git(root);
+        }
+        fs::create_dir(root.join(".axon")).unwrap();
+        fs::write(root.join(".axon/.gitignore"), "# user rules\n").unwrap();
+        fs::write(root.join(".gitattributes"), "*.txt text\n").unwrap();
+        run(&dir, root, &["init", "--backend", "file", "t"]);
+        assert_eq!(
+            fs::read_to_string(root.join(".axon/.gitignore")).unwrap(),
+            "# user rules\n*\n!.gitignore\n!state.jsonl\n"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join(".gitattributes")).unwrap(),
+            "*.txt text\n/.axon/state.jsonl merge=axon\n"
+        );
+        assert!(!root.join(".axon/config.json").exists());
+        let before = fs::read(state(root)).unwrap();
+        assert_failure(&dir.axon_in(root, &["init", "--backend", "file"]));
+        assert_eq!(fs::read(state(root)).unwrap(), before);
+        if git_repo {
+            fs::write(root.join(".axon/private"), "private").unwrap();
+            git(root, &["add", ".axon"]);
+            let out = git_command(root)
+                .args(["ls-files", ".axon"])
+                .output()
+                .unwrap();
+            assert_success(&out);
+            assert_eq!(stdout(&out), ".axon/.gitignore\n.axon/state.jsonl\n");
+            assert!(
+                !git_command(root)
+                    .args(["config", "--get", "merge.axon.driver"])
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
     }
-    fs::create_dir_all(root.join(".axon/merge/work")).unwrap();
-    fs::write(root.join(".axon/merge/work/input"), "private").unwrap();
-    git(root, &["add", ".axon"]);
-    let output = git_command(root)
-        .args(["ls-files", ".axon"])
-        .output()
-        .unwrap();
-    assert_success(&output);
-    let expected = ".axon/.gitignore\n.axon/config.json\n.axon/state.jsonl\n";
-    assert_eq!(stdout(&output), expected);
-    fs::remove_file(&ignore).unwrap();
-    run(&dir, root, &["init"]);
-    assert_eq!(fs::read(&ignore).unwrap(), original);
-    assert_eq!(fs::read(config(root)).unwrap(), config_before);
-    fs::write(&ignore, "# user rules\n").unwrap();
-    run(&dir, root, &["init"]);
-    assert_eq!(fs::read(&ignore).unwrap(), b"# user rules\n");
 }
-
 #[test]
-fn sqlite_init_excludes_local_state_without_tracked_files() {
-    let dir = TestDir::new("sqlite-ignore");
-    let root = dir.path();
-    dir.init_git(root);
-    let exclude = root.join(".git/info/exclude");
-    fs::write(&exclude, "# user rules\nprivate/").unwrap();
-    run(&dir, root, &["init", "t"]);
-    assert!(!root.join(".axon/.gitignore").exists());
-    let expected = b"# user rules\nprivate/\n/.axon/\n";
-    assert_eq!(fs::read(&exclude).unwrap(), expected);
-    let config_before = fs::read(config(root)).unwrap();
-    run(&dir, root, &["init"]);
-    assert_eq!(fs::read(&exclude).unwrap(), expected);
-    assert_eq!(fs::read(config(root)).unwrap(), config_before);
-    let output = git_command(root)
-        .args(["ls-files", "--others", "--exclude-standard", "--", ".axon"])
-        .output()
-        .unwrap();
-    assert_success(&output);
-    assert!(stdout(&output).is_empty());
-    fs::remove_file(&exclude).unwrap();
-    run(&dir, root, &["init"]);
-    assert_eq!(fs::read(&exclude).unwrap(), b"/.axon/\n");
+fn sqlite_init_does_not_change_git_integration() {
+    for git_repo in [false, true] {
+        let dir = TestDir::new("sqlite-ignore");
+        let root = dir.path();
+        if git_repo {
+            dir.init_git(root);
+        }
+        let exclude = root.join(".git/info/exclude");
+        let before = git_repo.then(|| fs::read(&exclude).unwrap());
+        run(&dir, root, &["init", "t"]);
+        assert!(root.join(".axon/axon.db").exists());
+        for name in [".axon/.gitignore", ".axon/config.json", ".gitattributes"] {
+            assert!(!root.join(name).exists());
+        }
+        if let Some(before) = before {
+            assert_eq!(fs::read(exclude).unwrap(), before);
+        }
+    }
 }
-
 #[test]
-fn sqlite_worktree_exclusion_allows_file_worktree_override() {
-    let dir = TestDir::new("mixed-ignore");
-    let root = dir.path();
-    dir.init_git(root);
-    git(root, &["commit", "--allow-empty", "-qm", "seed"]);
-    let sql = root.join("sql-worktree");
-    git(
-        root,
-        &["worktree", "add", "-qb", "sql", sql.to_str().unwrap()],
-    );
-    run(&dir, &sql, &["init", "t"]);
-    assert!(
-        fs::read_to_string(root.join(".git/info/exclude"))
-            .unwrap()
-            .contains("/.axon/")
-    );
-    assert_success(
-        &git_command(&sql)
-            .args(["check-ignore", ".axon/config.json"])
-            .output()
-            .unwrap(),
-    );
-    run(&dir, root, &["init", "--backend", "file", "t"]);
-    fs::write(root.join(".gitignore"), "!/.axon/\n").unwrap();
-    git(root, &["add", ".axon"]);
-    let output = git_command(root)
-        .args(["ls-files", ".axon"])
-        .output()
-        .unwrap();
-    assert_success(&output);
+fn outer_ignore_policy_is_not_changed_or_rejected() {
+    let dir = TestDir::new("external-ignore");
+    dir.init_git(dir.path());
+    fs::write(dir.path().join(".gitignore"), ".axon/\n").unwrap();
+    run(&dir, dir.path(), &["init", "--backend", "file"]);
     assert_eq!(
-        stdout(&output),
-        ".axon/.gitignore\n.axon/config.json\n.axon/state.jsonl\n"
+        fs::read(dir.path().join(".gitignore")).unwrap(),
+        b".axon/\n"
     );
-    assert_success(
-        &git_command(&sql)
-            .args(["check-ignore", ".axon/config.json"])
-            .output()
-            .unwrap(),
-    );
+    make(&dir, dir.path());
 }
 
 #[test]
-fn init_outside_git_does_not_create_gitignore() {
-    for backend in ["sqlite", "file"] {
-        let dir = TestDir::new("no-git-ignore");
-        run(&dir, dir.path(), &["init", "--backend", backend, "t"]);
-        assert!(!dir.path().join(".axon/.gitignore").exists());
+fn integration_conflicts_preserve_state_rules_and_pending_marker() {
+    for (name, content) in [
+        (".axon/.gitignore", "state.jsonl\n"),
+        (".axon/.gitignore", "!state.jsonl\n*\n"),
+        (".gitattributes", "/.axon/state.jsonl merge=other\n"),
+    ] {
+        let dir = TestDir::new("integration-conflict");
+        fs::create_dir(dir.path().join(".axon")).unwrap();
+        let path = dir.path().join(name);
+        fs::write(&path, content).unwrap();
+        let out = dir.axon_in(dir.path(), &["init", "--backend", "file"]);
+        assert_failure(&out);
+        assert!(stderr(&out).contains("conflicting rule"));
+        assert!(stderr(&out).contains(name));
+        assert_eq!(fs::read(&path).unwrap(), content.as_bytes());
+        assert!(state(dir.path()).exists());
+        assert!(dir.path().join(".axon/init.pending").exists());
+        let before = fs::read(state(dir.path())).unwrap();
+        assert_failure(&dir.axon_in(dir.path(), &["list"]));
+        assert_failure(&dir.axon_in(dir.path(), &["init"]));
+        assert_eq!(fs::read(state(dir.path())).unwrap(), before);
     }
+}
+
+#[test]
+fn missing_ignore_wildcard_precedes_existing_exceptions_without_duplicates() {
+    let dir = TestDir::new("integration-existing");
+    dir.init_git(dir.path());
+    fs::create_dir(dir.path().join(".axon")).unwrap();
+    fs::write(
+        dir.path().join(".axon/.gitignore"),
+        "# keep\n!/state.jsonl\n!/.gitignore\n",
+    )
+    .unwrap();
+    let attrs = ".axon/state.jsonl text merge=axon\n";
+    fs::write(dir.path().join(".gitattributes"), attrs).unwrap();
+    run(&dir, dir.path(), &["init", "--backend", "file"]);
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".axon/.gitignore")).unwrap(),
+        "*\n# keep\n!/state.jsonl\n!/.gitignore\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".gitattributes")).unwrap(),
+        attrs
+    );
+    git(dir.path(), &["add", ".axon"]);
+    let out = git_command(dir.path())
+        .args(["ls-files", ".axon"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_eq!(stdout(&out), ".axon/.gitignore\n.axon/state.jsonl\n");
+}
+
+#[test]
+fn simultaneous_init_has_one_winner_across_backends() {
+    use std::process::Stdio;
+    for git_repo in [false, true] {
+        let dir = TestDir::new("concurrent-init");
+        if git_repo {
+            dir.init_git(dir.path());
+        }
+        let children: Vec<_> = (0..8)
+            .map(|i| {
+                dir.axon_command()
+                    .args([
+                        "init",
+                        "--backend",
+                        if i % 2 == 0 { "sqlite" } else { "file" },
+                    ])
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(
+            children
+                .into_iter()
+                .map(|c| c.wait_with_output().unwrap())
+                .filter(|o| o.status.success())
+                .count(),
+            1
+        );
+        assert_ne!(
+            state(dir.path()).exists(),
+            dir.path().join(".axon/axon.db").exists()
+        );
+        assert!(!dir.path().join(".axon/init.pending").exists());
+        make(&dir, dir.path());
+    }
+}
+
+#[test]
+fn empty_nested_directory_is_not_a_boundary_but_cannot_be_initialized() {
+    let dir = TestDir::new("empty-nested");
+    run(&dir, dir.path(), &["init", "--backend", "file"]);
+    let inner = dir.path().join("inner");
+    fs::create_dir_all(inner.join(".axon")).unwrap();
+    fs::write(inner.join(".axon/write.lock"), "").unwrap();
+    let id = make(&dir, &inner);
+    run(&dir, dir.path(), &["show", &id]);
+    assert_failure(&dir.axon_in(&inner, &["init"]));
+    assert!(!state(&inner).exists());
 }
 
 #[test]
@@ -220,7 +287,6 @@ fn all_normal_commands_and_import_use_file_without_sqlite() {
     run(&dir, root, &["import", "apply", plan.to_str().unwrap()]);
     assert_eq!(fs::read(state(root)).unwrap(), bytes);
     assert!(run(&dir, root, &["list"]).contains("Imported"));
-    assert!(!root.join(".axon/state.db").exists());
     assert!(!root.join(".axon/axon.db").exists());
 }
 #[test]
@@ -266,14 +332,22 @@ fn parallel_writers_keep_every_note_and_one_start() {
     );
 }
 #[test]
-fn worktrees_clone_and_shared_sqlite_coexist_without_file_propagation() {
+fn worktrees_and_clone_have_independent_file_state() {
     let dir = TestDir::new("file-worktrees");
     let main = dir.path().join("main");
     fs::create_dir(&main).unwrap();
     dir.init_git(&main);
     run(&dir, &main, &["init", "--backend", "file"]);
     let id = make(&dir, &main);
-    git(&main, &["add", ".axon/config.json", ".axon/state.jsonl"]);
+    git(
+        &main,
+        &[
+            "add",
+            ".axon/.gitignore",
+            ".axon/state.jsonl",
+            ".gitattributes",
+        ],
+    );
     git(&main, &["commit", "-qm", "seed"]);
     let a = dir.path().join("a");
     let b = dir.path().join("b");
@@ -300,20 +374,6 @@ fn worktrees_clone_and_shared_sqlite_coexist_without_file_propagation() {
         ],
     );
     run(&dir, &clone, &["show", &id]);
-    fs::remove_file(config(&b)).unwrap();
-    fs::remove_file(state(&b)).unwrap();
-    run(&dir, &b, &["init", "--backend", "sqlite"]);
-    let sql_id = make(&dir, &b);
-    run(&dir, &main, &["show", &id]);
-    assert_eq!(fs::read(state(&main)).unwrap(), original);
-    fs::remove_file(config(&clone)).unwrap();
-    assert_failure(&dir.axon_in(&clone, &["show", &id]));
-    let c = dir.path().join("c");
-    git(&main, &["worktree", "add", "-qb", "c", c.to_str().unwrap()]);
-    fs::remove_file(config(&c)).unwrap();
-    fs::remove_file(state(&c)).unwrap();
-    run(&dir, &c, &["init", "--backend", "sqlite"]);
-    run(&dir, &c, &["show", &sql_id]);
 }
 #[test]
 fn invalid_missing_partial_and_unmerged_never_fall_back() {
@@ -321,24 +381,32 @@ fn invalid_missing_partial_and_unmerged_never_fall_back() {
     let root = dir.path();
     run(&dir, root, &["init", "--backend", "file"]);
     let original = fs::read(state(root)).unwrap();
-    let cfg = fs::read(config(root)).unwrap();
-    run(&dir, root, &["init"]);
-    assert_eq!(fs::read(state(root)).unwrap(), original);
-    fs::write(config(root), b"{}").unwrap();
+    assert_failure(&dir.axon_in(root, &["init"]));
+    fs::write(state(root), b"corrupt").unwrap();
     assert_failure(&dir.axon_in(root, &["list"]));
     assert_failure(&dir.axon_in(root, &["init"]));
-    fs::write(config(root), &cfg).unwrap();
+    assert_eq!(fs::read(state(root)).unwrap(), b"corrupt");
+    fs::write(state(root), &original).unwrap();
+    fs::write(root.join(".axon/axon.db"), b"other backend").unwrap();
+    assert!(stderr(&dir.axon_in(root, &["list"])).contains("mixed backends"));
+    fs::remove_file(root.join(".axon/axon.db")).unwrap();
+    fs::write(root.join(".axon/init.pending"), b"incomplete").unwrap();
     fs::remove_file(state(root)).unwrap();
     assert_failure(&dir.axon_in(root, &["list"]));
     assert_failure(&dir.axon_in(root, &["init"]));
     assert!(!state(root).exists());
+    fs::remove_file(root.join(".axon/init.pending")).unwrap();
     fs::write(state(root), &original).unwrap();
-    fs::remove_file(config(root)).unwrap();
-    assert_failure(&dir.axon_in(root, &["init", "--backend", "file"]));
-    assert_eq!(fs::read(state(root)).unwrap(), original);
-    fs::write(config(root), cfg).unwrap();
     dir.init_git(root);
-    git(root, &["add", ".axon/config.json", ".axon/state.jsonl"]);
+    git(
+        root,
+        &[
+            "add",
+            ".axon/.gitignore",
+            ".axon/state.jsonl",
+            ".gitattributes",
+        ],
+    );
     git(root, &["commit", "-qm", "seed"]);
     let hash = git_command(root)
         .args(["hash-object", ".axon/state.jsonl"])
@@ -361,7 +429,7 @@ fn invalid_missing_partial_and_unmerged_never_fall_back() {
 }
 
 #[test]
-fn shared_registration_input_failure_can_be_corrected_without_recovery() {
+fn sqlite_worktrees_share_state_without_registration() {
     let dir = TestDir::new("file-registration-retry");
     let main = dir.path().join("main");
     fs::create_dir(&main).unwrap();
@@ -373,17 +441,19 @@ fn shared_registration_input_failure_can_be_corrected_without_recovery() {
         &main,
         &["worktree", "add", "-qb", "other", other.to_str().unwrap()],
     );
-    let before = fs::read(main.join(".git/axon/state.db")).unwrap();
+    let before = fs::read(main.join(".axon/axon.db")).unwrap();
     assert_failure(&dir.axon_in(&other, &["init", "wrong"]));
     assert!(!other.join(".axon/init.pending").exists());
-    assert!(!config(&other).exists());
-    run(&dir, &other, &["init", "original"]);
-    assert_eq!(fs::read(main.join(".git/axon/state.db")).unwrap(), before);
+    assert!(!other.join(".axon").exists());
+    assert_failure(&dir.axon_in(&other, &["init", "original"]));
+    assert_failure(&dir.axon_in(&other, &["init", "--backend", "file"]));
+    run(&dir, &other, &["list"]);
+    assert_eq!(fs::read(main.join(".axon/axon.db")).unwrap(), before);
 }
 
 #[cfg(unix)]
 #[test]
-fn dangling_configuration_never_escapes_to_an_ancestor_store() {
+fn dangling_state_never_escapes_to_an_ancestor_store() {
     use std::os::unix::fs::symlink;
     let dir = TestDir::new("file-dangling-config");
     let outer = dir.path();
@@ -391,7 +461,7 @@ fn dangling_configuration_never_escapes_to_an_ancestor_store() {
     let bytes = fs::read(state(outer)).unwrap();
     let inner = outer.join("inner");
     fs::create_dir_all(inner.join(".axon")).unwrap();
-    symlink("absent.json", config(&inner)).unwrap();
+    symlink("absent.json", state(&inner)).unwrap();
     assert_failure(&dir.axon_in(&inner, &["plan", "must not reach outer"]));
     assert_failure(&dir.axon_in(&inner, &["init", "--backend", "file"]));
     assert_eq!(fs::read(state(outer)).unwrap(), bytes);
@@ -399,14 +469,14 @@ fn dangling_configuration_never_escapes_to_an_ancestor_store() {
 }
 
 #[test]
-fn incomplete_nested_root_does_not_open_outer_config() {
+fn incomplete_nested_root_does_not_open_outer_state() {
     let dir = TestDir::new("file-partial-boundary");
     let outer = dir.path();
     run(&dir, outer, &["init", "--backend", "file"]);
     let bytes = fs::read(state(outer)).unwrap();
     let inner = outer.join("inner");
     fs::create_dir_all(inner.join(".axon")).unwrap();
-    fs::write(state(&inner), &bytes).unwrap();
+    fs::write(inner.join(".axon/init.pending"), "incomplete").unwrap();
     assert_failure(&dir.axon_in(&inner, &["plan", "must not reach outer"]));
     assert_failure(&dir.axon_in(&inner, &["init", "--backend", "file"]));
     assert_eq!(fs::read(state(outer)).unwrap(), bytes);

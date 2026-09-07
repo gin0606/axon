@@ -188,7 +188,7 @@ Revision reads use one database snapshot, and optional descriptions label `prese
 
 axon stores `.axon/axon.db` at the management root. In Git, the management root is the parent of the common Git directory, so linked worktrees share the database. Outside Git, commands search ancestors for the nearest database.
 
-Ordinary DB commands require schema v13 and never migrate an older DB implicitly. Use `axon migrate --source <v11-v12-v13-db> --output <new-directory> --backend <sqlite|file>` to create a new backend state, matching config, intact source backup, canonical snapshot and verification manifest. Existing v12/v13 IDs and all original table values are retained. v11 records receive stable IDs. v9/v10 must first be converted to v11 using an older compatible build.
+Ordinary DB commands require schema v13 and never migrate an older DB implicitly. Use `axon migrate --source <v11-v12-v13-db> --output <new-directory> --backend <sqlite|file>` to create a new backend state, intact source backup, canonical snapshot and verification manifest. Existing v12/v13 IDs and all original table values are retained. v11 records receive stable IDs. v9/v10 must first be converted to v11 using an older compatible build.
 
 Stop all writers, preserve the old binary and `.axon` directory including journal/WAL files, verify the conversion on copies, then explicitly switch every root using the shared binary. The command does not switch the source path. Unknown schemas and existing output directories are rejected. Failed outputs are retained for inspection; do not use an output without its successful manifest. See the [manual migration procedure](../reference/migration.md).
 

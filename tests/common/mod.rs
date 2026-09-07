@@ -377,7 +377,7 @@ impl TestRepo {
     }
 
     fn connection(&self) -> Connection {
-        Connection::open(self.root.join(".git/axon/state.db")).unwrap()
+        Connection::open(self.root.join(".axon/axon.db")).unwrap()
     }
 }
 

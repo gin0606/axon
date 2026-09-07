@@ -19,7 +19,7 @@ fn self_dependency_is_an_input_rejection_and_preserves_both_backends() {
         let path = dir.path().join(if backend == "file" {
             ".axon/state.jsonl"
         } else {
-            ".axon/state.db"
+            ".axon/axon.db"
         });
         let before = fs::read(&path).unwrap();
         let rejected = run(&["dep", "add", &id, "--needs", &id]);
@@ -124,7 +124,7 @@ fn sqlite_import_readonly_failure_preserves_storage_and_declaration() {
     )
     .unwrap();
     assert_success(&run(&["import", "prepare", path.to_str().unwrap()]));
-    let state = dir.path().join(".axon/state.db");
+    let state = dir.path().join(".axon/axon.db");
     let before = fs::read(&state).unwrap();
     let declaration = fs::read(&path).unwrap();
     let permissions = fs::metadata(&state).unwrap().permissions();
@@ -175,7 +175,7 @@ fn init_size_limit_failure_reports_retained_marker_and_unpublished_state() {
         }
         let output = command.output().unwrap();
         let marker = root.join(".axon/init.pending").is_file();
-        let state = root.join(".axon/state.db").exists() || root.join(".axon/state.jsonl").exists();
+        let state = root.join(".axon/axon.db").exists() || root.join(".axon/state.jsonl").exists();
         let config = root.join(".axon/config.json").exists();
         let temporary = fs::read_dir(root.join(".axon")).unwrap().any(|entry| {
             entry
@@ -189,13 +189,13 @@ fn init_size_limit_failure_reports_retained_marker_and_unpublished_state() {
         let diagnostic = stderr(&output);
         if backend == "sqlite" {
             assert!(
-                diagnostic.contains("prepare temporary SQLite state:"),
+                diagnostic.contains("initialize storage: SQLite:"),
                 "{diagnostic}"
             );
         }
         assert!(diagnostic.contains("Applied: initialization marker at"));
-        assert!(diagnostic.contains("Not applied: storage update at"));
-        assert!(diagnostic.contains("Help: Preserve the state, config.json, and init.pending"));
+        assert!(diagnostic.contains("Result unknown: storage update at"));
+        assert!(diagnostic.contains("Help: Preserve the state and init.pending"));
         assert!(!diagnostic.contains("axon note"));
         assert!(marker);
         assert!(!state);

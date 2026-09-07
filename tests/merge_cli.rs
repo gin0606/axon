@@ -38,6 +38,18 @@ fn git(root: &Path, args: &[&str]) -> Output {
 fn g(root: &Path, args: &[&str]) {
     assert_success(&git(root, args));
 }
+fn register_driver(root: &Path) {
+    let executable = env!("CARGO_BIN_EXE_axon").replace('\'', "'\\''");
+    g(
+        root,
+        &[
+            "config",
+            "merge.axon.driver",
+            &format!("'{executable}' merge driver %O %A %B"),
+        ],
+    );
+    g(root, &["config", "merge.axon.recursive", "binary"]);
+}
 fn state(root: &Path) -> PathBuf {
     root.join(".axon/state.jsonl")
 }
@@ -132,12 +144,11 @@ fn explicit_conflict_marker_resolution_and_checked_drift() {
     assert!(run(&d, d.path(), &["storage", "check", ".axon/state.jsonl"]).contains("Valid"));
 }
 #[test]
-fn source_context_config_and_resolution_drifts_preserve_destination() {
+fn source_context_and_resolution_drifts_preserve_destination() {
     for file in [
         "base",
         "work/base.jsonl",
         "work/context.json",
-        ".axon/config.json",
         "work/resolution.json",
     ] {
         let d = TestDir::new("merge-drift");
@@ -151,6 +162,24 @@ fn source_context_config_and_resolution_drifts_preserve_destination() {
         assert_failure(&d.axon_in(d.path(), &["merge", "apply", "work"]));
         assert_eq!(before, fs::read(state(d.path())).unwrap());
     }
+}
+
+#[test]
+fn active_merge_rejects_an_unrelated_store_and_backend_drift() {
+    let d = TestDir::new("merge-binding");
+    fixtures(&d, false);
+    let other = TestDir::new("merge-other-store");
+    init(&other);
+    let before = fs::read(state(d.path())).unwrap();
+    let unrelated = fs::read(state(other.path())).unwrap();
+    fs::write(state(d.path()), &unrelated).unwrap();
+    assert_failure(&prep(&d, "unrelated"));
+    assert_eq!(fs::read(state(d.path())).unwrap(), unrelated);
+    fs::write(state(d.path()), &before).unwrap();
+    assert_success(&prep(&d, "bound"));
+    fs::write(d.path().join(".axon/axon.db"), b"another backend").unwrap();
+    assert_failure(&d.axon_in(d.path(), &["merge", "apply", "bound"]));
+    assert_eq!(fs::read(state(d.path())).unwrap(), before);
 }
 #[test]
 fn cycle_requires_regular_repair_and_retains_stable_records() {
@@ -175,7 +204,15 @@ fn cycle_requires_regular_repair_and_retains_stable_records() {
     run(&d, d.path(), &["merge", "apply", "work"]);
 }
 fn commit(root: &Path) {
-    g(root, &["add", ".axon/state.jsonl", ".axon/config.json"]);
+    g(
+        root,
+        &[
+            "add",
+            ".axon/state.jsonl",
+            ".gitattributes",
+            ".axon/.gitignore",
+        ],
+    );
     g(root, &["commit", "-qm", "state"]);
 }
 #[test]
@@ -183,7 +220,7 @@ fn real_git_worktree_changes_propagate_only_on_explicit_merge() {
     let d = TestDir::new("merge-git");
     g(d.path(), &["init", "-q", "-b", "main"]);
     let (a, b) = init(&d);
-    run(&d, d.path(), &["merge", "setup"]);
+    register_driver(d.path());
     g(d.path(), &["add", ".gitattributes"]);
     commit(d.path());
     let initial = fs::read(state(d.path())).unwrap();
@@ -208,7 +245,7 @@ fn git_conflicts_preserve_driver_inputs_and_resolve_without_driver() {
         g(d.path(), &["init", "-q", "-b", "main"]);
         let (a, _) = init(&d);
         if driver {
-            run(&d, d.path(), &["merge", "setup"]);
+            register_driver(d.path());
             g(d.path(), &["add", ".gitattributes"]);
         }
         commit(d.path());
@@ -249,7 +286,7 @@ fn driver_rejects_empty_ancestor_without_discovering_backend() {
     let d = TestDir::new("merge-empty");
     fixtures(&d, false);
     fs::write(d.path().join("base"), b"").unwrap();
-    fs::write(d.path().join(".axon/config.json"), b"broken").unwrap();
+    fs::write(d.path().join(".axon/axon.db"), b"broken").unwrap();
     assert_failure(&d.axon_in(d.path(), &["merge", "driver", "base", "ours", "theirs"]));
     assert!(
         fs::read_to_string(d.path().join("ours"))
@@ -272,8 +309,8 @@ fn git_add_add_and_delete_modify_are_explicit_conflicts() {
         let d = TestDir::new("merge-git-edge");
         g(d.path(), &["init", "-q", "-b", "main"]);
         let (a, _) = init(&d);
-        run(&d, d.path(), &["merge", "setup"]);
-        g(d.path(), &["add", ".gitattributes", ".axon/config.json"]);
+        register_driver(d.path());
+        g(d.path(), &["add", ".gitattributes", ".axon/.gitignore"]);
         if !add_add {
             g(d.path(), &["add", ".axon/state.jsonl"]);
         }
@@ -300,7 +337,7 @@ fn multiple_merge_bases_do_not_guess_an_ancestor() {
     let d = TestDir::new("merge-git-bases");
     g(d.path(), &["init", "-q", "-b", "main"]);
     let (a, b) = init(&d);
-    run(&d, d.path(), &["merge", "setup"]);
+    register_driver(d.path());
     g(d.path(), &["add", ".gitattributes"]);
     commit(d.path());
     g(d.path(), &["branch", "right"]);
@@ -519,7 +556,6 @@ fn destination_symlinks_cannot_bypass_store_binding() {
         let d = TestDir::new("merge-output-symlink");
         fixtures(&d, false);
         let before = fs::read(state(d.path())).unwrap();
-        let config = fs::read(d.path().join(".axon/config.json")).unwrap();
         if directory_link {
             fs::rename(d.path().join(".axon"), d.path().join("storage")).unwrap();
             symlink("storage", d.path().join(".axon")).unwrap();
@@ -531,10 +567,6 @@ fn destination_symlinks_cannot_bypass_store_binding() {
         assert_failure(&result);
         assert!(stderr(&result).contains("symlink"));
         assert_eq!(fs::read(state(d.path())).unwrap(), before);
-        assert_eq!(
-            fs::read(d.path().join(".axon/config.json")).unwrap(),
-            config
-        );
         assert!(d.path().join("work/ours.jsonl").exists());
         assert_failure(&d.axon_in(d.path(), &["merge", "apply", "work"]));
     }
@@ -676,29 +708,11 @@ fn workspace_alias_is_rejected_after_relocation() {
 }
 
 #[test]
-fn setup_reports_saved_configuration_when_attributes_cannot_be_read() {
-    let d = TestDir::new("setup-partial");
-    d.init_git(d.path());
-    fs::create_dir(d.path().join(".gitattributes")).unwrap();
+fn merge_setup_is_removed() {
+    let d = TestDir::new("removed-setup");
     let output = d.axon_in(d.path(), &["merge", "setup"]);
-    assert_eq!(output.status.code(), Some(1));
-    assert!(stderr(&output).contains(".gitattributes setup:"));
-    assert!(
-        stderr(&output).contains(
-            "Applied: Git config merge.axon.name, merge.axon.driver, merge.axon.recursive"
-        )
-    );
-    let config = git(
-        d.path(),
-        &["config", "--local", "--get", "merge.axon.recursive"],
-    );
-    assert_success(&config);
-    assert_eq!(stdout(&config).trim(), "binary");
-    assert!(d.path().join(".gitattributes").is_dir());
-    let diagnostic = stderr(&output);
-    assert_eq!(diagnostic.matches("Help:").count(), 1);
-    assert!(diagnostic.find("Applied:").unwrap() < diagnostic.find("Help:").unwrap());
-    assert!(!diagnostic.contains("workspace"));
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("unrecognized subcommand"));
 }
 
 #[test]

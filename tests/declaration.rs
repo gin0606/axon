@@ -135,7 +135,7 @@ fn prepare_check_and_apply_create_mixed_entities_and_dependencies() {
     assert!(stdout(&apply).contains(&format!("Applied  {}", path.display())));
     let refreshed = fs::read(&path).unwrap();
     assert_ne!(refreshed, canonical.as_bytes());
-    let saved_path = repo.root().join(".git/axon/state.db");
+    let saved_path = repo.root().join(".axon/axon.db");
     let saved = fs::read(&saved_path).unwrap();
     let repeated = repo.axon(&["import", "apply", path.to_str().unwrap()]);
     assert_success(&repeated);
@@ -507,7 +507,7 @@ fn builtin_example_applies_without_editing_and_preserves_its_plan_structure() {
     assert_eq!(yaml.matches("base: null").count(), 3);
 
     repo.init("test");
-    let db_path = repo.root().join(".git/axon/state.db");
+    let db_path = repo.root().join(".axon/axon.db");
     let before = fs::read(&db_path).unwrap();
     for args in [
         &["docs", "declaration"][..],
@@ -763,7 +763,7 @@ fn external_reference_diagnostics_preserve_database_and_failed_prepare_file() {
             "Keep only snapshots required",
         ),
     ];
-    let saved_path = repo.root().join(".git/axon/state.db");
+    let saved_path = repo.root().join(".axon/axon.db");
     let saved = fs::read(&saved_path).unwrap();
     let path = plan_path(&repo, "invalid-external.yml");
     for (input, diagnostic, guidance) in cases {

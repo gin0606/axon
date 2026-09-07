@@ -6,7 +6,6 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    process::Command,
     rc::Rc,
 };
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -55,8 +54,6 @@ pub enum MergeCmd {
         ours: PathBuf,
         theirs: PathBuf,
     },
-    /// Explicitly register the driver and state path attribute in this repository
-    Setup,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,7 +68,8 @@ struct Manifest {
     inputs: Vec<Frozen>,
     output: PathBuf,
     preimage: Option<String>,
-    config: Option<Frozen>,
+    active_root: Option<PathBuf>,
+    store_id: Option<RecordId>,
     context: String,
     driver: bool,
 }
@@ -189,7 +187,7 @@ fn output_path(path: &Path, workspace: &Path) -> Result<PathBuf> {
     for entry in protected {
         match fs::symlink_metadata(entry) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(format!("merge destination symlink is not supported: {}; use a regular destination to retain configuration binding and writer lock", entry.display()).into());
+                return Err(format!("merge destination symlink is not supported: {}; use a regular destination to retain store binding and writer lock", entry.display()).into());
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -288,19 +286,10 @@ pub fn storage(command: StorageCmd) -> Result<()> {
     println!("Valid snapshot");
     Ok(())
 }
-fn config_binding(output: &Path) -> Result<Option<Frozen>> {
-    if output.file_name() != Some(std::ffi::OsStr::new("state.jsonl"))
-        || output.parent().and_then(Path::file_name) != Some(std::ffi::OsStr::new(".axon"))
-    {
-        return Ok(None);
-    }
-    let path = output.parent().unwrap().join("config.json");
-    let bytes = fs::read(&path)?;
-    crate::storage::file_config_identity(&path)?;
-    Ok(Some(Frozen {
-        path,
-        digest: digest(&bytes),
-    }))
+fn active_root(output: &Path) -> Option<PathBuf> {
+    (output.file_name() == Some(std::ffi::OsStr::new("state.jsonl"))
+        && output.parent().and_then(Path::file_name) == Some(std::ffi::OsStr::new(".axon")))
+    .then(|| output.parent().unwrap().parent().unwrap().to_path_buf())
 }
 fn prepare(
     base: &Path,
@@ -372,23 +361,31 @@ fn prepare_created(
     if let Some(bytes) = &preimage {
         atomic(&workspace.join("preimage"), bytes)?;
     }
-    let binding = if driver {
-        None
-    } else {
-        config_binding(&output)?
-    };
-    let evaluation_root = if let Some(config) = &binding {
-        config
-            .path
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf()
+    let binding = if driver { None } else { active_root(&output) };
+    let evaluation_root = if let Some(root) = &binding {
+        root.clone()
     } else if driver {
         std::env::current_dir()?
     } else {
         crate::storage::merge_evaluation_root()?
+    };
+    let store_id = if binding.is_some() {
+        let original = codec::decode(
+            &fs::read(workspace.join("ours.jsonl"))?,
+            evaluate(evaluation_root.clone()),
+        )?;
+        if let Some(bytes) = &preimage
+            && let Ok(destination) = codec::decode(bytes, evaluate(evaluation_root.clone()))
+            && destination.metadata.get("store_id") != original.metadata.get("store_id")
+        {
+            return Err("destination store identity differs from merge inputs".into());
+        }
+        match original.metadata.get("store_id") {
+            Some(core::MetadataValue::Text(id)) => Some(id.parse()?),
+            _ => return Err("missing input store identity".into()),
+        }
+    } else {
+        None
     };
     let context = Context {
         at: Utc::now(),
@@ -402,7 +399,8 @@ fn prepare_created(
         inputs,
         output: output.clone(),
         preimage: preimage.as_deref().map(digest),
-        config: binding,
+        active_root: binding,
+        store_id,
         context: digest(&fs::read(workspace.join("context.json"))?),
         driver,
     };
@@ -464,10 +462,8 @@ fn frozen(workspace: &Path, manifest: &Manifest, applied: Option<&[u8]>) -> Resu
     {
         return Err("input drift: preimage changed".into());
     }
-    if let Some(config) = &manifest.config
-        && digest(&drift_read(&config.path)?) != config.digest
-    {
-        return Err("input drift: active configuration changed".into());
+    if let Some(root) = &manifest.active_root {
+        crate::storage::check_file_destination(root)?;
     }
     Ok(bytes.try_into().unwrap())
 }
@@ -513,13 +509,11 @@ fn compute(workspace: &Path, manifest: &Manifest, bytes: [Vec<u8>; 3]) -> Result
         })
         .collect();
     let outcome = prepared.resolve(&resolution.choices, &mut repairs)?;
-    if let (Some(config), merge::Outcome::Complete(candidate)) = (&manifest.config, &outcome) {
-        let identity = crate::storage::file_config_identity(&config.path)?;
-        if candidate.state().metadata.get("store_id")
+    if let (Some(identity), merge::Outcome::Complete(candidate)) = (&manifest.store_id, &outcome)
+        && candidate.state().metadata.get("store_id")
             != Some(&core::MetadataValue::Text(identity.to_string()))
-        {
-            return Err("candidate store identity differs from active configuration".into());
-        }
+    {
+        return Err("candidate store identity differs from frozen input".into());
     }
     Ok(outcome)
 }
@@ -611,7 +605,7 @@ fn apply_with(workspace: &Path, mut checkpoint: impl FnMut(&str) -> Result<()>) 
         return Err("checked artifact drift; run merge check again".into());
     }
     output_path(&manifest.output, workspace)?;
-    let lockpath = if manifest.config.is_some() {
+    let lockpath = if manifest.active_root.is_some() {
         manifest.output.parent().unwrap().join("write.lock")
     } else {
         manifest.output.with_extension("merge.lock")
@@ -652,72 +646,6 @@ fn apply_with(workspace: &Path, mut checkpoint: impl FnMut(&str) -> Result<()>) 
     )?;
     Ok(())
 }
-fn git(args: &[&str]) -> Result<String> {
-    let output = Command::new("git").args(args).output()?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).into_owned().into());
-    }
-    Ok(String::from_utf8(output.stdout)?.trim().into())
-}
-fn setup() -> Result<()> {
-    let root = PathBuf::from(git(&["rev-parse", "--show-toplevel"])?);
-    let executable = std::env::current_exe()?
-        .to_string_lossy()
-        .replace('\'', "'\\''");
-    let settings = [
-        (
-            "merge.axon.name",
-            "Axon validated snapshot merge".to_string(),
-        ),
-        (
-            "merge.axon.driver",
-            format!("'{executable}' merge driver %O %A %B"),
-        ),
-        ("merge.axon.recursive", "binary".to_string()),
-    ];
-    let mut applied = Vec::new();
-    for (key, value) in &settings {
-        git(&["config", "--local", key, value]).map_err(|e| {
-            let prior = if applied.is_empty() { String::new() } else { format!("\nApplied: Git config {}", applied.join(", ")) };
-            format!("{} Git config {key}: {e}{prior}\nResult unknown: Git config {key}\nHelp: Inspect local Git configuration before retrying setup.", root.display())
-        })?;
-        applied.push(*key);
-    }
-    let attributes_result = (|| -> Result<()> {
-        let attributes = root.join(".gitattributes");
-        let mut bytes = optional(&attributes)?.unwrap_or_default();
-        let entry = "/.axon/state.jsonl merge=axon";
-        if !String::from_utf8_lossy(&bytes)
-            .lines()
-            .any(|line| line == entry)
-        {
-            if !bytes.is_empty() && !bytes.ends_with(b"\n") {
-                bytes.push(b'\n');
-            }
-            bytes.extend_from_slice(format!("{entry}\n").as_bytes());
-            atomic(&attributes, &bytes)?;
-        }
-        Ok(())
-    })();
-    attributes_result.map_err(|e| {
-        Box::new(ArtifactFailure {
-            source: crate::operation_error(
-                format!("{} .gitattributes setup", root.display()),
-                e,
-                "",
-            ),
-            details: format!("Applied: Git config {}", applied.join(", ")),
-            guidance: "Inspect local Git configuration and .gitattributes before retrying setup."
-                .into(),
-        }) as Box<dyn std::error::Error>
-    })?;
-    crate::write_mutation_output(
-        "Registered driver; review .gitattributes and ignore .axon/merge/\n",
-        crate::OutputDecoration::Plain,
-        "Git merge driver configuration and .gitattributes",
-    )?;
-    Ok(())
-}
 pub fn run(command: MergeCmd) -> Result<()> {
     match command {
         MergeCmd::Prepare {
@@ -729,7 +657,6 @@ pub fn run(command: MergeCmd) -> Result<()> {
         } => prepare(&base, &ours, &theirs, &output, &workspace, false, &mut None),
         MergeCmd::Check { workspace } => check(&workspace),
         MergeCmd::Apply { workspace } => apply(&workspace),
-        MergeCmd::Setup => setup(),
         MergeCmd::Driver { base, ours, theirs } => {
             let parent = std::env::current_dir()?.join(".axon/merge");
             fs::create_dir_all(&parent)?;
@@ -890,9 +817,8 @@ mod tests {
         );
         let failure = ArtifactFailure {
             source: failure,
-            details: "Applied: Git config merge.axon.name".into(),
-            guidance: "Inspect local Git configuration and .gitattributes before retrying setup."
-                .into(),
+            details: "Applied: destination file".into(),
+            guidance: "Inspect the destination before retrying publication.".into(),
         };
         let diagnostic = format!(
             "Error: {failure}\nHelp: {}",

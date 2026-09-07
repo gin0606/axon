@@ -14,7 +14,7 @@ fn saved_bytes(repo: &TestRepo, backend: &str) -> Vec<u8> {
     fs::read(repo.root().join(if backend == "file" {
         ".axon/state.jsonl"
     } else {
-        ".git/axon/state.db"
+        ".axon/axon.db"
     }))
     .unwrap()
 }
@@ -112,7 +112,7 @@ fn four_creators_save_complete_initial_state_and_revision_without_transitions() 
                     let snapshot = repo.snapshot(&id);
                     assert_eq!(snapshot.decision_events, 0);
                     assert_eq!(snapshot.progress_events, 0);
-                    let conn = Connection::open(repo.root().join(".git/axon/state.db")).unwrap();
+                    let conn = Connection::open(repo.root().join(".axon/axon.db")).unwrap();
                     let count: i64 = conn
                         .query_row(
                             "SELECT count(*) FROM entity_deps WHERE entity_id=?1",

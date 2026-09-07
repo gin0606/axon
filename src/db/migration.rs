@@ -421,9 +421,9 @@ fn migrate_with_checkpoint(
             fixed.query_row("SELECT value FROM meta WHERE key='store_id'", [], |r| {
                 r.get(0)
             })?;
-        failure.stage = "writing backend and configuration";
+        failure.stage = "writing backend";
         let destination = output.join(match backend {
-            crate::storage::Backend::Sqlite => "state.db",
+            crate::storage::Backend::Sqlite => "axon.db",
             crate::storage::Backend::File => "state.jsonl",
         });
         match backend {
@@ -445,11 +445,6 @@ fn migrate_with_checkpoint(
             }
         }
         write_new(&output.join("snapshot.jsonl"), &canonical)?;
-        let config = serde_json::to_vec_pretty(
-            &serde_json::json!({"schema":1,"backend":backend,"store_id":store_id}),
-        )
-        .map_err(|e| invalid(e.to_string()))?;
-        write_new(&output.join("config.json"), &config)?;
         checkpoint("after-backend")?;
         let input = Connection::open_with_flags(&backup, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let input_tables = all_tables(&input)?;
@@ -462,7 +457,6 @@ fn migrate_with_checkpoint(
             "source_backup_blake3":blake3::hash(&fs::read(&backup)?).to_hex().to_string(),
             "target_blake3":blake3::hash(&fs::read(&destination)?).to_hex().to_string(),
             "snapshot_blake3":blake3::hash(&canonical).to_hex().to_string(),
-            "config_blake3":blake3::hash(&config).to_hex().to_string(),
             "row_counts":input_tables.iter().map(|(n,t)|(n.clone(),t.rows.len())).collect::<BTreeMap<_,_>>(),
             "target_row_counts":final_tables.iter().map(|(n,t)|(n.clone(),t.rows.len())).collect::<BTreeMap<_,_>>(),
             "mappings":mappings, "identity":"v11 deterministic IDs; all v12/v13 store and record IDs preserved",

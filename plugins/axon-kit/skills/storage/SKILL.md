@@ -9,22 +9,19 @@ Use `axon-kit:conventions`. Read its mutation contract before `init`; `storage c
 
 ## Keep backend selection explicit
 
-The caller supplies `sqlite` or `file` when creating a new root. Do not choose between shared SQLite and worktree-local tracked state as an implementation detail. Existing valid configuration selects the authoritative store; do not switch it by editing configuration or by initializing over another backend.
+The caller supplies `sqlite` or `file` when creating a new root. Do not choose between shared SQLite and worktree-local tracked state as an implementation detail. One backend per Git repository is supported; mixed backends across worktrees are an unsupported operational state, not an invitation to create a selector.
 
-In Git, the active management root is the current worktree root. Outside Git, `init` uses the current directory and normal commands use the nearest configured ancestor. Inspect the intended root before mutation. Do not infer an active store from an old `.axon/axon.db`, a nearby state file, or another worktree.
+There is no backend configuration file. In Git, file storage is at the current worktree root's `.axon/state.jsonl`; SQLite is at `.axon/axon.db` under the parent of the Git common directory and is shared without worktree registration. Outside Git, normal discovery stops at the nearest ancestor with either canonical state or `init.pending`. Both canonical paths present is a mixed-backend error; neither is uninitialized. Corruption, unreadable state, or a pending marker stops discovery without fallback. Do not infer the authority of files outside these prescribed paths.
 
 ## Initialize without replacing state
 
-Run `axon init --backend <sqlite|file> [prefix]` as one standalone mutation. Omit the prefix only when the management-root directory name is the intended ID prefix.
+Run `axon init --backend <sqlite|file> [prefix]` as one standalone mutation. Omit the prefix only when the storage-root directory name is the intended ID prefix. Git-free init uses the current directory and rejects nesting under an existing management root.
 
-`init` does not reset or upgrade an existing authoritative store. In Git:
+Init is new-only: existing state, including valid state, is rejected. It does not reset, upgrade, switch backend, or repair. SQLite creates the database without changing ignore files. File init, inside or outside Git, creates or complements `.axon/.gitignore` (ignore all except itself and `state.jsonl`) and root `.gitattributes` (`/.axon/state.jsonl merge=axon`).
 
-- SQLite uses `axon/state.db` under the common Git directory and keeps worktree configuration local by adding `/.axon/` to the shared `info/exclude`.
-- File storage creates Git-trackable `.axon/config.json` and `.axon/state.jsonl` plus `.axon/.gitignore`, which excludes transient files while retaining those three files.
+Report created or updated state and integration artifacts. Init does not register the driver, stage, or commit. Preserve unrelated rules. An outer or global ignore hiding `.axon/` is user policy, not an initialization error or authorization to alter that policy.
 
-`init` does not stage or commit Git files and does not register the merge driver. Report every created or updated configuration, state, and ignore artifact. Preserve existing ignore content; if a parent or global ignore still hides file-backend artifacts, report the conflict instead of editing unrelated Git configuration.
-
-If initialization stops after publishing only part of the root, preserve the state, configuration, pending marker, temporary files, and reported paths. Do not rerun into an ambiguous root or create another empty state. Re-run only after the observed files establish the CLI's documented safe recovery or no-op case.
+After partial initialization, preserve state, pending marker, temporary and integration files. Stop writers and inspect the reported paths. Complete auxiliary files manually only with appropriate authority and valid state; remove the marker only after verification. Otherwise preserve the incomplete box elsewhere before a fresh init. Re-running init is not recovery, and existing state must never be overwritten.
 
 ## Validate a complete snapshot
 
@@ -32,4 +29,4 @@ Run `axon storage check <snapshot>` for a read-only validation of canonical file
 
 ## Return
 
-Return the selected mode, management root or snapshot, backend and authoritative paths when applicable, store identity, validation result, Git-ignore consequences, changed artifacts, and storage-result classification. Do not migrate data, set up merge integration, stage, commit, or switch a live root unless a separate authorized workflow owns that effect.
+Return the selected mode, management root or snapshot, backend and authoritative paths when applicable, store identity, validation result, Git-ignore consequences, changed artifacts, and storage-result classification. Do not migrate data, register the Git driver, stage, commit, or switch a live root unless a separate authorized workflow owns that effect.

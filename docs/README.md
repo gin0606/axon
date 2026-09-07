@@ -20,6 +20,7 @@ axon の利用手順、現在の契約、開発方法、設計経緯を目的別
 | [状態モデル](reference/state-model.md) | Entity、各軸、claim、包含、依存、Group の進行、導出値 |
 | [情報モデル](reference/information-model.md) | 情報分類、declaration の所有と固定、Revision、Note、履歴、観測 |
 | [手動移行](reference/migration.md) | v11/v12/v13からSQLite/fileへの変換・検証・切替 |
+| [Backend と file 保存](reference/file-storage.md) | 設定なしの探索、init、Git integration、保存と merge の失敗境界 |
 | [CLI 契約](reference/cli.md) | コマンド境界、反復実行、原子性、入出力、管理 root と ID の解決 |
 | [宣言ファイル](reference/declaration-file.md) | strict YAML、所有範囲、競合検査、export / prepare / check / apply |
 
@@ -44,6 +45,7 @@ DB schema の正は [src/db.rs](../src/db.rs)、CLI の Usage は Clap の定義
 | --- | --- |
 | [設計判断](design/decisions.md) | 軸を分けた理由、代替案、Group・情報モデル・永続化の導入経緯 |
 | [file backend の設計](design/file-backend.md) | worktree ごとの保存、履歴の分岐、三方向 merge、手動移行の新仕様案 |
+| [保存先と初期化の簡素化](design/storage-discovery.md) | config 廃止、元の SQLite 配置、一 repository 一 backend と保証の範囲 |
 | [CLI 操作案内の棚卸し](design/cli-guidance-audit.md) | 2026-09-05 時点の全コマンドの案内評価 |
 | [初期設計のドライラン](design/initial-dry-run.md) | 初期モデルを運用シナリオに当てはめた検討記録 |
 
