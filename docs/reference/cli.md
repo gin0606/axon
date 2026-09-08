@@ -111,7 +111,7 @@ Undecided への変更、編集、全文確認、再判断の意味を説明し�
 
 - `--parent <group-id>`: 親 Group。
 - `--needs <entity-id>`: outgoing dependency。複数指定は `--needs A --needs B` と反復し、同じ参照は一つにまとめる。
-- `--manual` / `--at <YYYY-MM-DD>` / `--after <entity-id>` / `--command <shell-string>`: 初期 Resurface condition。一種類だけ指定でき、未指定は Always。日付と条件の意味は `when` と同じ。
+- `--manual` / `--at <RFC3339>` / `--after <entity-id>` / `--command <shell-string>`: 初期 Resurface condition。一種類だけ指定でき、未指定は Always。`--at` は秒と UTC offset を持つ RFC 3339（例: `2026-12-01T00:00:00+09:00`）とし、条件の意味は `when` と同じ。
 
 参照 ID は完全 ID または一意な suffix を受け取る。description は `-m/--message` または `-F/--file`（`-` は stdin）、title は従来どおり指定する。shell string は一引数として渡し、先頭がハイフンなら `--command='--help text'` のように `=` を使う。
 
@@ -477,7 +477,7 @@ Issue と Group は同じ `<prefix>-<ランダム 6 文字>` namespace を使い
 
 ## DBの互換性検査
 
-通常操作は対応するschema更新をbackup付きで自動実行し、成功後に続行する。現行の基点はv13で、退役した旧版・未来版・未知構造は変更せず拒否する。
+通常操作は対応するschema更新をbackup付きで自動実行し、成功後に続行する。現行の基点はv14で、v13 の `AtDate(YYYY-MM-DD)` は UTC 午前 0 時へ移行する。退役した旧版・未来版・未知構造は変更せず拒否する。
 `init` は新規作成専用で、既存正本や初期化途中への再実行を拒否する。既定は SQLite で ignore は変更しない。`--backend file` は Git 内外とも `.axon/.gitignore` と root `.gitattributes` を生成・補完する。Git driver の登録は利用者が通常の `git config` で行う。保存成功境界とinit復旧は[backendとfile保存](file-storage.md)を参照。help、docs、version、completionはDB不要。
 backend変換は明示した現行schemaのSQLite入力から別directoryへ出力し、元DBの切替はしない。
 診断はpath、版、処理段階、原因、backup先と出力の適用状態を示す。失敗時の途中成果を上書きせず、

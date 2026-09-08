@@ -82,6 +82,7 @@ RecordId の SQL 変換も adapter 内に置く。
 
 この境界はSQLite単独でも使う。v13はv12の全tableを維持し、`history_lineage`、`causal_links`、
 `history_baselines`、`history_merges`を追加する。保存済みの因果情報は維持する。
+v14 は `AtDate` をオフセット付き RFC 3339 instant にし、v13 の日付は UTC 午前 0 時に変換して現在値・履歴・因果 payload を保持する。
 新しい因果関係とcurrent/lastの検証は[分岐履歴](branch-history.md)に定める。
 通常操作の情報所有モデルと分岐履歴モデルを検証し、共通操作契約をメモリとSQLiteで検証する。
 CLI・Command・migrationテストで実装の境界を確認する。

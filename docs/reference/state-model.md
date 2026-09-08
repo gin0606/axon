@@ -37,7 +37,7 @@ Resurface condition の成立は保存状態を書き換えず、浮上時刻の
 | 条件 | 保存する付随情報 | 成立条件 |
 | --- | --- | --- |
 | `Always` | なし | 常に成立 |
-| `AtDate` | 日付 | 現在のUTC日付が指定日以降 |
+| `AtDate` | オフセット付き RFC 3339 の時刻 | 現在の時刻が指定 instant 以降 |
 | `AfterEntity` | 参照先 Entity | 参照先が terminal |
 | `Manual` | なし | 設定中は常に未成立。明示的な置換・解除を待つ |
 | `Command` | シェル文字列 | 外部コマンドの観測結果が成立を示す |
@@ -54,6 +54,10 @@ Group が非浮上になると activation gate が閉じ、子孫は active scop
 進行中の子孫を含め、子孫の保存状態と claim は変えない。Manual / Command は Entity への参照辺を
 持たず、AfterEntity への置換には既存の待機グラフ制約を適用する。
 再浮上は再検討・着手候補へ戻す意味であり、計画や外部前提の妥当性を保証しない。
+
+`AtDate` は秒と UTC offset を必須とし、`Z` も許可する。小数秒は 9 桁まで保持し、
+同じ instant を示す異なる offset 表記は同値とする。永続化と比較は UTC に正規化し、
+人間向けの表示は実行環境の local timezone と数値 offset を使う。
 
 ## Identity と claim
 

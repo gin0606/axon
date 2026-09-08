@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 pub const FORMAT: u32 = 1;
-pub const SCHEMA: u32 = 13;
+pub const SCHEMA: u32 = 14;
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
 enum Row {
@@ -375,4 +375,183 @@ impl<'de> Deserialize<'de> for UniqueValue {
         }
         d.deserialize_any(Visitor)
     }
+}
+
+pub(crate) fn upgrade_v13(bytes: &[u8]) -> crate::db::Result<Vec<u8>> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|error| crate::db::DbError::Storage(error.to_string()))?;
+    let mut output = Vec::new();
+    let mut header = false;
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let mut raw: UniqueValue = serde_json::from_str(line)
+            .map_err(|error| crate::db::DbError::Storage(error.to_string()))?;
+        if raw.0["type"] == "Header" {
+            if header || raw.0["format"] != FORMAT || raw.0["schema"] != 13 {
+                return Err(crate::db::DbError::Storage(
+                    "duplicate or unsupported snapshot header".into(),
+                ));
+            }
+            raw.0["schema"] = SCHEMA.into();
+            header = true;
+        }
+        upgrade_row_v13(&mut raw.0)?;
+        serde_json::to_writer(&mut output, &raw.0)
+            .map_err(|error| crate::db::DbError::Storage(error.to_string()))?;
+        output.push(b'\n');
+    }
+    if !header {
+        return Err(crate::db::DbError::Storage(
+            "missing snapshot Header".into(),
+        ));
+    }
+    Ok(output)
+}
+
+fn upgrade_row_v13(value: &mut serde_json::Value) -> crate::db::Result<bool> {
+    let Some(fields) = value.as_object_mut() else {
+        return Ok(false);
+    };
+    let kind = fields
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let mut changed = false;
+    match kind.as_str() {
+        "Entity" => {
+            if let Some(entity) = fields.get_mut("entity") {
+                changed |= upgrade_entity_v13(entity)?;
+            }
+        }
+        "Decision" => {
+            if let Some(event) = fields.get_mut("value") {
+                changed |= upgrade_event_v13(event)?;
+            }
+        }
+        "Merge" => {
+            if let Some(value) = fields.get_mut("value") {
+                changed |= upgrade_merge_v13(value)?;
+            }
+        }
+        "Baseline" => {
+            if let Some(value) = fields.get_mut("value") {
+                changed |= upgrade_baseline_v13(value)?;
+            }
+        }
+        _ => {}
+    }
+    if matches!(
+        kind.as_str(),
+        "Revision" | "Note" | "Decision" | "Progress" | "Merge" | "Baseline"
+    ) && let Some(link) = fields.get_mut("link")
+    {
+        changed |= upgrade_link_v13(link)?;
+    }
+    Ok(changed)
+}
+
+fn upgrade_condition_v13(value: &mut serde_json::Value) -> crate::db::Result<bool> {
+    let Some(fields) = value.as_object_mut() else {
+        return Ok(false);
+    };
+    let Some(at) = fields.get_mut("AtDate") else {
+        return Ok(false);
+    };
+    let serde_json::Value::String(date) = at else {
+        return Err(crate::db::DbError::InvalidSchema(
+            "v13 AtDate payload must be a date string".into(),
+        ));
+    };
+    let parsed = date.parse::<chrono::NaiveDate>().map_err(|_| {
+        crate::db::DbError::InvalidSchema(format!("invalid v13 AtDate payload: {date}"))
+    })?;
+    *date = format!("{parsed}T00:00:00Z");
+    Ok(true)
+}
+
+fn upgrade_entity_v13(value: &mut serde_json::Value) -> crate::db::Result<bool> {
+    value
+        .get_mut("resurface_condition")
+        .map(upgrade_condition_v13)
+        .transpose()
+        .map(|changed| changed.unwrap_or(false))
+}
+
+fn upgrade_proof_v13(value: &mut serde_json::Value) -> crate::db::Result<bool> {
+    value
+        .get_mut("resurface")
+        .map(upgrade_condition_v13)
+        .transpose()
+        .map(|changed| changed.unwrap_or(false))
+}
+
+pub(crate) fn upgrade_link_v13(value: &mut serde_json::Value) -> crate::db::Result<bool> {
+    let Some(result) = value.get_mut("result") else {
+        return Ok(false);
+    };
+    if result.is_null() {
+        Ok(false)
+    } else {
+        upgrade_proof_v13(result)
+    }
+}
+
+fn upgrade_bundle_v13(value: &mut serde_json::Value) -> crate::db::Result<bool> {
+    value
+        .get_mut("entity")
+        .map(upgrade_entity_v13)
+        .transpose()
+        .map(|changed| changed.unwrap_or(false))
+}
+
+pub(crate) fn upgrade_merge_v13(value: &mut serde_json::Value) -> crate::db::Result<bool> {
+    let mut changed = false;
+    if let Some(inputs) = value
+        .get_mut("inputs")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for input in inputs {
+            if let Some(candidate) = input.get_mut("candidate") {
+                changed |= upgrade_bundle_v13(candidate)?;
+            }
+        }
+    }
+    if let Some(result) = value.get_mut("result") {
+        changed |= upgrade_bundle_v13(result)?;
+    }
+    Ok(changed)
+}
+
+pub(crate) fn upgrade_baseline_v13(value: &mut serde_json::Value) -> crate::db::Result<bool> {
+    value
+        .get_mut("bundle")
+        .map(upgrade_bundle_v13)
+        .transpose()
+        .map(|changed| changed.unwrap_or(false))
+}
+
+fn upgrade_event_v13(value: &mut serde_json::Value) -> crate::db::Result<bool> {
+    let Some(fields) = value.as_object_mut() else {
+        return Ok(false);
+    };
+    if fields.get("field").and_then(serde_json::Value::as_str) != Some("resurface_condition") {
+        return Ok(false);
+    }
+    let mut changed = false;
+    for key in ["old_value", "new_value"] {
+        if let Some(serde_json::Value::String(label)) = fields.get_mut(key)
+            && let Some(date) = label
+                .strip_prefix("AtDate(")
+                .and_then(|value| value.strip_suffix(')'))
+        {
+            let parsed = date.parse::<chrono::NaiveDate>().map_err(|_| {
+                crate::db::DbError::InvalidSchema(format!(
+                    "invalid v13 AtDate history label: {label}"
+                ))
+            })?;
+            *label = format!("AtDate({parsed}T00:00:00Z)");
+            changed = true;
+        }
+    }
+    Ok(changed)
 }

@@ -11,7 +11,72 @@ pub(super) struct Step {
 }
 
 // Retired formats have no production update path. Add a step with the next schema change.
-const STEPS: &[Step] = &[];
+const STEPS: &[Step] = &[Step {
+    from: 13,
+    schema: super::FRESH_SCHEMA,
+    apply: upgrade_v13,
+}];
+
+fn upgrade_v13(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "UPDATE entities SET resurface_date=resurface_date || 'T00:00:00Z' WHERE resurface_kind='date'",
+        [],
+    )?;
+    migrate_event_labels(conn)?;
+    migrate_json_payloads(conn)?;
+    Ok(())
+}
+
+fn migrate_event_labels(conn: &Connection) -> Result<()> {
+    for column in ["old_value", "new_value"] {
+        let sql = format!(
+            "UPDATE entity_events SET {column}=substr({column},1,17) || 'T00:00:00Z)' WHERE {column} GLOB 'AtDate(????-??-??)'"
+        );
+        conn.execute(&sql, [])?;
+    }
+    Ok(())
+}
+
+fn migrate_json_payloads(conn: &Connection) -> Result<()> {
+    let tables = [
+        (
+            "causal_links",
+            "record_id",
+            crate::codec::upgrade_link_v13 as fn(&mut serde_json::Value) -> crate::db::Result<bool>,
+        ),
+        (
+            "history_baselines",
+            "record_id",
+            crate::codec::upgrade_baseline_v13,
+        ),
+        (
+            "history_merges",
+            "record_id",
+            crate::codec::upgrade_merge_v13,
+        ),
+    ];
+    for (table, key, upgrade) in tables {
+        let sql = format!("SELECT {key},payload FROM {table}");
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(statement);
+        for (id, payload) in rows {
+            let mut value: serde_json::Value = serde_json::from_str(&payload)
+                .map_err(|error| DbError::InvalidSchema(error.to_string()))?;
+            if upgrade(&mut value)? {
+                let payload = serde_json::to_string(&value)
+                    .map_err(|error| DbError::InvalidSchema(error.to_string()))?;
+                let sql = format!("UPDATE {table} SET payload=?2 WHERE {key}=?1");
+                conn.execute(&sql, rusqlite::params![id, payload])?;
+            }
+        }
+    }
+    Ok(())
+}
 
 pub(super) fn open(path: &Path) -> std::result::Result<(Connection, Outcome), Failure> {
     run(

@@ -31,7 +31,7 @@ fn four_creators_save_complete_initial_state_and_revision_without_transitions() 
             for condition in [
                 vec![],
                 vec!["--manual"],
-                vec!["--at", "2099-12-31"],
+                vec!["--at", "2099-12-31T00:00:00Z"],
                 vec!["--after", "TARGET"],
                 vec!["--command", "exit 7"],
             ] {
@@ -62,7 +62,8 @@ fn four_creators_save_complete_initial_state_and_revision_without_transitions() 
                 }));
                 args.push("complete title");
                 let id = create(&repo, &args);
-                let show = repo.axon(&["show", &id, "--skip-command-evaluation"]);
+                let show =
+                    repo.axon_in_timezone("UTC", &["show", &id, "--skip-command-evaluation"]);
                 assert_success(&show);
                 let show = stdout(&show);
                 assert!(show.contains("Progress: NotStarted"));
@@ -79,7 +80,7 @@ fn four_creators_save_complete_initial_state_and_revision_without_transitions() 
                 let label = match condition.first().copied() {
                     None => "Always".to_string(),
                     Some("--manual") => "Manual".into(),
-                    Some("--at") => "AtDate(2099-12-31)".into(),
+                    Some("--at") => "AtDate(2099-12-31T00:00:00+00:00)".into(),
                     Some("--after") => format!("AfterEntity({first})"),
                     _ => "Command(exit 7)".into(),
                 };
@@ -151,12 +152,17 @@ fn rejected_initial_inputs_leave_all_storage_bytes_unchanged() {
                 vec!["--parent", &ended, "--needs", &issue],
                 vec!["--parent", &active, "--needs", &active],
                 vec!["--parent", &active, "--after", &active],
-                vec!["--at", "2099-02-30"],
-                vec!["--manual", "--at", "2099-01-01"],
+                vec!["--at", "2099-02-30T00:00:00Z"],
+                vec!["--at", "2099-01-01"],
+                vec!["--at", "2099-01-01T00:00:00"],
+                vec!["--at", "2099-01-01T00:00Z"],
+                vec!["--at", "2099-01-01T00:00:00.1234567890Z"],
+                vec!["--at", "2099-01-01T00:00:60Z"],
+                vec!["--manual", "--at", "2099-01-01T00:00:00Z"],
                 vec!["--manual", "--after", &issue],
                 vec!["--manual", "--command", "exit 0"],
-                vec!["--at", "2099-01-01", "--after", &issue],
-                vec!["--at", "2099-01-01", "--command", "exit 0"],
+                vec!["--at", "2099-01-01T00:00:00Z", "--after", &issue],
+                vec!["--at", "2099-01-01T00:00:00Z", "--command", "exit 0"],
                 vec!["--after", &issue, "--command", "exit 0"],
             ] {
                 let before = saved_bytes(&repo, backend);
@@ -274,6 +280,6 @@ fn all_creation_help_lists_initial_options() {
             assert!(help.contains(option), "{args:?}: {option}");
         }
         assert!(help.contains("without execution"));
-        assert!(help.contains("YYYY-MM-DD"));
+        assert!(help.contains("RFC 3339"));
     }
 }

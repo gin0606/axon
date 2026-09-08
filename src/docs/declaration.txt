@@ -25,7 +25,9 @@ Create a new plan
   do open the DB and can automatically migrate an old supported schema first.
 
 Required fields
-  schema: axon-plan/v2
+  schema: axon-plan/v3
+  axon-plan/v2 files are rejected rather than converted in memory. Migrate the
+  current store with a normal command, then run axon export again for fresh v3.
   issues and groups: lists of complete Entity records, even when empty.
   Each record requires id, key, base, title, description, and observed.
   title is non-empty and single-line; description is text or null.

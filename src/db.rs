@@ -107,7 +107,7 @@ pub enum DbError {
 
 pub type Result<T> = std::result::Result<T, DbError>;
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 
 #[cfg(test)]
 const SCHEMA_V1: &str = r#"
@@ -1044,7 +1044,7 @@ fn parse_time(value: &str) -> Result<DateTime<Utc>> {
 
 fn resurface_date(condition: &ResurfaceCondition) -> Option<String> {
     match condition {
-        ResurfaceCondition::AtDate(date) => Some(date.to_string()),
+        ResurfaceCondition::AtDate(at) => Some(at.utc_string()),
         _ => None,
     }
 }
@@ -2317,7 +2317,7 @@ mod tests {
             .apply(
                 &id("c"),
                 Change::SetResurfaceCondition(ResurfaceCondition::AtDate(
-                    "2026-01-01".parse().unwrap(),
+                    "2026-01-01T00:00:00Z".parse().unwrap(),
                 )),
                 &ctx(),
             )

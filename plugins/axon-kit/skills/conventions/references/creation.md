@@ -10,7 +10,7 @@ Axon は Entity の意味的な一意性を定めない。呼び出し側の依�
 
 ## 完全な初期状態を与える
 
-4 つの creator はすべて、`--parent <group-id>`、複数の `--needs <entity-id>`、および `--manual`、`--at <YYYY-MM-DD>`、`--after <entity-id>`、`--command <shell-string>` のいずれか 1 つの初期 condition を受け入れる。condition option なしは `Always`、`--needs` なしは dependency なしを意味する。ID には完全な ID または一意な suffix を指定でき、重複 dependency は 1 件として保存される。shell 文字列は 1 argument として quote し、先頭が hyphen の場合は `--command='--help text'` を使う。
+4 つの creator はすべて、`--parent <group-id>`、複数の `--needs <entity-id>`、および `--manual`、`--at <RFC3339>`、`--after <entity-id>`、`--command <shell-string>` のいずれか 1 つの初期 condition を受け入れる。condition option なしは `Always`、`--needs` なしは dependency なしを意味する。ID には完全な ID または一意な suffix を指定でき、重複 dependency は 1 件として保存される。shell 文字列は 1 argument として quote し、先頭が hyphen の場合は `--command='--help text'` を使う。
 
 作成は Entity、関係、condition、初期 Revision を 1 transaction で保存する。`plan` は Accepted、`capture` は Undecided で開始し、どちらも claim のない NotStarted である。Accepted Revision は dependency を含む完全な declaration を保持するが、condition は含まない。Undecided での作成に Revision はない。初期値は架空の decision history や condition-change history を作らない。明確な失敗では部分的な Entity や record は残らない。
 

@@ -677,7 +677,7 @@ impl StateSnapshot {
                         "resurface_condition" => {
                             event.new_value
                                 == (!matches!(proof.resurface, ResurfaceCondition::Always))
-                                    .then(|| proof.resurface.label())
+                                    .then(|| proof.resurface.history_label())
                         }
                         _ => false,
                     };

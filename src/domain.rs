@@ -1,5 +1,6 @@
 pub use crate::record_id::{RecordId, RecordKind};
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, FixedOffset, Local, Timelike, Utc};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
 #[derive(Debug, thiserror::Error)]
@@ -142,7 +143,7 @@ impl Disposition {
 pub enum ResurfaceCondition {
     Always,
     Manual,
-    AtDate(NaiveDate),
+    AtDate(ResurfaceAt),
     AfterEntity(EntityId),
     Command(String),
 }
@@ -167,10 +168,11 @@ impl ResurfaceCondition {
         match (kind, date, reference, command) {
             (None, None, None, None) => Ok(Self::Always),
             (Some("manual"), None, None, None) => Ok(Self::Manual),
-            (Some("date"), Some(date), None, None) => date
-                .parse::<NaiveDate>()
-                .map(Self::AtDate)
-                .map_err(|_| ParseError::ResurfaceCondition(format!("invalid date: {date}"))),
+            (Some("date"), Some(date), None, None) => {
+                date.parse::<ResurfaceAt>().map(Self::AtDate).map_err(|_| {
+                    ParseError::ResurfaceCondition(format!("invalid resurface timestamp: {date}"))
+                })
+            }
             (Some("after_entity"), None, Some(reference), None) => {
                 Ok(Self::AfterEntity(EntityId::from_stored(reference)))
             }
@@ -186,10 +188,142 @@ impl ResurfaceCondition {
         match self {
             Self::Always => "Always".to_string(),
             Self::Manual => "Manual".to_string(),
-            Self::AtDate(date) => format!("AtDate({date})"),
+            Self::AtDate(at) => format!("AtDate({})", at.local_string()),
             Self::AfterEntity(id) => format!("AfterEntity({id})"),
             Self::Command(command) => format!("Command({command})"),
         }
+    }
+
+    pub fn history_label(&self) -> String {
+        match self {
+            Self::AtDate(at) => format!("AtDate({})", at.utc_string()),
+            _ => self.label(),
+        }
+    }
+}
+
+/// A UTC instant plus the fractional-second precision supplied by the user.
+#[derive(Debug, Clone, Copy)]
+pub struct ResurfaceAt {
+    instant: DateTime<Utc>,
+    fractional_digits: u8,
+}
+
+impl ResurfaceAt {
+    pub fn instant(self) -> DateTime<Utc> {
+        self.instant
+    }
+
+    pub fn utc_string(self) -> String {
+        self.string_at_offset(FixedOffset::east_opt(0).expect("UTC offset"), true)
+    }
+
+    pub fn local_string(self) -> String {
+        let local = self.instant.with_timezone(&Local);
+        self.string_at_offset(*local.offset(), false)
+    }
+
+    fn string_at_offset(self, offset: FixedOffset, use_z: bool) -> String {
+        let local = self.instant.with_timezone(&offset);
+        let mut value = local.format("%Y-%m-%dT%H:%M:%S").to_string();
+        if self.fractional_digits > 0 {
+            let nanos = format!("{:09}", local.nanosecond());
+            value.push('.');
+            value.push_str(&nanos[..usize::from(self.fractional_digits)]);
+        }
+        if use_z {
+            value.push('Z');
+        } else {
+            let seconds = offset.local_minus_utc();
+            let sign = if seconds < 0 { '-' } else { '+' };
+            let minutes = seconds.unsigned_abs() / 60;
+            value.push_str(&format!("{sign}{:02}:{:02}", minutes / 60, minutes % 60));
+        }
+        value
+    }
+}
+
+impl std::str::FromStr for ResurfaceAt {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let bytes = value.as_bytes();
+        if bytes.len() < 20
+            || bytes.get(4) != Some(&b'-')
+            || bytes.get(7) != Some(&b'-')
+            || !matches!(bytes.get(10), Some(b'T' | b't'))
+            || bytes.get(13) != Some(&b':')
+            || bytes.get(16) != Some(&b':')
+            || ![0..4, 5..7, 8..10, 11..13, 14..16, 17..19]
+                .into_iter()
+                .flatten()
+                .all(|index| bytes[index].is_ascii_digit())
+            || &bytes[17..19] == b"60"
+        {
+            return Err("expected RFC 3339 with seconds and UTC offset");
+        }
+        let (time_end, offset_valid) = if matches!(bytes.last(), Some(b'Z' | b'z')) {
+            (bytes.len() - 1, true)
+        } else if bytes.len() >= 6 {
+            let offset = &bytes[bytes.len() - 6..];
+            (
+                bytes.len() - 6,
+                matches!(offset[0], b'+' | b'-')
+                    && offset[1..3].iter().all(u8::is_ascii_digit)
+                    && offset[3] == b':'
+                    && offset[4..6].iter().all(u8::is_ascii_digit),
+            )
+        } else {
+            (0, false)
+        };
+        if !offset_valid || time_end < 19 {
+            return Err("expected RFC 3339 with seconds and UTC offset");
+        }
+        let fractional_digits = if time_end == 19 {
+            0
+        } else if bytes.get(19) == Some(&b'.')
+            && (21..=29).contains(&time_end)
+            && bytes[20..time_end].iter().all(u8::is_ascii_digit)
+        {
+            u8::try_from(time_end - 20).expect("at most 9 digits")
+        } else {
+            return Err("fractional seconds must contain at most 9 digits");
+        };
+        let instant = DateTime::parse_from_rfc3339(value)
+            .map_err(|_| "invalid RFC 3339 timestamp")?
+            .with_timezone(&Utc);
+        Ok(Self {
+            instant,
+            fractional_digits,
+        })
+    }
+}
+
+impl PartialEq for ResurfaceAt {
+    fn eq(&self, other: &Self) -> bool {
+        self.instant == other.instant
+    }
+}
+
+impl Eq for ResurfaceAt {}
+
+impl std::fmt::Display for ResurfaceAt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.utc_string())
+    }
+}
+
+impl Serialize for ResurfaceAt {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.utc_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for ResurfaceAt {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -360,5 +494,26 @@ mod tests {
         );
         assert_eq!(after.kind_db(), Some("after_entity"));
         assert!(ResurfaceCondition::from_db(Some("date"), None, None, None).is_err());
+    }
+
+    #[test]
+    fn resurface_at_requires_seconds_and_offset_and_preserves_precision() {
+        let at: ResurfaceAt = "2026-09-08T12:34:56.1200+09:00".parse().unwrap();
+        assert_eq!(at.utc_string(), "2026-09-08T03:34:56.1200Z");
+        assert_eq!(
+            at,
+            "2026-09-08T03:34:56.1200Z".parse::<ResurfaceAt>().unwrap()
+        );
+
+        for invalid in [
+            "2026-09-08",
+            "2026-09-08T12:34:56",
+            "2026-09-08T12:34+09:00",
+            "2026-09-08T12:34:56.1234567890Z",
+            "2026-09-08T12:34:60Z",
+            "2026-09-日T12:34:56Z",
+        ] {
+            assert!(invalid.parse::<ResurfaceAt>().is_err(), "{invalid}");
+        }
     }
 }

@@ -12,7 +12,11 @@ pub(crate) struct Step {
     pub to: (u32, u32),
     pub apply: fn(&[u8]) -> Result<Vec<u8>>,
 }
-const STEPS: &[Step] = &[];
+const STEPS: &[Step] = &[Step {
+    from: (1, 13),
+    to: (1, 14),
+    apply: codec::upgrade_v13,
+}];
 
 pub(crate) fn open(
     path: &Path,

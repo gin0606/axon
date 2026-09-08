@@ -23,7 +23,7 @@ fn assert_show_relation(output: &str, label: &str, id: &str) {
 
 fn new_plan(dependencies: &str) -> String {
     format!(
-        r#"schema: axon-plan/v2
+        r#"schema: axon-plan/v3
 issues:
   - id: null
     key: api
@@ -260,8 +260,8 @@ fn strict_yaml_and_read_only_or_stale_snapshots_are_rejected() {
     let exported = stdout(&repo.axon(&["export", &issue]));
 
     let duplicate = exported.replacen(
-        "schema: axon-plan/v2",
-        "schema: axon-plan/v2\nschema: axon-plan/v2",
+        "schema: axon-plan/v3",
+        "schema: axon-plan/v3\nschema: axon-plan/v3",
         1,
     );
     write(&path, &duplicate);
@@ -440,7 +440,7 @@ fn observed_shapes_and_file_local_aliases_round_trip() {
     let dated = repo.plan("dated");
     let claimed = repo.plan("claimed");
     assert_success(&repo.axon(&["when", "after", &waiting, &trigger]));
-    assert_success(&repo.axon(&["when", "at", &dated, "2099-01-02"]));
+    assert_success(&repo.axon(&["when", "at", &dated, "2099-01-02T00:00:00.1200+09:00"]));
     assert_success(&repo.axon(&["start", &claimed]));
     let path = plan_path(&repo, "observed.yml");
     let mut exported = stdout(&repo.axon(&["export", &trigger, &waiting, &dated, &claimed]));
@@ -453,11 +453,37 @@ fn observed_shapes_and_file_local_aliases_round_trip() {
         &format!("entity: {{ id: {trigger} }}"),
         "entity: { key: trigger }",
     );
+
+    let old_schema = exported
+        .replacen("schema: axon-plan/v3", "schema: axon-plan/v2", 1)
+        .replacen(
+            "at: \"2099-01-01T15:00:00.1200Z\"",
+            "date: \"2099-01-02\"",
+            1,
+        );
+    write(&path, &old_schema);
+    let rejected = repo.axon(&["import", "check", path.to_str().unwrap()]);
+    assert_failure(&rejected);
+    assert!(stderr(&rejected).contains("schema must be axon-plan/v3"));
+    assert!(stderr(&rejected).contains("Help:"));
+    assert!(stderr(&rejected).contains("axon export"));
+
+    let old_date = exported.replacen(
+        "at: \"2099-01-01T15:00:00.1200Z\"",
+        "date: \"2099-01-02\"",
+        1,
+    );
+    write(&path, &old_date);
+    let rejected = repo.axon(&["import", "check", path.to_str().unwrap()]);
+    assert_failure(&rejected);
+    assert!(stderr(&rejected).contains("unknown field"));
+
     write(&path, &exported);
 
     assert_success(&repo.axon(&["import", "prepare", path.to_str().unwrap()]));
     let prepared = fs::read_to_string(&path).unwrap();
     assert!(prepared.contains("kind: at_date"));
+    assert!(prepared.contains("at: \"2099-01-01T15:00:00.1200Z\""));
     assert!(prepared.contains("progress: in_progress"));
     assert!(prepared.contains("entity: { key: trigger }"));
     assert_success(&repo.axon(&["import", "check", path.to_str().unwrap()]));
@@ -468,7 +494,7 @@ fn a_hundred_entity_plan_remains_a_single_atomic_edit() {
     let repo = TestRepo::new();
     repo.init("scale");
     let path = plan_path(&repo, "large.yml");
-    let mut yaml = String::from("schema: axon-plan/v2\nissues:\n");
+    let mut yaml = String::from("schema: axon-plan/v3\nissues:\n");
     for index in 0..100 {
         yaml.push_str(&format!(
             "  - id: null\n    key: task-{index}\n    base: null\n    title: task {index}\n    description: long description {index}\n    observed:\n      progress: not_started\n      claim: null\n      disposition: accepted\n      resurface:\n        kind: always\n"
@@ -500,7 +526,7 @@ fn builtin_example_applies_without_editing_and_preserves_its_plan_structure() {
     assert!(example.stderr.is_empty());
     assert!(!repo.root().join(".axon").exists());
     let yaml = stdout(&example);
-    assert!(yaml.starts_with("schema: axon-plan/v2\n"));
+    assert!(yaml.starts_with("schema: axon-plan/v3\n"));
     assert!(!yaml.contains("\x1b"));
     assert!(!yaml.contains("```"));
     assert_eq!(yaml.matches("id: null").count(), 3);

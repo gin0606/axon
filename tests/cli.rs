@@ -107,9 +107,20 @@ fn mutation_confirmations_begin_with_the_affected_entity() {
     );
     repo.undecide(&draft);
     assert_eq!(
-        stdout(&repo.axon(&["when", "at", &draft, "2099-01-02"])),
-        format!("{draft}  Resurface condition: AtDate(2099-01-02)\n")
+        stdout(
+            &repo.axon_in_timezone("UTC", &["when", "at", &draft, "2099-01-02T03:04:05.1200Z"],)
+        ),
+        format!("{draft}  Resurface condition: AtDate(2099-01-02T03:04:05.1200+00:00)\n")
     );
+    let event_count = repo.snapshot(&draft).decision_events;
+    assert_failure(&repo.axon(&["when", "at", &draft, "2099-01-02T12:04:05.1200+09:00"]));
+    assert_eq!(repo.snapshot(&draft).decision_events, event_count);
+    assert_eq!(
+        repo.snapshot(&draft).resurface_date.as_deref(),
+        Some("2099-01-02T03:04:05.1200Z")
+    );
+    let log = stdout(&repo.axon_in_timezone("Asia/Tokyo", &["log", &draft]));
+    assert!(log.contains("AtDate(2099-01-02T12:04:05.1200+09:00)"));
 
     let prerequisite = repo.plan("prerequisite");
     assert_eq!(
@@ -531,7 +542,7 @@ fn group_show_renders_the_complete_subtree_and_direct_dependencies() {
     repo.add_dependency(&blocked, &external_unresolved);
     repo.add_dependency(&orphaned, &external_rejected);
     assert_success(&repo.axon(&["dep", "add", &nested_draft, "--needs", &ready]));
-    assert_success(&repo.axon(&["when", "at", &deferred, "2099-01-02"]));
+    assert_success(&repo.axon(&["when", "at", &deferred, "2099-01-02T00:00:00Z"]));
     assert_success(&repo.axon(&["decide", "reject", &rejected, "-r", "not needed"]));
 
     assert_success(&repo.axon(&["start", &group]));

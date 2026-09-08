@@ -11,8 +11,8 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
-const SCHEMA: &str = "axon-plan/v2";
-const FINGERPRINT_VERSION: &str = "axon-entity-fingerprint/v2";
+const SCHEMA: &str = "axon-plan/v3";
+const FINGERPRINT_VERSION: &str = "axon-entity-fingerprint/v3";
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeclarationError {
@@ -20,6 +20,11 @@ pub enum DeclarationError {
     Evaluation(#[from] EvaluationError),
     #[error("{0}")]
     Invalid(String),
+    #[error("schema must be {expected} (found {found})")]
+    UnsupportedSchema {
+        found: String,
+        expected: &'static str,
+    },
     #[error("{reason}")]
     Reference { reason: String, guidance: String },
     #[error("{0}")]
@@ -46,6 +51,11 @@ struct PlanFile {
     groups: Vec<EntityRecord>,
     relations: Relations,
     references: References,
+}
+
+#[derive(Deserialize)]
+struct SchemaProbe {
+    schema: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,7 +121,7 @@ enum ResurfaceRecord {
     },
     AtDate {
         #[serde(serialize_with = "quoted_string")]
-        date: String,
+        at: String,
     },
     AfterEntity {
         #[serde(serialize_with = "flow_reference")]
@@ -325,6 +335,27 @@ fn parse(input: &str) -> Result<PlanFile> {
         reject_unsupported_tags: true,
         with_snippet: true,
     };
+    let probe: SchemaProbe = serde_saphyr::from_str_with_options(input, options)
+        .map_err(|error| DeclarationError::Invalid(format!("invalid declaration YAML: {error}")))?;
+    if probe.schema != SCHEMA {
+        return Err(DeclarationError::UnsupportedSchema {
+            found: probe.schema,
+            expected: SCHEMA,
+        });
+    }
+    let options = serde_saphyr::options! {
+        budget: serde_saphyr::budget! {
+            max_documents: 1,
+            max_aliases: 0,
+            max_anchors: 0,
+        },
+        duplicate_keys: DuplicateKeyPolicy::Error,
+        merge_keys: MergeKeyPolicy::Error,
+        strict_booleans: true,
+        no_schema: true,
+        reject_unsupported_tags: true,
+        with_snippet: true,
+    };
     serde_saphyr::from_str_with_options(input, options)
         .map_err(|error| DeclarationError::Invalid(format!("invalid declaration YAML: {error}")))
 }
@@ -414,20 +445,21 @@ fn normalize_observed(observed: &mut Observed) -> Result<()> {
             .with_timezone(&Utc)
             .to_rfc3339_opts(SecondsFormat::AutoSi, true);
     }
-    if let ResurfaceRecord::AtDate { date } = &mut observed.resurface {
-        *date = date
-            .parse::<chrono::NaiveDate>()
-            .map_err(|_| DeclarationError::Invalid(format!("invalid resurface date: {date}")))?
-            .to_string();
+    if let ResurfaceRecord::AtDate { at } = &mut observed.resurface {
+        *at = at
+            .parse::<ResurfaceAt>()
+            .map_err(|_| DeclarationError::Invalid(format!("invalid resurface timestamp: {at}")))?
+            .utc_string();
     }
     Ok(())
 }
 
 fn validate_local(document: &PlanFile, allow_null_ids: bool) -> Result<()> {
     if document.schema != SCHEMA {
-        return Err(DeclarationError::Invalid(format!(
-            "schema must be {SCHEMA}"
-        )));
+        return Err(DeclarationError::UnsupportedSchema {
+            found: document.schema.clone(),
+            expected: SCHEMA,
+        });
     }
     let mut ids = HashSet::new();
     let mut keys = HashSet::new();
@@ -510,9 +542,9 @@ fn validate_observed(observed: &Observed) -> Result<()> {
         }
         (_, None) => {}
     }
-    if let ResurfaceRecord::AtDate { date } = &observed.resurface {
-        date.parse::<chrono::NaiveDate>()
-            .map_err(|_| DeclarationError::Invalid(format!("invalid resurface date: {date}")))?;
+    if let ResurfaceRecord::AtDate { at } = &observed.resurface {
+        at.parse::<ResurfaceAt>()
+            .map_err(|_| DeclarationError::Invalid(format!("invalid resurface timestamp: {at}")))?;
     }
     validate_reference_in_resurface(&observed.resurface)
 }
@@ -786,8 +818,8 @@ fn observed_matches(record: &Observed, entity: &Entity, resolver: &Resolver) -> 
         (ResurfaceRecord::Command { command }, ResurfaceCondition::Command(expected)) => {
             Ok(command == expected)
         }
-        (ResurfaceRecord::AtDate { date: record }, ResurfaceCondition::AtDate(expected)) => {
-            Ok(record == &expected.to_string())
+        (ResurfaceRecord::AtDate { at: record }, ResurfaceCondition::AtDate(expected)) => {
+            Ok(record == &expected.utc_string())
         }
         (
             ResurfaceRecord::AfterEntity { entity: record },
@@ -1370,8 +1402,8 @@ fn observed(entity: &Entity) -> Observed {
         ResurfaceCondition::Command(command) => ResurfaceRecord::Command {
             command: command.clone(),
         },
-        ResurfaceCondition::AtDate(date) => ResurfaceRecord::AtDate {
-            date: date.to_string(),
+        ResurfaceCondition::AtDate(at) => ResurfaceRecord::AtDate {
+            at: at.utc_string(),
         },
         ResurfaceCondition::AfterEntity(id) => ResurfaceRecord::AfterEntity {
             entity: id_reference(id),
@@ -1443,9 +1475,9 @@ fn fingerprint(view: &View, entity: &Entity) -> String {
             hash_token(&mut hasher, "command");
             hash_token(&mut hasher, command);
         }
-        ResurfaceCondition::AtDate(date) => {
+        ResurfaceCondition::AtDate(at) => {
             hash_token(&mut hasher, "at_date");
-            hash_token(&mut hasher, &date.to_string());
+            hash_token(&mut hasher, &at.utc_string());
         }
         ResurfaceCondition::AfterEntity(target) => {
             hash_token(&mut hasher, "after_entity");

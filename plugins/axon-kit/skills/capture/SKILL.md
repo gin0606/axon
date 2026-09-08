@@ -23,7 +23,7 @@ mutation の前に、後から読む人が現在の会話を参照できない�
 
 Issue には `axon capture <title>`、Group には `axon group capture <title>` を実行する。決定済みの parent は `--parent <group-id>`、outgoing dependency はそれぞれ `--needs <entity-id>`、初期 description は `-m <description>` または `-F <snapshot>` で与える。file または stdin を使う前に、mutation contract の入力固定規則を適用する。
 
-初期 condition が与えられた場合、`--manual`、`--at <YYYY-MM-DD>`、`--after <entity-id>`、`--command <shell-string>` のいずれか 1 つだけを選ぶ。省略時は `Always` となる。ID には完全な ID または一意な suffix を指定できる。完全な draft と初期 condition は、Revision や架空の状態 transition を作らず atomic に保存される。呼び出し側が与えていない schedule や関係を創作しない。
+初期 condition が与えられた場合、`--manual`、`--at <RFC3339>`、`--after <entity-id>`、`--command <shell-string>` のいずれか 1 つだけを選ぶ。省略時は `Always` となる。ID には完全な ID または一意な suffix を指定できる。完全な draft と初期 condition は、Revision や架空の状態 transition を作らず atomic に保存される。呼び出し側が与えていない schedule や関係を創作しない。
 
 初期 Command 文字列は作成時に実行されない。これを実行せず保存結果を検証するには `axon show <id> --skip-command-evaluation` を使う。
 

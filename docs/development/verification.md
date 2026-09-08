@@ -41,6 +41,7 @@ cargo llvm-cov --locked --all-targets --all-features --summary-only
 `spec/axon.qnt` は axon の思想的コアである A / B / C / D の直交性、dependency と Resurface condition の差、ready / blocked / orphaned / blocking cause だけを扱う。group の identity、包含、状態、依存は持ち込まない。
 
 `spec/group_plan.qnt` はGroup の設計を扱う補助 model で、3 issue と 3 group からなる固定 Entity 集合を共有状態にする。実装上の DB transaction に対応して、各操作は 1 action で原子的に実行する。時刻は `AtDate` の評価に必要な小さい整数 clock だけを持つ。通信、障害、複数 actor、wall-clock、永続化はこの状態機械の関心ではない。
+RFC 3339 の構文、offset の UTC 正規化、小数秒の保持、storage migration はこの整数 clock 抽象の到達可能性を変えないため、Rust の domain・CLI・backend テストで検証する。
 
 `spec/information_model.qnt` は Entity ごとの plan declaration、Control state、
 Declaration Revision、Note、判断履歴、進行履歴を共有状態として扱う。title と

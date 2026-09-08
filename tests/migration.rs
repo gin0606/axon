@@ -3,6 +3,104 @@ use common::{TestRepo, assert_failure, assert_success, stderr};
 use rusqlite::Connection;
 use std::{fs, path::Path};
 
+#[test]
+fn ordinary_open_migrates_v13_dates_and_preserves_sqlite_history() {
+    let repo = TestRepo::new();
+    repo.init("legacy");
+    let issue = repo.plan("AtDate(2026-01-02)");
+    assert_success(&repo.axon(&["note", "add", &issue, "-m", "kept note"]));
+    assert_success(&repo.axon(&[
+        "when",
+        "at",
+        &issue,
+        "2099-01-02T00:00:00Z",
+        "-r",
+        "kept reason",
+    ]));
+
+    let path = repo.root().join(".axon/axon.db");
+    let conn = Connection::open(&path).unwrap();
+    let counts = |conn: &Connection| {
+        [
+            "entity_notes",
+            "declaration_revisions",
+            "entity_events",
+            "causal_links",
+        ]
+        .map(|table| {
+            conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap()
+        })
+    };
+    let before_counts = counts(&conn);
+    conn.execute_batch(
+        "UPDATE entities SET resurface_date='2099-01-02' WHERE resurface_kind='date';
+         UPDATE entity_events SET new_value='AtDate(2099-01-02)'
+           WHERE new_value='AtDate(2099-01-02T00:00:00Z)';
+         UPDATE entity_events SET old_value='AtDate(2099-01-02)'
+           WHERE old_value='AtDate(2099-01-02T00:00:00Z)';
+         UPDATE causal_links SET payload=replace(payload,'2099-01-02T00:00:00Z','2099-01-02');
+         UPDATE history_baselines SET payload=replace(payload,'2099-01-02T00:00:00Z','2099-01-02');
+         UPDATE history_merges SET payload=replace(payload,'2099-01-02T00:00:00Z','2099-01-02');
+         PRAGMA user_version=13;",
+    )
+    .unwrap();
+    drop(conn);
+
+    let result = repo.axon(&["show", &issue, "--skip-command-evaluation"]);
+    assert_success(&result);
+    assert!(stderr(&result).contains("v13 -> v14"));
+    let conn = Connection::open(&path).unwrap();
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        14
+    );
+    assert_eq!(counts(&conn), before_counts);
+    assert_eq!(
+        conn.query_row("SELECT title FROM entities WHERE id=?1", [&issue], |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap(),
+        "AtDate(2026-01-02)"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT resurface_date FROM entities WHERE id=?1",
+            [&issue],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "2099-01-02T00:00:00Z"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT new_value FROM entity_events WHERE entity_id=?1 AND field='resurface_condition'",
+            [&issue],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "AtDate(2099-01-02T00:00:00Z)"
+    );
+    assert!(
+        conn.query_row(
+            "SELECT payload FROM causal_links WHERE payload LIKE '%' || ?1 || '%' ORDER BY rowid DESC LIMIT 1",
+            [&issue],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap()
+        .contains("2099-01-02T00:00:00Z")
+    );
+    assert_eq!(
+        fs::read_dir(repo.root().join(".axon/migration-backups"))
+            .unwrap()
+            .count(),
+        1
+    );
+}
+
 fn convert(repo: &TestRepo, source: &Path, output: &Path, backend: &str) -> std::process::Output {
     repo.axon(&[
         "migrate",
@@ -41,8 +139,8 @@ fn current_backend_conversion_preserves_state_and_source() {
         let manifest: serde_json::Value =
             serde_saphyr::from_str(&fs::read_to_string(output.join("manifest.yaml")).unwrap())
                 .unwrap();
-        assert_eq!(manifest["source_schema"], 13);
-        assert_eq!(manifest["target_schema"], 13);
+        assert_eq!(manifest["source_schema"], 14);
+        assert_eq!(manifest["target_schema"], 14);
         assert_eq!(manifest["row_counts"], manifest["target_row_counts"]);
         assert_eq!(manifest["mappings"], serde_json::json!([]));
         assert!(!output.join("staging").exists());
@@ -60,7 +158,7 @@ fn current_backend_conversion_preserves_state_and_source() {
 }
 #[test]
 fn incompatible_schema_is_rejected_without_output_or_source_update() {
-    for schema in [9, 10, 11, 12, 14, 999] {
+    for schema in [9, 10, 11, 12, 13, 999] {
         let repo = TestRepo::new();
         repo.init("old");
         let source = repo.root().join(".axon/axon.db");
@@ -129,7 +227,7 @@ fn ambiguous_ids_and_duplicate_record_identity_are_rejected() {
 }
 
 #[test]
-fn v13_wal_and_changed_source_keep_existing_identity_and_causal_payloads() {
+fn current_wal_and_changed_source_keep_existing_identity_and_causal_payloads() {
     let repo = TestRepo::new();
     repo.init("current");
     let id = repo.plan("history");

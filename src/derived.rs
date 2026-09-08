@@ -135,7 +135,7 @@ pub struct View {
     order: Vec<EntityId>,
     deps: Vec<(EntityId, EntityId)>,
     evaluation: Rc<Evaluation>,
-    date: Option<chrono::NaiveDate>,
+    at: Option<chrono::DateTime<Utc>>,
 }
 
 impl View {
@@ -163,7 +163,7 @@ impl View {
             order,
             deps,
             evaluation,
-            date: None,
+            at: None,
         }
     }
 
@@ -179,8 +179,8 @@ impl View {
             ResurfaceCondition::Command(_) => None,
             ResurfaceCondition::Always => Some(true),
             ResurfaceCondition::Manual => Some(false),
-            ResurfaceCondition::AtDate(date) => {
-                Some(*date <= self.date.unwrap_or_else(|| Utc::now().date_naive()))
+            ResurfaceCondition::AtDate(at) => {
+                Some(at.instant() <= self.at.unwrap_or_else(Utc::now))
             }
             ResurfaceCondition::AfterEntity(target) => {
                 Some(self.get(target).is_none_or(Entity::is_terminal))
@@ -258,7 +258,7 @@ impl View {
     }
 
     pub fn at(mut self, at: chrono::DateTime<Utc>) -> Self {
-        self.date = Some(at.date_naive());
+        self.at = Some(at);
         self
     }
 
@@ -613,6 +613,33 @@ mod tests {
 
     fn id(value: &str) -> EntityId {
         EntityId::from_stored(value)
+    }
+
+    #[test]
+    fn at_date_compares_the_exact_instant_across_offsets() {
+        let mut item = entity(
+            "timed",
+            EntityKind::Issue,
+            Progress::NotStarted,
+            Disposition::Accepted,
+            None,
+        );
+        item.resurface_condition =
+            ResurfaceCondition::AtDate("2026-09-08T12:00:00.123456789+09:00".parse().unwrap());
+        let before = "2026-09-08T03:00:00.123456788Z".parse().unwrap();
+        let exact = "2026-09-08T03:00:00.123456789Z".parse().unwrap();
+        assert_eq!(
+            View::new(vec![item.clone()], vec![])
+                .at(before)
+                .observed_surfaced(&item),
+            Some(false)
+        );
+        assert_eq!(
+            View::new(vec![item.clone()], vec![])
+                .at(exact)
+                .observed_surfaced(&item),
+            Some(true)
+        );
     }
 
     #[test]

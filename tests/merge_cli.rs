@@ -304,6 +304,25 @@ fn driver_rejects_empty_ancestor_without_discovering_backend() {
 }
 
 #[test]
+fn merge_prepare_rejects_a_v13_common_ancestor_without_rewriting_inputs() {
+    let d = TestDir::new("merge-old-schema");
+    fixtures(&d, false);
+    let legacy = fs::read_to_string(d.path().join("base"))
+        .unwrap()
+        .replace("\"schema\":14", "\"schema\":13");
+    fs::write(d.path().join("base"), &legacy).unwrap();
+    let ours = fs::read(d.path().join("ours")).unwrap();
+    let theirs = fs::read(d.path().join("theirs")).unwrap();
+
+    let result = prep(&d, "old-schema");
+    assert_failure(&result);
+    assert!(stderr(&result).contains("unsupported snapshot header"));
+    assert_eq!(fs::read_to_string(d.path().join("base")).unwrap(), legacy);
+    assert_eq!(fs::read(d.path().join("ours")).unwrap(), ours);
+    assert_eq!(fs::read(d.path().join("theirs")).unwrap(), theirs);
+}
+
+#[test]
 fn git_add_add_and_delete_modify_are_explicit_conflicts() {
     for add_add in [true, false] {
         let d = TestDir::new("merge-git-edge");

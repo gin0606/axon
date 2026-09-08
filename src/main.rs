@@ -13,7 +13,7 @@ mod merge_cli;
 mod record_id;
 
 use anstyle::{AnsiColor, Color, Style};
-use chrono::{NaiveDate, Utc};
+use chrono::Utc;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use core::ApplyOutcome;
@@ -476,8 +476,8 @@ struct InitialStateArgs {
     /// Initially remain unsurfaced until explicitly changed
     #[arg(long, conflicts_with_all = ["at", "after", "command"])]
     manual: bool,
-    /// Initial resurface date in YYYY-MM-DD format
-    #[arg(long, value_name = "DATE", conflicts_with_all = ["after", "command"])]
+    /// Initial resurface instant as RFC 3339 with seconds and UTC offset
+    #[arg(long, value_name = "RFC3339", conflicts_with_all = ["after", "command"])]
     at: Option<String>,
     /// Initially wait for an Entity (ID or unique suffix) to become Ended or Rejected
     #[arg(long, value_name = "ENTITY", conflicts_with = "command")]
@@ -499,11 +499,8 @@ impl InitialStateArgs {
             .collect::<Result<Vec<_>, _>>()?;
         let condition = if self.manual {
             ResurfaceCondition::Manual
-        } else if let Some(date) = &self.at {
-            ResurfaceCondition::AtDate(
-                date.parse::<NaiveDate>()
-                    .map_err(|_| format!("invalid date: {date} (expected YYYY-MM-DD)"))?,
-            )
+        } else if let Some(at) = &self.at {
+            ResurfaceCondition::AtDate(parse_resurface_at(at)?)
         } else if let Some(reference) = &self.after {
             ResurfaceCondition::AfterEntity(store.resolve_id(reference)?)
         } else if let Some(command) = &self.command {
@@ -637,7 +634,8 @@ enum WhenCmd {
     At {
         /// Entity ID or unique ID suffix
         id: String,
-        /// Resurface date in YYYY-MM-DD format
+        /// Resurface instant as RFC 3339 with seconds and UTC offset
+        #[arg(value_name = "RFC3339")]
         date: String,
         /// Reason recorded in decision history. For a leading hyphen, use --reason='--help text' (or -r='--help text')
         #[arg(short, long)]
@@ -840,6 +838,17 @@ fn error_guidance(error: &(dyn std::error::Error + 'static)) -> Option<String> {
         error.downcast_ref::<declaration::DeclarationError>()
     {
         return Some(guidance.clone());
+    }
+    if error
+        .downcast_ref::<declaration::DeclarationError>()
+        .is_some_and(|error| {
+            matches!(
+                error,
+                declaration::DeclarationError::UnsupportedSchema { .. }
+            )
+        })
+    {
+        return Some("Old declaration schemas are not converted in memory. Open the current store with this axon build so its supported storage migration completes, then run `axon export` again and use the fresh axon-plan/v3 declaration.".to_string());
     }
     if let Some(error) = error.downcast_ref::<DbError>() {
         return Some(match error {
@@ -3026,17 +3035,16 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
         }
         WhenCmd::At { id, date, reason } => {
             let id = store.resolve_id(&id)?;
-            let date: NaiveDate = date
-                .parse()
-                .map_err(|_| format!("invalid date: {date} (expected YYYY-MM-DD)"))?;
+            let date = parse_resurface_at(&date)?;
+            let condition = ResurfaceCondition::AtDate(date);
             store.apply(
                 &id,
-                Change::SetResurfaceCondition(ResurfaceCondition::AtDate(date)),
+                Change::SetResurfaceCondition(condition.clone()),
                 &ctx(reason),
             )?;
             write_confirmation(
                 &id,
-                |_| format!("Resurface condition: AtDate({date})"),
+                |_| format!("Resurface condition: {}", condition.label()),
                 Style::new(),
             )?;
         }
@@ -3086,6 +3094,14 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+fn parse_resurface_at(value: &str) -> Result<ResurfaceAt, String> {
+    value.parse().map_err(|_| {
+        format!(
+            "invalid resurface timestamp: {value} (expected e.g. 2026-12-01T00:00:00+09:00 or 2026-11-30T15:00:00Z)"
+        )
+    })
 }
 
 fn setting_confirmation(outcome: ApplyOutcome, detail: String) -> String {
@@ -3192,6 +3208,12 @@ fn format_decision(event: &db::Event, decoration: OutputDecoration) -> String {
         Some("undecided") => "Undecided".to_string(),
         Some("accepted") => "Accepted".to_string(),
         Some("rejected") => "Rejected".to_string(),
+        Some(other) if event.field == "resurface_condition" => other
+            .strip_prefix("AtDate(")
+            .and_then(|value| value.strip_suffix(')'))
+            .and_then(|value| value.parse::<ResurfaceAt>().ok())
+            .map(|at| format!("AtDate({})", at.local_string()))
+            .unwrap_or_else(|| other.to_string()),
         Some(other) => other.to_string(),
         None => "Always".to_string(),
     };
@@ -3590,7 +3612,10 @@ fn render_docs(decoration: OutputDecoration) -> String {
     .unwrap();
     writeln!(output, "\nUse axon docs declaration for declaration fields and the import workflow.\nUse axon docs declaration --example for a complete new-plan YAML example.").unwrap();
     writeln!(output, "\nStorage recovery\n  Ordinary commands apply supported schema updates with a backup before continuing.\n  Schema v13 is the current baseline; retired schema conversion paths are not retained.\n  Use axon migrate --source <current-schema-db> --output <new-directory> --backend <sqlite|file>\n  for backend conversion only. Schema mismatch is an error; the source is not updated or switched.\n  Keep an old binary, stop writers, verify copies, then switch all affected roots.\n  Failed outputs may be incomplete; preserve and inspect them before retry.\n  Unknown schemas are rejected. init only creates new DBs; init cannot upgrade.\n  --version identifies the executable release, not its DB schema.\n  Before recovery stop all writers and preserve .axon with SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  export also requires a compatible build and is not a complete database backup.\n  No backend config: discover axon.db or state.jsonl at the prescribed paths.\n  Both present is an error; neither is uninitialized. Invalid/partial state stops discovery.\n  Outside Git, use the nearest ancestor state or init.pending; Git is a boundary.\n  init --backend file creates .axon/state.jsonl; the default backend is sqlite.\n  SQLite uses .axon/axon.db at the parent of the Git common directory, shared by worktrees;\n  outside Git it uses the management root. One backend per repository is supported.\n  SQLite init does not change ignore files. File init adds .axon/.gitignore and\n  /.axon/state.jsonl merge=axon to root .gitattributes, also outside Git.\n  File writers lock, read, validate, sync a temporary, compare original bytes, replace,\n  and sync the directory before success. No-op preserves bytes.\n  Failure before replace is not applied; failure after replace is result unknown.\n  Inspect state before retrying an unknown result; do not repeat an append blindly.\n  init creates new state only; existing state or init.pending is never repaired or replaced.\n  Preserve incomplete files, complete the box manually, then remove init.pending after verification.\n  Linked worktrees use shared SQLite without registration. Legacy paths are not discovered.\n  Do not overlap Git checkout/merge or editor writes with Axon writes in one worktree.\n  OS locks are local; network filesystem/distributed guarantees are not provided.\n  Use storage check <snapshot> to validate a complete JSONL file.\n  merge prepare/check/apply use an explicit workspace; edit resolution.json then check.\n  After installation, register the Git driver with git config merge.axon.driver\n  'axon merge driver %O %A %B' and git config merge.axon.recursive binary.\n  Conflicts preserve raw inputs; Axon never stages or commits Git files.\n  help, docs, version and completion do not open the DB.\n").unwrap();
-    output
+    output.replace(
+        "Schema v13 is the current baseline; retired schema conversion paths are not retained.",
+        "Schema v14 is current; v13 AtDate values migrate to UTC midnight with a backup.\n  Historical v13 Git merge inputs and axon-plan/v2 declarations are rejected; use a compatible\n  old binary to recover the old snapshot, then migrate and re-export before retrying.",
+    )
 }
 
 fn write_completion(shell: Shell) -> std::io::Result<()> {

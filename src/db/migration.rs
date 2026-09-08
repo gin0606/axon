@@ -408,7 +408,7 @@ fn migrate_with_checkpoint(
 
 fn all_tables(conn: &Connection) -> super::Result<BTreeMap<String, Table>> {
     let mut result = tables(conn)?;
-    if version(conn)? == 13 {
+    if version(conn)? == SCHEMA_VERSION {
         for (name, order) in [
             ("history_lineage", "entity_id"),
             ("causal_links", "record_id"),
@@ -489,7 +489,7 @@ mod tests {
                 );
                 assert_eq!(output.join("manifest.yaml").exists(), published);
                 assert_eq!(fs::read(&source).unwrap(), before);
-                let backup = output.join("source-v13.db");
+                let backup = output.join(format!("source-v{SCHEMA_VERSION}.db"));
                 assert!(backup.exists());
                 let saved = fs::read(&backup).unwrap();
                 assert!(migrate(&source, &output, backend).is_err());

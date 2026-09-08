@@ -25,7 +25,7 @@ mutation の前に、会話 context なしで提案する declaration を読み�
 
 Issue には `axon plan <title>`、Group には `axon group plan <title>` を実行する。`--parent <group-id>` を含め、outgoing dependency ごとに `--needs <entity-id>` を繰り返し、初期 description を `-m <description>` または `-F <snapshot>` で与える。file または stdin を使う前に、mutation contract の入力固定規則を適用する。
 
-与えられた初期 condition を使う。`Always` では condition option を省略し、それ以外では `--manual`、`--at <YYYY-MM-DD>`、`--after <entity-id>`、`--command <shell-string>` のいずれか 1 つだけを選ぶ。ID には完全な ID または一意な suffix を指定できる。これらの入力、Entity、最初の完全な Revision は atomic に保存される。与えられた dependency や condition を設定するためだけに capture を経由しない。初期値は transition history を作らず、作成には reason option もない。reason を付けるために transition を捏造しない。明示的に要求された実際の transition は別操作のままとする。
+与えられた初期 condition を使う。`Always` では condition option を省略し、それ以外では `--manual`、`--at <RFC3339>`、`--after <entity-id>`、`--command <shell-string>` のいずれか 1 つだけを選ぶ。ID には完全な ID または一意な suffix を指定できる。これらの入力、Entity、最初の完全な Revision は atomic に保存される。与えられた dependency や condition を設定するためだけに capture を経由しない。初期値は transition history を作らず、作成には reason option もない。reason を付けるために transition を捏造しない。明示的に要求された実際の transition は別操作のままとする。
 
 初期 Command 文字列は実行せず保存される。確認で外部 command を実行しないよう、`axon show <id> --skip-command-evaluation` で検証する。該当する場合、readiness は未評価として報告し、呼び出し側がその観測を必要とするときだけ別途評価する。
 

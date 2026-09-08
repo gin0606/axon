@@ -49,6 +49,68 @@ fn state(root: &Path) -> PathBuf {
 }
 
 #[test]
+fn ordinary_open_migrates_v13_dates_and_preserves_file_records() {
+    let dir = TestDir::new("file-date-upgrade");
+    let root = dir.path();
+    run(&dir, root, &["init", "--backend", "file", "legacy"]);
+    let issue = make(&dir, root);
+    run(
+        &dir,
+        root,
+        &["note", "add", &issue, "-m", "AtDate(2026-01-02)"],
+    );
+    run(&dir, root, &["when", "at", &issue, "2099-01-02T00:00:00Z"]);
+
+    let current = fs::read_to_string(state(root)).unwrap();
+    let record_count = current.lines().count();
+    let legacy = current
+        .replace("\"schema\":14", "\"schema\":13")
+        .replace(
+            "\"metadata\":{",
+            "\"metadata\":{\"AtDate\":{\"Text\":\"kept metadata\"},",
+        )
+        .replace("2099-01-02T00:00:00Z", "2099-01-02");
+    fs::write(state(root), &legacy).unwrap();
+
+    let result = dir.axon_in(root, &["show", &issue, "--skip-command-evaluation"]);
+    assert_success(&result);
+    assert!(stderr(&result).contains("(1, 13) -> (1, 14)"));
+    let updated = fs::read_to_string(state(root)).unwrap();
+    assert_eq!(updated.lines().count(), record_count);
+    assert!(updated.contains("AtDate(2026-01-02)"));
+    assert!(updated.contains("\"AtDate\":{\"Text\":\"kept metadata\"}"));
+    assert!(updated.contains("2099-01-02T00:00:00Z"));
+    assert!(!updated.contains("\"AtDate\":\"2099-01-02\""));
+    let backups = fs::read_dir(root.join(".axon/migration-backups"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(fs::read_to_string(&backups[0]).unwrap(), legacy);
+    assert_success(&dir.axon_in(root, &["storage", "check", state(root).to_str().unwrap()]));
+}
+
+#[test]
+fn v13_file_with_non_date_at_date_payload_is_rejected_without_writing() {
+    let dir = TestDir::new("file-invalid-v13-date");
+    let root = dir.path();
+    run(&dir, root, &["init", "--backend", "file", "legacy"]);
+    let issue = make(&dir, root);
+    run(&dir, root, &["when", "at", &issue, "2099-01-02T00:00:00Z"]);
+
+    let invalid = fs::read_to_string(state(root))
+        .unwrap()
+        .replace("\"schema\":14", "\"schema\":13");
+    fs::write(state(root), &invalid).unwrap();
+
+    let result = dir.axon_in(root, &["show", &issue, "--skip-command-evaluation"]);
+    assert_failure(&result);
+    assert!(stderr(&result).contains("invalid v13 AtDate payload"));
+    assert_eq!(fs::read_to_string(state(root)).unwrap(), invalid);
+    assert!(!root.join(".axon/migration-backups").exists());
+}
+
+#[test]
 fn file_init_integrates_git_files_without_config_or_registration() {
     for git_repo in [false, true] {
         let dir = TestDir::new("backend-ignore");
@@ -278,7 +340,7 @@ fn all_normal_commands_and_import_use_file_without_sqlite() {
     }
     run(&dir, root, &["show", id.rsplit('-').next().unwrap()]);
     let plan = root.join("plan.yml");
-    fs::write(&plan,"schema: axon-plan/v2\nissues:\n  - id: null\n    key: new\n    base: null\n    title: Imported\n    description: null\n    observed:\n      progress: not_started\n      claim: null\n      disposition: accepted\n      resurface:\n        kind: always\ngroups: []\nrelations:\n  editable:\n    parents: []\n    dependencies: []\n  readonly:\n    parents: []\n    dependencies: []\nreferences:\n  entities: []\n").unwrap();
+    fs::write(&plan,"schema: axon-plan/v3\nissues:\n  - id: null\n    key: new\n    base: null\n    title: Imported\n    description: null\n    observed:\n      progress: not_started\n      claim: null\n      disposition: accepted\n      resurface:\n        kind: always\ngroups: []\nrelations:\n  editable:\n    parents: []\n    dependencies: []\n  readonly:\n    parents: []\n    dependencies: []\nreferences:\n  entities: []\n").unwrap();
     for command in ["prepare", "check", "apply"] {
         run(&dir, root, &["import", command, plan.to_str().unwrap()]);
     }

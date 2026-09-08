@@ -249,7 +249,7 @@ fn stored_reads_and_relation_repairs_do_not_execute_conditions() {
         assert_eq!(calls(&repo), 0);
     }
     assert_success(&repo.axon(&["when", "after", &id, &other]));
-    assert_success(&repo.axon(&["when", "at", &id, "2100-01-01"]));
+    assert_success(&repo.axon(&["when", "at", &id, "2100-01-01T00:00:00Z"]));
     assert_success(&repo.axon(&["when", "command", &id, "exit 0"]));
     assert_success(&repo.axon(&["when", "clear", &id]));
     assert_eq!(calls(&repo), 0);
@@ -577,7 +577,10 @@ fn skipped_observations_keep_known_conditions_and_closed_gates_definitive() {
     assert!(shown.contains("Ready: no"));
     assert!(shown.contains("Surfaced: unevaluated"));
     let date = repo.plan("date condition");
-    for (value, expected) in [("2000-01-01", "yes"), ("2999-01-01", "no")] {
+    for (value, expected) in [
+        ("2000-01-01T00:00:00Z", "yes"),
+        ("2999-01-01T00:00:00Z", "no"),
+    ] {
         assert_success(&repo.axon(&["when", "at", &date, value]));
         let shown = repo.axon(&["show", &date, "--skip-command-evaluation"]);
         assert_success(&shown);

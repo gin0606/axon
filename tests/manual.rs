@@ -123,7 +123,7 @@ fn manual_replaces_every_condition_and_removes_after_entity_wait_edges() {
         };
         let target = repo.plan("target");
         for condition in [
-            vec!["when", "at", &id, "2099-01-01"],
+            vec!["when", "at", &id, "2099-01-01T00:00:00Z"],
             vec!["when", "after", &id, &target],
             vec!["when", "command", &id, "exit 7"],
         ] {

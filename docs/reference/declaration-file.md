@@ -9,7 +9,7 @@
 次は既存と新規の issue / group、内部と境界をまたぐ関係を含む、`prepare` 前の完全な例である。fingerprint は例示値であり、そのまま適用できない。実在 snapshot の取得手順は §6.1.1 を参照する。新規 DB で使える完全 YAML は `axon docs declaration --example` で取得する。
 
 ```yaml
-schema: axon-plan/v2
+schema: axon-plan/v3
 issues:
   - id: demo-4d5e6f
     key: null
@@ -23,7 +23,7 @@ issues:
       disposition: accepted
       resurface:
         kind: at_date
-        date: "2026-10-01"
+        at: "2026-10-01T00:00:00Z"
   - id: null
     key: api
     base: null
@@ -153,9 +153,11 @@ references:
 
 root は次の 5 field だけをこの順で持つ mapping とする。すべて必須であり、空の場合も list または mapping 自体を省略しない。
 
+旧 `axon-plan/v2` はメモリ内変換せず拒否する。対応する現行 store を通常起動で移行し、`axon export` を再実行して新しい v3 declaration を作る。
+
 | field | 型 | 所有者・意味 |
 | --- | --- | --- |
-| `schema` | string | 必ず `axon-plan/v2`。形式と fingerprint の version label を兼ねる |
+| `schema` | string | 必ず `axon-plan/v3`。形式と fingerprint の version label を兼ねる |
 | `issues` | list | 編集対象の issue の完全宣言 |
 | `groups` | list | 編集対象の group の完全宣言 |
 | `relations` | mapping | 編集可能・読み取り専用の関係を一箇所に正規化したもの |
@@ -209,7 +211,7 @@ resurface:
 ```yaml
 resurface:
   kind: at_date
-  date: "2026-10-01"
+  at: "2026-10-01T00:00:00Z"
 ```
 
 ```yaml
@@ -236,7 +238,7 @@ check / apply が導出差分を作る場合は必要な条件を評価し、変
 評価失敗時は書き込みを確定せず、commit 後の出力や再 export で追加評価しない。
 共通の実行契約は [CLI 契約](cli.md#外部条件の評価) を参照する。
 
-`date` は quote した `YYYY-MM-DD` string とする。`after_entity` の参照先は issue / group のどちらでもよい。ready、blocked、orphaned、surfaced、active scope、blocking cause、group 集計などの導出値はファイルに保存しない。時刻、別 Entity、外部観測の変更だけで snapshot が古くなるのを避け、`check` が実行時の DB から適用前後の導出差分を表示する。
+`at` は秒と UTC offset を持つ RFC 3339 string とする。小数秒は 9 桁まで許可し、canonical form は instant を UTC の `Z` 表記に正規化しつつ入力の小数桁数を保持する。`after_entity` の参照先は issue / group のどちらでもよい。ready、blocked、orphaned、surfaced、active scope、blocking cause、group 集計などの導出値はファイルに保存しない。時刻、別 Entity、外部観測の変更だけで snapshot が古くなるのを避け、`check` が実行時の DB から適用前後の導出差分を表示する。
 
 新規 Entity の observed は必ず `not_started`、claim null、`accepted`、`always` とする。import から状態操作は行わず、異なる値は拒否する。
 
@@ -262,8 +264,8 @@ fingerprint は `blake3:` に続く lowercase 64 桁の hex string とする。
 
 各 Entity の fingerprint は、次の token 列を上から順に encode して BLAKE3 へ渡す。
 
-1. schema `axon-plan/v2`
-2. fingerprint 構造の version label `axon-entity-fingerprint/v2`
+1. schema `axon-plan/v3`
+2. fingerprint 構造の version label `axon-entity-fingerprint/v3`
 3. kind (`issue` / `group`)
 4. ID
 5. title
@@ -272,7 +274,7 @@ fingerprint は `blake3:` に続く lowercase 64 桁の hex string とする。
 8. progress (`not_started` / `in_progress` / `ended`)
 9. claim の presence (`none` / `some`)。`some` なら続けて actor、worktree、canonical UTC timestamp
 10. disposition (`undecided` / `accepted` / `rejected`)
-11. resurface kind (`always` / `at_date` / `after_entity` / `manual` / `command`)。`at_date` なら続けて canonical date、`after_entity` なら続けて解決済み Entity ID、`command` なら続けてシェル文字列。評価結果は含めない
+11. resurface kind (`always` / `at_date` / `after_entity` / `manual` / `command`)。`at_date` なら続けて canonical UTC instant、`after_entity` なら続けて解決済み Entity ID、`command` なら続けてシェル文字列。評価結果は含めない
 12. outgoing dependency の件数を符号なし 64 bit big-endian integer で表した 8 byte
 13. prerequisite の解決済み ID を bytewise UTF-8 昇順に並べた各 token
 
@@ -484,7 +486,7 @@ fresh export では key を復元せず ID reference を使う。
 
 ```yaml
 # 未知 field
-schema: axon-plan/v2
+schema: axon-plan/v3
 issues: []
 groups: []
 relations:
@@ -496,7 +498,7 @@ priority: high
 
 ```yaml
 # duplicate key
-schema: axon-plan/v2
+schema: axon-plan/v3
 issues: []
 issues: []
 ```

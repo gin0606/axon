@@ -1,4 +1,4 @@
-schema: axon-plan/v2
+schema: axon-plan/v3
 issues:
   - id: null
     key: implement

@@ -122,8 +122,8 @@ fn decision_event(
         Change::SetResurfaceCondition(value) => Some((
             "resurface_condition",
             (!matches!(entity.resurface_condition, ResurfaceCondition::Always))
-                .then(|| entity.resurface_condition.label()),
-            (!matches!(value, ResurfaceCondition::Always)).then(|| value.label()),
+                .then(|| entity.resurface_condition.history_label()),
+            (!matches!(value, ResurfaceCondition::Always)).then(|| value.history_label()),
         )),
         _ => None,
     }
@@ -1367,7 +1367,7 @@ pub(crate) mod tests {
         let mut input = entity("i", EntityKind::Issue, None);
         input.disposition = Disposition::Accepted;
         input.current_revision = Some(RecordId::deterministic(RecordKind::Revision, b"initial"));
-        input.resurface_condition = ResurfaceCondition::AtDate(at().date_naive());
+        input.resurface_condition = ResurfaceCondition::AtDate(at().to_rfc3339().parse().unwrap());
         let state = execute(&empty(), Operation::Insert(input, Vec::new()), 1)
             .unwrap()
             .state;
