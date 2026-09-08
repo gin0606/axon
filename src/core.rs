@@ -1105,6 +1105,148 @@ pub(crate) mod tests {
             },
         )
     }
+
+    #[test]
+    fn manual_preserves_every_kind_progress_and_disposition_in_memory() {
+        let mut tick = 0;
+        for kind in [EntityKind::Issue, EntityKind::Group] {
+            for desired_progress in ["not_started", "in_progress", "ended"] {
+                for desired_disposition in [
+                    Disposition::Accepted,
+                    Disposition::Undecided,
+                    Disposition::Rejected,
+                ] {
+                    let name =
+                        format!("manual-{kind:?}-{desired_progress}-{desired_disposition:?}");
+                    let entity_id = id(&name);
+                    let mut state = empty();
+                    {
+                        let mut apply = |operation| {
+                            tick += 1;
+                            state = execute(&state, operation, tick).unwrap().state().clone();
+                        };
+                        apply(Operation::Insert(entity(&name, kind, None), Vec::new()));
+                        apply(Operation::Change(
+                            entity_id.clone(),
+                            Change::Decide(Disposition::Accepted),
+                        ));
+                        if desired_progress != "not_started" {
+                            apply(Operation::Change(
+                                entity_id.clone(),
+                                Change::Start(Claim {
+                                    actor: "contract".into(),
+                                    worktree: "/worktree/contract".into(),
+                                    at: at(),
+                                }),
+                            ));
+                        }
+                        if desired_progress == "ended" {
+                            apply(Operation::Change(entity_id.clone(), Change::Done));
+                        }
+                        if desired_disposition != Disposition::Accepted {
+                            apply(Operation::Change(
+                                entity_id.clone(),
+                                Change::Decide(desired_disposition),
+                            ));
+                        }
+                    }
+
+                    let before = state.entity(&entity_id).unwrap().clone();
+                    let history = state.histories[&entity_id].clone();
+                    tick += 1;
+                    state = execute(
+                        &state,
+                        Operation::Change(
+                            entity_id.clone(),
+                            Change::SetResurfaceCondition(ResurfaceCondition::Manual),
+                        ),
+                        tick,
+                    )
+                    .unwrap()
+                    .state()
+                    .clone();
+                    let after = state.entity(&entity_id).unwrap();
+                    assert_eq!(after.kind, before.kind);
+                    assert_eq!(after.progress, before.progress);
+                    assert_eq!(after.disposition, before.disposition);
+                    assert_eq!(after.current_revision, before.current_revision);
+                    assert_eq!(after.parent, before.parent);
+                    assert_eq!(state.histories[&entity_id].revisions, history.revisions);
+                    assert_eq!(state.histories[&entity_id].notes, history.notes);
+                    assert_eq!(state.histories[&entity_id].progress, history.progress);
+                    assert_eq!(
+                        state.histories[&entity_id].decisions.len(),
+                        history.decisions.len() + 1
+                    );
+                    assert_eq!(after.resurface_condition, ResurfaceCondition::Manual);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn initial_entity_matrix_is_complete_without_transition_history() {
+        for kind in [EntityKind::Issue, EntityKind::Group] {
+            for disposition in [Disposition::Undecided, Disposition::Accepted] {
+                for condition in [
+                    ResurfaceCondition::Always,
+                    ResurfaceCondition::Manual,
+                    ResurfaceCondition::AtDate("2099-12-31T00:00:00Z".parse().unwrap()),
+                    ResurfaceCondition::AfterEntity(id("target")),
+                    ResurfaceCondition::Command("exit 7".into()),
+                ] {
+                    let mut state = empty();
+                    let mut tick = 0;
+                    let mut apply = |operation| {
+                        tick += 1;
+                        state = execute(&state, operation, tick).unwrap().state().clone();
+                    };
+                    apply(Operation::Insert(
+                        entity("parent", EntityKind::Group, None),
+                        Vec::new(),
+                    ));
+                    apply(Operation::Insert(
+                        entity("target", EntityKind::Issue, None),
+                        Vec::new(),
+                    ));
+                    let mut candidate = entity("candidate", kind, Some("parent"));
+                    candidate.title = "complete title".into();
+                    candidate.description = Some("complete description".into());
+                    candidate.disposition = disposition;
+                    candidate.current_revision =
+                        (disposition == Disposition::Accepted).then(|| {
+                            RecordId::deterministic(RecordKind::Revision, b"candidate-initial")
+                        });
+                    candidate.resurface_condition = condition.clone();
+                    apply(Operation::Insert(candidate, vec![id("target")]));
+
+                    let saved = state.entity(&id("candidate")).unwrap();
+                    assert_eq!(saved.kind, kind);
+                    assert_eq!(saved.title, "complete title");
+                    assert_eq!(saved.description.as_deref(), Some("complete description"));
+                    assert_eq!(saved.parent.as_ref(), Some(&id("parent")));
+                    assert_eq!(saved.progress, Progress::NotStarted);
+                    assert_eq!(saved.disposition, disposition);
+                    assert_eq!(saved.resurface_condition, condition);
+                    assert_eq!(
+                        state.declaration.dependencies,
+                        vec![(id("candidate"), id("target"))]
+                    );
+                    let history = state.histories.get(&id("candidate"));
+                    assert!(history.is_none_or(|history| history.decisions.is_empty()));
+                    assert!(history.is_none_or(|history| history.progress.is_empty()));
+                    assert_eq!(
+                        history.map_or(0, |history| history.revisions.len()),
+                        usize::from(disposition == Disposition::Accepted)
+                    );
+                    assert_eq!(
+                        saved.current_revision,
+                        history.and_then(|history| history.revisions.first().map(|r| r.id))
+                    );
+                }
+            }
+        }
+    }
     /// The same behavioral assertions run against memory and transactional SQLite publication.
     pub fn contract(
         mut run: impl FnMut(Operation) -> std::result::Result<(ApplyOutcome, StateSnapshot), String>,

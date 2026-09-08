@@ -1,5 +1,4 @@
-mod common;
-use common::{TestRepo, assert_success, stderr, stdout};
+use crate::common::{TestRepo, assert_success, stderr, stdout};
 use std::fs;
 
 fn search(repo: &TestRepo, text: &str) -> String {

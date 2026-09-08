@@ -1,6 +1,4 @@
-mod common;
-
-use common::TestDir;
+use crate::common::{self, TestDir};
 use std::process::{Output, Stdio};
 
 fn axon(args: &[&str]) -> (Output, TestDir) {

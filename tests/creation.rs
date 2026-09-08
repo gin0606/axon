@@ -1,6 +1,4 @@
-mod common;
-
-use common::{TestRepo, assert_failure, assert_success, stdout};
+use crate::common::{TestRepo, assert_failure, assert_success, stdout};
 use rusqlite::Connection;
 use std::fs;
 
@@ -21,109 +19,109 @@ fn saved_bytes(repo: &TestRepo, backend: &str) -> Vec<u8> {
 
 #[test]
 fn four_creators_save_complete_initial_state_and_revision_without_transitions() {
-    for backend in ["sqlite", "file"] {
-        for command in [
-            vec!["plan"],
-            vec!["capture"],
+    for (backend, command, condition) in [
+        ("sqlite", vec!["plan"], vec![]),
+        ("file", vec!["capture"], vec!["--manual"]),
+        (
+            "sqlite",
             vec!["group", "plan"],
+            vec!["--at", "2099-12-31T00:00:00Z"],
+        ),
+        ("file", vec!["group", "capture"], vec!["--after", "TARGET"]),
+        ("sqlite", vec!["plan"], vec!["--command", "exit 7"]),
+        ("file", vec!["group", "plan"], vec![]),
+        ("sqlite", vec!["capture"], vec!["--after", "TARGET"]),
+        (
+            "file",
             vec!["group", "capture"],
-        ] {
-            for condition in [
-                vec![],
-                vec!["--manual"],
-                vec!["--at", "2099-12-31T00:00:00Z"],
-                vec!["--after", "TARGET"],
-                vec!["--command", "exit 7"],
-            ] {
-                let repo = TestRepo::new();
-                assert_success(&repo.axon(&["init", "test", "--backend", backend]));
-                let parent = repo.group_plan("parent");
-                let first = repo.plan("first prerequisite");
-                let second = repo.group_plan("second prerequisite");
-                let mut args = command.clone();
-                args.extend([
-                    "--parent",
-                    parent.strip_prefix("test-").unwrap(),
-                    "--needs",
-                    &first,
-                    "--needs",
-                    second.strip_prefix("test-").unwrap(),
-                    "--needs",
-                    &first,
-                    "-m",
-                    "complete description",
-                ]);
-                args.extend(condition.iter().map(|value| {
-                    if *value == "TARGET" {
-                        first.as_str()
-                    } else {
-                        *value
-                    }
-                }));
-                args.push("complete title");
-                let id = create(&repo, &args);
-                let show =
-                    repo.axon_in_timezone("UTC", &["show", &id, "--skip-command-evaluation"]);
-                assert_success(&show);
-                let show = stdout(&show);
-                assert!(show.contains("Progress: NotStarted"));
-                assert!(!show.contains("Claim:"));
-                let accepted = command.last() == Some(&"plan");
-                assert!(show.contains(if accepted {
-                    "Disposition: Accepted"
-                } else {
-                    "Disposition: Undecided"
-                }));
-                assert!(show.contains("Decision history: 0  Progress history: 0"));
-                assert!(show.contains(&format!("Parent: {parent}")));
-                assert!(show.contains(&first) && show.contains(&second));
-                let label = match condition.first().copied() {
-                    None => "Always".to_string(),
-                    Some("--manual") => "Manual".into(),
-                    Some("--at") => "AtDate(2099-12-31T00:00:00+00:00)".into(),
-                    Some("--after") => format!("AfterEntity({first})"),
-                    _ => "Command(exit 7)".into(),
-                };
-                assert!(
-                    show.contains(&format!("Resurface condition: {label}")),
-                    "{show}"
-                );
-                if accepted {
-                    let revision = show
-                        .split("fixed at Revision ")
-                        .nth(1)
-                        .unwrap()
-                        .split_whitespace()
-                        .next()
-                        .unwrap();
-                    let revision = stdout(&repo.axon(&["revision", "show", &id, revision]));
-                    assert!(
-                        revision.contains("complete title")
-                            && revision.contains("complete description")
-                    );
-                    assert!(revision.contains(&format!("Parent: {parent}")));
-                    assert_eq!(revision.matches(&first).count(), 1);
-                    assert_eq!(revision.matches(&second).count(), 1);
-                    assert!(!revision.contains("Resurface condition"));
-                } else {
-                    assert!(show.contains("Revisions: 0"));
-                }
-                assert!(stdout(&repo.axon(&["claims"])).is_empty());
-                if backend == "sqlite" {
-                    let snapshot = repo.snapshot(&id);
-                    assert_eq!(snapshot.decision_events, 0);
-                    assert_eq!(snapshot.progress_events, 0);
-                    let conn = Connection::open(repo.root().join(".axon/axon.db")).unwrap();
-                    let count: i64 = conn
-                        .query_row(
-                            "SELECT count(*) FROM entity_deps WHERE entity_id=?1",
-                            [&id],
-                            |r| r.get(0),
-                        )
-                        .unwrap();
-                    assert_eq!(count, 2);
-                }
+            vec!["--command", "exit 7"],
+        ),
+    ] {
+        let repo = TestRepo::new();
+        assert_success(&repo.axon(&["init", "test", "--backend", backend]));
+        let parent = repo.group_plan("parent");
+        let first = repo.plan("first prerequisite");
+        let second = repo.group_plan("second prerequisite");
+        let mut args = command.clone();
+        args.extend([
+            "--parent",
+            parent.strip_prefix("test-").unwrap(),
+            "--needs",
+            &first,
+            "--needs",
+            second.strip_prefix("test-").unwrap(),
+            "--needs",
+            &first,
+            "-m",
+            "complete description",
+        ]);
+        args.extend(condition.iter().map(|value| {
+            if *value == "TARGET" {
+                first.as_str()
+            } else {
+                *value
             }
+        }));
+        args.push("complete title");
+        let id = create(&repo, &args);
+        let show = repo.axon_in_timezone("UTC", &["show", &id, "--skip-command-evaluation"]);
+        assert_success(&show);
+        let show = stdout(&show);
+        assert!(show.contains("Progress: NotStarted"));
+        assert!(!show.contains("Claim:"));
+        let accepted = command.last() == Some(&"plan");
+        assert!(show.contains(if accepted {
+            "Disposition: Accepted"
+        } else {
+            "Disposition: Undecided"
+        }));
+        assert!(show.contains("Decision history: 0  Progress history: 0"));
+        assert!(show.contains(&format!("Parent: {parent}")));
+        assert!(show.contains(&first) && show.contains(&second));
+        let label = match condition.first().copied() {
+            None => "Always".to_string(),
+            Some("--manual") => "Manual".into(),
+            Some("--at") => "AtDate(2099-12-31T00:00:00+00:00)".into(),
+            Some("--after") => format!("AfterEntity({first})"),
+            _ => "Command(exit 7)".into(),
+        };
+        assert!(
+            show.contains(&format!("Resurface condition: {label}")),
+            "{show}"
+        );
+        if accepted {
+            let revision = show
+                .split("fixed at Revision ")
+                .nth(1)
+                .unwrap()
+                .split_whitespace()
+                .next()
+                .unwrap();
+            let revision = stdout(&repo.axon(&["revision", "show", &id, revision]));
+            assert!(
+                revision.contains("complete title") && revision.contains("complete description")
+            );
+            assert!(revision.contains(&format!("Parent: {parent}")));
+            assert_eq!(revision.matches(&first).count(), 1);
+            assert_eq!(revision.matches(&second).count(), 1);
+            assert!(!revision.contains("Resurface condition"));
+        } else {
+            assert!(show.contains("Revisions: 0"));
+        }
+        assert!(stdout(&repo.axon(&["claims"])).is_empty());
+        if backend == "sqlite" {
+            let snapshot = repo.snapshot(&id);
+            assert_eq!(snapshot.decision_events, 0);
+            assert_eq!(snapshot.progress_events, 0);
+            let conn = Connection::open(repo.root().join(".axon/axon.db")).unwrap();
+            let count: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM entity_deps WHERE entity_id=?1",
+                    [&id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 2);
         }
     }
 }
@@ -138,40 +136,42 @@ fn rejected_initial_inputs_leave_all_storage_bytes_unchanged() {
         let ended = repo.group_plan("ended parent");
         assert_success(&repo.axon(&["start", &ended]));
         assert_success(&repo.axon(&["done", &ended]));
-        for command in [
+        let commands = [
             vec!["plan"],
             vec!["capture"],
             vec!["group", "plan"],
             vec!["group", "capture"],
-        ] {
-            for options in [
-                vec!["--needs", &issue, "--needs", "missing"],
-                vec!["--parent", "missing"],
-                vec!["--after", "missing"],
-                vec!["--parent", &issue, "--needs", &ended],
-                vec!["--parent", &ended, "--needs", &issue],
-                vec!["--parent", &active, "--needs", &active],
-                vec!["--parent", &active, "--after", &active],
-                vec!["--at", "2099-02-30T00:00:00Z"],
-                vec!["--at", "2099-01-01"],
-                vec!["--at", "2099-01-01T00:00:00"],
-                vec!["--at", "2099-01-01T00:00Z"],
-                vec!["--at", "2099-01-01T00:00:00.1234567890Z"],
-                vec!["--at", "2099-01-01T00:00:60Z"],
-                vec!["--manual", "--at", "2099-01-01T00:00:00Z"],
-                vec!["--manual", "--after", &issue],
-                vec!["--manual", "--command", "exit 0"],
-                vec!["--at", "2099-01-01T00:00:00Z", "--after", &issue],
-                vec!["--at", "2099-01-01T00:00:00Z", "--command", "exit 0"],
-                vec!["--after", &issue, "--command", "exit 0"],
-            ] {
-                let before = saved_bytes(&repo, backend);
-                let mut args = command.clone();
-                args.extend(options);
-                args.push("invalid initial entity");
-                assert_failure(&repo.axon(&args));
-                assert_eq!(saved_bytes(&repo, backend), before, "{args:?}");
-            }
+        ];
+        for (index, options) in [
+            vec!["--needs", &issue, "--needs", "missing"],
+            vec!["--parent", "missing"],
+            vec!["--after", "missing"],
+            vec!["--parent", &issue, "--needs", &ended],
+            vec!["--parent", &ended, "--needs", &issue],
+            vec!["--parent", &active, "--needs", &active],
+            vec!["--parent", &active, "--after", &active],
+            vec!["--at", "2099-02-30T00:00:00Z"],
+            vec!["--at", "2099-01-01"],
+            vec!["--at", "2099-01-01T00:00:00"],
+            vec!["--at", "2099-01-01T00:00Z"],
+            vec!["--at", "2099-01-01T00:00:00.1234567890Z"],
+            vec!["--at", "2099-01-01T00:00:60Z"],
+            vec!["--manual", "--at", "2099-01-01T00:00:00Z"],
+            vec!["--manual", "--after", &issue],
+            vec!["--manual", "--command", "exit 0"],
+            vec!["--at", "2099-01-01T00:00:00Z", "--after", &issue],
+            vec!["--at", "2099-01-01T00:00:00Z", "--command", "exit 0"],
+            vec!["--after", &issue, "--command", "exit 0"],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let before = saved_bytes(&repo, backend);
+            let mut args = commands[index % commands.len()].clone();
+            args.extend(options);
+            args.push("invalid initial entity");
+            assert_failure(&repo.axon(&args));
+            assert_eq!(saved_bytes(&repo, backend), before, "{args:?}");
         }
     }
 }

@@ -1,5 +1,4 @@
-mod common;
-use common::{TestDir, assert_success, stderr, stdout};
+use crate::common::{TestDir, assert_success, stderr, stdout};
 use std::fs;
 
 #[test]

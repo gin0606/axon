@@ -1,6 +1,4 @@
-mod common;
-
-use common::{TestDir, TestRepo, assert_success, stderr, stdout};
+use crate::common::{TestDir, TestRepo, assert_success, stderr, stdout};
 use std::{collections::BTreeMap, env, fs, path::Path, process::Command};
 
 fn command(directory: &Path) -> Command {

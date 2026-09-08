@@ -1,6 +1,4 @@
-mod common;
-
-use common::{TestDir, TestRepo, assert_failure, assert_success, stderr, stdout};
+use crate::common::{TestDir, TestRepo, assert_failure, assert_success, stderr, stdout};
 use std::fs;
 
 fn calls(repo: &TestRepo) -> usize {

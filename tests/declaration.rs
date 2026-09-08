@@ -1,6 +1,4 @@
-mod common;
-
-use common::{TestRepo, assert_failure, assert_success, stderr, stdout};
+use crate::common::{TestRepo, assert_failure, assert_success, stderr, stdout};
 use std::fs;
 use std::path::{Path, PathBuf};
 

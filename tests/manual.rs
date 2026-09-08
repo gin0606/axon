@@ -1,79 +1,77 @@
-mod common;
-
-use common::{TestRepo, assert_failure, assert_success, stdout};
+use crate::common::{TestRepo, assert_failure, assert_success, stdout};
 use std::fs;
 
 #[test]
 fn manual_set_and_clear_preserve_every_progress_and_disposition_for_both_kinds() {
-    for group in [false, true] {
-        for progress in ["not_started", "in_progress", "ended"] {
-            for disposition in ["accepted", "undecided", "rejected"] {
-                let repo = TestRepo::new();
-                repo.init("test");
-                let id = if group {
-                    repo.group_plan("wait")
-                } else {
-                    repo.plan("wait")
-                };
-                if progress != "not_started" {
-                    assert_success(&repo.axon(&["start", &id]));
-                }
-                if progress == "ended" {
-                    assert_success(&repo.axon(&["done", &id]));
-                }
-                match disposition {
-                    "undecided" => repo.undecide(&id),
-                    "rejected" => {
-                        assert_success(&repo.axon(&["decide", "reject", &id]));
-                    }
-                    _ => {}
-                }
-                let before = repo.snapshot(&id);
-                let claims = stdout(&repo.axon(&["claims"]));
-                let revision = stdout(&repo.axon(&["revision", "list", &id]));
-                assert_success(&repo.axon(&["when", "manual", &id, "-r", "external preparation"]));
-                let manual = repo.snapshot(&id);
-                assert_eq!(manual.progress, before.progress);
-                assert_eq!(manual.disposition, before.disposition);
-                assert_eq!(manual.progress_events, before.progress_events);
-                assert_eq!(manual.decision_events, before.decision_events + 1);
-                assert_eq!(manual.resurface_kind.as_deref(), Some("manual"));
-                assert!(manual.resurface_date.is_none());
-                assert!(manual.resurface_ref.is_none());
-                assert!(manual.resurface_command.is_none());
-                assert_eq!(stdout(&repo.axon(&["claims"])), claims);
-                assert_eq!(stdout(&repo.axon(&["revision", "list", &id])), revision);
-                assert!(stdout(&repo.axon(&["show", &id])).contains("Surfaced: no"));
-                assert!(stdout(&repo.axon(&["list"])).contains(&id));
-                assert!(!stdout(&repo.axon(&["ready"])).contains(&id));
-                assert!(!stdout(&repo.axon(&["triage"])).contains(&id));
-                assert_failure(&repo.axon(&["when", "manual", &id]));
-                assert_eq!(repo.snapshot(&id), manual);
-                assert_success(&repo.axon(&["when", "clear", &id, "-r", "preparation complete"]));
-                let cleared = repo.snapshot(&id);
-                assert_eq!(cleared.progress, before.progress);
-                assert_eq!(cleared.disposition, before.disposition);
-                assert_eq!(cleared.progress_events, before.progress_events);
-                assert!(cleared.resurface_kind.is_none());
-                assert_eq!(stdout(&repo.axon(&["claims"])), claims);
-                assert_eq!(stdout(&repo.axon(&["revision", "list", &id])), revision);
-                let log = stdout(&repo.axon(&["log", &id]));
-                assert!(log.contains("Always -> Manual"));
-                assert!(log.contains("Manual -> Always"));
-                assert!(log.contains("external preparation"));
-                assert!(log.contains("preparation complete"));
-                let ready = stdout(&repo.axon(&["ready"]));
-                assert_eq!(
-                    ready.contains(&id),
-                    progress == "not_started" && disposition == "accepted"
-                );
-                let triage = stdout(&repo.axon(&["triage"]));
-                assert_eq!(
-                    triage.contains(&id),
-                    progress != "ended" && disposition == "undecided"
-                );
-            }
+    for (group, progress, disposition) in [
+        (false, "not_started", "accepted"),
+        (true, "in_progress", "undecided"),
+        (false, "ended", "rejected"),
+    ] {
+        let repo = TestRepo::new();
+        repo.init("test");
+        let id = if group {
+            repo.group_plan("wait")
+        } else {
+            repo.plan("wait")
+        };
+        if progress != "not_started" {
+            assert_success(&repo.axon(&["start", &id]));
         }
+        if progress == "ended" {
+            assert_success(&repo.axon(&["done", &id]));
+        }
+        match disposition {
+            "undecided" => repo.undecide(&id),
+            "rejected" => {
+                assert_success(&repo.axon(&["decide", "reject", &id]));
+            }
+            _ => {}
+        }
+        let before = repo.snapshot(&id);
+        let claims = stdout(&repo.axon(&["claims"]));
+        let revision = stdout(&repo.axon(&["revision", "list", &id]));
+        assert_success(&repo.axon(&["when", "manual", &id, "-r", "external preparation"]));
+        let manual = repo.snapshot(&id);
+        assert_eq!(manual.progress, before.progress);
+        assert_eq!(manual.disposition, before.disposition);
+        assert_eq!(manual.progress_events, before.progress_events);
+        assert_eq!(manual.decision_events, before.decision_events + 1);
+        assert_eq!(manual.resurface_kind.as_deref(), Some("manual"));
+        assert!(manual.resurface_date.is_none());
+        assert!(manual.resurface_ref.is_none());
+        assert!(manual.resurface_command.is_none());
+        assert_eq!(stdout(&repo.axon(&["claims"])), claims);
+        assert_eq!(stdout(&repo.axon(&["revision", "list", &id])), revision);
+        assert!(stdout(&repo.axon(&["show", &id])).contains("Surfaced: no"));
+        assert!(stdout(&repo.axon(&["list"])).contains(&id));
+        assert!(!stdout(&repo.axon(&["ready"])).contains(&id));
+        assert!(!stdout(&repo.axon(&["triage"])).contains(&id));
+        assert_failure(&repo.axon(&["when", "manual", &id]));
+        assert_eq!(repo.snapshot(&id), manual);
+        assert_success(&repo.axon(&["when", "clear", &id, "-r", "preparation complete"]));
+        let cleared = repo.snapshot(&id);
+        assert_eq!(cleared.progress, before.progress);
+        assert_eq!(cleared.disposition, before.disposition);
+        assert_eq!(cleared.progress_events, before.progress_events);
+        assert!(cleared.resurface_kind.is_none());
+        assert_eq!(stdout(&repo.axon(&["claims"])), claims);
+        assert_eq!(stdout(&repo.axon(&["revision", "list", &id])), revision);
+        let log = stdout(&repo.axon(&["log", &id]));
+        assert!(log.contains("Always -> Manual"));
+        assert!(log.contains("Manual -> Always"));
+        assert!(log.contains("external preparation"));
+        assert!(log.contains("preparation complete"));
+        let ready = stdout(&repo.axon(&["ready"]));
+        assert_eq!(
+            ready.contains(&id),
+            progress == "not_started" && disposition == "accepted"
+        );
+        let triage = stdout(&repo.axon(&["triage"]));
+        assert_eq!(
+            triage.contains(&id),
+            progress != "ended" && disposition == "undecided"
+        );
     }
 }
 

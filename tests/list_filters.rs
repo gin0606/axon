@@ -1,6 +1,4 @@
-mod common;
-
-use common::{TestRepo, assert_success, stderr, stdout};
+use crate::common::{TestRepo, assert_success, stderr, stdout};
 use std::fs;
 
 fn ids(repo: &TestRepo, args: &[&str]) -> Vec<String> {
@@ -49,50 +47,53 @@ fn list_filters_cover_states_kinds_overlap_and_preserve_storage() {
     let claims = stdout(&repo.axon(&["claims"]));
     let original = ids(&repo, &["list"]);
     assert_eq!(original.len(), 18);
-    for kind in [None, Some("issue"), Some("group")] {
-        for progress in [
-            None,
+    let cases = [
+        (None, None, None, None),
+        (Some("issue"), None, None, None),
+        (None, Some("in-progress"), None, None),
+        (None, None, Some("rejected"), None),
+        (None, None, None, Some(false)),
+        (Some("group"), Some("ended"), Some("accepted"), Some(true)),
+        (
+            Some("issue"),
             Some("not-started"),
-            Some("in-progress"),
-            Some("ended"),
-        ] {
-            for disposition in [None, Some("undecided"), Some("accepted"), Some("rejected")] {
-                for terminal in [None, Some(false), Some(true)] {
-                    let mut args = vec!["list"];
-                    if let Some(value) = kind {
-                        args.extend(["--kind", value]);
-                    }
-                    if let Some(value) = progress {
-                        args.extend(["--progress", value]);
-                    }
-                    if let Some(value) = disposition {
-                        args.extend(["--disposition", value]);
-                    }
-                    if let Some(value) = terminal {
-                        args.push(if value {
-                            "--terminal=true"
-                        } else {
-                            "--terminal=false"
-                        });
-                    }
-                    let expected: Vec<_> = original
-                        .iter()
-                        .filter(|id| {
-                            let (_, k, p, d) = entities
-                                .iter()
-                                .find(|(candidate, ..)| candidate == *id)
-                                .unwrap();
-                            kind.is_none_or(|v| v == *k)
-                                && progress.is_none_or(|v| v == *p)
-                                && disposition.is_none_or(|v| v == *d)
-                                && terminal.is_none_or(|v| v == (*p == "ended" || *d == "rejected"))
-                        })
-                        .cloned()
-                        .collect();
-                    assert_eq!(ids(&repo, &args), expected, "{args:?}");
-                }
-            }
+            Some("undecided"),
+            Some(false),
+        ),
+    ];
+    for (kind, progress, disposition, terminal) in cases {
+        let mut args = vec!["list"];
+        if let Some(value) = kind {
+            args.extend(["--kind", value]);
         }
+        if let Some(value) = progress {
+            args.extend(["--progress", value]);
+        }
+        if let Some(value) = disposition {
+            args.extend(["--disposition", value]);
+        }
+        if let Some(value) = terminal {
+            args.push(if value {
+                "--terminal=true"
+            } else {
+                "--terminal=false"
+            });
+        }
+        let expected: Vec<_> = original
+            .iter()
+            .filter(|id| {
+                let (_, k, p, d) = entities
+                    .iter()
+                    .find(|(candidate, ..)| candidate == *id)
+                    .unwrap();
+                kind.is_none_or(|v| v == *k)
+                    && progress.is_none_or(|v| v == *p)
+                    && disposition.is_none_or(|v| v == *d)
+                    && terminal.is_none_or(|v| v == (*p == "ended" || *d == "rejected"))
+            })
+            .cloned()
+            .collect();
+        assert_eq!(ids(&repo, &args), expected, "{args:?}");
     }
     let after: Vec<_> = entities
         .iter()

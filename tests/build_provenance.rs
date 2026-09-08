@@ -1,6 +1,4 @@
-mod common;
-
-use common::{TestDir, assert_success};
+use crate::common::{TestDir, assert_success};
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};

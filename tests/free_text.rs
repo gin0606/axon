@@ -1,6 +1,4 @@
-mod common;
-
-use common::{TestRepo, assert_success, stdout};
+use crate::common::{TestRepo, assert_success, stdout};
 
 #[test]
 fn creation_separators_and_equals_save_literal_text() {

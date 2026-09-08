@@ -1,5 +1,4 @@
-mod common;
-use common::{TestDir, assert_failure, assert_success, stderr, stdout};
+use crate::common::{TestDir, assert_failure, assert_success, stderr, stdout};
 use serde_json::{Value, json};
 use std::{
     fs,

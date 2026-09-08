@@ -3658,6 +3658,88 @@ mod tests {
     }
 
     #[test]
+    fn list_filter_predicate_covers_every_saved_state_combination() {
+        let now = Utc::now();
+        let claim = Claim {
+            actor: "test".into(),
+            worktree: "/test".into(),
+            at: now,
+        };
+        let kinds = [
+            (None, None),
+            (Some(KindFilter::Issue), Some(EntityKind::Issue)),
+            (Some(KindFilter::Group), Some(EntityKind::Group)),
+        ];
+        let progresses = [
+            (None, None),
+            (Some(ProgressFilter::NotStarted), Some("not-started")),
+            (Some(ProgressFilter::InProgress), Some("in-progress")),
+            (Some(ProgressFilter::Ended), Some("ended")),
+        ];
+        let dispositions = [
+            (None, None),
+            (
+                Some(DispositionFilter::Undecided),
+                Some(Disposition::Undecided),
+            ),
+            (
+                Some(DispositionFilter::Accepted),
+                Some(Disposition::Accepted),
+            ),
+            (
+                Some(DispositionFilter::Rejected),
+                Some(Disposition::Rejected),
+            ),
+        ];
+
+        for entity_kind in [EntityKind::Issue, EntityKind::Group] {
+            for progress in [
+                Progress::NotStarted,
+                Progress::InProgress(claim.clone()),
+                Progress::Ended,
+            ] {
+                for disposition in [
+                    Disposition::Undecided,
+                    Disposition::Accepted,
+                    Disposition::Rejected,
+                ] {
+                    let mut candidate = entity("candidate", entity_kind);
+                    candidate.progress = progress.clone();
+                    candidate.disposition = disposition;
+                    for (kind, expected_kind) in kinds {
+                        for (progress, expected_progress) in progresses {
+                            for (disposition, expected_disposition) in dispositions {
+                                for terminal in [None, Some(false), Some(true)] {
+                                    let filters = ListFilters {
+                                        search: None,
+                                        kind,
+                                        progress,
+                                        disposition,
+                                        terminal,
+                                    };
+                                    let expected = expected_kind.is_none_or(|v| v == entity_kind)
+                                        && expected_progress.is_none_or(|v| {
+                                            v == candidate
+                                                .progress
+                                                .label()
+                                                .to_ascii_lowercase()
+                                                .replace("notstarted", "not-started")
+                                                .replace("inprogress", "in-progress")
+                                        })
+                                        && expected_disposition
+                                            .is_none_or(|v| v == candidate.disposition)
+                                        && terminal.is_none_or(|v| v == candidate.is_terminal());
+                                    assert_eq!(filters.matches(&candidate), expected);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn confirmation_failure_keeps_stdout_decoration_out_of_applied_result() {
         let id = EntityId::from_stored("t-task");
         for raw in ["actor", "raw \u{1b}[31mactor\u{1b}[0m"] {

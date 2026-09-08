@@ -1,5 +1,4 @@
-mod common;
-use common::{TestRepo, assert_failure, assert_success, stderr};
+use crate::common::{TestRepo, assert_failure, assert_success, stderr};
 use rusqlite::Connection;
 use std::{fs, path::Path};
 
