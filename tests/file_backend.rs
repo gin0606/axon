@@ -267,7 +267,6 @@ fn all_normal_commands_and_import_use_file_without_sqlite() {
         vec!["ready"],
         vec!["triage"],
         vec!["claims"],
-        vec!["status"],
         vec!["show", &group],
         vec!["show", &id],
         vec!["log", &id],

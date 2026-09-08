@@ -8,8 +8,6 @@ agentに任せた仕事の状況や、以前に残した情報を自分で確認
 
 | 知りたいこと | コマンド |
 | --- | --- |
-| 計画全体の状況、進行中の仕事や待ち | `axon status` |
-| 特定の計画の状況 | `axon status --group <group-id>` |
 | 今から着手できるもの | `axon ready` |
 | 採否や前提を判断する必要があるもの | `axon triage` |
 | 誰がどこで着手したままか | `axon claims` |
@@ -18,7 +16,7 @@ agentに任せた仕事の状況や、以前に残した情報を自分で確認
 | タイトル・説明・Note本文から探す | `axon list --search '設定'` |
 | 採否・再浮上条件の変更履歴 | `axon log <id>` |
 
-`status`は状況の要約、`ready`と`triage`は条件に合う候補です。そこに見つからない記録も、`list`で探せます。例えば、終了した仕事だけなら`axon list --progress ended`、採用済みで未着手の仕事なら`axon list --disposition accepted --progress not-started`です。後者には、待ち条件などでまだ着手できないものも含まれます。
+`ready`と`triage`は条件に合う候補だけを表示します。そこに見つからない記録も、`list`で探せます。例えば、終了した仕事だけなら`axon list --progress ended`、採用済みで未着手の仕事なら`axon list --disposition accepted --progress not-started`です。後者には、待ち条件などでまだ着手できないものも含まれます。特定の計画はGroupのIDを`show`へ渡すと、配下の構造と待ちを確認できます。
 
 ### 過去の結果や計画の変更を読む
 
@@ -125,12 +123,11 @@ Noteに作業結果が残り、`done`で進行が終了してclaimが解放さ�
 セッションが切れたり、別の仕事に移ったりして、どこまで進めたか分からなくなったときは、全体の状況と着手記録から辿ります。
 
 ```sh
-axon status
 axon claims
 axon show <気になるid>
 ```
 
-`status`で計画ごとの状況、`claims`で着手したままの対象を見つけ、`show`で説明やNoteを読みます。claimは着手時の記録なので、そのagentが今も動いていることまでは分かりません。
+`claims`で着手したままの対象を見つけ、`show`で説明やNote、Group配下の構造を読みます。claimは着手時の記録なので、そのagentが今も動いていることまでは分かりません。着手中でない対象を探す場合は`list`または`list --search <text>`を使います。
 
 着手中の仕事をそのまま続けるなら、再び`start`する必要はありません。状態を確認して作業を続けます。
 

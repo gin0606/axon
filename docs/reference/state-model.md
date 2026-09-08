@@ -178,4 +178,4 @@ group の保存済み Progress と、配下の状況は別々に表示する。�
 
 root Entity は常に active scope 内だが、自身が Manual なら未浮上のため含まれない。一方、祖先 gate が閉じている子 Entity は、自身が surfaced でも active scope 外のため含まれない。親 Group が Undecided / orphaned なら子孫の gate は閉じ、親自身も残りの条件を満たす場合だけ frontier に入る。子が active scope 内になり、自身も surfaced なら、Undecided / orphaned の子が対象に入る。
 
-非表示は Entity の不存在や作成・更新の失敗を意味しない。非表示だけを根拠に作成を再実行せず、管理 root 全体の棚卸しには `list`、個別の保存状態と未浮上・inactive 等の理由には `show` を使う。`ready` は着手候補、`status` は進行中の作業や待ちを含む状況把握を担い、`status` は全件一覧ではない。
+非表示は Entity の不存在や作成・更新の失敗を意味しない。非表示だけを根拠に作成を再実行せず、管理 root 全体の棚卸しには `list`、個別の保存状態と未浮上・inactive 等の理由には `show` を使う。`ready` と `triage` はそれぞれの frontier であり、全件一覧ではない。

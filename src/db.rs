@@ -455,21 +455,6 @@ impl Store {
         Ok(view)
     }
 
-    pub fn status_snapshot(&mut self, group: Option<&str>) -> Result<(Option<EntityId>, View)> {
-        let tx = self.conn.transaction()?;
-        let id = group.map(|raw| resolve_id(&tx, raw)).transpose()?;
-        let view = read_view(&tx, self.evaluation.clone())?;
-        if let Some(id) = &id
-            && view
-                .get(id)
-                .is_some_and(|entity| entity.kind != EntityKind::Group)
-        {
-            return Err(DbError::NotGroup(id.to_string()));
-        }
-        tx.commit()?;
-        Ok((id, view))
-    }
-
     pub fn search_snapshot(&mut self, text: &str) -> Result<(View, NoteMatches)> {
         let tx = self.conn.transaction()?;
         let snapshot = read_snapshot(&tx, self.evaluation.clone())?;

@@ -1244,188 +1244,6 @@ fn failed_operations_offer_inspection_without_changing_state() {
     assert!(stderr(&output).contains(&format!("axon note list {id}")));
 }
 
-fn status_candidates(output: &str, heading: &str) -> std::collections::BTreeSet<String> {
-    let mut current = None;
-    let mut ids = std::collections::BTreeSet::new();
-    for line in output.lines() {
-        let line = line.trim_start();
-        if line.starts_with("test-") {
-            current = line.split_whitespace().next();
-        }
-        let marker = if heading == "Ready candidates" {
-            "Ready candidate"
-        } else {
-            "Triage candidate:"
-        };
-        if line.starts_with(marker) {
-            assert!(ids.insert(current.unwrap().to_string()));
-        }
-    }
-    ids
-}
-
-#[test]
-fn status_groups_candidates_waits_and_saved_claims_without_double_counting() {
-    let repo = TestRepo::new();
-    repo.init("test");
-    let group = created_id(&repo.axon(&["group", "plan", "main plan"]));
-    let nested = created_id(&repo.axon(&["group", "plan", "nested", "--parent", &group]));
-    let dormant = created_id(&repo.axon(&["capture", "inactive draft", "--parent", &nested]));
-    let child = created_id(&repo.axon(&["plan", "running child", "--parent", &group]));
-    assert_success(&repo.axon(&["start", &group]));
-    assert_success(&repo.axon(&["start", &child]));
-    let ready = created_id(&repo.axon(&["plan", "standalone ready"]));
-    let decision = created_id(&repo.axon(&["capture", "standalone decision"]));
-    let prerequisite = created_id(&repo.axon(&["plan", "external prerequisite"]));
-    let blocked = created_id(&repo.axon(&["capture", "blocked", "--parent", &group]));
-    assert_success(&repo.axon(&["dep", "add", &blocked, "--needs", &prerequisite]));
-    assert_success(&repo.axon(&["decide", "accept", &blocked]));
-    let after = created_id(&repo.axon(&["plan", "after", "--parent", &group]));
-    assert_success(&repo.axon(&["when", "after", &after, &prerequisite]));
-    let output = repo.axon(&["status"]);
-    assert_success(&output);
-    let text = stdout(&output);
-    assert!(
-        text.starts_with("Saved claims: 2  Triage candidates: 1  Ready candidates: 3\n"),
-        "{text}"
-    );
-    assert!(text.contains(&format!("{nested}  Group  nested")));
-    assert!(text.contains("Descendants: 5  Issue: 4  Group: 1  Terminal: 0"));
-    assert!(!status_candidates(&text, "Triage candidates").contains(&dormant));
-    for (command, heading) in [
-        ("ready", "Ready candidates"),
-        ("triage", "Triage candidates"),
-    ] {
-        let expected = stdout(&repo.axon(&[command]))
-            .lines()
-            .map(|l| l.split_whitespace().next().unwrap().to_string())
-            .collect();
-        assert_eq!(status_candidates(&text, heading), expected);
-    }
-    let selected = stdout(&repo.axon(&["status", "--group", &group]));
-    assert!(selected.starts_with("Saved claims: 2  Triage candidates: 0  Ready candidates: 1\n"));
-    assert!(!selected.contains(&ready));
-    assert!(!selected.contains(&decision));
-    assert!(selected.contains(&format!(
-        "Unresolved dependency: {prerequisite}  external prerequisite  External"
-    )));
-    assert!(selected.contains("Resurface condition not satisfied: AfterEntity"));
-    assert_success(&repo.axon(&["decide", "reject", &prerequisite]));
-    let selected = stdout(&repo.axon(&["status", "--group", &group]));
-    assert!(selected.starts_with("Saved claims: 2  Triage candidates: 1  Ready candidates: 2\n"));
-    assert!(selected.contains("Rejected prerequisite (Orphaned)"));
-    assert!(!selected.contains("Resurface condition not satisfied: AfterEntity"));
-    assert_success(&repo.axon(&["when", "manual", &group]));
-    let selected = stdout(&repo.axon(&["status", "--group", &group]));
-    assert!(selected.starts_with("Saved claims: 2  Triage candidates: 0  Ready candidates: 0\n"));
-    assert!(selected.contains("Active scope: no"));
-    assert!(selected.contains("Claim: test-actor"));
-    assert_eq!(
-        selected
-            .matches("Resurface condition not satisfied: Manual")
-            .count(),
-        1
-    );
-    let nested_scope = stdout(&repo.axon(&["status", "--group", &nested]));
-    assert!(
-        nested_scope.starts_with("Saved claims: 0  Triage candidates: 0  Ready candidates: 0\n")
-    );
-    assert!(nested_scope.contains("External ancestor scope"));
-    assert!(nested_scope.contains("Descendants: 1"));
-    assert_success(&repo.axon(&["decide", "reject", &group]));
-    let rejected = stdout(&repo.axon(&["status"]));
-    assert!(rejected.contains(&format!("{group}  Group  main plan  [InProgress/Rejected]")));
-    assert!(rejected.contains("Rejected Group: descendant scope is inactive"));
-    assert!(rejected.contains(&child));
-}
-
-#[test]
-fn status_empty_terminal_scope_resolution_and_help() {
-    let repo = TestRepo::new();
-    repo.init("test");
-    let empty = repo.axon(&["status"]);
-    assert_success(&empty);
-    assert!(empty.stdout.is_empty());
-    assert!(stderr(&empty).contains("No plans"));
-    let group = created_id(&repo.axon(&["group", "plan", "finished"]));
-    assert_success(&repo.axon(&["start", &group]));
-    let awaiting = stdout(&repo.axon(&["status"]));
-    assert!(awaiting.contains("Can complete: yes"));
-    assert_success(&repo.axon(&["done", &group]));
-    assert!(repo.axon(&["status"]).stdout.is_empty());
-    let suffix = group.rsplit('-').next().unwrap();
-    let selected = repo.axon(&["status", "--group", suffix]);
-    assert_success(&selected);
-    assert!(stdout(&selected).contains("[Ended/Accepted]"));
-    let issue = created_id(&repo.axon(&["plan", "issue"]));
-    for reference in [&issue, "missing", "test-%"] {
-        assert_failure(&repo.axon(&["status", "--group", reference]));
-    }
-    for args in [
-        vec!["--help"],
-        vec!["status", "--help"],
-        vec!["completion", "bash"],
-        vec!["completion", "zsh"],
-    ] {
-        let output = repo.axon(&args);
-        assert_success(&output);
-        assert!(stdout(&output).contains("status"));
-    }
-}
-
-#[test]
-fn status_omits_rejected_root_with_only_unfinished_saved_descendants() {
-    let repo = TestRepo::new();
-    repo.init("test");
-    let root = repo.group_plan("rejected root");
-    let child = created_id(&repo.axon(&["plan", "saved child", "--parent", &root]));
-    assert_success(&repo.axon(&["decide", "reject", &root]));
-
-    let status = repo.axon(&["status"]);
-    assert_success(&status);
-    assert!(status.stdout.is_empty());
-    assert!(stderr(&status).contains("No plans"));
-
-    let selected = stdout(&repo.axon(&["status", "--group", &root]));
-    assert!(selected.contains(&format!("{root}  Group  rejected root")));
-    assert!(selected.contains(&format!("{child}  Issue  saved child")));
-
-    let claimed_root = repo.group_plan("rejected root with descendant claim");
-    let claimed_child =
-        created_id(&repo.axon(&["plan", "claimed child", "--parent", &claimed_root]));
-    assert_success(&repo.axon(&["start", &claimed_root]));
-    assert_success(&repo.axon(&["start", &claimed_child]));
-    assert_success(&repo.axon(&["decide", "reject", &claimed_child]));
-    assert_success(&repo.axon(&["done", &claimed_root]));
-    assert_success(&repo.axon(&["decide", "reject", &claimed_root]));
-
-    let status = stdout(&repo.axon(&["status"]));
-    assert!(status.contains(&format!("{claimed_root}  Group")));
-    assert!(status.contains(&format!("{claimed_child}  Issue")));
-}
-
-#[test]
-fn status_shares_command_evaluation_and_propagates_errors_with_no_partial_output() {
-    let repo = TestRepo::new();
-    repo.init("test");
-    let group = created_id(&repo.axon(&["group", "plan", "observed"]));
-    assert_success(&repo.axon(&["start", &group]));
-    created_id(&repo.axon(&["plan", "child", "--parent", &group]));
-    assert_success(&repo.axon(&["when", "command", &group, "echo x >> observations; exit 1"]));
-    assert_success(&repo.axon(&["status"]));
-    assert_eq!(
-        fs::read_to_string(repo.root().join("observations")).unwrap(),
-        "x\n"
-    );
-    assert_success(&repo.axon(&["when", "command", &group, "echo bad >&2; exit 7"]));
-    let output = repo.axon(&["status"]);
-    assert_failure(&output);
-    assert!(output.stdout.is_empty());
-    assert!(stderr(&output).contains("bad"));
-    let other = created_id(&repo.axon(&["group", "plan", "unrelated"]));
-    assert_success(&repo.axon(&["status", "--group", &other]));
-}
-
 #[test]
 fn show_leads_with_situation_remaining_and_owned_waits() {
     let repo = TestRepo::new();
@@ -1692,7 +1510,7 @@ fn show_treats_rejected_groups_as_terminal_without_hiding_saved_state() {
 }
 
 #[test]
-fn plan_views_keep_inherited_dependency_gates_at_the_owning_scope() {
+fn show_keeps_inherited_dependency_gates_at_the_owning_scope() {
     let repo = TestRepo::new();
     repo.init("test");
     let root = repo.group_plan("root");
@@ -1711,32 +1529,6 @@ fn plan_views_keep_inherited_dependency_gates_at_the_owning_scope() {
             assert_success(&repo.axon(&["decide", "reject", &target]));
         }
         for selected in [&root, &nested] {
-            let output = repo.axon(&["status", "--group", selected]);
-            assert_success(&output);
-            let status = stdout(&output);
-            assert_eq!(
-                status.matches("Descendant gate closed:").count(),
-                1,
-                "{status}"
-            );
-            let waits = status.as_str();
-            assert!(waits.contains(&root));
-            assert!(waits.contains(&format!("{target}  prerequisite  External")));
-            assert!(status_candidates(&status, "Ready candidates").is_empty());
-            let expected = if rejected && selected == &root {
-                std::collections::BTreeSet::from([root.clone()])
-            } else {
-                std::collections::BTreeSet::new()
-            };
-            assert_eq!(status_candidates(&status, "Triage candidates"), expected);
-            assert_eq!(status.matches("Active scope: no").count(), 2);
-            assert_eq!(
-                status.matches("Claim: test-actor").count(),
-                if selected == &root { 3 } else { 2 }
-            );
-            if selected == &nested {
-                assert!(waits.contains("External ancestor scope"));
-            }
             let show = stdout(&repo.axon(&["show", selected]));
             for counts in [
                 if selected == &root {
@@ -1750,7 +1542,6 @@ fn plan_views_keep_inherited_dependency_gates_at_the_owning_scope() {
                     "Progress: NotStarted: 2  InProgress: 1  Ended: 0"
                 },
             ] {
-                assert!(status.contains(counts), "{status}");
                 assert!(show.contains(counts), "{show}");
             }
             assert!(!show.contains("  Ready"));
@@ -1786,17 +1577,6 @@ fn plan_views_keep_inherited_dependency_gates_at_the_owning_scope() {
             _ => assert_success(&repo.axon(&["decide", "reject", &local_target])),
         }
         for selected in [&root, &nested] {
-            let output = repo.axon(&["status", "--group", selected]);
-            assert_success(&output);
-            let status = stdout(&output);
-            let waits = status.as_str();
-            assert_eq!(
-                waits.matches("Descendant gate closed:").count(),
-                2,
-                "{status}"
-            );
-            assert!(waits.contains(&root));
-            assert!(waits.contains(&format!("{nested}  Group")));
             let show = stdout(&repo.axon(&["show", selected]));
             let summary = show.split_once("\n\nDetails\n").unwrap().0;
             assert_eq!(
@@ -1806,10 +1586,8 @@ fn plan_views_keep_inherited_dependency_gates_at_the_owning_scope() {
             );
             assert!(summary.contains(&format!("Descendant gate closed: {nested}")));
             if local_gate == "manual" {
-                assert!(waits.contains("Resurface condition not satisfied: Manual"));
                 assert!(summary.contains("Not surfaced: Manual"));
             } else {
-                assert!(waits.contains(&format!("{local_target}  nested prerequisite  External")));
                 assert!(summary.contains(&local_target));
             }
         }
@@ -1818,56 +1596,28 @@ fn plan_views_keep_inherited_dependency_gates_at_the_owning_scope() {
 }
 
 #[test]
-fn plan_summaries_omit_empty_sections_and_keep_ended_structure_in_details() {
+fn show_keeps_ended_group_structure_out_of_the_summary_and_in_details() {
     let repo = TestRepo::new();
     repo.init("test");
-    let ready = repo.plan("unique standalone ready title");
-    let draft = created_id(&repo.axon(&["capture", "unique standalone draft title"]));
-    let running = repo.plan("unique standalone running title");
-    assert_success(&repo.axon(&["start", &running]));
-    let output = stdout(&repo.axon(&["status"]));
-    assert_eq!(output.matches("Ungrouped Issues").count(), 1);
-    for title in [
-        "unique standalone ready title",
-        "unique standalone draft title",
-        "unique standalone running title",
-    ] {
-        assert_eq!(output.matches(title).count(), 1, "{output}");
-    }
-    assert!(!output.contains("(none)"));
-    assert!(!output.contains("Waits and gates"));
-    assert_eq!(
-        status_candidates(&output, "Ready candidates"),
-        std::collections::BTreeSet::from([ready])
-    );
-    assert_eq!(
-        status_candidates(&output, "Triage candidates"),
-        std::collections::BTreeSet::from([draft])
-    );
-    assert!(output.contains("Claim: test-actor"));
-
     let root = repo.group_plan("completed root");
     let nested = created_id(&repo.axon(&["group", "plan", "completed nested", "--parent", &root]));
     assert_success(&repo.axon(&["start", &root]));
     assert_success(&repo.axon(&["start", &nested]));
     assert_success(&repo.axon(&["done", &nested]));
     assert_success(&repo.axon(&["done", &root]));
+
     for selected in [&root, &nested] {
-        let status = stdout(&repo.axon(&["status", "--group", selected]));
-        assert!(status.starts_with("Saved claims: 0  Triage candidates: 0  Ready candidates: 0"));
-        assert!(!status.contains("Can complete:"), "{status}");
-        assert!(!status.contains("Descendant gate closed:"), "{status}");
         let show = stdout(&repo.axon(&["show", selected]));
         let (summary, details) = show.split_once("\n\nDetails\n").unwrap();
         assert!(!summary.contains("Descendant gate closed:"), "{show}");
-        assert!(!summary.contains("Can complete:"));
-        assert!(details.contains("Descendant gate closed:"));
-        assert!(details.contains("Can complete: no"));
+        assert!(!summary.contains("Can complete:"), "{show}");
+        assert!(details.contains("Descendant gate closed:"), "{show}");
+        assert!(details.contains("Can complete: no"), "{show}");
     }
 }
 
 #[test]
-fn ended_plan_summaries_preserve_command_failure_and_rejected_claim_context() {
+fn show_preserves_ended_rejected_group_dependencies_and_inactive_context() {
     let repo = TestRepo::new();
     repo.init("test");
     let outer = repo.group_plan("active outer plan");
@@ -1891,30 +1641,20 @@ fn ended_plan_summaries_preserve_command_failure_and_rejected_claim_context() {
     assert_success(&repo.axon(&["when", "manual", &root]));
     assert_success(&repo.axon(&["done", &root]));
     assert_success(&repo.axon(&["decide", "reject", &root]));
-    let default_status = stdout(&repo.axon(&["status"]));
-    assert!(default_status.contains(&root));
-    assert!(default_status.contains(&child));
-    for (status, saved_claims, completion_prompts) in [
-        (default_status, 2, 1),
-        (stdout(&repo.axon(&["status", "--group", &root])), 1, 0),
-    ] {
-        assert!(status.contains(&format!("Saved claims: {saved_claims}")));
-        assert!(status.contains("Active scope: no"));
-        assert!(status.contains("Rejected Group: descendant scope is inactive"));
-        assert!(status.contains(&format!(
-            "Unresolved dependency: {unresolved}  unresolved root prerequisite"
-        )));
-        assert!(status.contains(&format!(
-            "Rejected prerequisite (Orphaned): {rejected}  rejected root prerequisite"
-        )));
-        assert!(status.contains("Resurface condition not satisfied: Manual"));
-        assert_eq!(status.matches("Can complete:").count(), completion_prompts);
-        assert!(!status.contains("Descendant gate closed:"), "{status}");
-    }
+
     let root_show = stdout(&repo.axon(&["show", &root]));
-    assert!(root_show.contains(&format!("Needs: {unresolved}")));
-    assert!(root_show.contains(&format!("Needs: {rejected}")));
-    assert!(root_show.contains("Resurface condition: Manual"));
+    assert!(
+        root_show.contains(&format!("Needs: {unresolved}")),
+        "{root_show}"
+    );
+    assert!(
+        root_show.contains(&format!("Needs: {rejected}")),
+        "{root_show}"
+    );
+    assert!(
+        root_show.contains("Resurface condition: Manual"),
+        "{root_show}"
+    );
     for selected in [&outer, &root, &child] {
         let show = stdout(&repo.axon(&["show", selected]));
         assert!(
@@ -1924,75 +1664,5 @@ fn ended_plan_summaries_preserve_command_failure_and_rejected_claim_context() {
                 .contains("descendant scope is inactive"),
             "{show}"
         );
-    }
-    assert_success(&repo.axon(&["when", "command", &root, "echo diagnostic >&2; exit 7"]));
-    let failure = repo.axon(&["status", "--group", &root]);
-    assert_failure(&failure);
-    assert!(stdout(&failure).is_empty());
-    assert!(stderr(&failure).contains("diagnostic"));
-    assert_success(&repo.axon(&[
-        "when",
-        "command",
-        &root,
-        "echo observed >> observations; exit 0",
-    ]));
-    assert_success(&repo.axon(&["status", "--group", &root]));
-    assert_eq!(
-        fs::read_to_string(repo.root().join("observations"))
-            .unwrap()
-            .lines()
-            .count(),
-        1
-    );
-}
-
-#[test]
-fn status_treats_rejected_groups_as_terminal_without_hiding_saved_context() {
-    let repo = TestRepo::new();
-    repo.init("test");
-
-    let not_started = repo.group_plan("rejected before start");
-    let saved_child = created_id(&repo.axon(&[
-        "plan",
-        "saved child with dependency",
-        "--parent",
-        &not_started,
-    ]));
-    let dependency = repo.plan("external prerequisite for saved child");
-    repo.add_dependency(&saved_child, &dependency);
-    assert_success(&repo.axon(&["when", "manual", &not_started]));
-    assert_success(&repo.axon(&["decide", "reject", &not_started]));
-
-    let explicit = stdout(&repo.axon(&["status", "--group", &not_started]));
-    assert!(explicit.contains(&format!("{not_started}  Group")));
-    assert!(explicit.contains("[NotStarted/Rejected]"));
-    assert!(explicit.contains(&saved_child));
-    assert!(explicit.contains(&dependency));
-    assert!(explicit.contains("Unresolved dependency:"));
-    assert!(explicit.contains("Resurface condition not satisfied: Manual"));
-    assert!(explicit.contains("Rejected Group: descendant scope is inactive"));
-    assert!(!explicit.contains("Can complete:"), "{explicit}");
-    assert!(!explicit.contains("Descendant gate closed:"), "{explicit}");
-
-    let in_progress = repo.group_plan("rejected after start");
-    let claimed_child =
-        created_id(&repo.axon(&["plan", "claimed saved child", "--parent", &in_progress]));
-    assert_success(&repo.axon(&["start", &in_progress]));
-    assert_success(&repo.axon(&["start", &claimed_child]));
-    assert_success(&repo.axon(&["decide", "reject", &in_progress]));
-
-    for status in [
-        stdout(&repo.axon(&["status", "--group", &in_progress])),
-        stdout(&repo.axon(&["status"])),
-    ] {
-        assert!(status.contains(&format!("{in_progress}  Group")));
-        assert!(status.contains("[InProgress/Rejected]"));
-        assert!(status.contains(&claimed_child));
-        assert!(status.contains("Saved claims: 2"));
-        assert!(status.contains("Claim: test-actor"));
-        assert!(status.contains("Active scope: no"));
-        assert!(status.contains("Rejected Group: descendant scope is inactive"));
-        assert!(!status.contains("Can complete:"), "{status}");
-        assert!(!status.contains("Descendant gate closed:"), "{status}");
     }
 }

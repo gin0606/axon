@@ -143,7 +143,6 @@ fn condition_evaluating_leaf_commands_enable_the_shared_trace() {
     for args in [
         vec!["ready", "--trace-conditions"],
         vec!["triage", "--trace-conditions"],
-        vec!["status", "--trace-conditions"],
         vec!["list", "--trace-conditions"],
         vec!["show", &ready, "--trace-conditions"],
     ] {

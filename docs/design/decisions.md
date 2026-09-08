@@ -595,10 +595,10 @@ Entity がないとき、関係のない Group の AfterEntity で代用する�
 成立条件、確認先、選択肢と効果は説明し、採否や計画変更の選択は利用者に残す。
 現在の規範は [CLI 契約](../reference/cli.md#操作を理解するための案内) に置く。
 
-## 計画を横断する status
+## 計画横断 status の追加と廃止
 
 2026-09-05、用途別一覧を手で結合せずに計画の文脈で候補と待ちを読める入口として
-`status` を追加する。root Group と所属なし Issue を独立したブロックにし、nested Group は
+`status` を追加した。root Group と所属なし Issue を独立したブロックにし、nested Group は
 所属 scope として示す。Ended と Rejected は別軸の件数を保持し、達成率には変換しない。
 共通の待ちは所有する Group の scope に一度だけ示し、inactive 配下の保存済み claim も残す。
 対象選択は利用者に委ね、安定した ID 順は優先順位を意味しない。
@@ -607,12 +607,14 @@ ID 解決と状態・関係を一つの read transaction で取得し、候補�
 条件評価 context を使う。状態意味論は変更せず、Rust の CLI fixture で既存の
 ready / triage との一致を検証するため、新規 Quint モデルは追加しない。
 
+2026-09-08、`status` は廃止した。Group 内の tree 構造、現在の着手位置、次に着手可能な対象、その先に残る仕事を一つの画面で見通す目的を満たせず、既存の一覧を集約した表示を維持しても改善の方向を固定してしまうためである。現在は `list`、`ready`、`triage`、`claims`、`show` を目的別に使い、計画表示全体は新しいコマンドを含めて別途設計する。
+
 ## show は計画の状況から詳細へ読む
 
 既知の計画を把握する際、独立した状態軸を最初に列挙すると、残りと待ち先を利用者が再構成する必要がある。Situation、終了・却下・未終了の内訳、包含階層と待ち、Details の順にする。Ended と Rejected は重なりを明示して保持し、未終了は実施の約束でも terminal の補数による達成率でもない。
 
 共通の activation gate は所有Groupに一度示し、個別の dependency とスケジュール条件から区別する。Rejected Group は Progress にかかわらずすでに terminal として完了可否を示さず、子孫は将来作業を要求しない inactive な保存状態として残す。保存済み claim がある場合だけ、外部作業の処遇を Entity ごとに判断する必要を示す。Ended Groupでも Can complete: no や子孫ごとの Inactive を主表示に繰り返さない。単一read snapshot、既存条件評価、全description・Note・進行履歴の保存文字列と色なし出力の契約を維持する。状態意味論を変えない表示変更のため新しいQuintモデルは追加しない。
 
-## 計画表示の密度と終了済み構造
+## 廃止前の status の表示密度と終了済み構造
 
-status は詳細を読む対象を選ぶ入口として、一項目の identity に候補・claim・待ちを集約する。所属なし Issue は一つの一覧とし、空セクションを省く。冒頭のゼロ件数は保持する。Ended または Rejected の Group はすでに terminal なので、完了可否と descendant gate を表示しない。通常表示では root 自身が非 terminal、または subtree に保存済み claim がある計画だけを選ぶ。Rejected root Group の配下に未終了の保存状態だけが残っていても作業の約束とは扱わず省き、claim があれば観測と解消のため配下の保存状態、dependency、Resurface condition とともに残す。状態導出と条件評価を変えず、表示の優先順位を変更する。
+廃止前の status は詳細を読む対象を選ぶ入口として、一項目の identity に候補・claim・待ちを集約していた。所属なし Issue は一つの一覧とし、空セクションを省いていた。冒頭のゼロ件数は保持した。Ended または Rejected の Group はすでに terminal なので、完了可否と descendant gate を表示しなかった。通常表示では root 自身が非 terminal、または subtree に保存済み claim がある計画だけを選んだ。Rejected root Group の配下に未終了の保存状態だけが残っていても作業の約束とは扱わず省き、claim があれば観測と解消のため配下の保存状態、dependency、Resurface condition とともに残した。状態導出と条件評価を変えず、表示の優先順位だけを変更していた。

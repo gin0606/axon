@@ -608,21 +608,6 @@ impl Store {
             Self::File(s) => entity(&s.read()?.1, id),
         }
     }
-    pub fn status_snapshot(&mut self, group: Option<&str>) -> Result<(Option<EntityId>, View)> {
-        match self {
-            Self::Sqlite(s) => s.status_snapshot(group),
-            Self::File(s) => {
-                let state = s.read()?.1;
-                let id = group.map(|g| resolve(&state, g)).transpose()?;
-                if let Some(id) = &id
-                    && entity(&state, id)?.kind != EntityKind::Group
-                {
-                    return Err(DbError::NotGroup(id.to_string()));
-                }
-                Ok((id, state.declaration.view()))
-            }
-        }
-    }
     pub fn show_snapshot(&mut self, input: &str) -> Result<ShowSnapshot> {
         match self {
             Self::Sqlite(s) => s.show_snapshot(input),

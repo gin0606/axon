@@ -45,7 +45,7 @@ accepted または rejected の各 declaration は immutable な Declaration Rev
 
 `ready` と `triage` は frontier であり完全な inventory ではない。`triage` にないことは Entity の不在や作成・更新失敗を意味しない。その証拠だけで作成を繰り返さない。
 
-saved state には `axon show <id> --skip-command-evaluation` を使い、readiness、surfacing、active-scope の評価が必要なら通常の derived query を続けて使う。`status` は plan、保存済み claim、candidate、wait を要約するが、完全な inventory ではない。
+saved state には `axon show <id> --skip-command-evaluation` を使い、readiness、surfacing、active-scope の評価が必要なら通常の derived query を続けて使う。完全な inventory には `axon list --skip-command-evaluation` を使い、`ready`、`triage`、`claims` の非表示を Entity の不在の証拠にしない。
 
 ## 関係と Group
 

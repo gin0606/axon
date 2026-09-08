@@ -11,7 +11,6 @@ mod history;
 mod merge;
 mod merge_cli;
 mod record_id;
-mod status;
 
 use anstyle::{AnsiColor, Color, Style};
 use chrono::{NaiveDate, Utc};
@@ -38,9 +37,7 @@ const HELP_SECTIONS: &[HelpSection] = &[
     },
     HelpSection {
         heading: "Inspect",
-        commands: &[
-            "status", "show", "list", "claims", "log", "note", "revision", "actor",
-        ],
+        commands: &["show", "list", "claims", "log", "note", "revision", "actor"],
     },
     HelpSection {
         heading: "Plan management",
@@ -343,23 +340,12 @@ enum Command {
     },
     /// List the active decision frontier
     #[command(
-        long_about = "List Entities that satisfy all four conditions: non-terminal, their own Resurface condition is satisfied (surfaced), in active scope (all ancestor Group gates open), and Undecided or orphaned. A root Entity with Manual is active but unsurfaced; a surfaced child below a closed ancestor gate is inactive. Absence does not mean creation/update failed or an Entity is missing; do not repeat creation on that evidence. Use axon list for the complete management-root inventory and axon show <ID> for saved state and unsurfaced/inactive reasons. ready lists startable candidates; status summarizes plans, saved claims, and waits, not a complete inventory."
+        long_about = "List Entities that satisfy all four conditions: non-terminal, their own Resurface condition is satisfied (surfaced), in active scope (all ancestor Group gates open), and Undecided or orphaned. A root Entity with Manual is active but unsurfaced; a surfaced child below a closed ancestor gate is inactive. Absence does not mean creation/update failed or an Entity is missing; do not repeat creation on that evidence. Use axon list for the complete management-root inventory and axon show <ID> for saved state and unsurfaced/inactive reasons. ready and triage list their respective frontiers, not a complete inventory."
     )]
     Triage {
         /// Include only one Entity kind
         #[arg(long, value_enum)]
         kind: Option<KindFilter>,
-        #[command(flatten)]
-        trace: TraceConditionsArgs,
-    },
-    /// Summarize plans, saved claims, candidates, and waits
-    #[command(
-        long_about = "Summarize root plans and ungrouped Issues whose root is non-terminal or whose subtree has saved claims. --group includes the specified Group and every descendant, even when terminal. Each item combines its candidates, saved claim, and waits; empty sections are omitted. Candidate sets match ready and triage; saved claims do not imply agent activity. Ended and Rejected Groups omit completion and descendant-gate prompts. Rejected Groups retain their own stored dependency and resurface-condition waits. Use show <ID> for complete details and terminal Group structure."
-    )]
-    Status {
-        /// Group ID or unique ID suffix; include its complete descendant scope
-        #[arg(long)]
-        group: Option<String>,
         #[command(flatten)]
         trace: TraceConditionsArgs,
     },
@@ -1034,7 +1020,6 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
         Command::Ready { kind, trace } => cmd_ready(kind, trace.trace_conditions),
         Command::Triage { kind, trace } => cmd_triage(kind, trace.trace_conditions),
         Command::Claims { kind } => cmd_claims(kind),
-        Command::Status { group, trace } => status::run(group.as_deref(), trace.trace_conditions),
         Command::Start { id, trace } => cmd_start(&id, trace.trace_conditions),
         Command::Done { id } => cmd_done(&id),
         Command::Release { id, reason } => cmd_release(&id, reason),
@@ -3553,7 +3538,7 @@ fn render_docs(decoration: OutputDecoration) -> String {
     )
     .unwrap();
 
-    writeln!(output, "  triage requires all four conditions: non-terminal, the Entity's own Resurface\n  condition satisfied (surfaced), active scope (all ancestor Group gates open),\n  and Undecided or orphaned. A root Entity with Manual is active but unsurfaced;\n  a surfaced child below a closed ancestor gate is inactive. Neither appears\n  until all four conditions hold. Absence does not mean creation/update failed\n  or an Entity is missing; do not repeat creation on that evidence.\n  Use axon list for the complete management-root inventory and axon show <ID>\n  for saved state and unsurfaced/inactive reasons. ready lists startable candidates;\n  status summarizes plans, saved claims, and waits, not a complete inventory.\n").unwrap();
+    writeln!(output, "  triage requires all four conditions: non-terminal, the Entity's own Resurface\n  condition satisfied (surfaced), active scope (all ancestor Group gates open),\n  and Undecided or orphaned. A root Entity with Manual is active but unsurfaced;\n  a surfaced child below a closed ancestor gate is inactive. Neither appears\n  until all four conditions hold. Absence does not mean creation/update failed\n  or an Entity is missing; do not repeat creation on that evidence.\n  Use axon list for the complete management-root inventory and axon show <ID>\n  for saved state and unsurfaced/inactive reasons. ready and triage list their\n  respective frontiers, not a complete inventory.\n").unwrap();
 
     writeln!(output, "{}", decoration.paint(OUTPUT_HEADING, "Groups")).unwrap();
     writeln!(
@@ -3590,10 +3575,6 @@ fn render_docs(decoration: OutputDecoration) -> String {
         (
             "axon done / axon release",
             "End the work or release its claim",
-        ),
-        (
-            "axon status",
-            "Compare plans, candidates, saved claims, and waits",
         ),
         ("axon show", "Inspect one Entity and its current context"),
     ] {
@@ -3757,75 +3738,6 @@ mod tests {
         drop(store);
         drop(connection);
         std::fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn status_styles_preserve_text_and_stored_strings() {
-        let mut group = entity("t-g", EntityKind::Group);
-        group.title = " 計画\n  continued ".into();
-        let mut issue = entity("t-i", EntityKind::Issue);
-        issue.parent = Some(group.id.clone());
-        issue.progress = Progress::InProgress(Claim {
-            actor: " actor ".into(),
-            worktree: " /tmp/my worktree ".into(),
-            at: Utc::now(),
-        });
-        let view = View::new(vec![group, issue], vec![]);
-        let plain = status::render(&view, None, OutputDecoration::Plain).unwrap();
-        let ansi = status::render(&view, None, OutputDecoration::Ansi).unwrap();
-        assert_eq!(plain, anstream::adapter::strip_str(&ansi).to_string());
-        assert!(plain.contains(" 計画\n  continued "));
-        assert!(plain.contains("Claim:  actor   Worktree:  /tmp/my worktree "));
-    }
-
-    #[test]
-    fn status_styles_actions_waits_failures_and_inactive_state_by_meaning() {
-        let group = entity("t-group", EntityKind::Group);
-        let ready = entity("t-ready", EntityKind::Issue);
-
-        let mut undecided = entity("t-undecided", EntityKind::Issue);
-        undecided.disposition = Disposition::Undecided;
-        undecided.current_revision = None;
-
-        let blocked = entity("t-blocked", EntityKind::Issue);
-        let prerequisite = entity("t-prerequisite", EntityKind::Issue);
-
-        let orphaned = entity("t-orphaned", EntityKind::Issue);
-        let mut rejected = entity("t-rejected", EntityKind::Issue);
-        rejected.disposition = Disposition::Rejected;
-
-        let mut hidden = entity("t-hidden", EntityKind::Issue);
-        hidden.resurface_condition = ResurfaceCondition::Manual;
-
-        let view = View::new(
-            vec![
-                group,
-                ready,
-                undecided,
-                blocked.clone(),
-                prerequisite.clone(),
-                orphaned.clone(),
-                rejected.clone(),
-                hidden,
-            ],
-            vec![(blocked.id, prerequisite.id), (orphaned.id, rejected.id)],
-        );
-        let ansi = status::render(&view, None, OutputDecoration::Ansi).unwrap();
-
-        for expected in [
-            OutputDecoration::Ansi.paint(OUTPUT_ID, "t-ready"),
-            OutputDecoration::Ansi.paint(OUTPUT_POSITIVE, "Ready candidate"),
-            OutputDecoration::Ansi.paint(OUTPUT_WAITING, "Descendant gate closed:"),
-            OutputDecoration::Ansi.paint(OUTPUT_WAITING, "Unresolved dependency:"),
-            OutputDecoration::Ansi.paint(OUTPUT_DECISION, "Undecided"),
-            OutputDecoration::Ansi.paint(OUTPUT_FAILURE, "Orphaned"),
-            OutputDecoration::Ansi.paint(OUTPUT_MUTED, "Resurface condition not satisfied: Manual"),
-        ] {
-            assert!(
-                ansi.contains(&expected),
-                "missing semantic style: {expected:?}"
-            );
-        }
     }
 
     #[test]

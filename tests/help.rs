@@ -46,10 +46,7 @@ fn root_help_groups_commands_in_workflow_order() {
         ),
         (
             "Inspect:",
-            [
-                "status", "show", "list", "claims", "log", "note", "revision", "actor",
-            ]
-            .as_slice(),
+            ["show", "list", "claims", "log", "note", "revision", "actor"].as_slice(),
         ),
         (
             "Plan management:",
@@ -86,6 +83,26 @@ fn root_help_groups_commands_in_workflow_order() {
             previous_command = command;
         }
     }
+}
+
+#[test]
+fn status_is_not_a_public_command() {
+    let (output, _) = axon(&["status"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+
+    let root = help_stdout(&[]);
+    assert!(
+        !root
+            .lines()
+            .any(|line| line.trim_start().starts_with("status "))
+    );
+
+    let bash = help_stdout(&["completion", "bash"]);
+    assert!(!bash.contains("axon,status)"));
+    let zsh = help_stdout(&["completion", "zsh"]);
+    assert!(!zsh.contains("\n            (status)\n"));
+    assert!(!zsh.contains("'status:"));
 }
 
 #[test]
@@ -136,7 +153,6 @@ fn condition_evaluating_leaf_help_documents_trace_contract() {
     for args in [
         &["ready", "--help"][..],
         &["triage", "--help"][..],
-        &["status", "--help"][..],
         &["start", "--help"][..],
         &["list", "--help"][..],
         &["show", "--help"][..],

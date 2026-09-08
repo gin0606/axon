@@ -9,7 +9,7 @@ Usage、引数、option、コマンドツリーは Clap の定義から生成す
 | 分類 | command 順序 |
 | --- | --- |
 | Workflow | `plan`, `capture`, `ready`, `triage`, `start`, `done`, `release` |
-| Inspect | `status`, `show`, `list`, `claims`, `log`, `note`, `revision`, `actor` |
+| Inspect | `show`, `list`, `claims`, `log`, `note`, `revision`, `actor` |
 | Plan management | `write`, `group`, `dep`, `decide`, `when`, `export`, `import` |
 | Setup & utilities | `init`, `migrate`, `storage`, `merge`, `completion`, `docs`, `help` |
 
@@ -179,7 +179,7 @@ Git 外では Axon 管理 root とし、起動元の環境変数を継承する�
 
 これは既存ツール一般の終了コード規約ではない。必要な終了コード変換は利用者のスクリプトが担う。
 判定失敗の診断は対象 Entity、シェル文字列、終了理由、取得できた stdout / stderr を示す。
-正常時の外部出力は通常の Axon 出力へ混ぜない。`ready`、`triage`、`status`、`start`、
+正常時の外部出力は通常の Axon 出力へ混ぜない。`ready`、`triage`、`start`、
 `list`、`show`、`import check`、`import apply` は `--trace-conditions` を受け付ける。
 指定時は、その操作が実際に評価した終了 0 / 1 の Command ごとに Entity ID、cwd、成立可否と
 終了コード、取得した stdout / stderr を一つの block として stderr へ評価順に表示する。
@@ -227,40 +227,9 @@ Group などの評価は行う。履歴・Note・Revision の参照、claims、e
 
 `list --search <text>` は現在のtitle、description、対象Entityの全Note本文をリテラル部分一致で検索する。大小文字を区別し、Unicode正規化や空白の除去を行わない。空文字は入力エラー。`%`、`_`、正規表現の記号は通常の文字であり、Noteのactor・日時、古いRevision、判断・進捗履歴は検索しない。kind・状態filterとはANDで併用し、未指定なら通常listの全Entity範囲を検索する。複数箇所の一致も1 Entity 1行とし、既存順序を維持する。検索時だけ行末に `Matched: title, description, note-…` を添え、一致したNote IDはID順に列挙する。全文は `show <id>` / `note show <id> <note-id>` で取得する。検索条件もCommand評価前に適用し、空結果は成功する。option形式の検索語は `--search='--help'` と渡す。
 
-`triage` は非 terminal・自身が surfaced・active scope 内・Undecided または orphaned の4条件をすべて満たす Entity を返す。完全定義と自身の未浮上／祖先 gate による inactive の区別は[状態モデル](state-model.md#observed-情報と-triage-frontier)を参照する。非表示は作成・更新の失敗や不存在を意味しないため、作成を再実行する根拠にはしない。管理 root 全体の棚卸しは `list`、個別の保存状態と非表示理由は `show` で確認する。`status` は状況の要約であり全件一覧ではない。
+`triage` は非 terminal・自身が surfaced・active scope 内・Undecided または orphaned の4条件をすべて満たす Entity を返す。完全定義と自身の未浮上／祖先 gate による inactive の区別は[状態モデル](state-model.md#observed-情報と-triage-frontier)を参照する。非表示は作成・更新の失敗や不存在を意味しないため、作成を再実行する根拠にはしない。管理 root 全体の棚卸しは `list`、個別の保存状態と非表示理由は `show` で確認する。`ready` と `triage` はそれぞれの frontier であり全件一覧ではない。
 
 `claims` は claim の経過時間やプロセス状態から staleness を推定しない。表示された保存済み事実を基に人が判断し、必要な claim だけ `release` で明示的に解放する。
-
-### 計画の横断表示
-
-`status` は root Group ごとの計画を ID 順に要約し、その後に所属なし Issue の一覧を ID 順で示す。
-root Entity 自身が非 terminal、またはその subtree に保存済み claim があれば表示する。
-Rejected root Group は、配下に非 terminal な保存状態だけが残る場合は省き、Group 自身または
-配下に保存済み claim がある場合は観測と解消のため表示する。
-`status --group <id>` は ID / 一意 suffix を解決し、指定 Group 自身と全子孫を対象にする。
-指定時は terminal だけでも表示する。存在しない参照、曖昧参照、Issue 指定はエラーになる。
-
-冒頭は対象の保存済み claim / triage 候補 / ready 候補の件数、続くブロックは Group 自身の
-Progress / Disposition、完了可能性、全子孫の軸別内訳、nested Group の所属、claim、候補、
-待ちを示す。候補集合は同じ条件下の ready / triage を対象範囲へ絞ったものと一致する。
-未終了を実施の約束とはせず、Ended と Rejected を達成率へ合算しない。
-Ended または Rejected の Group はすでに terminal なので、完了可否と descendant gate を
-表示しない。Rejected Group の保存状態、claim、dependency、Resurface condition は維持する。
-
-待ちは所有する scope ごとにまとめ、未解決 dependency、Rejected prerequisite、未成立の
-Resurface condition、Group の descendant gate を区別する。gate の表示は `show` と同じく、
-Group 自身の Progress、Disposition、Resurface condition、direct dependency に基づく。
-祖先由来の共通理由は所有祖先 scope に一度だけ示し、nested Group 固有の失敗条件は残す。
-nested scope の外にある祖先、
-dependency / AfterEntity 参照先は External として説明するだけで構成員や集計には加えない。
-NotStarted Group の ready は Group 自身の着手候補であり、子孫は gate が開くまで候補にしない。
-inactive な scope 内も保存された claim の actor / worktree / 開始時刻を表示し、実際の
-プロセス稼働、健全性、停止、staleness を推測しない。詳細な全 subtree、本文、Note、履歴は
-`show <id>` に委ねる。空結果は他の一覧と同じ stdout / stderr 契約に従う。
-
-ID 解決と Entity / 関係を一回の整合した read snapshot から取得する。候補と説明で同じ
-条件評価 context を共有し、必要な Command の判定失敗はエラーとして返す。対象外の独立した
-計画は評価しない。NO_COLOR / 非対話出力でも同じ意味と順序、保存文字列を保つ。
 
 ### Plan 宣言ファイル
 
@@ -513,10 +482,6 @@ Issue と Group は同じ `<prefix>-<ランダム 6 文字>` namespace を使い
 backend変換は明示した現行schemaのSQLite入力から別directoryへ出力し、元DBの切替はしない。
 診断はpath、版、処理段階、原因、backup先と出力の適用状態を示す。失敗時の途中成果を上書きせず、
 結果不明なら出力とbackupを調べてから再開する。具体的な手順は[手動移行](migration.md)。
-
-### 計画表示の情報密度
-
-status は各項目の identity を一度だけ表示し、Ready / Triage、保存 claim と待ち理由をその項目に添える。所属なし Issue は Ungrouped Issues にまとめ、空セクションは省く。冒頭の件数はゼロでも表示する（対象全体が空の場合は既存の空表示案内）。Ended Group の完了不可と終了由来 gate は要約から外し、show の Details で確認できる。Rejected root Group は保存済み claim がある場合だけ通常表示に残し、その場合は配下の未終了項目・保存 claim・inactive 理由も表示する。
 
 ## 手動移行
 
