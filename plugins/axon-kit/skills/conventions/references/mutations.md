@@ -8,7 +8,7 @@ Axon discovers the backend from prescribed canonical state paths, without a conf
 
 With the file backend, ordinary mutations change the active worktree's `.axon/state.jsonl`, which is intended for Git tracking and may already be tracked; `.gitattributes` and `.axon/.gitignore` belong to the same worktree-local artifact set. The mutation does not authorize staging, committing, merging, or discarding those files. Preserve unrelated working-tree changes and report the storage artifacts changed by the operation. Reads in one worktree observe only its current snapshot: they do not prove that another worktree has no divergent state or claim.
 
-With SQLite in Git, the authoritative `.axon/axon.db` is under the parent of the common Git directory and may be outside the current sandbox or worktree. Escalate only the authorized Axon mutation when host permission is required. Do not broaden that permission to read-only commands or unrelated programs.
+With SQLite in Git, the authoritative `.axon/axon.db` is under the parent of the common Git directory and may be outside the current sandbox or worktree. When host permission is required, limit escalation to the authorized Axon command whose access requirement has been established. This includes read commands that need write access for locking or supported automatic storage updates. Permission for one command does not extend to other commands or unrelated programs; follow the host's permission process for each required operation.
 
 If the file backend's Git index is unmerged, normal operations are intentionally rejected. Preserve the inputs and resolve and stage a validated snapshot through the storage or merge workflow; do not bypass the guard by writing the state file directly.
 
