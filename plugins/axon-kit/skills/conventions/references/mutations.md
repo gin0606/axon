@@ -22,13 +22,13 @@ If the file backend's Git index is unmerged, normal operations are intentionally
 
 After a successful mutation, read the complete target or artifact state and verify the operation's postconditions. Re-read Revisions, Notes, relationships, claims, frontiers, or storage artifacts when the capability's effect can change them. Treat command output as evidence, not as a substitute for the relevant postcondition.
 
-If a multi-phase workflow completes only some mutations, stop at the first unresolved phase. Preserve the applied state and any recovery artifact, report completed and remaining phases separately, and do not automatically roll back with compensating mutations.
+If a multi-phase workflow completes only some mutations, reconcile the failed phase under the retry rules below. Correct a recoverable execution error and continue the already-authorized phases when the outcome and safe next operation are established. Stop when the outcome remains unknown, a material decision is missing, or recovery requires an unauthorized effect. Preserve the applied state and any recovery artifact, report completed and remaining phases separately, and do not automatically roll back with compensating mutations.
 
 ## Retry only after reconciliation
 
 A clear failure is not permission to repeat the same command without changing its cause. If command completion or storage application is unknown, first confirm that the process has ended and inspect current state using stable IDs, record counts, actor labels, payloads, and operation-specific postconditions.
 
-Repeat a mutation only when its capability defines a safe reconciliation rule and the observations establish that repetition cannot duplicate the effect. In particular, Entity creation and Note addition need their own duplicate checks. If the evidence cannot distinguish applied from unapplied, report the storage outcome as unknown and stop.
+After resolving the failure's cause, repeat a mutation when the capability's recovery rule or the CLI's repetition contract, together with observed current values and relevant history, establishes that repetition is safe. For example, `write`, `group set|unset`, and `dep add|rm` accept the same saved value as a successful no-op. Verify that the target, intended effect, and applicable preconditions still match the authorized request before retrying. Entity creation and Note addition remain non-idempotent and require their capability-specific duplicate checks. If the evidence cannot distinguish applied from unapplied, report the storage outcome as unknown and stop.
 
 ## Preserve input snapshots
 

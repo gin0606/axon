@@ -39,7 +39,7 @@ Run each mutation separately and verify its postconditions before the next phase
 - An `Undecided` declaration can be edited without changing Disposition.
 - For a real change to a fixed declaration, first run `axon decide undecide <id>` with any supplied reason, verify the draft, edit only the supplied declaration fields and relationships, verify the complete declaration, then apply the supplied final Disposition as a separate transition.
 - A no-op declaration value does not require reconsideration.
-- If a staged change fails, stop with the current state, completed phases, and remaining phases. Do not automatically restore the previous declaration or Disposition.
+- If a staged change fails, reconcile its outcome using the mutation contract. Correct recoverable execution errors, such as invalid input syntax, without changing the supplied decision, then continue the already-authorized phases when safe. Stop and report the current state, completed phases, and remaining phases when the outcome remains unknown, a material decision is missing, or recovery requires an unauthorized effect. Do not automatically restore the previous declaration or Disposition.
 - Route supplemental findings or handoffs to `axon-kit:add-note`; do not append them to the description.
 
 When decomposing an accepted plan, use `axon-kit:plan` for decided children and `axon-kit:capture` for unresolved children. Apply only supplied parent and dependency relationships. Do not start a child implicitly.
