@@ -6,6 +6,27 @@
 
 MSRVを変更するときは、`Cargo.toml`、[導入ガイド](../guide/getting-started.md#インストールと対応環境)、以下の検証コマンドを同じ変更で更新する。
 
+## Full verification
+
+pull requestとmainへのpushでは、GitHub Actionsがrepositoryの
+`rust-toolchain.toml`を使って次のfull verificationを実行する。ローカルでも
+同じ正本を実行する。
+
+```sh
+./scripts/full-verification
+```
+
+このscriptは順に次を実行し、いずれかが失敗した時点で非zero終了する。
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+```
+
+CIのcacheはCargo dependencyとbuild artifactだけに使い、成功済みのtest結果を
+根拠にfull verificationを省略しない。
+
 リリース前には通常 toolchain の全検証に加え、MSRVで次を実行する。
 
 ```sh
