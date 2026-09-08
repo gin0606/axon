@@ -1,50 +1,50 @@
 # Declaration workflow
 
-Read this reference before exporting to a file, canonicalizing, applying, or recovering a declaration operation.
+declaration の file への export、canonicalize、apply、または declaration 操作の recover を行う前に、この reference を読む。
 
-## Keep declaration and Control state separate
+## declaration と Control state を分離する
 
-A declaration edits only title, description, parent, and outgoing dependencies. Existing `Accepted` or `Rejected` declarations are fixed; `axon import` does not bypass that rule. The calling workflow must use `axon-kit:triage` to return an Entity to `Undecided` before applying a real declaration change and must make any later Disposition or Resurface-condition change separately.
+declaration が編集するのは title、description、parent、outgoing dependency だけである。既存の `Accepted` または `Rejected` declaration は固定され、`axon import` もこの rule を迂回しない。実際の declaration 変更を適用する前に、呼び出し側 workflow は `axon-kit:triage` で Entity を `Undecided` に戻す必要がある。その後の Disposition または Resurface condition の変更も別途行う。
 
-New records in a declaration represent `Accepted`, `NotStarted`, `Always` Entities with no claim. Use `axon-kit:plan` or `axon-kit:capture` with the supplied initial condition for single-Entity creation when the intended condition or adoption differs. Ordinary Control-state operations remain separate when later transitions are required. Do not normalize a caller's intended state merely to fit declaration import.
+declaration の新規 record は、claim のない `Accepted`、`NotStarted`、`Always` の Entity を表す。意図する condition または adoption が異なる単一 Entity の作成には、与えられた初期 condition とともに `axon-kit:plan` または `axon-kit:capture` を使う。後続 transition が必要な場合、通常の Control-state 操作は分離したままとする。declaration import に合わせるためだけに、呼び出し側の意図する state を normalize しない。
 
-If a combined workflow partially completes, stop at the first unresolved phase. Report the applied storage state and remaining phases; do not compensate or roll back automatically.
+combined workflow が部分的に完了した場合、最初の未解決 phase で停止する。適用済み storage state と残りの phase を報告し、自動的な補償や rollback を行わない。
 
-## Export and review
+## export と review
 
-Use explicit IDs, `--group`, and `--recursive` selectors to define the editable set. Their union is the complete edit set; relationship endpoints do not become editable automatically.
+明示的な ID、`--group`、`--recursive` selector で editable set を定義する。それらの和集合が完全な edit set であり、関係の endpoint は自動的に editable にならない。
 
-For export to a file, write to a temporary path, confirm that `axon export` succeeded, and run `axon import check` on the result before replacing an existing destination. Do not overwrite an existing caller-owned artifact unless the request includes that replacement.
+file への export では temporary path に書き、`axon export` の成功を確認し、既存 destination を置き換える前に結果へ `axon import check` を実行する。依頼に置き換えが含まれない限り、呼び出し側所有の既存 artifact を上書きしない。
 
-For a read-only check, run `axon import check <file>` without preparing or rewriting the file. For a read-only review, keep the original unchanged, prepare a temporary copy if necessary, and inspect both the declaration content and the reported structural and derived impact. These checks may evaluate Command conditions needed for derived impact; use a separately reviewed environment and do not mistake them for saved-text-only inspection.
+read-only check では file を prepare または rewrite せず `axon import check <file>` を実行する。read-only review では original を変更せず保持し、必要なら temporary copy を prepare して、declaration 内容と報告された構造的・導出的影響の両方を調査する。これらの check は導出影響に必要な Command condition を評価する場合がある。Command を実行してよいことを別途確認した environment を使い、saved text だけの調査と誤認しない。
 
-## Add an external dependency or parent snapshot
+## external dependency または parent snapshot を追加する
 
-Use `axon docs declaration` for the offline procedure and examples. Keep the destination edit set explicit. Export the external Entity separately; copy its id, base, title and complete observed mapping into destination references.entities, add kind from its source issues/groups list, and omit key/description. Never invent snapshot values or add the target to the destination edit set merely to resolve an ID.
+offline の手順と例には `axon docs declaration` を使う。destination edit set を明示したままにする。external Entity を別途 export し、その id、base、title、完全な observed mapping を destination の references.entities に copy し、source の issues/groups list から kind を追加して key/description は省略する。snapshot value を創作したり、ID を解決するためだけに target を destination edit set へ加えたりしない。
 
-Include exactly the snapshots needed by destination relations and observed AfterEntity targets, recursively through reference observed states. Reuse required source references.entities records, not all source records or relations. Destination readonly relations belong to external owners pointing into the destination edit set; preserve them from its export. Remove snapshots that are no longer required. Adding a correct required snapshot is not editing the referenced Entity.
+destination relation と observed AfterEntity target に必要な snapshot だけを含める。参照先の observed state がさらに参照する Entity も再帰的にたどる。すべての source record や relation ではなく、必要な source references.entities record を再利用する。destination の readonly relation は destination edit set を指す external owner に属するため、その export から保持する。不要になった snapshot は削除する。正しく必要な snapshot の追加は、参照先 Entity の編集ではない。
 
-New owners and existing Undecided owners can own editable edges to fixed external parents/prerequisites. After prepare/check/apply/check, require no remaining changes and verify external declaration/Control values are unchanged (new incoming edges may appear in their exports).
+new owner と既存の Undecided owner は、固定された external parent/prerequisite への editable edge を所有できる。prepare/check/apply/check 後、残りの変更がないことを要求し、external declaration/Control value が不変であることを検証する（その export に新しい incoming edge が現れる場合はある）。
 
-A missing file ID is not proof of absence from active storage. Check the ID and export its snapshot. To establish storage absence, verify the active root; for a stale or incorrect reference base preserve and compare a fresh export, and return unresolved conflicts. A matching-base snapshot mismatch requires restoring exported kind/title/observed, not changing external state.
+file に ID がないことは active storage に存在しない証拠ではない。ID を確認して snapshot を export する。storage に存在しないことを立証するには active root を検証する。stale または不正な reference base では fresh export を保存・比較し、未解決 conflict を返す。base が一致する snapshot の mismatch では external state を変えず、export 済み kind/title/observed を復元する必要がある。
 
-## Canonicalize or apply
+## canonicalize または apply
 
-Work on a private temporary copy when the caller-owned source must remain recoverable. `axon import prepare` discards comments and rewrites canonical YAML.
+呼び出し側所有の source を recoverable に保つ必要がある場合、private temporary copy で作業する。`axon import prepare` は comment を破棄し canonical YAML に書き換える。
 
-1. Run `axon import prepare <working-file>` as a standalone artifact mutation.
-2. Inspect the rewritten YAML, including the editable set, allocated IDs, owned relationships, readonly relationships, and external snapshots.
-3. Run `axon import check <working-file>`. Review all errors, warnings, structural changes, and derived impact before continuing.
-4. For canonicalization only, replace the requested destination after verifying that the source has not changed. Report `storage result: not applied` and stop.
-5. For storage application, confirm that the checked working file has not changed, then run `axon import apply <working-file>` as a standalone storage mutation.
-6. Run `axon import check <working-file>` again and require success with no remaining changes. Verify the changed Entities and relevant derived effects.
+1. `axon import prepare <working-file>` を単独の artifact mutation として実行する。
+2. editable set、割り当て ID、owned relation、readonly relation、external snapshot を含む書き換え後の YAML を調査する。
+3. `axon import check <working-file>` を実行する。続行前にすべての error、warning、構造変更、導出影響を review する。
+4. canonicalization だけの場合、source が変わっていないことを検証してから要求された destination を置き換える。`storage result: not applied` と報告して停止する。
+5. storage へ適用する場合、check 済み working file が変わっていないことを確認し、`axon import apply <working-file>` を単独の storage mutation として実行する。
+6. `axon import check <working-file>` を再実行し、残りの変更なしで成功することを要求する。変更した Entity と関係する導出作用を検証する。
 
-## Conflicts and uncertain results
+## conflict と不確かな結果
 
-Do not run `prepare` over a stale file to conceal a fingerprint conflict. Preserve the stale file, obtain a fresh export, and return the conflicting declaration fields and relationships to the calling workflow. Do not invent an automatic merge policy.
+fingerprint conflict を隠すため stale file に `prepare` を実行しない。stale file を保存し、fresh export を取得して、conflict する declaration field と関係を呼び出し側 workflow に返す。自動 merge policy を創作しない。
 
-If storage application succeeded but the declaration-file rewrite failed, keep the exact file and run the same `axon import apply` again. Axon accepts that retry only when active storage already matches the complete declared result.
+storage への適用が成功し declaration file の rewrite が失敗した場合、正確な file を保持し、同じ `axon import apply` を再実行する。Axon がこの再試行を受け入れるのは、active storage がすでに完全な declared result と一致する場合だけである。
 
-If command completion is unknown, first confirm that the process ended and keep the working file unchanged. Reconcile its readonly snapshots and owned values with current storage. Retry only the same preserved apply file under Axon's recovery contract; otherwise report `storage result: unknown`.
+command の完了が不明な場合、まず process の終了を確認し、working file を変更せず保持する。その readonly snapshot と owned value を current storage と照合する。Axon の recovery contract に従い、同じ保存済み apply file だけを再試行する。それ以外では `storage result: unknown` と報告する。
 
-Delete only temporary files created by this operation, and only after their storage and artifact outcomes are known. Report the exact path and recovery purpose of any retained file.
+この操作で作成した temporary file だけを、その storage と artifact の結果が判明した後にだけ削除する。保持した file は正確な path と recovery purpose を報告する。

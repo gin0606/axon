@@ -1,34 +1,34 @@
 ---
 name: plan
-description: Register a new Issue or Group as Accepted with a complete plan declaration. Use when adoption and declaration content are already supplied; not for unresolved capture, existing-Entity decisions, or implementation.
+description: 完全な計画 declaration を持つ新規 Issue または Group を Accepted として登録する。採用判断と declaration 内容がすでに与えられている場合に使い、未解決事項の記録、既存 Entity の判断、実装には使わない。
 ---
 
-# Register an accepted Axon Entity
+# 採用済みの Axon Entity を登録する
 
-Use `axon-kit:conventions`. Read its model, creation, and mutation contracts before creating an Entity.
+`axon-kit:conventions` を使う。Entity を作成する前に、そのモデル、作成、mutation contract を読む。
 
-## Input contract
+## 入力 contract
 
-The caller supplies the adoption decision, intended kind, complete declaration, Resurface condition, and any transition reasons it wants recorded. This capability may improve wording without changing meaning. It must not substitute its own adoption decision, choose whether another Entity should be reused, expand the plan, or begin implementation.
+呼び出し側が、採用判断、意図する kind、完全な declaration、Resurface condition、および記録したい transition reason があればそれを与える。この capability は意味を変えず表現を改善してよい。呼び出し側の採用判断を独自の判断に置き換えること、別 Entity を再利用するかの選択、計画の拡張、実装の開始は行わない。
 
-If the supplied declaration is incomplete or ambiguous, return the missing input without writing.
+与えられた declaration が不完全または曖昧な場合は、書き込まず不足している入力を返す。
 
-## Build the complete declaration
+## 完全な declaration を組み立てる
 
-Use an Issue for one accepted work item and a Group for an explicit plan boundary containing multiple Entities. The declaration should let a later implementer recover why the work exists and what makes it complete without the creating conversation.
+1 つの採用済み作業項目には Issue、複数の Entity を含む明示的な計画境界には Group を使う。declaration は、後の実装者が作成時の会話なしに、作業が存在する理由と完了条件を復元できる内容にする。
 
-Use only the declaration content and relationships supplied by the caller. Put future investigation and implementation results in Notes, not in the initial description.
+呼び出し側が与えた declaration 内容と関係だけを使う。将来の調査・実装結果は初期 description ではなく Note に置く。
 
-Before mutation, reread the proposed declaration without conversational context. If this capability would have to supply a material requirement or structural decision, return the missing input instead of writing.
+mutation の前に、会話 context なしで提案する declaration を読み直す。この capability が重要な要件または構造上の判断を補う必要がある場合は、書き込まず不足している入力を返す。
 
-## Create and verify
+## 作成して検証する
 
-Run `axon plan <title>` for an Issue or `axon group plan <title>` for a Group. Include `--parent <group-id>`, repeat `--needs <entity-id>` for each outgoing dependency, and supply the initial description through `-m <description>` or `-F <snapshot>`. Apply the mutation contract's frozen-input rule before using a file or stdin.
+Issue には `axon plan <title>`、Group には `axon group plan <title>` を実行する。`--parent <group-id>` を含め、outgoing dependency ごとに `--needs <entity-id>` を繰り返し、初期 description を `-m <description>` または `-F <snapshot>` で与える。file または stdin を使う前に、mutation contract の入力固定規則を適用する。
 
-Use the supplied initial condition: omit condition options for `Always`, or choose exactly one of `--manual`, `--at <YYYY-MM-DD>`, `--after <entity-id>`, or `--command <shell-string>`. IDs accept full IDs or unique suffixes. These inputs, the Entity, and its first complete Revision are saved atomically. Do not stage through capture merely to configure already-supplied dependencies or a condition. Initial values do not create transition history and creation has no reason option; do not fabricate transitions to attach a reason. Explicitly requested real transitions remain separate operations.
+与えられた初期 condition を使う。`Always` では condition option を省略し、それ以外では `--manual`、`--at <YYYY-MM-DD>`、`--after <entity-id>`、`--command <shell-string>` のいずれか 1 つだけを選ぶ。ID には完全な ID または一意な suffix を指定できる。これらの入力、Entity、最初の完全な Revision は atomic に保存される。与えられた dependency や condition を設定するためだけに capture を経由しない。初期値は transition history を作らず、作成には reason option もない。reason を付けるために transition を捏造しない。明示的に要求された実際の transition は別操作のままとする。
 
-Initial Command strings are saved without execution. Verify using `axon show <id> --skip-command-evaluation` so confirmation does not execute an external command. Report readiness as unevaluated when applicable; evaluate it separately only when the caller needs that observation.
+初期 Command 文字列は実行せず保存される。確認で外部 command を実行しないよう、`axon show <id> --skip-command-evaluation` で検証する。該当する場合、readiness は未評価として報告し、呼び出し側がその観測を必要とするときだけ別途評価する。
 
-On a clear creation failure, no partial Entity is left. Reconcile an uncertain outcome through the creation contract before any retry.
+明確な作成失敗では部分的な Entity は残らない。不確かな結果は、再試行の前に作成 contract に従って照合する。
 
-After adoption, read the Entity context and the newly recorded Declaration Revision. Verify the fixed declaration, `Progress=NotStarted`, `Disposition=Accepted`, intended Resurface condition, parent, dependencies, no claim, and zero decision/progress transitions. Return the ID, kind, declaration summary, readiness impact, changed storage artifacts when relevant, and storage-result classification. Do not start the Entity.
+採用後、Entity context と新しく記録された Declaration Revision を読む。固定された declaration、`Progress=NotStarted`、`Disposition=Accepted`、意図した Resurface condition、parent、dependency、claim がないこと、decision/progress transition が 0 件であることを検証する。ID、kind、declaration の要約、readiness への影響、該当する場合は変更された storage artifact、storage 結果の分類を返す。Entity を開始しない。

@@ -1,43 +1,43 @@
 ---
 name: add-note
-description: Append supplemental information to an existing Issue or Group as an immutable Note without changing its declaration or Control state. Use for a requested Note, established result, correction, or handoff; not for declaration edits, state changes, or new Entities.
+description: 既存 Issue または Group の declaration や Control state を変えず、補足情報を immutable な Note として追記する。要求された Note、確定した結果、訂正、handoff に使い、declaration 編集、状態変更、新規 Entity には使わない。
 ---
 
-# Append one Axon Note
+# Axon Note を 1 件追記する
 
-Use `axon-kit:conventions`. Read its model and mutation contracts before adding a Note.
+`axon-kit:conventions` を使う。Note を追加する前に、そのモデルと mutation contract を読む。
 
-## Accept only supplemental information
+## 補足情報だけを受け入れる
 
-Read the target context needed to classify the information. A Note may record investigation or implementation results, constraints learned later, a correction, or a useful handoff. It must not change what the Entity is or its current Control state.
+情報を分類するために必要な対象 context を読む。Note には調査・実装結果、後から判明した制約、訂正、有用な handoff を記録できる。Note によって Entity の定義や現在の Control state を変更してはならない。
 
-- Route title, description, parent, or outgoing dependency changes to `axon-kit:triage`.
-- Route Progress, Disposition, Resurface condition, or claim changes to the capability that owns that state.
-- Keep a state-change reason in typed history; do not repeat it as a Note.
-- Correct an old Note by appending a new Note that identifies the original by its stable ID. Never edit or delete the original.
+- title、description、parent、outgoing dependency の変更は `axon-kit:triage` に渡す。
+- Progress、Disposition、Resurface condition、claim の変更は、その状態を所有する capability に渡す。
+- 状態変更の reason は typed history に置き、Note として重複させない。
+- 古い Note の訂正は、元の Note を stable ID で特定する新しい Note の追記で行う。元の Note を編集・削除しない。
 
-The calling request or workflow supplies the target and Note content. It may ask this capability to phrase established facts, but this capability does not invent a decision or choose a target. Return `input required` if the target, information class, or represented decision is unresolved.
+呼び出し側の依頼または workflow が対象と Note 内容を与える。この capability に確定した事実の表現を整えるよう求めてもよいが、capability は判断を創作せず、対象も選ばない。対象、情報 class、表現する判断が未解決の場合は `input required` を返す。
 
-## Freeze the append input
+## 追記入力を固定する
 
-Fix the exact Note body. Before the first append attempt, run `axon actor` in the same environment and working directory as the append to observe the current actor label. This works before the first Note and does not open Axon storage or create a record. Environment or directory changes after observation can change the next operation’s actor; past Notes or claims do not guarantee the current label. When using `-F` or stdin, preserve the bytes and record their digest as required by the mutation contract.
+正確な Note 本文を固定する。最初の追記試行前に、追記と同じ environment と working directory で `axon actor` を実行し、現在の actor label を観測する。これは最初の Note より前でも機能し、Axon storage を開かず record も作成しない。観測後に environment または directory が変わると次の操作の actor も変わりうる。過去の Note や claim は現在の label を保証しない。`-F` または stdin を使う場合は、mutation contract に従って byte 列を保存し digest を記録する。
 
-The actor is a display and investigation label, not a unique session ID, authentication or a lock. Multiple Codex or other agent sessions can share it. Never create a Note or start work merely to discover the actor.
+actor は表示・調査用の label であり、一意な session ID、認証、lock ではない。複数の Codex または他の agent session が共有しうる。actor を知るためだけに Note を作成したり作業を開始したりしない。
 
-Read `axon note list <id>` immediately before the append and record the count and complete set of stable IDs, using an empty set when no Notes exist.
+追記の直前に `axon note list <id>` を読み、件数と stable ID の完全な集合を記録する。Note がなければ空集合を使う。
 
-## Append once and verify
+## 1 回だけ追記して検証する
 
-Run `axon note add <id> -m <body>` or the equivalent `-F <snapshot>` as one standalone mutation.
+`axon note add <id> -m <body>` または同等の `-F <snapshot>` を、単独の mutation として実行する。
 
-On observed success, record the returned Note ID and never repeat the append. Read `axon note show <id> <note-id>` to verify the body, actor, and timestamp.
+成功を観測したら、返された Note ID を記録し、追記を繰り返さない。`axon note show <id> <note-id>` を読み、本文、actor、timestamp を検証する。
 
-If the append clearly failed, do not retry without resolving its cause. If its outcome is unknown:
+追記が明確に失敗した場合、原因を解消せず再試行しない。結果が不明な場合は次を行う。
 
-1. Confirm the original process ended.
-2. List every Note ID absent from the recorded pre-append set; ID order is not creation order.
-3. Read each candidate and compare both frozen body and actor.
-4. Actor agreement alone does not establish ownership. Treat one matching new ID and frozen body/actor as success only when the evidence establishes the append outcome. Multiple matches or otherwise inconclusive evidence mean `storage result: unknown`; preserve unrelated concurrent Notes.
-5. Only when every later Note was observed and none matches may the same frozen append be retried once. Reconcile that attempt by the same rule and do not retry again.
+1. 元の process が終了したことを確認する。
+2. 追記前に記録した集合になかった Note ID をすべて列挙する。ID 順は作成順ではない。
+3. 各候補を読み、固定した本文と actor の両方を比較する。
+4. actor の一致だけでは所有を立証できない。固定した本文と actor の両方に一致する新しい Note が 1 件だけ見つかった場合でも、証拠が追記結果を立証するときだけ成功とみなす。複数件が一致する場合や、証拠だけでは結論できない場合は `storage result: unknown` とし、無関係な concurrent Note を保存する。
+5. 後続の Note をすべて観測し、一致が 1 件もない場合だけ、同じ固定済み追記を 1 回再試行できる。その試行も同じ規則で照合し、それ以上再試行しない。
 
-Return the Note ID and summary and report concurrent Notes separately. Retain the input snapshot when the storage outcome remains unknown.
+Note ID と要約を返し、concurrent Note は別途報告する。storage 結果が不明のままなら入力 snapshot を保持する。

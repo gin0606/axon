@@ -1,74 +1,78 @@
-# Axon model contract
+# Axon モデル contract
 
-Read this reference when an operation needs to interpret or change Entity data.
+操作で Entity data の解釈または変更が必要なとき、この reference を読む。
 
-## Entity and state axes
+## Entity と状態軸
 
-Axon has two Entity kinds, Issue and Group. Both have a stable ID and the same three independent state axes:
+Axon には Issue と Group の 2 種類の Entity kind がある。どちらも stable ID と、同じ 3 つの独立した状態軸を持つ。
 
-- Progress: `NotStarted`, `InProgress`, or `Ended`
-- Disposition: `Undecided`, `Accepted`, or `Rejected`
-- Resurface condition: `Always`, `AtDate`, `AfterEntity`, `Manual`, or `Command`
+- Progress: `NotStarted`、`InProgress`、`Ended`
+- Disposition: `Undecided`、`Accepted`、`Rejected`
+- Resurface condition: `Always`、`AtDate`、`AfterEntity`、`Manual`、`Command`
 
-Do not use one axis as a proxy for another. A command that changes Progress must not silently change Disposition or Resurface condition, and the reverse also applies.
+1 つの軸を別の軸の代用にしない。Progress を変える command は Disposition や Resurface condition を暗黙に変えてはならず、逆も同様である。
 
-An Entity is terminal when its Progress is `Ended` or its Disposition is `Rejected`. `ready`, `blocked`, `orphaned`, `surfaced`, `terminal`, active scope, blocking causes, and Group completion facts are derived from stored state and relationships; do not treat them as independently editable data.
+Entity は Progress が `Ended` または Disposition が `Rejected` のとき terminal である。`ready`、`blocked`、`orphaned`、`surfaced`、`terminal`、active scope、blocking cause、Group completion fact は保存済み state と関係から導出される。独立して編集可能な data として扱わない。
 
-`ready` means that an Entity is in active scope, `NotStarted`, `Accepted`, surfaced, not blocked, and not orphaned. `triage` includes an Entity only when all four conditions hold: it is non-terminal, its own Resurface condition is satisfied (surfaced), it is in active scope (all ancestor Group activation gates are open), and it is `Undecided` or orphaned. These definitions do not assign the decision or work to a human or an agent.
+`ready` は Entity が active scope 内、`NotStarted`、`Accepted`、surfaced、not blocked、not orphaned であることを意味する。`triage` が Entity を含むのは、non-terminal、自身の Resurface condition を満たす（surfaced）、active scope 内（すべての ancestor Group の activation gate が開いている）、`Undecided` または orphaned、という 4 条件をすべて満たす場合だけである。これらの定義は判断や作業を人または agent に割り当てない。
 
-`Manual` remains unsurfaced until explicitly replaced or cleared with `axon when clear`. It has no payload and changes neither Progress, Disposition, nor claim. A Manual Group closes descendant active scope without changing descendant state. A root Entity is always in active scope but is absent from `triage` while its own condition is Manual; a surfaced child is absent while an ancestor gate is closed. Undecided or orphaned Entities enter `triage` when all four conditions hold.
+`Manual` は明示的に置き換えるか `axon when clear` で clear するまで unsurfaced のままである。payload を持たず、Progress、Disposition、claim のいずれも変更しない。Manual Group は descendant state を変えずに descendant の active scope を閉じる。root Entity は常に active scope 内だが、自身の condition が Manual の間は `triage` に現れない。surfaced child も ancestor gate が閉じている間は現れない。Undecided または orphaned Entity は 4 条件すべてを満たすと `triage` に入る。
 
-`Command` stores a shell string, not its observed result. Queries that need derived status can run it: exit 0 satisfies the condition, exit 1 does not, and other exits, signals, or spawn failures fail the Axon command. Results are shared within one invocation and reevaluated next time; satisfaction can revert without changing Progress, Disposition, or claim. Clearing or correcting the condition does not require successful evaluation. See `axon when command --help` for the execution contract.
+`Command` は観測結果ではなく shell 文字列を保存する。導出 status が必要な query はこれを実行できる。exit 0 は condition を満たし、exit 1 は満たさず、その他の exit、signal、spawn failure は Axon command を失敗させる。結果は 1 invocation 内で共有され、次回は再評価される。Progress、Disposition、claim を変えなくても、condition の充足結果は後の評価で覆りうる。condition の clear または訂正に評価成功は不要である。実行 contract は `axon when command --help` を参照する。
 
-## Information ownership
+## 情報の所有範囲
 
-An Entity's plan declaration consists only of:
+Entity の plan declaration は次の要素だけで構成される。
 
 - title
 - description
 - parent Group
-- outgoing dependencies
+- outgoing dependency
 
-Progress, Disposition, Resurface condition, and claim are Control state. Decision and progress reasons belong to their typed history. `ready` and the other derived facts are observations, not declaration or state fields.
+Progress、Disposition、Resurface condition、claim は Control state である。decision reason と progress reason はそれぞれの typed history に属する。`ready` などの導出 fact は観測値であり、declaration や state field ではない。
 
-An `Undecided` Entity has a draft declaration that can be edited. An `Accepted` or `Rejected` Entity has a fixed declaration. To change a fixed declaration, return it to `Undecided`, edit and verify the complete draft, then apply the intended final Disposition separately. Preserve any reasons supplied for those transitions in typed history.
+`Undecided` Entity は編集可能な draft declaration を持つ。`Accepted` または `Rejected` Entity は固定された declaration を持つ。固定 declaration を変更するには `Undecided` に戻し、完全な draft を編集・検証してから、意図する最終 Disposition を別途適用する。それらの transition に与えられた reason は typed history に保存する。
 
-Initial creation may supply dependencies and a condition atomically. It preserves NotStarted without a claim and records initial values without fabricated transitions; Accepted creation captures the complete declaration in its first Revision, while Undecided creation has none. Initial Command strings are not executed for saving or confirmation.
+初期作成では dependency と condition を atomic に与えられる。claim のない NotStarted を保ち、架空の transition なしに初期値を記録する。Accepted での作成は最初の Revision に完全な declaration を記録し、Undecided での作成には Revision がない。初期 Command 文字列は保存時にも確認時にも実行されない。
 
-Each accepted or rejected declaration is preserved as an immutable Declaration Revision. A Note is append-only supplemental information that does not change the declaration or Control state. Investigation results, implementation results, constraints learned later, and handoff details belong in Notes. Do not use description as an activity log, use a Note to simulate a state change, edit an old Note, or duplicate a state-change reason in a Note.
+accepted または rejected の各 declaration は immutable な Declaration Revision として保存される。Note は declaration や Control state を変更しない append-only の補足情報である。調査結果、実装結果、後から判明した制約、handoff の詳細は Note に属する。description を activity log にしたり、Note で状態変更を模倣したり、古い Note を編集したり、状態変更 reason を Note に重複させたりしない。
 
 ## Entity context
 
-Before changing an existing Entity, read `axon show <id> --skip-command-evaluation` and inspect the saved fields relevant to the requested operation. Read Declaration Revisions, Notes, and typed history when the request changes or depends on the information they preserve. Evaluate derived conditions separately when the operation requires them. Do not infer missing context from a frontier listing.
+既存 Entity を変更する前に `axon show <id> --skip-command-evaluation` を読み、要求された操作に関係する保存済み field を調査する。依頼が Declaration Revision、Note、typed history の保持情報を変更する、またはそれに依存する場合は、それらを読む。操作に必要な導出 condition は別途評価する。frontier listing から不足 context を推測しない。
 
-Inspect related Entities when their state or declaration can change the operation's validity or a consequence the caller needs to understand. Use `axon list --skip-command-evaluation` when a complete saved-state inventory, including inactive Entities, is required; evaluate conditions separately only when the derived observation matters. `ready` and `triage` are frontiers, not complete inventories. Absence from `triage` does not mean an Entity is missing or its creation/update failed; do not repeat creation on that evidence. Use `axon show <id> --skip-command-evaluation` for saved state and then a normal derived query when readiness, surfacing, or active-scope evaluation is required. `status` summarizes plans, saved claims, candidates, and waits; it is not a complete inventory.
+関連 Entity の state または declaration が操作の validity や呼び出し側が理解すべき結果を変えうる場合、それらを調査する。inactive Entity を含む完全な saved-state inventory が必要なら `axon list --skip-command-evaluation` を使い、導出された観測が重要な場合だけ condition を別途評価する。
 
-## Relationships and Groups
+`ready` と `triage` は frontier であり完全な inventory ではない。`triage` にないことは Entity の不在や作成・更新失敗を意味しない。その証拠だけで作成を繰り返さない。
 
-Dependencies are prerequisites. A dependency is satisfied when its target is `Ended` and not `Rejected`; a rejected target makes the dependent orphaned. `AfterEntity` is a schedule condition instead: an ended or rejected target makes the waiter surfaced.
+saved state には `axon show <id> --skip-command-evaluation` を使い、readiness、surfacing、active-scope の評価が必要なら通常の derived query を続けて使う。`status` は plan、保存済み claim、candidate、wait を要約するが、完全な inventory ではない。
 
-A Group is an explicit plan Entity, not a tag. Starting it opens its activation gate but does not start descendants. A Group can be done only while `InProgress` and after every descendant is terminal. Releasing a Group requires zero `InProgress` descendants. Rejecting a Group makes the Group terminal and closes its active scope but does not mutate descendant state. Non-terminal descendants below it can remain as a stable inactive saved state; their visibility alone does not require rejection, release, or other cleanup. When a saved claim or its external work actually needs a disposition, report the observed claim and the available per-Entity choices without changing descendants automatically.
+## 関係と Group
 
-Do not automatically start descendants, finish an ancestor Group, move children, or rewrite dependencies as a side effect of another capability. Return those possible next operations to the calling workflow.
+Dependency は prerequisite である。target が `Ended` かつ `Rejected` でないとき dependency は満たされ、rejected target は dependent を orphaned にする。一方、`AfterEntity` は schedule condition であり、ended または rejected の target は waiter を surfaced にする。
 
-## Inspect without executing external conditions
+Group は tag ではなく明示的な plan Entity である。開始すると activation gate が開くが descendant は開始しない。Group を done にできるのは `InProgress` で、すべての descendant が terminal になった後だけである。Group の release には `InProgress` descendant が 0 件である必要がある。Group を reject すると Group は terminal になり active scope が閉じるが、descendant state は変更しない。配下の non-terminal descendant は安定した inactive saved state として残りうる。可視であることだけを理由に reject、release、その他 cleanup を要求しない。保存済み claim またはその外部作業に実際に disposition が必要なときは、descendant を自動変更せず、観測した claim と Entity ごとの選択肢を報告する。
 
-Use `axon list --skip-command-evaluation` or `axon show <id> --skip-command-evaluation`
-when only saved information is needed, or when a Command condition fails or does not finish.
-These forms execute no Command, including ancestor, descendant, and related conditions.
-`unevaluated` is a read-time observation, not false or a stored state. Other conditions
-remain evaluable. This option can be combined with `--trace-conditions` but emits no
-Command trace; it does not establish readiness for a lifecycle mutation. Normal reads
-and lifecycle checks continue to evaluate conditions.
+別 capability の副作用として descendant を自動開始したり、ancestor Group を完了したり、child を移動したり、dependency を書き換えたりしない。それらの可能な次操作を呼び出し側 workflow に返す。
 
-Use `--trace-conditions` only when the caller needs the evaluation evidence. It emits each executed shell string plus captured stdout and stderr without redaction or truncation; do not expose or persist sensitive output unnecessarily. An abnormal exit can fail the Axon invocation without producing a trace block.
+## 外部 condition を実行せず調査する
 
-### Literal saved-text search
+保存済み情報だけが必要な場合、または Command condition が失敗・未完了の場合は、
+`axon list --skip-command-evaluation` または `axon show <id> --skip-command-evaluation` を使う。
+これらは ancestor、descendant、関連 condition を含め、Command を一切実行しない。
+`unevaluated` は read 時の観測であり、false や保存済み state ではない。他の condition は
+引き続き評価できる。この option は `--trace-conditions` と併用できるが Command trace を
+出力せず、lifecycle mutation に対する readiness を立証しない。通常の read と lifecycle check は
+引き続き condition を評価する。
 
-`axon list --search <text>` searches the current title and description plus every Note body. It is case-sensitive literal matching: regex, `%`, and `_` have no special meaning, and actors, history, and Revisions are excluded. It combines with kind and saved-state filters before Command evaluation. Add `--skip-command-evaluation` for a pure saved-text search. Matched locations and stable Note IDs identify where to inspect the full content. Search can narrow candidates, but absence from one literal query does not prove semantic uniqueness.
+呼び出し側が評価証拠を必要とする場合だけ `--trace-conditions` を使う。実行した各 shell 文字列と取得した stdout/stderr を redaction や truncation なしで出力するため、sensitive な出力を不必要に公開・保存しない。abnormal exit は trace block を出さずに Axon invocation を失敗させる場合がある。
 
-### Inventory state filters
+### 保存済み text の literal search
 
-`axon list` without filters includes every Entity. Combine `--progress not-started|in-progress|ended`, `--disposition undecided|accepted|rejected`, `--terminal=true|false`, and `--kind issue|group` with AND; each option is accepted once. Terminal means Ended or Rejected (including their overlap). Omit `--terminal` to include both. Matches retain inactive and unsurfaced Entities: `--terminal=false` is not the ready/triage frontier or active scope. Empty matches succeed. Filters preserve saved state, history, claims, row format, and ordering.
+`axon list --search <text>` は現在の title と description、およびすべての Note 本文を検索する。case-sensitive な literal matching であり、regex、`%`、`_` に特別な意味はなく、actor、history、Revision は対象外である。Command evaluation の前に kind filter と saved-state filter と組み合わせられる。純粋な saved-text search には `--skip-command-evaluation` を加える。一致箇所と stable Note ID により、完全な内容を調査する場所を特定できる。search で候補を絞れるが、1 つの literal query に存在しないことは意味的な一意性を証明しない。
 
-For example, use `axon list --progress not-started --disposition accepted` for unstarted accepted plans, `axon list --disposition rejected` for rejected Entities, or `axon list --progress ended` for ended work. Saved-state filters run before row/Command evaluation; required ancestors of retained rows can still be evaluated. Add `--skip-command-evaluation` to prevent all Command execution.
+### inventory の state filter
+
+filter なしの `axon list` はすべての Entity を含む。`--progress not-started|in-progress|ended`、`--disposition undecided|accepted|rejected`、`--terminal=true|false`、`--kind issue|group` は AND で組み合わせ、各 option は 1 回指定できる。Terminal は Ended または Rejected（両方の場合を含む）を意味する。両方を含めるには `--terminal` を省略する。一致結果には inactive と unsurfaced の Entity も残る。`--terminal=false` は ready/triage frontier や active scope ではない。一致 0 件でも成功する。filter は saved state、history、claim、row format、ordering を保持する。
+
+たとえば、未開始の accepted plan には `axon list --progress not-started --disposition accepted`、rejected Entity には `axon list --disposition rejected`、ended work には `axon list --progress ended` を使う。Saved-state filter は row/Command evaluation の前に実行され、保持された row に必要な ancestor は引き続き評価されうる。すべての Command 実行を防ぐには `--skip-command-evaluation` を加える。

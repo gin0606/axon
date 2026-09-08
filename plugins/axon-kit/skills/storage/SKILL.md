@@ -1,32 +1,32 @@
 ---
 name: storage
-description: Initialize an Axon management root or validate a complete file snapshot. Use for backend selection, init recovery, Git ignore consequences, and axon storage check; not for migration, merge conflict resolution, or ordinary Entity operations.
+description: Axon management root を初期化する、または完全な file snapshot を検証する。backend 選択、init の復旧、Git ignore への影響、axon storage check に使い、migration、merge conflict 解消、通常の Entity 操作には使わない。
 ---
 
-# Initialize or validate Axon storage
+# Axon storage を初期化または検証する
 
-Use `axon-kit:conventions`. Read its mutation contract before `init`; `storage check` is read-only.
+`axon-kit:conventions` を使う。`init` の前に mutation contract を読む。`storage check` は read-only である。
 
-## Keep backend selection explicit
+## backend 選択を明示する
 
-The caller supplies `sqlite` or `file` when creating a new root. Do not choose between shared SQLite and worktree-local tracked state as an implementation detail. One backend per Git repository is supported; mixed backends across worktrees are an unsupported operational state, not an invitation to create a selector.
+新しい root を作成するとき、呼び出し側が `sqlite` または `file` を与える。共有 SQLite と worktree-local な tracked state の選択を実装詳細として決めない。Git repository ごとに 1 backend だけが support される。worktree 間で backend が混在する状態は未 support の運用状態であり、selector を作る理由にはならない。
 
-There is no backend configuration file. In Git, file storage is at the current worktree root's `.axon/state.jsonl`; SQLite is at `.axon/axon.db` under the parent of the Git common directory and is shared without worktree registration. Outside Git, normal discovery stops at the nearest ancestor with either canonical state or `init.pending`. Both canonical paths present is a mixed-backend error; neither is uninitialized. Corruption, unreadable state, or a pending marker stops discovery without fallback. Do not infer the authority of files outside these prescribed paths.
+backend 設定 file はない。Git 内では、file storage は現在の worktree root の `.axon/state.jsonl`、SQLite は Git common directory の parent 配下の `.axon/axon.db` にあり、worktree 登録なしで共有される。Git 外の通常の discovery は、canonical state または `init.pending` がある最も近い ancestor で止まる。両方の canonical path がある場合は mixed-backend error、どちらもなければ uninitialized である。破損、読み取り不能な状態、pending marker がある場合、fallback せず discovery を停止する。規定された path 外の file が authoritative だと推測しない。
 
-## Initialize without replacing state
+## 状態を置き換えず初期化する
 
-Run `axon init --backend <sqlite|file> [prefix]` as one standalone mutation. Omit the prefix only when the storage-root directory name is the intended ID prefix. Git-free init uses the current directory and rejects nesting under an existing management root.
+`axon init --backend <sqlite|file> [prefix]` を単独の mutation として実行する。storage-root directory 名を意図する ID prefix とする場合だけ prefix を省略する。Git 外での init は current directory を使い、既存 management root 配下への入れ子を拒否する。
 
-Init is new-only: existing state, including valid state, is rejected. It does not reset, upgrade, switch backend, or repair. SQLite creates the database without changing ignore files. File init, inside or outside Git, creates or complements `.axon/.gitignore` (ignore all except itself and `state.jsonl`) and root `.gitattributes` (`/.axon/state.jsonl merge=axon`).
+Init は新規作成専用であり、valid なものを含め、既存の state があれば拒否する。reset、upgrade、backend 切り替え、repair は行わない。SQLite は ignore file を変えず database を作成する。File init は Git の内外を問わず、`.axon/.gitignore`（自身と `state.jsonl` 以外を ignore）と root の `.gitattributes`（`/.axon/state.jsonl merge=axon`）を作成または補完する。
 
-Report created or updated state and integration artifacts. Init does not register the driver, stage, or commit. Preserve unrelated rules. An outer or global ignore hiding `.axon/` is user policy, not an initialization error or authorization to alter that policy.
+作成または更新した state と integration artifact を報告する。Init は driver の登録、stage、commit を行わない。無関係な rule を保持する。上位階層または global の ignore 設定が `.axon/` を隠していることは user policy であり、初期化 error ではなく、その policy を変更する許可にもならない。
 
-After partial initialization, preserve state, pending marker, temporary and integration files. Stop writers and inspect the reported paths. Complete auxiliary files manually only with appropriate authority and valid state; remove the marker only after verification. Otherwise preserve the incomplete box elsewhere before a fresh init. Re-running init is not recovery, and existing state must never be overwritten.
+部分的な初期化の後は、state、pending marker、temporary file、integration file を保持する。writer を停止し、報告された path を調査する。適切な権限と valid な state がある場合だけ auxiliary file を手動で完成させ、検証後にだけ marker を削除する。それ以外では、新しく init する前に不完全な management root を別の場所へ保存する。init の再実行は復旧ではなく、既存 state を上書きしてはならない。
 
-## Validate a complete snapshot
+## 完全な snapshot を検証する
 
-Run `axon storage check <snapshot>` for a read-only validation of canonical file storage. It does not use backend discovery, the Git index, or Command evaluation. A successful check establishes structural validity of those exact bytes; it does not make the snapshot authoritative or prove that another file has not drifted.
+canonical file storage を read-only で検証するには `axon storage check <snapshot>` を実行する。backend discovery、Git index、Command evaluation は使わない。check の成功はその byte 列の構造的 validity を立証するが、snapshot を authoritative にしたり、別 file に drift がないことを証明したりはしない。
 
-## Return
+## 結果を返す
 
-Return the selected mode, management root or snapshot, backend and authoritative paths when applicable, store identity, validation result, Git-ignore consequences, changed artifacts, and storage-result classification. Do not migrate data, register the Git driver, stage, commit, or switch a live root unless a separate authorized workflow owns that effect.
+選択した mode、management root または snapshot、該当する場合は backend と authoritative path、store identity、検証結果、Git ignore への影響、変更した artifact、storage 結果の分類を返す。別の許可済み workflow がその作用を所有しない限り、data migration、Git driver 登録、stage、commit、live root 切り替えを行わない。

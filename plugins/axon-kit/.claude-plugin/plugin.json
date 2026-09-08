@@ -1,6 +1,6 @@
 {
   "name": "axon-kit",
-  "description": "Reusable Axon model and safe tracker-operation capabilities",
+  "description": "再利用可能な Axon モデルと、安全に tracker を操作するための capability 集",
   "version": "0.1.0",
   "author": {
     "name": "gin0606"

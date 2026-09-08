@@ -1,7 +1,7 @@
 {
   "name": "axon-kit",
-  "version": "0.1.0+codex.20260907032457",
-  "description": "Reusable Axon model and safe tracker-operation capabilities",
+  "version": "0.1.0+codex.20260908040044",
+  "description": "再利用可能な Axon モデルと、安全に tracker を操作するための capability 集",
   "author": {
     "name": "gin0606"
   },
@@ -9,8 +9,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Axon Skill Kit",
-    "shortDescription": "Compose safe Axon tracker operations.",
-    "longDescription": "Provides Axon's state and information contracts plus focused capabilities for Entity operations, backend initialization, migration, and file-snapshot merge without imposing an implementation workflow.",
+    "shortDescription": "安全な Axon tracker 操作を組み立てます。",
+    "longDescription": "実装 workflow を規定せず、Axon の状態・情報 contract と、Entity 操作、backend 初期化、migration、file snapshot merge に特化した capability を提供します。",
     "developerName": "gin0606",
     "category": "Productivity",
     "capabilities": [
@@ -18,9 +18,9 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Capture this concern in Axon without deciding it.",
-      "Register this accepted plan in Axon.",
-      "Safely initialize, migrate, or merge this Axon storage."
+      "この懸念を判断せず Axon に記録してください。",
+      "この採用済み計画を Axon に登録してください。",
+      "この Axon storage を安全に初期化、移行、または merge してください。"
     ]
   }
 }

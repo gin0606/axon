@@ -1,18 +1,18 @@
 ---
 name: declaration
-description: Review, export, canonicalize, check, or apply strict YAML plan declarations for any number of Entities. Use for declaration artifacts and axon export/import; not for ordinary single-Entity changes or implementation of the CLI itself.
+description: 任意件数の Entity に対する厳密な YAML plan declaration を review、export、canonicalize、check、apply する。declaration artifact と axon export/import に使い、通常の単一 Entity 変更や CLI 自体の実装には使わない。
 ---
 
-# Operate on Axon declaration files
+# Axon declaration file を操作する
 
-Use `axon-kit:conventions`. Read its model contract and, before any storage or artifact mutation, its mutation contract.
+`axon-kit:conventions` を使う。そのモデル contract を読み、storage または artifact の mutation 前には mutation contract も読む。
 
-This capability owns declaration artifacts and the `axon export` / `axon import prepare|check|apply` mechanics. A declaration can edit only title, description, parent, and outgoing dependencies. It cannot edit Progress, Disposition, Resurface condition, claim, Declaration Revision, Note, typed history, incoming relationships, or external Entity values. Required external snapshots can be added/removed as owned relations change; this does not expand the edit set.
+この capability は declaration artifact と `axon export` / `axon import prepare|check|apply` の mechanics を所有する。declaration が編集できるのは title、description、parent、outgoing dependency だけである。Progress、Disposition、Resurface condition、claim、Declaration Revision、Note、typed history、incoming relation、external Entity value は編集できない。owned relation の変更に伴って必要な external snapshot を追加・削除できるが、edit set は拡張されない。
 
-The calling request or workflow supplies the operation mode and the intended declaration content. Artifact editing does not authorize storage application, and storage application does not authorize a Control-state change.
+呼び出し側の依頼または workflow が operation mode と意図する declaration 内容を与える。artifact の編集は storage への適用を許可せず、storage への適用は Control state の変更を許可しない。
 
-Read [the declaration workflow](references/workflow.md) completely before exporting to a file, canonicalizing, applying, or recovering from a conflict or uncertain result. A read-only `axon import check <file>` needs only the boundaries in this entrypoint. Export, check, and apply can evaluate Command conditions needed for observed snapshots or derived impact and have no skip option; inspect saved Command strings first and use an appropriate execution environment.
+file への export、canonicalize、apply、conflict または不確かな結果からの復旧を行う前に、[declaration workflow](references/workflow.md)を最後まで読む。read-only の `axon import check <file>` には、この entrypoint の境界だけが必要である。Export、check、apply は、観測 snapshot または導出影響に必要な Command condition を評価でき、skip option はない。最初に保存済み Command 文字列を調査し、適切な実行 environment を使う。
 
-Use `axon-kit:triage` when a fixed declaration must first return to `Undecided`, and use `axon-kit:plan` or `axon-kit:capture` for single-Entity creation with supplied content and initial conditions that the declaration format cannot represent. Those capabilities remain separate from artifact mechanics.
+固定済み declaration をまず `Undecided` に戻す必要がある場合は `axon-kit:triage` を使う。与えられた内容と、declaration format では表現できない初期 condition を持つ単一 Entity の作成には `axon-kit:plan` または `axon-kit:capture` を使う。これらの capability は artifact mechanics から分離したままとする。
 
-Return the operation mode, storage-result classification, changed IDs and kinds, key-to-ID mappings, relevant structural and derived impact, warnings, changed storage artifacts, artifact status, and any recovery file that must be retained.
+operation mode、storage 結果の分類、変更した ID と kind、key-to-ID mapping、関係する構造的・導出的影響、warning、変更した storage artifact、artifact status、保持すべき recovery file を返す。

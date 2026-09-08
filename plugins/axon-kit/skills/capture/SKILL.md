@@ -1,39 +1,39 @@
 ---
 name: capture
-description: Create a new Issue or Group as Undecided without adopting it. Use for an unresolved concern or plan boundary; not for accepted registration, existing-Entity changes, or implementation.
+description: 未解決の懸念や計画境界を、採用せず Undecided の新規 Issue または Group として作成する。Accepted での登録、既存 Entity の変更、実装には使わない。
 ---
 
-# Capture an undecided Axon Entity
+# 未判断の Axon Entity を記録する
 
-Use `axon-kit:conventions`. Read its model, creation, and mutation contracts before creating an Entity.
+`axon-kit:conventions` を使う。Entity を作成する前に、そのモデル、作成、mutation contract を読む。
 
-## Input contract
+## 入力 contract
 
-The caller supplies an unresolved concern or plan boundary, the intended kind, and any intended parent, outgoing dependencies, or initial Resurface condition. This capability may make the wording durable, but it does not adopt the work, start it, schedule it, choose whether another Entity should be reused, or invent structural relationships. It can save a supplied initial condition; route later Resurface-condition changes to `axon-kit:triage`.
+呼び出し側が、未解決の懸念または計画境界と、意図する kind を与える。該当する場合は、意図する parent、outgoing dependency、初期 Resurface condition も与える。この capability は記述を後から読んでも通じる表現へ整えてよいが、作業の採用や開始、schedule、別 Entity を再利用するかの選択、構造的な関係の創作は行わない。与えられた初期 condition は保存できるが、後からの Resurface condition 変更は `axon-kit:triage` に渡す。
 
-Use an Issue for one concern or prospective work item. Use a Group only for an explicit plan boundary that may contain multiple Entities. If the intended kind or relationship is unresolved and affects the declaration, return `input required` without writing.
+1 つの懸念または作業候補には Issue を使う。複数の Entity を含みうる明示的な計画境界にだけ Group を使う。意図する kind または関係が未解決で declaration に影響する場合は、書き込まず `input required` を返す。
 
-## Build the draft declaration
+## draft declaration を組み立てる
 
-Use the declaration content supplied by the caller without adding a decision or requirement. Do not use the description for future findings or handoffs.
+判断や要件を加えず、呼び出し側から与えられた declaration 内容を使う。将来の finding や handoff のために description を使わない。
 
-Before mutation, reread the proposed declaration as if the later reader had no access to the current conversation. Resolve unexplained local shorthand and ambiguous references.
+mutation の前に、後から読む人が現在の会話を参照できないものとして、提案する declaration を読み直す。説明のないローカルな略語や曖昧な参照を解消する。
 
-## Create and verify
+## 作成して検証する
 
-Run `axon capture <title>` for an Issue or `axon group capture <title>` for a Group. Include an already-decided parent with `--parent <group-id>`, repeat `--needs <entity-id>` for outgoing dependencies, and supply the initial description with `-m <description>` or `-F <snapshot>`. Apply the mutation contract's frozen-input rule before using a file or stdin.
+Issue には `axon capture <title>`、Group には `axon group capture <title>` を実行する。決定済みの parent は `--parent <group-id>`、outgoing dependency はそれぞれ `--needs <entity-id>`、初期 description は `-m <description>` または `-F <snapshot>` で与える。file または stdin を使う前に、mutation contract の入力固定規則を適用する。
 
-For a supplied initial condition, choose exactly one of `--manual`, `--at <YYYY-MM-DD>`, `--after <entity-id>`, or `--command <shell-string>`; omission means `Always`. IDs accept full IDs or unique suffixes. The complete draft and initial condition are saved atomically, without a Revision or fabricated state transitions. Do not invent a schedule or relationship that the caller did not supply.
+初期 condition が与えられた場合、`--manual`、`--at <YYYY-MM-DD>`、`--after <entity-id>`、`--command <shell-string>` のいずれか 1 つだけを選ぶ。省略時は `Always` となる。ID には完全な ID または一意な suffix を指定できる。完全な draft と初期 condition は、Revision や架空の状態 transition を作らず atomic に保存される。呼び出し側が与えていない schedule や関係を創作しない。
 
-Initial Command strings are not executed during creation. Use `axon show <id> --skip-command-evaluation` to verify the saved result without executing them.
+初期 Command 文字列は作成時に実行されない。これを実行せず保存結果を検証するには `axon show <id> --skip-command-evaluation` を使う。
 
-For a newly created Entity, read the complete final Entity context and verify:
+新しく作成した Entity について完全な最終 context を読み、次を検証する。
 
-- the intended kind, title, description, parent, and outgoing dependencies
-- `Progress=NotStarted`, `Disposition=Undecided`, and the supplied Resurface condition (default `Always`)
-- zero Declaration Revisions
-- no claim, Note, or decision/progress transition history
+- 意図した kind、title、description、parent、outgoing dependency
+- `Progress=NotStarted`、`Disposition=Undecided`、与えられた Resurface condition（default は `Always`）
+- Declaration Revision が 0 件
+- claim、Note、decision/progress transition history がないこと
 
-A clear creation failure leaves no partial Entity. Reconcile an uncertain create through the creation contract before any retry; do not create a replacement merely because the Entity is absent from a frontier.
+明確な作成失敗では部分的な Entity は残らない。不確かな作成結果は、再試行の前に作成 contract に従って照合する。frontier に Entity がないという理由だけで代替 Entity を作らない。
 
-Return the created ID, kind, complete declaration summary, changed storage artifacts when relevant, and storage-result classification. Do not continue into adoption or work.
+作成した ID、kind、完全な declaration の要約、該当する場合は変更された storage artifact、storage 結果の分類を返す。採用や作業へ続けない。

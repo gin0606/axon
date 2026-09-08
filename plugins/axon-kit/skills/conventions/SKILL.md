@@ -1,31 +1,31 @@
 ---
 name: conventions
-description: Provide Axon's shared state and information model plus the safety contract for CLI operations. Use as the foundation for other axon-kit skills and consuming workflows; it does not define collaboration policy, work selection, implementation, or commits.
+description: Axon の共通の状態・情報モデルと CLI 操作の安全性 contract を提供する。他の axon-kit skill と利用側 workflow の基盤として使い、協業方針、作業選択、実装、commit は規定しない。
 ---
 
-# Axon operation contract
+# Axon 操作 contract
 
-Use this skill as the shared foundation for every Axon capability. It defines what Axon data means and how an authorized operation is executed without losing history, duplicating non-idempotent effects, or mistaking an uncertain storage result for success.
+この skill をすべての Axon capability の共通基盤として使う。Axon データの意味と、履歴を失わず、非 idempotent な作用を重複させず、不確かな storage 結果を成功と誤認せずに、許可された操作を実行する方法を定める。
 
-## Keep the layers separate
+## 層を分離する
 
-- Axon defines Entity state, relationships, derived facts, and information ownership. It does not decide whether a human or an agent chooses work, makes a disposition decision, or reviews a result.
-- The calling request or workflow supplies the target, intended effect, and authority for that effect. An `axon-kit` capability performs only that effect and returns control; it does not infer permission for later phases.
-- Repository rules and host permissions remain in force. A workflow cannot use this kit to expand its external authority.
-- Axon state synchronization does not prescribe implementation, testing, review, or commit behavior.
+- Axon は Entity の状態、関係、導出事実、情報の所有範囲を定める。人と agent のどちらが作業を選ぶか、Disposition を判断するか、結果を review するかは決めない。
+- 呼び出し側の依頼または workflow が、対象、意図する作用、その作用への権限を与える。`axon-kit` capability はその作用だけを実行して制御を返し、後続 phase への許可を推測しない。
+- repository の規則と host の権限は引き続き有効である。workflow はこの kit を使って外部への権限を拡張できない。
+- Axon の状態同期は、実装、test、review、commit のふるまいを規定しない。
 
-## Read the applicable contracts
+## 該当する contract を読む
 
-Read [the model contract](references/model.md) before interpreting an Entity, changing its declaration or Control state, or reasoning about relationships and derived facts.
+Entity を解釈する前、declaration または Control state を変更する前、関係や導出事実について判断する前に、[モデル contract](references/model.md)を読む。
 
-Read [the mutation contract](references/mutations.md) before any command that changes Axon storage or a storage-related artifact. Read-only inspection does not require that reference unless a previous mutation has an uncertain outcome.
+Axon storage または storage 関連 artifact を変更する command の前に、[mutation contract](references/mutations.md)を読む。過去の mutation の結果が不確かでない限り、read-only な調査ではこの参照は不要である。
 
-For new Issue or Group creation, also read [the creation contract](references/creation.md).
+新しい Issue または Group を作成するときは、[作成 contract](references/creation.md)も読む。
 
-## Prefer the installed CLI contract
+## インストール済み CLI の contract を優先する
 
-Use `axon help` or the relevant `axon <command> --help` when command syntax or an input contract is uncertain. Do not compensate for a disagreement between the installed CLI, its documentation, and these instructions by inventing an alternative write path. Report the mismatch so the caller can decide which version or artifact is authoritative.
+command 構文または入力 contract が不確かなときは、`axon help` または該当する `axon <command> --help` を使う。インストール済み CLI、その documentation、この指示の間に不一致がある場合、別の書き込み経路を考案して埋め合わせない。呼び出し側がどの version または artifact を正とするか決められるよう、不一致を報告する。
 
-## Return a capability result
+## capability の結果を返す
 
-Report the target IDs or storage artifacts, the requested effect, the observed final state, and any relevant frontier or relationship impact. For a mutation, classify the storage result as applied, not applied, partially applied, or unknown. Do not hide unfinished phases behind a general success message.
+対象 ID または storage artifact、要求された作用、観測した最終状態、関係する frontier または関係への影響を報告する。mutation では、storage 結果を適用済み、未適用、部分適用、不明のいずれかに分類する。未完了の phase を一般的な成功報告で隠さない。

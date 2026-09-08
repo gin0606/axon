@@ -1,37 +1,37 @@
 # Axon snapshot merge workflow
 
-Read this reference before preparing, resolving, checking, applying, or recovering an Axon file-backend merge.
+Axon file-backend merge の prepare、resolve、check、apply、recover を行う前に、この reference を読む。
 
-## Freeze complete inputs
+## 完全な入力を固定する
 
-Use three explicit complete snapshots: base, ours, and theirs. Choose an unused workspace directory and an output path outside that workspace. Preserve the exact input bytes; do not edit the workspace copies, manifest, fixed context, or output preimage.
+base、ours、theirs の明示的で完全な 3 snapshot を使う。未使用の workspace directory と、その workspace 外の output path を選ぶ。正確な入力 byte 列を保存し、workspace copy、manifest、fixed context、output preimage を編集しない。
 
-Run `axon merge prepare --base <base> --ours <ours> --theirs <theirs> --output <output> --workspace <unused-workspace>` as a standalone artifact mutation. A nonzero result can still create the workspace and preserve useful originals and diagnostics. Inspect the workspace before deciding whether the preparation was unapplied, unresolved, or unknown; do not rerun with the same workspace name.
+`axon merge prepare --base <base> --ours <ours> --theirs <theirs> --output <output> --workspace <unused-workspace>` を単独の artifact mutation として実行する。nonzero result でも workspace が作られ、有用な original と diagnostic が保存される場合がある。prepare が未適用、未解決、不明のどれかを判断する前に workspace を調査する。同じ workspace 名で再実行しない。
 
-The manifest fixes absolute input paths and digests, output and preimage, active file-store binding when applicable, and evaluation context. `choices.json` contains stable conflict and input-choice IDs, including automatic selections. `report.json` distinguishes valid, unresolved, input drift, and invalid results. A candidate is publishable only when `candidate.jsonl` and its checked metadata describe a completely valid result.
+manifest は入力の absolute path と digest、output と preimage、該当する場合は active file-store binding、evaluation context を固定する。`choices.json` は自動選択を含む stable conflict ID と input-choice ID を保持する。`report.json` は valid、unresolved、input drift、invalid の結果を区別する。`candidate.jsonl` と check 済み metadata が完全に valid な結果を示す場合だけ candidate を公開できる。
 
-## Resolve without rewriting originals
+## original を書き換えず解決する
 
-Edit only `resolution.json`. Use the manifest's input digests as choices; `ours` and `theirs` are conversational labels, not accepted identities. Base is comparison evidence and cannot be selected as the current result. Review the complete Entity bundles and relevant record IDs rather than choosing by title or latest timestamp.
+`resolution.json` だけを編集する。選択には manifest の input digest を使う。`ours` と `theirs` は会話上の label であり、選択値として指定できる識別子ではない。Base は比較証拠であり、current result として選択できない。title や最新 timestamp で選ばず、完全な Entity bundle と関係する record ID を review する。
 
-Use a repair only when the calling request or supplied decision fixes its exact effect. Supported repairs use Axon's normal guarded operations, including dependency changes, Note addition, state changes, and start with the workspace's fixed context. Do not edit historical records, fabricate a claim, or bypass the fixed-declaration transition rules. A merge conflict does not authorize a Disposition, declaration, dependency, or work-state decision.
+呼び出し側の依頼または与えられた判断によって正確な作用が確定している場合だけ repair を使う。support される repair は、dependency 変更、Note 追加、状態変更、start など Axon の通常の guarded operation を workspace の fixed context で使う。historical record の編集、claim の捏造、固定 declaration の transition rule の迂回を行わない。merge conflict は Disposition、declaration、dependency、work-state の判断を許可しない。
 
-Run `axon merge check <workspace>` after each resolution edit. It recomputes the whole candidate and invalidates earlier approval when inputs, resolution, or context drift. Inspect every remaining conflict and the resulting Entity state, relationships, history, claims, and store identity. Repeat only while new supplied decisions or verified corrections make progress.
+resolution を編集するたびに `axon merge check <workspace>` を実行する。candidate 全体を再計算し、input、resolution、context に drift があれば以前の approval を無効にする。残るすべての conflict と、結果の Entity state、関係、history、claim、store identity を調査する。新たに与えられた判断または検証済み訂正で進展がある間だけ繰り返す。
 
-## Publish only the checked candidate
+## check 済み candidate だけを公開する
 
-Immediately before publication, verify that inputs, resolution, checked candidate, destination preimage, backend, store identity, and output path still match the workspace. Run `axon merge apply <workspace>` as one standalone storage mutation.
+公開の直前に、input、resolution、check 済み candidate、destination preimage、backend、store identity、output path が引き続き workspace と一致することを検証する。`axon merge apply <workspace>` を単独の storage mutation として実行する。
 
-Apply publishes only the last checked valid candidate. It does not stage the result or continue Git. Verify the output bytes and store identity, run `axon storage check <output>`, and inspect the affected Entities. If the same candidate is already at the output, a verified repeat can be a no-op; do not infer that case without matching the preserved candidate and destination.
+Apply は最後に check した valid candidate だけを公開する。結果の stage や Git の続行は行わない。output byte 列と store identity を検証し、`axon storage check <output>` を実行して、影響を受ける Entity を調査する。同じ candidate がすでに output にある場合、検証済みの再実行は no-op になりうるが、保存済み candidate と destination の一致なしにその場合だと推測しない。
 
-If publication may have reached the destination but completion is unknown, preserve the entire workspace and output. Confirm the process ended and compare the candidate, destination, backend, and recorded digests before any retry. Never replace the destination manually or regenerate the workspace to conceal drift.
+公開が destination に到達した可能性はあるが完了が不明な場合、workspace と output の全体を保存する。再試行前に process の終了を確認し、candidate、destination、backend、記録済み digest を比較する。destination を手動で置き換えたり、drift を隠すため workspace を再生成したりしない。
 
-## Recover a Git-driver conflict
+## Git driver conflict を復旧する
 
-The low-level driver can preserve raw inputs under `.axon/merge/<id>` while its `%A` output is a Git temporary path. Do not apply that driver workspace directly to `.axon/state.jsonl`. Build a new explicit workspace using the preserved complete inputs or verified Git stage 1/2/3 snapshots, and set the actual state file as output.
+low-level driver は raw input を `.axon/merge/<id>` 配下に保存できる一方、その `%A` output は Git temporary path である。その driver workspace を `.axon/state.jsonl` に直接 apply しない。保存済みの完全な input または検証済み Git stage 1/2/3 snapshot から新しい明示的な workspace を作り、実際の state file を output に設定する。
 
-After a validated explicit apply, run `axon storage check` on the state file. The caller, not this capability, decides and performs `git add`, commit, merge or rebase continuation, or abort. Normal Axon operations remain blocked while the index entry is unmerged.
+検証済みの明示的 apply 後、state file に対して `axon storage check` を実行する。`git add`、commit、merge/rebase の続行、abort を判断・実行するのはこの capability ではなく呼び出し側である。index entry が unmerged の間、通常の Axon 操作は引き続き blocked となる。
 
-## Stop conditions
+## 停止条件
 
-Stop and retain the workspace when a semantic choice is missing, a repair would expand authority, required input is incomplete, drift cannot be reconciled, publication is unknown, or repeated checking makes no progress. Report which inputs are authoritative, which phases completed, and what decision or observation is required next.
+意味上の選択が不足、repair が権限を拡張、必要な入力が不完全、drift を照合不能、公開結果が不明、または check の反復に進展がない場合は停止して workspace を保持する。どの入力が authoritative か、どの phase が完了したか、次に必要な判断または観測を報告する。

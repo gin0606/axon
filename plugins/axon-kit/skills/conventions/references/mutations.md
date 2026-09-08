@@ -1,37 +1,37 @@
 # Axon mutation contract
 
-Read this reference before changing Axon storage or a storage-related artifact, or when reconciling a mutation whose outcome is uncertain.
+Axon storage または storage 関連 artifact を変更する前、または結果が不確かな mutation を照合するとき、この reference を読む。
 
-## Respect the active backend
+## active backend を尊重する
 
-Axon discovers the backend from prescribed canonical state paths, without a configuration file. File state is worktree-local; SQLite is shared across Git worktrees. Both paths present is an error; invalid or pending state stops discovery. One backend per repository is supported, without scanning other worktrees. Inspect the intended root and canonical paths before mutation; do not treat a legacy backup as authoritative.
+Axon は設定 file を使わず、規定の canonical state path から backend を発見する。File state は worktree-local、SQLite は Git worktree 間で共有される。両方の path がある場合は error で、invalid または pending な state は discovery を停止する。他の worktree を scan せず、repository ごとに 1 backend を support する。mutation の前に意図する root と canonical path を調査し、legacy backup を authoritative として扱わない。
 
-With the file backend, ordinary mutations change the active worktree's `.axon/state.jsonl`, which is intended for Git tracking and may already be tracked; `.gitattributes` and `.axon/.gitignore` belong to the same worktree-local artifact set. The mutation does not authorize staging, committing, merging, or discarding those files. Preserve unrelated working-tree changes and report the storage artifacts changed by the operation. Reads in one worktree observe only its current snapshot: they do not prove that another worktree has no divergent state or claim.
+file backend では、通常の mutation は active worktree の `.axon/state.jsonl` を変更する。これは Git tracking を意図し、すでに tracked の場合がある。`.gitattributes` と `.axon/.gitignore` は同じ worktree-local artifact set に属する。mutation はそれらの file の staging、commit、merge、破棄を許可しない。無関係な working tree 変更を保持し、操作で変更された storage artifact を報告する。1 worktree での read は現在の snapshot だけを観測し、別 worktree に divergent state や claim がないことは証明しない。
 
-With SQLite in Git, the authoritative `.axon/axon.db` is under the parent of the common Git directory and may be outside the current sandbox or worktree. When host permission is required, limit escalation to the authorized Axon command whose access requirement has been established. This includes read commands that need write access for locking or supported automatic storage updates. Permission for one command does not extend to other commands or unrelated programs; follow the host's permission process for each required operation.
+Git 内の SQLite では、authoritative な `.axon/axon.db` は common Git directory の parent 配下にあり、current sandbox または worktree 外の場合がある。host permission が必要なら、access 要件を確認済みの許可された Axon command だけに escalation を限定する。lock または support された自動 storage update のため write access が必要な read command も含む。1 command への permission は他の command や無関係な program へ拡張されない。必要な操作ごとに host の permission process に従う。
 
-If the file backend's Git index is unmerged, normal operations are intentionally rejected. Preserve the inputs and resolve and stage a validated snapshot through the storage or merge workflow; do not bypass the guard by writing the state file directly.
+file backend の Git index が unmerged の場合、通常の操作は意図的に拒否される。入力を保存し、storage または merge workflow により検証済み snapshot を解決して stage する。state file を直接書いて guard を迂回しない。
 
-## Execute one effect at a time
+## 作用を 1 つずつ実行する
 
-- Run each state-changing Axon command as a standalone shell call so another command cannot hide its exit status.
-- Keep read-only discovery and unrelated programs out of the same shell call.
-- Use the exact target and payload authorized by the caller. Do not broaden a selector, add relationships, choose another Entity, or continue into a later phase implicitly.
+- 状態を変える各 Axon command は単独の shell call として実行し、別 command が終了 status を隠さないようにする。
+- read-only discovery と無関係な program を同じ shell call に含めない。
+- 呼び出し側が許可した正確な対象と payload を使う。selector の拡大、関係の追加、別 Entity の選択、後続 phase への暗黙の進行を行わない。
 
-## Verify observed state
+## 観測した状態を検証する
 
-After a successful mutation, read the complete target or artifact state and verify the operation's postconditions. Re-read Revisions, Notes, relationships, claims, frontiers, or storage artifacts when the capability's effect can change them. Treat command output as evidence, not as a substitute for the relevant postcondition.
+mutation の成功後、対象または artifact の完全な状態を読み、操作の postcondition を検証する。capability の作用で変わりうる Revision、Note、関係、claim、frontier、storage artifact は再読する。command output は証拠として扱い、関係する postcondition の代用にはしない。
 
-If a multi-phase workflow completes only some mutations, reconcile the failed phase under the retry rules below. Correct a recoverable execution error and continue the already-authorized phases when the outcome and safe next operation are established. Stop when the outcome remains unknown, a material decision is missing, or recovery requires an unauthorized effect. Preserve the applied state and any recovery artifact, report completed and remaining phases separately, and do not automatically roll back with compensating mutations.
+multi-phase workflow が一部の mutation だけを完了した場合、以下の retry rule に従って失敗 phase を照合する。結果と安全な次操作を立証できたら、復旧可能な実行 error を訂正し、許可済み phase を続ける。結果が不明なまま、重要な判断が不足、または復旧に未許可の作用が必要なら停止する。適用済み state と recovery artifact を保存し、完了済み・残りの phase を別々に報告し、compensating mutation による自動 rollback は行わない。
 
-## Retry only after reconciliation
+## 照合後にだけ再試行する
 
-A clear failure is not permission to repeat the same command without changing its cause. If command completion or storage application is unknown, first confirm that the process has ended and inspect current state using stable IDs, record counts, actor labels, payloads, and operation-specific postconditions.
+明確な失敗は、原因を変えず同じ command を繰り返す許可ではない。command の完了または storage 適用が不明なら、まず process の終了を確認し、stable ID、record 件数、actor label、payload、操作固有の postcondition で現在の状態を調査する。
 
-After resolving the failure's cause, repeat a mutation when the capability's recovery rule or the CLI's repetition contract, together with observed current values and relevant history, establishes that repetition is safe. For example, `write`, `group set|unset`, and `dep add|rm` accept the same saved value as a successful no-op. Verify that the target, intended effect, and applicable preconditions still match the authorized request before retrying. Entity creation and Note addition remain non-idempotent and require their capability-specific duplicate checks. If the evidence cannot distinguish applied from unapplied, report the storage outcome as unknown and stop.
+失敗原因を解消した後、capability の recovery rule または CLI の repetition contract と、観測した現在値・関係する history によって繰り返しが安全だと立証できる場合に mutation を再試行する。たとえば `write`、`group set|unset`、`dep add|rm` は同じ保存値を成功した no-op として受け入れる。再試行前に、対象、意図する作用、該当する precondition が許可された依頼と引き続き一致することを検証する。Entity 作成と Note 追加は非 idempotent のままであり、capability 固有の重複 check が必要である。証拠から適用済みと未適用を区別できない場合、storage 結果を不明と報告して停止する。
 
-## Preserve input snapshots
+## 入力 snapshot を保存する
 
-For a mutation sourced from a file or stdin, preserve the exact bytes before the first attempt when later re-reading could change the payload. Record a digest when the operation's retry contract needs one, and reuse only those verified bytes for an allowed retry. Do not silently re-read a mutable source.
+file または stdin を source とする mutation で、後からの再読により payload が変わりうる場合は、最初の試行前に正確な byte 列を保存する。操作の retry contract が必要とする場合は digest を記録し、許可された再試行にはその検証済み byte 列だけを再利用する。mutable source を暗黙に再読しない。
 
-Remove a temporary snapshot only after the operation is verified as applied or not applied. Preserve its exact path and digest when it is needed to reconcile an unknown or partial result.
+temporary snapshot は、操作が適用済みまたは未適用だと検証できた後にだけ削除する。不明または部分的な結果の照合に必要なら、正確な path と digest を保存する。

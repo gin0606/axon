@@ -1,42 +1,42 @@
 ---
 name: work-state
-description: Synchronize an Entity's Progress and claim through start, release, or done. Use for an explicit lifecycle operation or from a workflow that owns the external work; it does not implement, select work, decide Disposition, or commit.
+description: start、release、done によって Entity の Progress と claim を同期する。明示的な lifecycle 操作、または外部作業を所有する workflow から使い、実装、作業選択、Disposition 判断、commit は行わない。
 ---
 
-# Synchronize Axon work state
+# Axon の作業状態を同期する
 
-Use `axon-kit:conventions`. Read its model and mutation contracts before a lifecycle mutation. Notes are a separate information operation owned by the calling request or workflow.
+`axon-kit:conventions` を使う。lifecycle mutation の前に、そのモデルと mutation contract を読む。Note は呼び出し側の依頼または workflow が所有する別の情報操作である。
 
-This capability changes only Progress and claim through `start`, `release`, or `done`. The caller owns any implementation, investigation, planning, review, and commit workflow outside Axon.
+この capability は `start`、`release`、`done` による Progress と claim だけを変更する。Axon 外の実装、調査、計画、review、commit workflow は呼び出し側が所有する。
 
 ## Start
 
-Read the Entity context and verify the target itself is `ready`. `axon start` checks readiness and acquires the claim in one transaction.
+Entity context を読み、対象自身が `ready` であることを検証する。`axon start` は 1 transaction で readiness を検査し claim を取得する。
 
-Run `axon start <id>` as a standalone mutation. Verify `Progress=InProgress`, the observed claim owner and worktree, and any Group frontier opened by the start.
+`axon start <id>` を単独の mutation として実行する。`Progress=InProgress`、観測した claim owner と worktree、start によって開いた Group frontier を検証する。
 
-If the Entity is already `InProgress`, do not steal or release its claim. Return the current owner so the calling workflow can decide whether it is resuming compatible work. If the target is Undecided, Rejected, blocked, orphaned, outside active scope, ended, or claimed elsewhere, return the exact state without changing another axis or choosing another Entity.
+Entity がすでに `InProgress` の場合、その claim を奪ったり release したりしない。呼び出し側 workflow が互換性のある作業を再開するか判断できるよう、現在の owner を返す。対象が Undecided、Rejected、blocked、orphaned、active scope 外、ended、または他で claim されている場合、別の軸を変更したり別 Entity を選んだりせず、正確な状態を返す。
 
-A Group start opens only its own activation gate. It never starts descendants. Return the newly exposed `ready` and `triage` frontier without choosing a child.
+Group の start は自身の activation gate だけを開き、descendant を開始しない。child を選ばず、新しく現れた `ready` と `triage` frontier を返す。
 
 ## Release
 
-Release changes an `InProgress` Entity back to `NotStarted` and removes its claim. The caller supplies the release request and optional reason. A release reason belongs in progress history; a supplemental handoff is a separate Note.
+Release は `InProgress` の Entity を `NotStarted` に戻し、claim を削除する。呼び出し側が release の依頼と任意の reason を与える。release reason は progress history に属し、補足の handoff は別の Note とする。
 
-For a Group, verify that it has zero `InProgress` descendants. Do not release descendants as a side effect.
+Group では `InProgress` の descendant が 0 件であることを検証する。副作用として descendant を release しない。
 
-Run `axon release <id>` with `-r <reason>` when supplied, as a standalone mutation. Verify `Progress=NotStarted`, claim removal, progress history, and relevant frontier changes.
+reason が与えられた場合は `-r <reason>` を付け、`axon release <id>` を単独の mutation として実行する。`Progress=NotStarted`、claim の削除、progress history、関係する frontier の変化を検証する。
 
 ## Done
 
-Done means no further work will be performed for this Entity. The caller supplies that lifecycle decision; this capability does not define the external workflow's completion criteria.
+Done は、この Entity に対してこれ以上作業しないことを意味する。呼び出し側がその lifecycle 判断を与え、この capability は外部 workflow の完了基準を定めない。
 
-For a Group, require every descendant to be terminal. Do not mutate descendants or automatically finish the Group when the last child becomes terminal.
+Group では、すべての descendant が terminal であることを要求する。descendant を変更せず、最後の child が terminal になったとき Group を自動的に完了しない。
 
-Before `done`, inspect dependencies, Group ancestry, and any waiter impact needed by the caller. Use `axon list --skip-command-evaluation` only when complete reverse `AfterEntity` impact is required, then evaluate relevant frontiers separately.
+`done` の前に、dependency、Group ancestry、呼び出し側が必要とする waiter への影響を調査する。逆方向の `AfterEntity` の完全な影響が必要な場合だけ `axon list --skip-command-evaluation` を使い、その後、関係する frontier を別途評価する。
 
-Run `axon done <id>` as a standalone mutation. Verify the target's ended state, claim removal, progress history, direct dependents, relevant waiters, Group ancestry, and frontier impact. Do not automatically finish an ancestor Group; return any ancestor that has become completable.
+`axon done <id>` を単独の mutation として実行する。対象の ended 状態、claim の削除、progress history、direct dependent、関係する waiter、Group ancestry、frontier への影響を検証する。ancestor Group を自動的に完了せず、完了可能になった ancestor を返す。
 
-## Return
+## 結果を返す
 
-Return the requested lifecycle effect, final Progress and claim, relevant frontier and relationship impact, changed storage artifacts when relevant, and storage-result classification. Never continue into external work or a later lifecycle effect on your own.
+要求された lifecycle の作用、最終的な Progress と claim、関係する frontier と関係への影響、該当する場合は変更された storage artifact、storage 結果の分類を返す。独自に外部作業や後続の lifecycle 作用へ進まない。
