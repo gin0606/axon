@@ -11,6 +11,25 @@ fn calls(repo: &TestRepo) -> usize {
 }
 
 #[test]
+fn skipped_show_lists_after_entity_waiters_without_running_commands() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let target = repo.plan("target");
+    let waiter = repo.plan("waiter");
+    assert_success(&repo.axon(&["when", "after", &waiter, &target]));
+    let command = repo.plan("command condition");
+    assert_success(&repo.axon(&["when", "command", &command, "echo called >> calls; exit 0"]));
+
+    let shown = repo.axon(&["show", &target, "--skip-command-evaluation"]);
+    assert_success(&shown);
+    assert!(stderr(&shown).is_empty());
+    assert!(stdout(&shown).contains(&format!(
+        "AfterEntity waiter: {waiter}  Issue  [NotStarted/Accepted]  waiter"
+    )));
+    assert_eq!(calls(&repo), 0);
+}
+
+#[test]
 fn command_is_observed_once_per_invocation_and_can_stop_surfacing() {
     let repo = TestRepo::new();
     repo.init("test");

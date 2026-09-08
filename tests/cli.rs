@@ -1502,6 +1502,91 @@ fn show_leads_with_situation_remaining_and_owned_waits() {
 }
 
 #[test]
+fn show_lists_direct_after_entity_waiters_with_saved_state() {
+    let repo = TestRepo::new();
+    repo.init("test");
+
+    let issue_target = repo.plan("issue target");
+    let dependent = repo.plan("dependency dependent");
+    repo.add_dependency(&dependent, &issue_target);
+    let issue_waiter = repo.plan("issue waiter");
+    assert_success(&repo.axon(&["when", "after", &issue_waiter, &issue_target]));
+    let inactive_parent = repo.group_plan("inactive parent");
+    let group_waiter = repo.group_plan("inactive group waiter");
+    repo.set_parent(&group_waiter, &inactive_parent);
+    assert_success(&repo.axon(&["when", "after", &group_waiter, &issue_target]));
+    let group_waiter_child =
+        created_id(&repo.axon(&["plan", "group waiter child", "--parent", &group_waiter]));
+
+    let group_target = repo.group_plan("group target");
+    let ended_issue_waiter = repo.plan("ended issue waiter");
+    assert_success(&repo.axon(&["when", "after", &ended_issue_waiter, &group_target]));
+    let rejected_group_waiter = repo.group_plan("rejected group waiter");
+    assert_success(&repo.axon(&["when", "after", &rejected_group_waiter, &group_target]));
+    assert_success(&repo.axon(&["decide", "reject", &group_target]));
+    assert_success(&repo.axon(&["start", &ended_issue_waiter]));
+    assert_success(&repo.axon(&["done", &ended_issue_waiter]));
+    assert_success(&repo.axon(&["decide", "reject", &rejected_group_waiter]));
+
+    let unrelated_target = repo.plan("unrelated target");
+    let unrelated_waiter = repo.plan("unrelated waiter");
+    assert_success(&repo.axon(&["when", "after", &unrelated_waiter, &unrelated_target]));
+    let no_waiters = repo.plan("no waiters");
+
+    for args in [
+        vec!["show", issue_target.as_str()],
+        vec!["show", issue_target.as_str(), "--skip-command-evaluation"],
+    ] {
+        let show = stdout(&repo.axon(&args));
+        assert!(
+            show.lines()
+                .any(|line| line.contains("Dependent:") && line.contains(&dependent)),
+            "{show}"
+        );
+        assert!(
+            show.lines().any(|line| line.contains("AfterEntity waiter:")
+                && line.contains(&format!(
+                    "{issue_waiter}  Issue  [NotStarted/Accepted]  issue waiter"
+                ))),
+            "{show}"
+        );
+        assert!(
+            show.lines().any(|line| line.contains("AfterEntity waiter:")
+                && line.contains(&format!(
+                    "{group_waiter}  Group  [NotStarted/Accepted]  inactive group waiter"
+                ))),
+            "{show}"
+        );
+        assert!(!show.contains(&unrelated_waiter), "{show}");
+        assert!(!show.contains(&group_waiter_child), "{show}");
+    }
+
+    for args in [
+        vec!["show", group_target.as_str()],
+        vec!["show", group_target.as_str(), "--skip-command-evaluation"],
+    ] {
+        let show = stdout(&repo.axon(&args));
+        assert!(
+            show.lines().any(|line| line.contains("AfterEntity waiter:")
+                && line.contains(&format!(
+                    "{ended_issue_waiter}  Issue  [Ended/Accepted]  ended issue waiter"
+                ))),
+            "{show}"
+        );
+        assert!(
+            show.lines().any(|line| line.contains("AfterEntity waiter:")
+                && line.contains(&format!(
+                    "{rejected_group_waiter}  Group  [NotStarted/Rejected]  rejected group waiter"
+                ))),
+            "{show}"
+        );
+    }
+
+    let no_waiters = stdout(&repo.axon(&["show", &no_waiters]));
+    assert!(!no_waiters.contains("AfterEntity waiter:"), "{no_waiters}");
+}
+
+#[test]
 fn show_distinguishes_explicit_completion_from_an_ended_group() {
     let repo = TestRepo::new();
     repo.init("test");

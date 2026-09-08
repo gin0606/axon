@@ -1697,6 +1697,12 @@ fn render_skipped_show(
             render_related_entity(dependent, decoration)
         ));
     }
+    for waiter in view.direct_after_entity_waiters(&entity.id) {
+        relations.push(format!(
+            "AfterEntity waiter: {}",
+            render_related_entity_with_state(waiter, decoration)
+        ));
+    }
     match view.observed_blocking_causes(&entity.id) {
         Some(causes) => {
             for cause in causes {
@@ -2156,6 +2162,13 @@ fn render_show(
             OUTPUT_MUTED,
         ));
     }
+    for waiter in view.direct_after_entity_waiters(&entity.id) {
+        relations.push((
+            "AfterEntity waiter:",
+            render_related_entity_with_state(waiter, decoration),
+            OUTPUT_MUTED,
+        ));
+    }
     for cause in view.blocking_causes(&entity.id)? {
         if direct_group_dependencies.contains(&cause.id) {
             continue;
@@ -2489,6 +2502,20 @@ fn render_related_entity(entity: &Entity, decoration: OutputDecoration) -> Strin
         "{}  {}  {}",
         decoration.paint(OUTPUT_ID, &entity.id),
         decoration.paint(OUTPUT_MUTED, entity.kind.label()),
+        entity.title
+    )
+}
+
+fn render_related_entity_with_state(entity: &Entity, decoration: OutputDecoration) -> String {
+    format!(
+        "{}  {}  [{}/{}]  {}",
+        decoration.paint(OUTPUT_ID, &entity.id),
+        decoration.paint(OUTPUT_MUTED, entity.kind.label()),
+        decoration.paint(progress_style(&entity.progress), entity.progress.label()),
+        decoration.paint(
+            disposition_style(entity.disposition),
+            entity.disposition.label()
+        ),
         entity.title
     )
 }

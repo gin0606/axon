@@ -29,7 +29,7 @@ description: Axon公式kitの上に、自律実行とユーザー判断の境界
 
 既存Entityを変更するときは、まず`axon show <id> --skip-command-evaluation`で保存情報を読み、判断またはdeclarationに関係するDeclaration Revisionと`axon log <id>`を確認する。readiness、surfaced、active scopeなどの導出値が判断に必要な場合だけ、通常の`show`やfrontierを別に評価する。古いNoteやRevisionを年齢だけで無関係とみなさない。
 
-terminal状態が変わるDisposition操作、`done`、または完全な波及確認が必要な操作では、dependent、Groupの祖先と子孫、active scope、`ready`、`triage`を必要な範囲で確認する。reverse `AfterEntity`の完全な影響があり得る場合は、`axon list --skip-command-evaluation`の全IDから参照元を調べる。
+terminal状態が変わるDisposition操作、`done`、または完全な波及確認が必要な操作では、対象の`axon show <id> --skip-command-evaluation`からdependent、Groupの祖先と子孫、`AfterEntity waiter`を調べ、active scope、`ready`、`triage`を必要な範囲で確認する。waiterがGroupの場合は、必要に応じてそのGroupを個別に`show`して子孫への影響を確認する。
 
 ## 新規Entityの重複を扱う
 

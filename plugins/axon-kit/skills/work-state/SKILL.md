@@ -33,7 +33,7 @@ Done は、この Entity に対してこれ以上作業しないことを意味�
 
 Group では、すべての descendant が terminal であることを要求する。descendant を変更せず、最後の child が terminal になったとき Group を自動的に完了しない。
 
-`done` の前に、dependency、Group ancestry、呼び出し側が必要とする waiter への影響を調査する。逆方向の `AfterEntity` の完全な影響が必要な場合だけ `axon list --skip-command-evaluation` を使い、その後、関係する frontier を別途評価する。
+`done` の前に対象の `axon show <id> --skip-command-evaluation` から direct dependent、Group ancestry、`AfterEntity waiter` を調査し、その後、関係する frontier を別途評価する。waiter が Group の場合、必要に応じてその Group を個別に `show` して子孫への影響を確認する。
 
 `axon done <id>` を単独の mutation として実行する。対象の ended 状態、claim の削除、progress history、direct dependent、関係する waiter、Group ancestry、frontier への影響を検証する。ancestor Group を自動的に完了せず、完了可能になった ancestor を返す。
 

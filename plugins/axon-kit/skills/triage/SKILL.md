@@ -19,7 +19,7 @@ description: 既存 Entity を調査し、与えられた Disposition、Resurfac
 - declaration だけの訂正
 - Resurface condition の変更
 
-Disposition 変更を提案または適用する前に、現在と提案後の terminal status を比較する。direct dependent、Group context、active scope、関係する frontier を調査する。呼び出し側が逆方向の `AfterEntity` の完全な影響を必要とする場合、Axon には直接の reverse-waiter query がないため `axon list --skip-command-evaluation` を使う。必要に応じて影響を受ける frontier を別途評価する。
+Disposition 変更を提案または適用する前に、現在と提案後の terminal status を比較する。対象の `axon show <id> --skip-command-evaluation` から direct dependent、Group context、`AfterEntity waiter` を調査する。waiter が Group の場合は必要に応じてその Group を個別に `show` し、影響を受ける frontier を別途評価する。
 
 orphaned Entity では、prerequisite の repair と reject を同じ操作として扱わない。
 

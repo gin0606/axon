@@ -290,6 +290,20 @@ impl View {
             .collect()
     }
 
+    pub fn direct_after_entity_waiters(&self, id: &EntityId) -> Vec<&Entity> {
+        let mut waiters = self
+            .iter()
+            .filter(|entity| {
+                matches!(
+                    &entity.resurface_condition,
+                    ResurfaceCondition::AfterEntity(target) if target == id
+                )
+            })
+            .collect::<Vec<_>>();
+        waiters.sort_by(|a, b| a.id.cmp(&b.id));
+        waiters
+    }
+
     pub fn ancestors(&self, id: &EntityId) -> Vec<&Entity> {
         let mut result = Vec::new();
         let mut seen = HashSet::new();
