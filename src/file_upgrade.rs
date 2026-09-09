@@ -155,10 +155,10 @@ fn run(
     })?;
     eprintln!(
         "Schema updated: {} {:?} -> {:?}; backup: {}",
-        path.display(),
+        crate::display::human_text(path.display()),
         from,
         target,
-        backup.display()
+        crate::display::human_text(backup.display())
     );
     Ok(())
 }

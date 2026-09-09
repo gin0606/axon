@@ -1,3 +1,4 @@
+use crate::display;
 use crate::domain::*;
 use chrono::Utc;
 use std::cell::RefCell;
@@ -65,8 +66,9 @@ impl Evaluation {
             .output()
             .map_err(|error| {
                 EvaluationError(format!(
-                    "{}: Command({script:?}) could not start in {}: {error}",
+                    "{}: Command({}) could not start in {}: {error}",
                     entity.id,
+                    display::human_text(script),
                     self.root.display()
                 ))
             })?;
@@ -76,8 +78,9 @@ impl Evaluation {
                 Ok(code == 0)
             }
             _ => Err(EvaluationError(format!(
-                "{}: Command({script:?}) failed: {}\nstdout:\n{}\nstderr:\n{}",
+                "{}: Command({}) failed: {}\nstdout:\n{}\nstderr:\n{}",
                 entity.id,
+                display::human_text(script),
                 output.status,
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
@@ -97,7 +100,7 @@ impl Evaluation {
         let mut block = format!(
             "Condition trace: {}\ncwd: {}\nresult: {result} (exit {code})\n",
             entity.id,
-            self.root.display()
+            display::human_text(self.root.display())
         );
         append_trace_stream(&mut block, "stdout", stdout);
         append_trace_stream(&mut block, "stderr", stderr);
@@ -123,7 +126,7 @@ fn append_trace_stream(block: &mut String, label: &str, bytes: &[u8]) {
         block.push_str("(empty)\n");
         return;
     }
-    block.push_str(&String::from_utf8_lossy(bytes));
+    block.push_str(&display::human_text(String::from_utf8_lossy(bytes)));
     if !bytes.ends_with(b"\n") {
         block.push('\n');
     }
