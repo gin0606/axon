@@ -466,7 +466,7 @@ fn terminate_group(
         };
     }
     if matches!(term_result, Ok(SignalDelivery::AlreadyGone)) {
-        let _ = child.try_wait();
+        reap_child(child);
         drain_after_termination(receiver, stdout, stderr, streams_open);
         return "process group exited before TERM".to_string();
     }
