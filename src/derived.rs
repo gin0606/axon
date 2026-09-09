@@ -1,3 +1,4 @@
+use crate::display;
 use crate::domain::*;
 use chrono::Utc;
 use std::cell::RefCell;
@@ -83,8 +84,9 @@ impl Evaluation {
     fn run_command(&self, entity: &Entity, script: &str) -> Result<bool> {
         let interrupt_guard = InterruptGuard::install().map_err(|error| {
             EvaluationError(format!(
-                "{}: Command({script:?}) could not install Ctrl-C handling: {error}",
-                entity.id
+                "{}: Command({}) could not install Ctrl-C handling: {error}",
+                entity.id,
+                display::human_text(script)
             ))
         })?;
         let mut command = Command::new("/bin/sh");
@@ -97,8 +99,9 @@ impl Evaluation {
             .process_group(0);
         let child = command.spawn().map_err(|error| {
             EvaluationError(format!(
-                "{}: Command({script:?}) could not start in {}: {error}",
+                "{}: Command({}) could not start in {}: {error}",
                 entity.id,
+                display::human_text(script),
                 self.root.display()
             ))
         })?;
@@ -119,8 +122,9 @@ impl Evaluation {
                 ),
             };
             EvaluationError(format!(
-                "{}: Command({script:?}) evaluation failed: {detail}\nstdout:\n{}\nstderr:\n{}",
+                "{}: Command({}) evaluation failed: {detail}\nstdout:\n{}\nstderr:\n{}",
                 entity.id,
+                display::human_text(script),
                 failure.stdout.render(),
                 failure.stderr.render()
             ))
@@ -131,8 +135,9 @@ impl Evaluation {
                 Ok(code == 0)
             }
             _ => Err(EvaluationError(format!(
-                "{}: Command({script:?}) failed: {}\nstdout:\n{}\nstderr:\n{}",
+                "{}: Command({}) failed: {}\nstdout:\n{}\nstderr:\n{}",
                 entity.id,
+                display::human_text(script),
                 outcome.status,
                 outcome.stdout.render(),
                 outcome.stderr.render()
@@ -158,7 +163,7 @@ impl Evaluation {
         let mut block = format!(
             "Condition trace: {}\ncwd: {}\nresult: {result} (exit {code})\n",
             entity.id,
-            self.root.display()
+            display::human_text(self.root.display())
         );
         append_trace_stream(&mut block, "stdout", stdout);
         append_trace_stream(&mut block, "stderr", stderr);
@@ -227,12 +232,12 @@ impl CapturedStream {
         if self.total == 0 {
             return "(empty)".to_string();
         }
-        let mut rendered = String::from_utf8_lossy(&self.head).into_owned();
+        let mut rendered = display::human_text(String::from_utf8_lossy(&self.head));
         let omitted = self.omitted();
         if omitted > 0 {
             rendered.push_str(&format!("\n... {omitted} bytes omitted ...\n"));
         }
-        rendered.push_str(&String::from_utf8_lossy(&self.tail));
+        rendered.push_str(&display::human_text(String::from_utf8_lossy(&self.tail)));
         rendered
     }
 }

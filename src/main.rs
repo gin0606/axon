@@ -155,7 +155,7 @@ struct ConditionEvaluationArgs {
     /// Trace evaluated Command conditions to stderr, including unredacted child output
     #[arg(
         long,
-        long_help = "Trace each Command condition actually evaluated by this invocation to stderr. Each block includes the Entity ID, working directory, exit result, and captured stdout/stderr. Each stream retains at most 64 KiB; larger output shows its first and last 32 KiB and the omitted byte count. Captured output is not redacted; non-UTF-8 bytes are rendered lossily, empty streams are marked (empty), and a trace write failure fails the Axon invocation. Memoized references and abnormal exits do not produce a trace block."
+        long_help = "Trace each Command condition actually evaluated by this invocation to stderr. Each block includes the Entity ID, working directory, exit result, and captured stdout/stderr. Each stream retains at most 64 KiB; larger output shows its first and last 32 KiB and the omitted byte count. Captured output is not redacted; non-UTF-8 bytes are rendered lossily and terminal controls use visible escapes, empty streams are marked (empty), and a trace write failure fails the Axon invocation. Memoized references and abnormal exits do not produce a trace block."
     )]
     trace_conditions: bool,
     /// Maximum duration for each Command condition (default: 30s)
@@ -799,16 +799,28 @@ fn main() {
                 return;
             }
             let decoration = current_error_decoration();
-            eprintln!("{} {error}", decoration.paint(OUTPUT_FAILURE, "Error:"));
+            eprintln!(
+                "{} {}",
+                decoration.paint(OUTPUT_FAILURE, "Error:"),
+                display::human_text(error)
+            );
             std::process::exit(1);
         }
         return;
     }
     if let Err(error) = run(args) {
         let decoration = current_error_decoration();
-        eprintln!("{} {error}", decoration.paint(OUTPUT_FAILURE, "Error:"));
+        eprintln!(
+            "{} {}",
+            decoration.paint(OUTPUT_FAILURE, "Error:"),
+            display::human_text(&error)
+        );
         if let Some(guidance) = error_guidance(error.as_ref()) {
-            eprintln!("{} {guidance}", decoration.paint(OUTPUT_HEADING, "Help:"));
+            eprintln!(
+                "{} {}",
+                decoration.paint(OUTPUT_HEADING, "Help:"),
+                display::human_text(guidance)
+            );
         }
         std::process::exit(1);
     }
@@ -834,7 +846,7 @@ fn open_store_with_evaluation(evaluation: ConditionEvaluationArgs) -> db::Result
                 eprintln!(
                     "{} database v{from} -> v{to}; backup: {}. Migration committed; continuing command.",
                     decoration.paint(OUTPUT_POSITIVE, "Migrated"),
-                    backup.display()
+                    display::human_text(backup.display())
                 );
             }
         },
@@ -1022,9 +1034,21 @@ fn mutation_context(matches: &clap::ArgMatches) -> Option<String> {
 fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> {
     let mut matches = cli_command()
         .try_get_matches_from(&args)
-        .unwrap_or_else(|mut error| {
-            free_text_error_guidance(&args, &mut error);
-            error.exit()
+        .unwrap_or_else(|error| {
+            let safe_args = args
+                .iter()
+                .map(|argument| display::human_text(argument.to_string_lossy()).into())
+                .collect::<Vec<std::ffi::OsString>>();
+            match cli_command().try_get_matches_from(&safe_args) {
+                Err(mut safe_error) => {
+                    free_text_error_guidance(&safe_args, &mut safe_error);
+                    safe_error.exit()
+                }
+                Ok(_) => {
+                    eprint!("{}", display::human_text(&error));
+                    std::process::exit(error.exit_code())
+                }
+            }
         });
     let context = mutation_context(&matches);
     let result = (|| match Cli::from_arg_matches_mut(&mut matches)?.command {
@@ -1039,14 +1063,15 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
             {
                 write_plain_output(&format!(
                     "Converted: {}\nSource backup: {}\nManifest: {}\nSource unchanged; verify the output before switching the live database.\n",
-                    database.display(),
-                    backup.display(),
-                    output.join("manifest.yaml").display()
+                    display::human_text(database.display()),
+                    display::human_text(backup.display()),
+                    display::human_text(output.join("manifest.yaml").display())
                 )).map_err(|e| operation_error("confirmation output", e, format!("\nApplied: migration output at {}", output.display())))?;
             }
             Ok(())
         }
-        Command::Actor => write_plain_output(&format!("{}\n", actor::actor())).map_err(Into::into),
+        Command::Actor => write_plain_output(&format!("{}\n", display::human_text(actor::actor())))
+            .map_err(Into::into),
         Command::Init { prefix, backend } => cmd_init(prefix, backend),
         Command::Storage { command } => merge_cli::storage(command),
         Command::Merge { command } => merge_cli::run(command),
@@ -1144,7 +1169,7 @@ fn cmd_import(command: ImportCmd) -> Result<(), Box<dyn std::error::Error>> {
                 &format!(
                     "{}  {}\n",
                     decoration.paint(OUTPUT_POSITIVE, "Prepared"),
-                    file.display()
+                    display::human_text(file.display())
                 ),
                 decoration,
                 &format!("declaration file prepared at {}", file.display()),
@@ -1164,7 +1189,7 @@ fn cmd_import(command: ImportCmd) -> Result<(), Box<dyn std::error::Error>> {
             output.push_str(&format!(
                 "{}  {}\n",
                 decoration.paint(OUTPUT_POSITIVE, "Applied"),
-                file.display()
+                display::human_text(file.display())
             ));
             write_mutation_output(
                 &output,
@@ -1177,7 +1202,7 @@ fn cmd_import(command: ImportCmd) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn decorate_import_report(report: &str, decoration: OutputDecoration) -> String {
-    report
+    display::human_text(report)
         .split_inclusive('\n')
         .map(|line| {
             let (body, newline) = line
@@ -1207,7 +1232,7 @@ fn cmd_init(
         &format!(
             "{}  {}\n{}  {prefix}-xxxxxx\n",
             decoration.paint(OUTPUT_POSITIVE, "Initialized"),
-            path.display(),
+            display::human_text(path.display()),
             decoration.paint(OUTPUT_MUTED, "Entity ID format:"),
         ),
         decoration,
@@ -1259,7 +1284,7 @@ fn cmd_create(
             decoration.paint(OUTPUT_POSITIVE, "Created"),
             decoration.paint(OUTPUT_MUTED, kind.label()),
             decoration.paint(disposition_style(disposition), disposition.label()),
-            entity.title,
+            display::human_text(&entity.title),
         ),
         decoration,
         &format!("{} Created", entity.id),
@@ -1345,7 +1370,7 @@ fn render_entity_identity(entity: &Entity, decoration: OutputDecoration) -> Stri
         "{}  {}  {}",
         decoration.paint(OUTPUT_ID, &entity.id),
         decoration.paint(OUTPUT_MUTED, entity.kind.label()),
-        entity.title
+        display::human_text(&entity.title)
     )
 }
 
@@ -1478,8 +1503,8 @@ fn render_claim_row(entity: &Entity, claim: &Claim, decoration: OutputDecoration
         render_inline_fields(
             decoration,
             vec![
-                ("Claim", claim.actor.clone()),
-                ("Worktree", claim.worktree.clone()),
+                ("Claim", display::human_text(&claim.actor)),
+                ("Worktree", display::human_text(&claim.worktree)),
                 ("Started", display::timestamp(&claim.at)),
             ]
         )
@@ -1489,11 +1514,11 @@ fn render_claim_row(entity: &Entity, claim: &Claim, decoration: OutputDecoration
 fn claim_details(claim: &Claim, decoration: OutputDecoration) -> String {
     format!(
         "{}  {}",
-        claim.actor,
+        display::human_text(&claim.actor),
         render_inline_fields(
             decoration,
             vec![
-                ("Worktree", claim.worktree.clone()),
+                ("Worktree", display::human_text(&claim.worktree)),
                 ("Started", display::timestamp(&claim.at)),
             ],
         )
@@ -1519,7 +1544,7 @@ fn cmd_start(
                 "{}  {} {}",
                 decoration.paint(OUTPUT_ACTIVE, "Started"),
                 decoration.paint(OUTPUT_MUTED, "Claim:"),
-                claim.actor
+                display::human_text(&claim.actor)
             )
         },
         Style::new(),
@@ -1610,7 +1635,7 @@ fn render_skipped_row(view: &View, entity: &Entity, decoration: OutputDecoration
         entity.kind.label(),
         entity.progress.label(),
         entity.disposition.label(),
-        entity.title,
+        display::human_text(&entity.title),
         observed_label(view.observed_surfaced(entity)),
         observed_label(view.observed_active_scope(&entity.id)),
         observed_label(view.observed_ready(entity)),
@@ -1632,7 +1657,7 @@ fn render_skipped_show(
             "{}  {}  {}",
             decoration.paint(OUTPUT_ID, &entity.id),
             entity.kind.label(),
-            entity.title
+            display::human_text(&entity.title)
         ),
         "Command evaluation skipped; unevaluated values are not false.".to_string(),
     ]];
@@ -1641,7 +1666,7 @@ fn render_skipped_show(
             "Progress: {}  Disposition: {}  Resurface condition: {}",
             entity.progress.label(),
             entity.disposition.label(),
-            entity.resurface_condition.label()
+            display::human_text(entity.resurface_condition.label())
         ),
         format!(
             "Active scope: {}  Surfaced: {}  Ready: {}  Blocked: {}  Orphaned: {}",
@@ -1680,7 +1705,7 @@ fn render_skipped_show(
             format!(
                 "{}  Resurface condition: {}  Surfaced: {}  Descendant gate open: {}",
                 render_related_entity(ancestor, decoration),
-                ancestor.resurface_condition.label(),
+                display::human_text(ancestor.resurface_condition.label()),
                 observed_label(view.observed_surfaced(ancestor)),
                 observed_label(view.observed_gate(ancestor))
             )
@@ -1720,7 +1745,7 @@ fn render_skipped_show(
                     "{}{}  Resurface condition: {}",
                     "  ".repeat(*depth),
                     render_skipped_row(view, child, decoration).trim_end(),
-                    child.resurface_condition.label()
+                    display::human_text(child.resurface_condition.label())
                 )
             })
             .collect();
@@ -1789,7 +1814,7 @@ fn render_list_row(
             disposition_style(entity.disposition),
             entity.disposition.label()
         ),
-        entity.title,
+        display::human_text(&entity.title),
         marks
     ))
 }
@@ -1812,7 +1837,10 @@ fn render_entity_marks(
     if !view.is_surfaced(entity)? {
         marks.push(decoration.paint(
             OUTPUT_MUTED,
-            format!("Not surfaced: {}", entity.resurface_condition.label()),
+            format!(
+                "Not surfaced: {}",
+                display::human_text(entity.resurface_condition.label())
+            ),
         ));
     }
     if let Some(reason) = inactive_scope_reason(view, &entity.id)? {
@@ -1875,7 +1903,7 @@ fn render_show(
         "{}  {}  {}",
         decoration.paint(OUTPUT_ID, &entity.id),
         decoration.paint(OUTPUT_MUTED, entity.kind.label()),
-        entity.title,
+        display::human_text(&entity.title),
     )];
 
     overview.push(format!(
@@ -1983,7 +2011,10 @@ fn render_show(
                     entity.disposition.label(),
                 ),
             ),
-            ("Resurface condition", entity.resurface_condition.label()),
+            (
+                "Resurface condition",
+                display::human_text(entity.resurface_condition.label()),
+            ),
         ],
     ));
     overview.push(render_inline_fields(
@@ -2255,7 +2286,7 @@ fn append_saved_records(
         blocks.push(render_section(
             decoration,
             "Description",
-            vec![description.clone()],
+            vec![display::human_text(description)],
         ));
     }
 
@@ -2269,9 +2300,9 @@ fn append_saved_records(
                 "{}  {}  {}",
                 decoration.paint(OUTPUT_HEADING, format!("Note {}", note.id)),
                 decoration.paint(OUTPUT_MUTED, display::timestamp(&note.created_at)),
-                note.actor
+                display::human_text(&note.actor)
             ));
-            rendered_notes.push(note.body.clone());
+            rendered_notes.push(display::human_text(&note.body));
         }
         blocks.push(render_section(decoration, "Notes", rendered_notes));
     }
@@ -2287,12 +2318,12 @@ fn append_saved_records(
             let reason = event
                 .reason
                 .as_ref()
-                .map(|reason| format!("  ({reason})"))
+                .map(|reason| format!("  ({})", display::human_text(reason)))
                 .unwrap_or_default();
             history.push(format!(
                 "  {}  {}  {}{reason}  [{}]",
                 display::timestamp(&event.at),
-                event.actor,
+                display::human_text(&event.actor),
                 decoration.paint(action_style, action),
                 event.id,
             ));
@@ -2412,7 +2443,10 @@ fn show_waits(
             "{indent}{}",
             decoration.paint(
                 OUTPUT_MUTED,
-                format!("Not surfaced: {}", entity.resurface_condition.label())
+                format!(
+                    "Not surfaced: {}",
+                    display::human_text(entity.resurface_condition.label())
+                )
             )
         ));
     }
@@ -2472,7 +2506,7 @@ fn render_subtree(
                 disposition_style(entity.disposition),
                 entity.disposition.label()
             ),
-            entity.title,
+            display::human_text(&entity.title),
         ));
         let rejected_group =
             entity.kind == EntityKind::Group && entity.disposition == Disposition::Rejected;
@@ -2534,7 +2568,10 @@ fn render_subtree_dependencies(
             } else {
                 format!(
                     "  {}",
-                    render_inline_fields(decoration, vec![("External", target.title.clone())])
+                    render_inline_fields(
+                        decoration,
+                        vec![("External", display::human_text(&target.title))],
+                    )
                 )
             };
             lines.push(format!(
@@ -2555,7 +2592,7 @@ fn render_related_entity(entity: &Entity, decoration: OutputDecoration) -> Strin
         "{}  {}  {}",
         decoration.paint(OUTPUT_ID, &entity.id),
         decoration.paint(OUTPUT_MUTED, entity.kind.label()),
-        entity.title
+        display::human_text(&entity.title)
     )
 }
 
@@ -2569,7 +2606,7 @@ fn render_related_entity_with_state(entity: &Entity, decoration: OutputDecoratio
             disposition_style(entity.disposition),
             entity.disposition.label()
         ),
-        entity.title
+        display::human_text(&entity.title)
     )
 }
 
@@ -2648,13 +2685,13 @@ fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
             let rows = notes
                 .into_iter()
                 .map(|note| {
-                    let first_line = note.body.lines().next().unwrap_or_default();
+                    let first_line = note.body.split('\n').next().unwrap_or_default();
                     format!(
                         "{}  {}  {}  {}\n",
                         decoration.paint(OUTPUT_INDEX, note.id),
                         decoration.paint(OUTPUT_MUTED, display::timestamp(&note.created_at)),
-                        note.actor,
-                        first_line
+                        display::human_text(&note.actor),
+                        display::human_text(first_line)
                     )
                 })
                 .collect::<String>();
@@ -2671,11 +2708,11 @@ fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
                     decoration,
                     vec![
                         ("Recorded", display::timestamp(&note.created_at)),
-                        ("Actor", note.actor),
+                        ("Actor", display::human_text(&note.actor)),
                     ],
                 ),
                 decoration.paint(OUTPUT_HEADING, "Body"),
-                note.body,
+                display::human_text(&note.body),
             );
             if !note.body.ends_with('\n') {
                 output.push('\n');
@@ -2708,7 +2745,7 @@ fn cmd_revision(command: RevisionCmd) -> Result<(), Box<dyn std::error::Error>> 
                         decoration.paint(OUTPUT_INDEX, revision.id),
                         decoration.paint(OUTPUT_MUTED, display::timestamp(&revision.created_at)),
                         marks,
-                        revision.title
+                        display::human_text(&revision.title)
                     )
                 })
                 .collect::<String>();
@@ -2750,7 +2787,7 @@ fn render_revision(
         decoration,
     );
     let description = match revision.description.as_deref() {
-        Some(description) => format!("present\n{description}"),
+        Some(description) => format!("present\n{}", display::human_text(description)),
         None => "absent".to_string(),
     };
     let parent = revision
@@ -2773,7 +2810,10 @@ fn render_revision(
             decoration,
             vec![("Created", display::timestamp(&revision.created_at))],
         ),
-        render_inline_fields(decoration, vec![("Title", revision.title.clone())]),
+        render_inline_fields(
+            decoration,
+            vec![("Title", display::human_text(&revision.title))],
+        ),
         render_inline_fields(decoration, vec![("Parent", parent)]),
     ]
     .join("\n");
@@ -2901,16 +2941,18 @@ fn push_value_diff(
             decoration.paint(OUTPUT_MUTED, "unchanged")
         ));
     } else {
-        for line in from.lines() {
+        for line in from.split('\n') {
             output.push_str(&format!(
-                "{} {line}\n",
-                decoration.paint(OUTPUT_FAILURE, "-")
+                "{} {}\n",
+                decoration.paint(OUTPUT_FAILURE, "-"),
+                display::human_text(line)
             ));
         }
-        for line in to.lines() {
+        for line in to.split('\n') {
             output.push_str(&format!(
-                "{} {line}\n",
-                decoration.paint(OUTPUT_POSITIVE, "+")
+                "{} {}\n",
+                decoration.paint(OUTPUT_POSITIVE, "+"),
+                display::human_text(line)
             ));
         }
     }
@@ -2952,7 +2994,7 @@ fn push_optional_diff_side(
         Some(value) => {
             output.push_str(&format!("{prefix} present\n"));
             for line in value.split('\n') {
-                output.push_str(&format!("{prefix} {line}\n"));
+                output.push_str(&format!("{prefix} {}\n", display::human_text(line)));
             }
         }
     }
@@ -3029,7 +3071,7 @@ fn inactive_scope_reason(view: &View, id: &EntityId) -> derived::Result<Option<S
         if !view.is_surfaced(group)? {
             reasons.push(format!(
                 "not surfaced: {}",
-                group.resurface_condition.label()
+                display::human_text(group.resurface_condition.label())
             ));
         }
         if view.is_orphaned(&group.id) {
@@ -3088,7 +3130,12 @@ fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
             )?;
             write_confirmation(
                 &id,
-                |_| format!("Resurface condition: {}", condition.label()),
+                |_| {
+                    format!(
+                        "Resurface condition: {}",
+                        display::human_text(condition.label())
+                    )
+                },
                 Style::new(),
             )?;
         }
@@ -3241,13 +3288,14 @@ fn cmd_log(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
         output.push_str(&format!(
             "{}  {}  {}",
             decoration.paint(OUTPUT_MUTED, display::timestamp(&event.at)),
-            event.actor,
+            display::human_text(&event.actor),
             format_decision(&event, decoration)
         ));
         if let Some(reason) = event.reason {
             output.push_str(&format!(
-                "  {} {reason}",
-                decoration.paint(OUTPUT_MUTED, "Reason:")
+                "  {} {}",
+                decoration.paint(OUTPUT_MUTED, "Reason:"),
+                display::human_text(reason)
             ));
         }
         if let Some(revision) = event.revision {
@@ -3272,14 +3320,14 @@ fn format_decision(event: &db::Event, decoration: OutputDecoration) -> String {
             .and_then(|value| value.strip_suffix(')'))
             .and_then(|value| value.parse::<ResurfaceAt>().ok())
             .map(|at| format!("AtDate({})", at.local_string()))
-            .unwrap_or_else(|| other.to_string()),
-        Some(other) => other.to_string(),
+            .unwrap_or_else(|| display::human_text(other)),
+        Some(other) => display::human_text(other),
         None => "Always".to_string(),
     };
     let field = match event.field.as_str() {
         "disposition" => "Disposition".to_string(),
         "resurface_condition" => "Resurface condition".to_string(),
-        field => field.to_string(),
+        field => display::human_text(field),
     };
     let old = label(&event.old_value);
     let new = label(&event.new_value);
@@ -4160,7 +4208,9 @@ mod tests {
 
     #[test]
     fn human_output_renderers_share_plain_and_ansi_text() {
-        let issue = entity("i", EntityKind::Issue);
+        let mut issue = entity("i", EntityKind::Issue);
+        issue.title = "title \u{1b}[2J\tspoof\u{7f}".to_string();
+        issue.description = Some("line one\nline two \u{1b}]0;spoof\u{7}".to_string());
         let mut rejected = entity("rejected", EntityKind::Issue);
         rejected.disposition = Disposition::Rejected;
         let view = View::new(
@@ -4168,18 +4218,18 @@ mod tests {
             vec![(issue.id.clone(), EntityId::from_stored("rejected"))],
         );
         let claim = Claim {
-            actor: "raw actor".to_string(),
-            worktree: "/raw/worktree".to_string(),
+            actor: "raw \u{1b}[31mactor".to_string(),
+            worktree: "/raw/\tworktree".to_string(),
             at: Utc::now(),
         };
         let event = db::Event {
             id: RecordId::new(RecordKind::Decision),
-            field: "disposition".to_string(),
-            old_value: Some("undecided".to_string()),
-            new_value: Some("accepted".to_string()),
+            field: "resurface_condition".to_string(),
+            old_value: Some("Command(echo \u{1b}[2J)".to_string()),
+            new_value: Some("Command(echo \u{1b}]0;spoof\u{7})".to_string()),
             revision: Some(RecordId::new(RecordKind::Revision)),
-            actor: "raw actor".to_string(),
-            reason: Some("raw reason".to_string()),
+            actor: "raw \u{1b}[31mactor".to_string(),
+            reason: Some("raw\treason".to_string()),
             at: Utc::now(),
         };
 
@@ -4225,8 +4275,75 @@ mod tests {
                 ),
             ),
         ] {
+            assert!(!plain.contains('\u{1b}'));
+            assert!(!plain.contains('\t'));
+            assert!(plain.contains("\\x1b") || !plain.contains("title"));
             assert_decoration_pair(plain, styled);
         }
+    }
+
+    #[test]
+    fn show_escapes_saved_controls_equally_with_and_without_terminal_decoration() {
+        let at = Utc::now();
+        let mut issue = entity("i", EntityKind::Issue);
+        issue.title = "title \u{1b}[2J\t".to_string();
+        issue.description = Some("description\n\u{1b}]0;spoof\u{7}\r".to_string());
+        issue.progress = Progress::InProgress(Claim {
+            actor: "actor \u{1b}[31m".to_string(),
+            worktree: "/worktree/\u{85}".to_string(),
+            at,
+        });
+        issue.resurface_condition =
+            ResurfaceCondition::Command("exit 0 # script \u{1b}[2J".to_string());
+        let view = View::new(vec![issue.clone()], vec![]);
+        let notes = [Note {
+            id: RecordId::new(RecordKind::Note),
+            body: "note\n\u{1b}]8;;spoof\u{7}".to_string(),
+            actor: "note actor\t".to_string(),
+            created_at: at,
+        }];
+        let progress = [db::ProgressEvent {
+            id: RecordId::new(RecordKind::Progress),
+            kind: db::ProgressEventKind::Release,
+            actor: "history actor\u{7f}".to_string(),
+            reason: Some("reason\r\0".to_string()),
+            at,
+        }];
+
+        let plain = render_show(
+            &view,
+            &issue,
+            &progress,
+            &notes,
+            RecordCounts {
+                notes: 1,
+                progressions: 1,
+                ..RecordCounts::default()
+            },
+            OutputDecoration::Plain,
+        )
+        .unwrap();
+        let styled = render_show(
+            &view,
+            &issue,
+            &progress,
+            &notes,
+            RecordCounts {
+                notes: 1,
+                progressions: 1,
+                ..RecordCounts::default()
+            },
+            OutputDecoration::Ansi,
+        )
+        .unwrap();
+
+        assert!(plain.chars().all(|character| {
+            character == '\n' || !matches!(character, '\u{00}'..='\u{1f}' | '\u{7f}'..='\u{9f}')
+        }));
+        for escaped in ["\\x1b", "\\t", "\\r", "\\x00", "\\x07", "\\x7f", "\\x85"] {
+            assert!(plain.contains(escaped), "missing {escaped:?} in {plain:?}");
+        }
+        assert_decoration_pair(plain, styled);
     }
 
     #[test]
@@ -4261,6 +4378,39 @@ mod tests {
         assert!(styled.contains("\u{1b}[0m raw old title\n"));
         assert!(styled.contains("\u{1b}[0m raw new description\n"));
         assert_decoration_pair(plain, styled);
+    }
+
+    #[test]
+    fn revision_diff_compares_raw_values_before_escaping_them() {
+        let issue = entity("i", EntityKind::Issue);
+        let at = Utc::now();
+        let from = DeclarationRevision {
+            id: RecordId::new(RecordKind::Revision),
+            title: "same\tvalue".to_string(),
+            description: Some("same \u{1b}".to_string()),
+            parent: None,
+            dependencies: vec![],
+            created_at: at,
+            baseline: false,
+        };
+        let to = DeclarationRevision {
+            id: RecordId::new(RecordKind::Revision),
+            title: "same\\tvalue".to_string(),
+            description: Some("same \\x1b".to_string()),
+            parent: None,
+            dependencies: vec![],
+            created_at: at,
+            baseline: false,
+        };
+
+        let output = render_revision_diff(&issue.id, &from, &to, OutputDecoration::Plain);
+        assert!(output.contains("Title\n- same\\tvalue\n+ same\\tvalue\n"));
+        assert!(output.contains("Description\n- present\n- same \\x1b\n+ present\n+ same \\x1b\n"));
+
+        let mut with_crlf = from;
+        with_crlf.title = "first\r\nsecond".to_string();
+        let output = render_revision_diff(&issue.id, &with_crlf, &to, OutputDecoration::Plain);
+        assert!(output.contains("- first\\r\n- second\n"));
     }
 
     #[test]

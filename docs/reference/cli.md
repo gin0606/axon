@@ -190,8 +190,9 @@ Git 外では Axon 管理 root とし、起動元の環境変数を継承する�
 
 stdout と stderr は pipe を並行して最後まで読み、stream ごとに最大64 KiBを保持する。超過時は
 先頭32 KiBと末尾32 KiBの間に省略byte数を示す。通常の判定失敗診断とtraceへ同じ上限を適用する。
-非 UTF-8 byteを lossy UTF-8 として表示するため、元の byte列を完全には再現しない。秘密情報を
-除去する保証はなく、traceは利用者が子processの出力を公開する明示的な診断操作である。
+非 UTF-8 byteを lossy UTF-8 として表示するため、元の byte列を完全には再現しない。端末制御文字は
+通常の人向け出力と同じ可視escapeにする。秘密情報を除去する保証はなく、traceは利用者が
+子processの出力を公開する明示的な診断操作である。
 trace blockのstderrへの書き込みまたはflushに失敗した場合は、
 その評価を失敗としてAxonの呼び出しも失敗させる。状態変更前の評価で失敗するため、変更は適用しない。
 
@@ -445,7 +446,7 @@ axon-2b4xyp で両実装の成功、no-op、拒否、段階結果と保存状態
 
 ### 装飾
 
-`show` を含む人向け出力は、stdout が対話 terminal なら状態の識別を補助する ANSI style を使う。非対話出力と `NO_COLOR` では同じ文字、空白、改行、順序を無装飾で出し、状態の違いを色だけでは表さない。title、description、Note本文、reasonなど利用者が保存した文字列は装飾・省略・整形しない。下流でpipeが閉じた場合は成功として扱う。
+`show` を含む人向け出力は、stdout が対話 terminal なら状態の識別を補助する ANSI style を使う。非対話出力と `NO_COLOR` では同じ文字、空白、改行、順序を無装飾で出し、状態の違いを色だけでは表さない。title、description、Note本文、reason、actor、worktree、path、Commandのシェル文字列とstdout / stderrに含まれる端末制御文字は、TTYと非TTYの両方で同じ可視escapeにする。改行と通常のUnicode文字は維持し、ESCは`\x1b`、tabは`\t`、CRは`\r`、その他のC0・DEL・C1制御文字は`\x00`から`\x9f`のASCII表記で示す。これは人向け表示だけの変換で、保存値は変更しない。下流でpipeが閉じた場合は成功として扱う。
 
 装飾は保存状態の値ごとではなく、その情報が利用者の現在の操作に持つ意味で決める。
 同じ意味は一覧、詳細、履歴、状態変更確認、help、診断で同じ style を使う。
@@ -475,7 +476,7 @@ actor、worktree、外部command、pathも値全体を意味色で塗らない�
 
 非TTY の record 境界、先頭の識別子、標準 stream は安定した外部契約とする。
 
-`export` と completion は生成内容そのものを標準出力へ書き、人向けの装飾を加えない。
+`export` と completion は生成内容そのものを標準出力へ書き、人向けの装飾や表示用escapeを加えない。
 
 Git 配下の file 正本は現在の worktree root の `.axon/state.jsonl`、
 SQLite は common Git directory の親の `.axon/axon.db` を共有する。
