@@ -117,10 +117,16 @@ Store が保持する評価 context を View と StoreSnapshot に共有し、�
 失敗を 1 invocation 内で再利用する。DB の読み取り transaction が別でも context は共有する。
 この結果はメモリ内だけに置き、条件のシェル文字列と区別する。
 
-CLIが `--trace-conditions` を受け取った場合だけ、Storeは評価contextへstderr writerを渡す。
+CLIはleaf commandの `--condition-timeout` を呼び出し単位の評価policyとしてStoreへ渡し、
+未指定時はCommand 1件ごとに30秒を適用する。CLIが `--trace-conditions` を受け取った場合だけ、
+Storeは評価contextへstderr writerを渡す。
 実processの終了0/1を取得した直後、結果をmemoizeする前に一つのtrace blockを書き込むため、
 評価順を保ち、memoized参照を再表示しない。異常終了は既存の評価errorだけを生成する。
 trace書き込み失敗も評価errorにし、状態変更のtransactionを確定しない。
+
+評価runnerはCommandごとに専用process groupを作り、2本のpipeを並行して読みながら各streamの
+先頭32 KiBと末尾32 KiBだけを保持する。timeoutまたはCtrl-CではgroupへTERMを送り、1秒の
+有限な猶予後にKILLする。このprocess監督と出力保持は保存状態ではなく評価contextの責務とする。
 
 条件の置換では付随列をまとめて更新し、旧条件の日付・参照・シェル文字列を残さない。
 SQL 制約と RawEntity の型変換境界で、選択した条件に不要な付随値を拒否する。

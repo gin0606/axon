@@ -180,15 +180,25 @@ Git 外では Axon 管理 root とし、起動元の環境変数を継承する�
 これは既存ツール一般の終了コード規約ではない。必要な終了コード変換は利用者のスクリプトが担う。
 判定失敗の診断は対象 Entity、シェル文字列、終了理由、取得できた stdout / stderr を示す。
 正常時の外部出力は通常の Axon 出力へ混ぜない。`ready`、`triage`、`start`、
-`list`、`show`、`import check`、`import apply` は `--trace-conditions` を受け付ける。
+`list`、`show`、`import check`、`import apply` は `--trace-conditions` と
+`--condition-timeout <DURATION>` を受け付ける。timeout は Command 1件ごとに既定30秒で、
+`500ms`、`30s`、`2m`、`1h` のような正の有限値を呼び出し単位で指定できる。保存済み条件や
+環境変数には保存せず、同じ呼び出しで評価するすべての Command に適用する。
 指定時は、その操作が実際に評価した終了 0 / 1 の Command ごとに Entity ID、cwd、成立可否と
 終了コード、取得した stdout / stderr を一つの block として stderr へ評価順に表示する。
 空 stream は `(empty)` と表示する。memoized 結果は再表示せず、判定失敗は既存診断だけを出す。
 
-trace は取得した出力を省略・redactionせず、非 UTF-8 byteを lossy UTF-8 として表示するため、
-元の byte列を完全には再現しない。秘密情報を除去する保証はなく、利用者が子processの出力を
-公開する明示的な診断操作である。trace blockのstderrへの書き込みまたはflushに失敗した場合は、
+stdout と stderr は pipe を並行して最後まで読み、stream ごとに最大64 KiBを保持する。超過時は
+先頭32 KiBと末尾32 KiBの間に省略byte数を示す。通常の判定失敗診断とtraceへ同じ上限を適用する。
+非 UTF-8 byteを lossy UTF-8 として表示するため、元の byte列を完全には再現しない。秘密情報を
+除去する保証はなく、traceは利用者が子processの出力を公開する明示的な診断操作である。
+trace blockのstderrへの書き込みまたはflushに失敗した場合は、
 その評価を失敗としてAxonの呼び出しも失敗させる。状態変更前の評価で失敗するため、変更は適用しない。
+
+各評価は専用process groupで起動する。timeoutまたはCtrl-CではgroupへTERMを送り、1秒後も
+終了していなければKILLする。timeoutは条件未成立ではなく判定失敗であり、対象Entity、適用した
+duration、終了処理、streamごとの省略有無を診断してAxonをexit 1にする。Ctrl-Cも子孫processを
+同じ手順で終了してからAxonをexit 1にする。
 
 評価するのは surfaced などの導出状態が必要になったときだけであり、単なる Entity の DB 読取を
 実行トリガーにしない。list / show、ready / triage、start の成立検査や import の導出差分でも、
@@ -204,8 +214,7 @@ Group などの評価は行う。履歴・Note・Revision の参照、claims、e
 評価失敗中でも条件の解除・訂正ができる。DB を変更しない読み取りでも、登録された外部
 コマンドの実行は起こりうる。
 
-専用の評価操作は設けない。タイムアウト、永続キャッシュ、実行間隔、ログと終了コードの再生は
-外部コマンドの責務であり、外部コマンドが終了しなければ Axon も待ち続ける。
+専用の評価操作は設けない。永続キャッシュ、実行間隔、ログと終了コードの再生は外部コマンドの責務とする。
 条件の非単調性と Group への作用は [状態モデル](state-model.md#resurface-condition) で定める。
 
 ### 包含
