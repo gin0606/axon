@@ -200,9 +200,12 @@ fn evaluation_failure_is_diagnostic_and_start_is_not_written() {
 }
 
 fn assert_no_terminal_controls(value: &str) {
-    assert!(value.chars().all(|character| {
-        character == '\n' || !matches!(character, '\u{00}'..='\u{1f}' | '\u{7f}'..='\u{9f}')
-    }));
+    assert!(
+        value.chars().all(|character| {
+            character == '\n' || !matches!(character, '\u{00}'..='\u{1f}' | '\u{7f}'..='\u{9f}')
+        }),
+        "unexpected terminal control in {value:?}"
+    );
 }
 
 #[cfg(unix)]
