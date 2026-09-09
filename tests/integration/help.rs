@@ -182,10 +182,10 @@ fn condition_evaluating_leaf_help_documents_trace_contract() {
         &["export", "--help"][..],
         &["import", "prepare", "--help"][..],
     ] {
+        let help = help_stdout(args);
         assert!(
-            !help_stdout(args).contains("--trace-conditions")
-                && !help_stdout(args).contains("--condition-timeout"),
-            "{args:?}"
+            !help.contains("--trace-conditions") && !help.contains("--condition-timeout"),
+            "{args:?}: {help}"
         );
     }
 }
