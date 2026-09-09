@@ -7,9 +7,14 @@ use std::process::{Command, Output};
 
 const WORKFLOW: &str = include_str!("../.github/workflows/full-verification.yml");
 const FULL_VERIFICATION: &str = include_str!("../scripts/full-verification");
+const LEFTHOOK: &str = include_str!("../lefthook.yml");
 
 fn workflow() -> Value {
     serde_saphyr::from_str(WORKFLOW).unwrap()
+}
+
+fn lefthook() -> Value {
+    serde_saphyr::from_str(LEFTHOOK).unwrap()
 }
 
 fn run_with_fake_cargo(root: &Path, fail: Option<&str>) -> (Output, String) {
@@ -92,4 +97,26 @@ fn full_verification_propagates_each_cargo_failure() {
         assert!(!output.status.success());
         assert_eq!(calls.lines().collect::<Vec<_>>(), commands[..=failed_index]);
     }
+}
+
+#[test]
+fn pre_commit_keeps_rust_checks_and_uses_the_fast_test_targets() {
+    let config = lefthook();
+    let jobs = config["pre-commit"]["jobs"].as_array().unwrap();
+    assert_eq!(jobs.len(), 3);
+    assert_eq!(jobs[0]["name"], "fmt");
+    assert_eq!(jobs[0]["glob"], "*.rs");
+    assert_eq!(jobs[0]["run"], "mise exec -- cargo fmt --check");
+    assert_eq!(jobs[1]["name"], "clippy");
+    assert_eq!(jobs[1]["glob"], "*.rs");
+    assert_eq!(
+        jobs[1]["run"],
+        "mise exec -- cargo clippy --all-targets --all-features -- -D warnings"
+    );
+    assert_eq!(jobs[2]["name"], "test");
+    assert_eq!(jobs[2]["glob"], "*.rs");
+    assert_eq!(
+        jobs[2]["run"],
+        "mise exec -- cargo test --bin axon --test smoke"
+    );
 }

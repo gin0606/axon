@@ -9,7 +9,7 @@ pre-commit:
       run: mise exec -- cargo clippy --all-targets --all-features -- -D warnings
     - name: test
       glob: "*.rs"
-      run: mise exec -- cargo test
+      run: mise exec -- cargo test --bin axon --test smoke
 
 post-checkout:
   jobs:

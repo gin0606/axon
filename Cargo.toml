@@ -30,3 +30,7 @@ libc = "0.2.189"
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[test]]
+name = "smoke"
+path = "tests/smoke.rs"
