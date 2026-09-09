@@ -629,7 +629,7 @@ fn external_snapshots_support_new_and_existing_owners_without_editing_targets() 
             export_value(&repo, id)
         } else {
             serde_saphyr::from_str::<serde_json::Value>(include_str!(
-                "../src/docs/declaration-example.yaml"
+                "../../src/docs/declaration-example.yaml"
             ))
             .unwrap()
         };

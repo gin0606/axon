@@ -6,6 +6,39 @@
 
 MSRVを変更するときは、`Cargo.toml`、[導入ガイド](../guide/getting-started.md#インストールと対応環境)、以下の検証コマンドを同じ変更で更新する。
 
+## Full verification
+
+pull requestとmainへのpushでは、GitHub Actionsがrepositoryの
+`rust-toolchain.toml`を使って次のfull verificationを個別のstepとして実行する。
+ローカルでも同じcommandを順に実行する。
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+```
+
+CIのcacheはCargo dependencyとbuild artifactだけに使い、成功済みのtest結果を
+根拠にfull verificationを省略しない。
+
+## Fast pre-commit gate
+
+Rust fileがstagedされているcommitでは、Lefthookがrustfmt、全target・全featureの
+Clippyと、次の高速test集合を並列に実行する。
+
+```sh
+cargo test --bin axon --test smoke
+```
+
+`--bin axon`はdomain、状態導出、storage、履歴、mergeなどbinary内のunit/core
+testを実行する。`--test smoke`は実binaryを使ってinit、Issue作成、show、start、
+doneと失敗時のexit codeを確認する。pre-commitは短い編集feedbackのため、この集合に
+integration targetのprovenance、migration、crash・durability、backend行列を含めない。
+
+オプションなしの`cargo test`は引き続きsmokeを含む全test targetの標準入口であり、
+上記を含まない契約はfull verificationで検査する。Lefthookの各jobは失敗時にcommitを
+拒否し、staged Rust fileがない場合は既存の`*.rs` globによってRust検証を省略する。
+
 リリース前には通常 toolchain の全検証に加え、MSRVで次を実行する。
 
 ```sh

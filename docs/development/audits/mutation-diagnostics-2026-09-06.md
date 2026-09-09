@@ -37,18 +37,18 @@ init の自動修復は追加しない。形式モデルの状態意味は変更
 
 | 経路 | 検証根拠 |
 | --- | --- |
-| 自己依存 | `tests/mutation_diagnostics.rs::self_dependency_is_an_input_rejection_and_preserves_both_backends`: SQLite/file の dep add と import prepare/apply が同じ理由・exit 1、state bytes/宣言 file 不変 |
+| 自己依存 | `tests/integration/mutation_diagnostics.rs::self_dependency_is_an_input_rejection_and_preserves_both_backends`: SQLite/file の dep add と import prepare/apply が同じ理由・exit 1、state bytes/宣言 file 不変 |
 | SQLite 保存不可 | 同 `sqlite_import_readonly_failure_preserves_storage_and_declaration`: 隔離 DB の read-only 権限、path/操作/未適用、DBと宣言 bytes 不変 |
 | file Note保存不可 | 同 `file_append_io_failure_names_storage_phase_and_keeps_all_saved_bytes`: directory permission、置換前未適用、state bytes 不変 |
 | 入力 file | 同 `input_file_errors_identify_operation_and_file`: Note の操作・ID・入力 pathを保持 |
 | write 後段失敗 | `main::tests::write_reports_saved_title_when_description_transaction_rolls_back`: open後の隔離SQLite triggerでdescriptionを拒否。title保存、description/判断履歴/Note不変、段階表示一致 |
-| import refresh | `tests/declaration.rs::apply_retry_repairs_the_file_after_a_post_commit_rewrite_failure`: directory permissionで宣言置換を拒否、保存値適用済みとfile未更新、同一file再applyで復旧 |
+| import refresh | `tests/integration/declaration.rs::apply_retry_repairs_the_file_after_a_post_commit_rewrite_failure`: directory permissionで宣言置換を拒否、保存値適用済みとfile未更新、同一file再applyで復旧 |
 | SQLite transaction rollback | `db::tests::sqlite_failure_rolls_back_every_imported_entity` / `publication_failure_rolls_back_control_revision_and_history`: triggerで複数Entity・Revision・履歴の保存途中を拒否、未適用表示とrollback一致 |
 | file replace 後 | `storage::tests::failure_boundaries_and_drift_do_not_partially_publish`: before-write/after-sync/after-replaceの注入、後者は結果不明で完全な新snapshotが残る |
 | init | `storage::tests::initialization_fault_diagnostics_match_published_stages`: 両backendでstate/config公開後の注入、config公開時I/O失敗のsource保持、診断と生成済みfileの一致 |
-| merge setup | `tests/merge_cli.rs::setup_reports_saved_configuration_when_attributes_cannot_be_read`: 属性pathをdirectoryにし後段を拒否、3項目のGit config保存と診断一致 |
-| init SQLite一時DB失敗 | `tests/mutation_diagnostics.rs::init_size_limit_failure_reports_retained_marker_and_unpublished_state`: 子processだけにRLIMIT_FSIZE（SQLite=1024、file=100）/SIGXFSZ無視を設定。pendingと一時fileが残り、最終state/config未公開、保存段階と復旧案内を確認 |
-| merge prepare後段 | `tests/merge_cli.rs::prepare_destination_resolution_failure_reports_preserved_workspace`: 存在しないoutput親を指定し、入力3snapshot保存済み・candidate未公開・新workspace案内を確認 |
+| merge setup | `tests/integration/merge_cli.rs::setup_reports_saved_configuration_when_attributes_cannot_be_read`: 属性pathをdirectoryにし後段を拒否、3項目のGit config保存と診断一致 |
+| init SQLite一時DB失敗 | `tests/integration/mutation_diagnostics.rs::init_size_limit_failure_reports_retained_marker_and_unpublished_state`: 子processだけにRLIMIT_FSIZE（SQLite=1024、file=100）/SIGXFSZ無視を設定。pendingと一時fileが残り、最終state/config未公開、保存段階と復旧案内を確認 |
+| merge prepare後段 | `tests/integration/merge_cli.rs::prepare_destination_resolution_failure_reports_preserved_workspace`: 存在しないoutput親を指定し、入力3snapshot保存済み・candidate未公開・新workspace案内を確認 |
 | merge publish | 既存 `merge_cli::tests::publish_faults_preserve_inputs_and_allow_reconciliation` と CLI suiteで置換前後・drift・conflict marker保持を確認 |
 
 SQLite commitそのもののdurability障害、disk full、OS crash、全stdout I/O失敗を網羅した
