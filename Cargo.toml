@@ -2,7 +2,6 @@
 name = "axon"
 version = "0.1.0"
 edition = "2024"
-autotests = false
 rust-version = "1.89"
 description = "A local issue tracker with independent state axes"
 license = "MIT"
@@ -26,11 +25,3 @@ thiserror = "2.0.20"
 
 [dev-dependencies]
 libc = "0.2.189"
-
-[[test]]
-name = "integration"
-path = "tests/integration.rs"
-
-[[test]]
-name = "smoke"
-path = "tests/smoke.rs"

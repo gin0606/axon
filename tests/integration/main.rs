@@ -1,8 +1,8 @@
+#[path = "../common/mod.rs"]
 mod common;
 
 mod actor;
 mod build_provenance;
-mod ci_workflow;
 mod cli;
 mod command;
 mod creation;

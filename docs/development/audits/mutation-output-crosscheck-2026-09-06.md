@@ -10,14 +10,14 @@
 
 | 結果 | 代表経路と根拠 | 出力・保存との対応 |
 | --- | --- | --- |
-| 実変更 | `tests/cli.rs::setting_confirmations_follow_saved_changes_and_preserve_noop_storage`、`main::tests::write_uses_description_save_outcome_after_title_changes_storage` | stdout / 0、完全ID先頭、実際に保存した Title / Description のみ列挙。削除は Description removed。dep / Parent は相手IDまたは最終値 |
-| 新規追加 | `tests/cli.rs::mutation_confirmations_begin_with_the_affected_entity`、`cmd_create`、`cmd_note` | stdout / 0、Created または Note の安定ID + recorded。非idempotentな追加で、同題・同文はno-opではない |
-| 成功no-op | 上記設定matrix、`tests/cli.rs::settings_are_noops_but_transitions_reject_repetition` | stdout / 0、No changes。関係は already present/absent または Parent 最終値を添える。両backend・Issue/Group・固定宣言の同値設定で保存bytes不変 |
-| 適用前拒否 | `tests/mutation_diagnostics.rs::self_dependency_is_an_input_rejection_and_preserves_both_backends`、同値遷移の既存検査 | stderr / 1、Error: 対象 操作: 原因。自己依存は cannot depend on itself、保存schema異常とは別型。通常depと宣言経由の原因が一致。保存bytes不変。同値遷移は No changes にならず必要なHelpを末尾に表示 |
+| 実変更 | `tests/integration/cli.rs::setting_confirmations_follow_saved_changes_and_preserve_noop_storage`、`main::tests::write_uses_description_save_outcome_after_title_changes_storage` | stdout / 0、完全ID先頭、実際に保存した Title / Description のみ列挙。削除は Description removed。dep / Parent は相手IDまたは最終値 |
+| 新規追加 | `tests/integration/cli.rs::mutation_confirmations_begin_with_the_affected_entity`、`cmd_create`、`cmd_note` | stdout / 0、Created または Note の安定ID + recorded。非idempotentな追加で、同題・同文はno-opではない |
+| 成功no-op | 上記設定matrix、`tests/integration/cli.rs::settings_are_noops_but_transitions_reject_repetition` | stdout / 0、No changes。関係は already present/absent または Parent 最終値を添える。両backend・Issue/Group・固定宣言の同値設定で保存bytes不変 |
+| 適用前拒否 | `tests/integration/mutation_diagnostics.rs::self_dependency_is_an_input_rejection_and_preserves_both_backends`、同値遷移の既存検査 | stderr / 1、Error: 対象 操作: 原因。自己依存は cannot depend on itself、保存schema異常とは別型。通常depと宣言経由の原因が一致。保存bytes不変。同値遷移は No changes にならず必要なHelpを末尾に表示 |
 | 実行失敗・未適用 | 同 `file_append_io_failure_names_storage_phase_and_keeps_all_saved_bytes` / `sqlite_import_readonly_failure_preserves_storage_and_declaration` | stderr / 1、操作・保存path・失敗phaseと Not applied。置換前失敗で正本bytes不変。入力file失敗もID・操作・fileを特定 |
-| 部分適用 | `main::tests::write_reports_saved_title_when_description_transaction_rolls_back`、`tests/declaration.rs::apply_retry_repairs_the_file_after_a_post_commit_rewrite_failure` | 後段失敗でも全体は非0。writeは保存済みTitleと後段未適用、importは storage declaration values と宣言file未更新を区別。原因→段階結果→Help。init/migration/mergeの段階は既存[診断棚卸し](mutation-diagnostics-2026-09-06.md)の境界表へ対応 |
+| 部分適用 | `main::tests::write_reports_saved_title_when_description_transaction_rolls_back`、`tests/integration/declaration.rs::apply_retry_repairs_the_file_after_a_post_commit_rewrite_failure` | 後段失敗でも全体は非0。writeは保存済みTitleと後段未適用、importは storage declaration values と宣言file未更新を区別。原因→段階結果→Help。init/migration/mergeの段階は既存[診断棚卸し](mutation-diagnostics-2026-09-06.md)の境界表へ対応 |
 | 結果不明 | `storage::tests::failure_boundaries_and_drift_do_not_partially_publish`、`main::tests::unknown_result_guidance_uses_valid_note_commands_and_initialization_files` | file置換後障害は Result unknown。完全な新snapshotが残っても同期の成功は保証しない。SQLite commitエラーも不明を維持。Note ID・本文の照合を案内し、無条件append retryを勧めない |
-| 複数EntityとDB/file | `tests/declaration.rs::prepare_check_and_apply_create_mixed_entities_and_dependencies` と上記import refresh検査 | Plan is valid. → Changes: → Derived changes → Applied <path>。Changes: none はDB no-op、Appliedはfile refreshも含む完了。checkの予測とapplyの保存成功を区別 |
+| 複数EntityとDB/file | `tests/integration/declaration.rs::prepare_check_and_apply_create_mixed_entities_and_dependencies` と上記import refresh検査 | Plan is valid. → Changes: → Derived changes → Applied <path>。Changes: none はDB no-op、Appliedはfile refreshも含む完了。checkの予測とapplyの保存成功を区別 |
 
 失敗時の適用範囲は、原因を記述する本文に続く段階結果で説明する。単純な拒否に空の
 Applied欄や定型Helpを増やさず、保存済み範囲・未適用・不明が混在する場合だけ列挙する。
@@ -73,7 +73,7 @@ slaveを読み取り完了まで保持するよう修正してから全条件を
   対応するHelpを最後に一度だけ出す。setupはGit configと.gitattributesの確認を案内する。
   `merge_cli::tests::published_file_failure_keeps_guidance_out_of_nested_stage_details` は
   実file置換後のdirectory sync障害を注入し、保存bytes、Result unknown、外側の
-  段階結果→Helpを確認する。`tests/merge_cli.rs` の
+  段階結果→Helpを確認する。`tests/integration/merge_cli.rs` の
   `relative_driver_output_preserves_original_conflict_diagnostic` と
   `setup_reports_saved_configuration_when_attributes_cannot_be_read` は実CLIの重複なし・末尾Helpと
   保存済み範囲を確認する。

@@ -39,7 +39,7 @@ fn fixture(root: &Path) {
         "[package]\nname='provenance-probe'\nversion='1.2.3'\nedition='2024'\n",
     )
     .unwrap();
-    fs::write(root.join("build.rs"), include_str!("../build.rs")).unwrap();
+    fs::write(root.join("build.rs"), include_str!("../../build.rs")).unwrap();
     fs::write(
         root.join("src/main.rs"),
         "fn main() { println!(\"{}\", env!(\"AXON_VERSION\")); }\n",

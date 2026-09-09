@@ -21,5 +21,9 @@ jobs:
         run: rustup toolchain install
       - name: Restore Cargo cache
         uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
-      - name: Run full verification
-        run: ./scripts/full-verification
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Run tests
+        run: cargo test

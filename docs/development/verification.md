@@ -9,14 +9,8 @@ MSRVを変更するときは、`Cargo.toml`、[導入ガイド](../guide/getting
 ## Full verification
 
 pull requestとmainへのpushでは、GitHub Actionsがrepositoryの
-`rust-toolchain.toml`を使って次のfull verificationを実行する。ローカルでも
-同じ正本を実行する。
-
-```sh
-./scripts/full-verification
-```
-
-このscriptは順に次を実行し、いずれかが失敗した時点で非zero終了する。
+`rust-toolchain.toml`を使って次のfull verificationを個別のstepとして実行する。
+ローカルでも同じcommandを順に実行する。
 
 ```sh
 cargo fmt --check
