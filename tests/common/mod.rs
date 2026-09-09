@@ -106,6 +106,10 @@ impl TestRepo {
         &self.root
     }
 
+    pub fn axon_command(&self) -> Command {
+        axon_command(&self.root, &self.dir.git_config)
+    }
+
     pub fn plan(&self, title: &str) -> String {
         self.create(&["plan", title])
     }

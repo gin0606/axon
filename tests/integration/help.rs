@@ -160,9 +160,13 @@ fn condition_evaluating_leaf_help_documents_trace_contract() {
         let help = help_stdout(args);
         assert!(help.contains("--trace-conditions"), "{args:?}: {help}");
         assert!(
-            help.contains("not redacted or truncated"),
+            help.contains("--condition-timeout <DURATION>"),
             "{args:?}: {help}"
         );
+        assert!(help.contains("default: 30s"), "{args:?}: {help}");
+        assert!(help.contains("at most 64 KiB"), "{args:?}: {help}");
+        assert!(help.contains("first and last 32 KiB"), "{args:?}: {help}");
+        assert!(help.contains("not redacted"), "{args:?}: {help}");
         assert!(
             help.contains("non-UTF-8 bytes are rendered lossily"),
             "{args:?}: {help}"
@@ -178,10 +182,20 @@ fn condition_evaluating_leaf_help_documents_trace_contract() {
         &["export", "--help"][..],
         &["import", "prepare", "--help"][..],
     ] {
+        let help = help_stdout(args);
         assert!(
-            !help_stdout(args).contains("--trace-conditions"),
-            "{args:?}"
+            !help.contains("--trace-conditions") && !help.contains("--condition-timeout"),
+            "{args:?}: {help}"
         );
+    }
+}
+
+#[test]
+fn condition_timeout_rejects_zero_missing_units_and_unlimited_values() {
+    for value in ["0s", "30", "none", "unlimited"] {
+        let output = axon(&["ready", "--condition-timeout", value]).0;
+        assert!(!output.status.success(), "{value}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("condition-timeout"));
     }
 }
 

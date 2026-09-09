@@ -150,14 +150,59 @@ struct Cli {
     command: Command,
 }
 
-#[derive(clap::Args)]
-struct TraceConditionsArgs {
+#[derive(clap::Args, Clone, Copy)]
+struct ConditionEvaluationArgs {
     /// Trace evaluated Command conditions to stderr, including unredacted child output
     #[arg(
         long,
-        long_help = "Trace each Command condition actually evaluated by this invocation to stderr. Each block includes the Entity ID, working directory, exit result, and captured stdout/stderr. Captured output is not redacted or truncated; non-UTF-8 bytes are rendered lossily and terminal controls use visible escapes, empty streams are marked (empty), and a trace write failure fails the Axon invocation. Memoized references and abnormal exits do not produce a trace block."
+        long_help = "Trace each Command condition actually evaluated by this invocation to stderr. Each block includes the Entity ID, working directory, exit result, and captured stdout/stderr. Each stream retains at most 64 KiB; larger output shows its first and last 32 KiB and the omitted byte count. Captured output is not redacted; non-UTF-8 bytes are rendered lossily and terminal controls use visible escapes, empty streams are marked (empty), and a trace write failure fails the Axon invocation. Memoized references and abnormal exits do not produce a trace block."
     )]
     trace_conditions: bool,
+    /// Maximum duration for each Command condition (default: 30s)
+    #[arg(
+        long,
+        value_name = "DURATION",
+        default_value = "30s",
+        value_parser = parse_condition_timeout,
+        long_help = "Maximum duration for each Command condition evaluated by this invocation (default: 30s). Accepts a positive integer followed by ms, s, m, or h, such as 500ms or 2m. There is no unlimited value. A timeout fails the Axon invocation before any requested mutation is applied."
+    )]
+    condition_timeout: std::time::Duration,
+}
+
+impl Default for ConditionEvaluationArgs {
+    fn default() -> Self {
+        Self {
+            trace_conditions: false,
+            condition_timeout: derived::DEFAULT_CONDITION_TIMEOUT,
+        }
+    }
+}
+
+fn parse_condition_timeout(value: &str) -> Result<std::time::Duration, String> {
+    let (number, unit, multiplier) = if let Some(number) = value.strip_suffix("ms") {
+        (number, "ms", 1_u64)
+    } else if let Some(number) = value.strip_suffix('s') {
+        (number, "s", 1_000)
+    } else if let Some(number) = value.strip_suffix('m') {
+        (number, "m", 60_000)
+    } else if let Some(number) = value.strip_suffix('h') {
+        (number, "h", 3_600_000)
+    } else {
+        return Err(
+            "use a positive integer followed by ms, s, m, or h (for example 500ms or 2m)"
+                .to_string(),
+        );
+    };
+    let number = number
+        .parse::<u64>()
+        .map_err(|_| format!("invalid {unit} duration: {value}"))?;
+    let milliseconds = number
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("duration is too large: {value}"))?;
+    if milliseconds == 0 {
+        return Err("condition timeout must be greater than zero".to_string());
+    }
+    Ok(std::time::Duration::from_millis(milliseconds))
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -336,7 +381,7 @@ enum Command {
         #[arg(long, value_enum)]
         kind: Option<KindFilter>,
         #[command(flatten)]
-        trace: TraceConditionsArgs,
+        evaluation: ConditionEvaluationArgs,
     },
     /// List the active decision frontier
     #[command(
@@ -347,7 +392,7 @@ enum Command {
         #[arg(long, value_enum)]
         kind: Option<KindFilter>,
         #[command(flatten)]
-        trace: TraceConditionsArgs,
+        evaluation: ConditionEvaluationArgs,
     },
     /// List every active claim
     Claims {
@@ -360,7 +405,7 @@ enum Command {
         /// Entity ID or unique ID suffix
         id: String,
         #[command(flatten)]
-        trace: TraceConditionsArgs,
+        evaluation: ConditionEvaluationArgs,
     },
     /// Mark one InProgress Entity as Ended
     Done {
@@ -408,7 +453,7 @@ enum Command {
         )]
         skip_command_evaluation: bool,
         #[command(flatten)]
-        trace: TraceConditionsArgs,
+        evaluation: ConditionEvaluationArgs,
     },
     /// Inspect one Entity from situation and waits to its full details
     Show {
@@ -421,7 +466,7 @@ enum Command {
         )]
         skip_command_evaluation: bool,
         #[command(flatten)]
-        trace: TraceConditionsArgs,
+        evaluation: ConditionEvaluationArgs,
     },
     /// Add and inspect durable notes
     #[command(subcommand)]
@@ -590,14 +635,14 @@ Save axon docs declaration --example output to a file, then pass it to prepare."
         /// Canonical YAML declaration file
         file: std::path::PathBuf,
         #[command(flatten)]
-        trace: TraceConditionsArgs,
+        evaluation: ConditionEvaluationArgs,
     },
     /// Validate and atomically apply a canonical declaration
     Apply {
         /// Canonical YAML declaration file to apply and refresh
         file: std::path::PathBuf,
         #[command(flatten)]
-        trace: TraceConditionsArgs,
+        evaluation: ConditionEvaluationArgs,
     },
 }
 
@@ -653,7 +698,7 @@ enum WhenCmd {
     },
     /// Evaluate a shell command when derived status is needed
     #[command(
-        long_about = "Store a Command condition for an Issue or Group. Run /bin/sh -c in the current worktree root (Axon management root outside Git), inheriting the caller's environment without interactive or login startup. Exit 0 satisfies the condition, 1 does not; other exits, signals, and spawn failures fail Axon. Adapt other tools' exit codes in your script. Each Entity is evaluated at most once per invocation; the next invocation reevaluates, and satisfaction can revert. Results are not stored. Normal stdout/stderr is suppressed; failures include diagnostics. Timeouts, persistent caches, intervals, and replay are the script's responsibility: Axon waits indefinitely for it to finish. Setting or clearing a condition does not evaluate it."
+        long_about = "Store a Command condition for an Issue or Group. Run /bin/sh -c in the current worktree root (Axon management root outside Git), inheriting the caller's environment without interactive or login startup. Exit 0 satisfies the condition, 1 does not; other exits, signals, spawn failures, and timeouts fail Axon. Adapt other tools' exit codes in your script. Each Entity is evaluated at most once per invocation; the next invocation reevaluates, and satisfaction can revert. Results are not stored. Evaluating leaf commands use a 30s timeout by default and accept a finite --condition-timeout override. On timeout or Ctrl-C, Axon terminates the condition's process group. Normal stdout/stderr is suppressed; failures include at most 64 KiB from each stream. Persistent caches, intervals, and replay remain the script's responsibility. Setting or clearing a condition does not evaluate it."
     )]
     Command {
         /// Entity ID or unique ID suffix
@@ -782,19 +827,30 @@ fn main() {
 }
 
 fn open_store(trace_conditions: bool) -> db::Result<Store> {
-    Store::open(trace_conditions, |outcome| {
-        if let db::migration::Outcome::Migrated {
-            from, to, backup, ..
-        } = outcome
-        {
-            let decoration = current_error_decoration();
-            eprintln!(
-                "{} database v{from} -> v{to}; backup: {}. Migration committed; continuing command.",
-                decoration.paint(OUTPUT_POSITIVE, "Migrated"),
-                display::human_text(backup.display())
-            );
-        }
+    open_store_with_evaluation(ConditionEvaluationArgs {
+        trace_conditions,
+        condition_timeout: derived::DEFAULT_CONDITION_TIMEOUT,
     })
+}
+
+fn open_store_with_evaluation(evaluation: ConditionEvaluationArgs) -> db::Result<Store> {
+    Store::open(
+        evaluation.trace_conditions,
+        evaluation.condition_timeout,
+        |outcome| {
+            if let db::migration::Outcome::Migrated {
+                from, to, backup, ..
+            } = outcome
+            {
+                let decoration = current_error_decoration();
+                eprintln!(
+                    "{} database v{from} -> v{to}; backup: {}. Migration committed; continuing command.",
+                    decoration.paint(OUTPUT_POSITIVE, "Migrated"),
+                    display::human_text(backup.display())
+                );
+            }
+        },
+    )
 }
 
 fn migration_guidance(failure: &db::migration::Failure) -> String {
@@ -895,7 +951,7 @@ fn error_guidance(error: &(dyn std::error::Error + 'static)) -> Option<String> {
 }
 
 fn evaluation_guidance() -> &'static str {
-    "Read saved information without executing conditions with `axon list --skip-command-evaluation` or `axon show <id> --skip-command-evaluation`. See `axon when command --help` for the exit-status contract. Correcting a Command condition, or explicitly replacing or clearing it, does not evaluate the failing condition; replacing or clearing it changes when the Entity surfaces."
+    "Read saved information without executing conditions with `axon list --skip-command-evaluation` or `axon show <id> --skip-command-evaluation`. Use a finite `--condition-timeout` override when an evaluation legitimately needs longer than 30s. See `axon when command --help` for the execution contract. Correcting a Command condition, or explicitly replacing or clearing it, does not evaluate the failing condition; replacing or clearing it changes when the Entity surfaces."
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1051,10 +1107,10 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
             message,
             file,
         ),
-        Command::Ready { kind, trace } => cmd_ready(kind, trace.trace_conditions),
-        Command::Triage { kind, trace } => cmd_triage(kind, trace.trace_conditions),
+        Command::Ready { kind, evaluation } => cmd_ready(kind, evaluation),
+        Command::Triage { kind, evaluation } => cmd_triage(kind, evaluation),
         Command::Claims { kind } => cmd_claims(kind),
-        Command::Start { id, trace } => cmd_start(&id, trace.trace_conditions),
+        Command::Start { id, evaluation } => cmd_start(&id, evaluation),
         Command::Done { id } => cmd_done(&id),
         Command::Release { id, reason } => cmd_release(&id, reason),
         Command::Write {
@@ -1066,14 +1122,14 @@ fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> 
         Command::Log { id } => cmd_log(&id),
         Command::List {
             filters,
-            trace,
+            evaluation,
             skip_command_evaluation,
-        } => cmd_list(filters, trace.trace_conditions, skip_command_evaluation),
+        } => cmd_list(filters, evaluation, skip_command_evaluation),
         Command::Show {
             id,
-            trace,
+            evaluation,
             skip_command_evaluation,
-        } => cmd_show(&id, trace.trace_conditions, skip_command_evaluation),
+        } => cmd_show(&id, evaluation, skip_command_evaluation),
         Command::Note(command) => cmd_note(command),
         Command::Revision(command) => cmd_revision(command),
         Command::Export {
@@ -1119,15 +1175,15 @@ fn cmd_import(command: ImportCmd) -> Result<(), Box<dyn std::error::Error>> {
                 &format!("declaration file prepared at {}", file.display()),
             )?;
         }
-        ImportCmd::Check { file, trace } => {
-            let mut store = open_store(trace.trace_conditions)?;
+        ImportCmd::Check { file, evaluation } => {
+            let mut store = open_store_with_evaluation(evaluation)?;
             write_output(
                 &decorate_import_report(&declaration::check(&mut store, &file)?, decoration),
                 decoration,
             )?;
         }
-        ImportCmd::Apply { file, trace } => {
-            let mut store = open_store(trace.trace_conditions)?;
+        ImportCmd::Apply { file, evaluation } => {
+            let mut store = open_store_with_evaluation(evaluation)?;
             let mut output =
                 decorate_import_report(&declaration::apply(&mut store, &file)?, decoration);
             output.push_str(&format!(
@@ -1299,8 +1355,8 @@ fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-fn load(trace_conditions: bool) -> Result<(Store, View), Box<dyn std::error::Error>> {
-    let mut store = open_store(trace_conditions)?;
+fn load(evaluation: ConditionEvaluationArgs) -> Result<(Store, View), Box<dyn std::error::Error>> {
+    let mut store = open_store_with_evaluation(evaluation)?;
     let view = store.view()?;
     Ok((store, view))
 }
@@ -1361,9 +1417,9 @@ fn write_confirmation_with(
 
 fn cmd_ready(
     kind: Option<KindFilter>,
-    trace_conditions: bool,
+    evaluation: ConditionEvaluationArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (_, view) = load(trace_conditions)?;
+    let (_, view) = load(evaluation)?;
     let decoration = current_output_decoration();
     let rows = view
         .ready(|entity| included(kind, entity))?
@@ -1380,9 +1436,9 @@ fn cmd_ready(
 
 fn cmd_triage(
     kind: Option<KindFilter>,
-    trace_conditions: bool,
+    evaluation: ConditionEvaluationArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (_, view) = load(trace_conditions)?;
+    let (_, view) = load(evaluation)?;
     let decoration = current_output_decoration();
     let mut rows = String::new();
     for (entity, reason) in view.triage(|entity| included(kind, entity))? {
@@ -1428,7 +1484,7 @@ fn render_triage_row(
 }
 
 fn cmd_claims(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>> {
-    let (_, view) = load(false)?;
+    let (_, view) = load(ConditionEvaluationArgs::default())?;
     let decoration = current_output_decoration();
     let rows = view
         .claims()
@@ -1469,8 +1525,11 @@ fn claim_details(claim: &Claim, decoration: OutputDecoration) -> String {
     )
 }
 
-fn cmd_start(raw: &str, trace_conditions: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store(trace_conditions)?;
+fn cmd_start(
+    raw: &str,
+    evaluation: ConditionEvaluationArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut store = open_store_with_evaluation(evaluation)?;
     let id = store.resolve_id(raw)?;
     let claim = Claim {
         actor: actor::actor(),
@@ -1511,10 +1570,10 @@ fn cmd_release(raw: &str, reason: Option<String>) -> Result<(), Box<dyn std::err
 
 fn cmd_list(
     filters: ListFilters,
-    trace_conditions: bool,
+    evaluation: ConditionEvaluationArgs,
     skip_command_evaluation: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store(trace_conditions)?;
+    let mut store = open_store_with_evaluation(evaluation)?;
     let (view, note_matches) = if let Some(text) = &filters.search {
         store.search_snapshot(text)?
     } else {
@@ -1796,10 +1855,10 @@ fn render_entity_marks(
 
 fn cmd_show(
     raw: &str,
-    trace_conditions: bool,
+    evaluation: ConditionEvaluationArgs,
     skip_command_evaluation: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store(trace_conditions)?;
+    let mut store = open_store_with_evaluation(evaluation)?;
     let db::ShowSnapshot {
         id,
         view,

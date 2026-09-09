@@ -1,6 +1,36 @@
 use crate::common::{TestDir, TestRepo, assert_failure, assert_success, stderr, stdout};
 use std::fs;
 
+#[cfg(unix)]
+fn process_exists(pid: i32) -> bool {
+    let result = unsafe { libc::kill(pid, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(unix)]
+fn wait_for_file(path: &std::path::Path) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while std::time::Instant::now() < deadline {
+        if let Ok(value) = fs::read_to_string(path) {
+            return value;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("timed out waiting for {}", path.display());
+}
+
+#[cfg(unix)]
+fn assert_process_exits(pid: i32) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while std::time::Instant::now() < deadline {
+        if !process_exists(pid) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("process {pid} remained after condition evaluation");
+}
+
 fn calls(repo: &TestRepo) -> usize {
     fs::read_to_string(repo.root().join("calls"))
         .unwrap_or_default()
@@ -99,6 +129,93 @@ fn trace_reports_normal_results_without_changing_default_output() {
     let trace = stderr(&waiting);
     assert!(trace.contains("result: not satisfied (exit 1)"), "{trace}");
     assert_eq!(trace.matches("(empty)").count(), 2, "{trace}");
+}
+
+#[test]
+fn command_output_is_bounded_per_stream_with_edges_and_omitted_bytes() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let id = repo.plan("large output");
+    let script = "awk 'BEGIN { for (i=0;i<40000;i++) printf \"A\"; for (i=0;i<40000;i++) printf \"B\" }'; awk 'BEGIN { for (i=0;i<40000;i++) printf \"C\"; for (i=0;i<40000;i++) printf \"D\" }' >&2; exit 23";
+    assert_success(&repo.axon(&["when", "command", &id, script]));
+
+    let output = repo.axon(&["show", &id]);
+    assert_failure(&output);
+    let diagnostic = stderr(&output);
+    let streams = diagnostic.split_once("\nstdout:\n").unwrap().1;
+    let (stdout_diagnostic, stderr_and_help) = streams.split_once("\nstderr:\n").unwrap();
+    let stderr_diagnostic = stderr_and_help.split_once("\nHelp:").unwrap().0;
+    for (stream, first, last) in [(stdout_diagnostic, 'A', 'B'), (stderr_diagnostic, 'C', 'D')] {
+        assert!(stream.starts_with(&first.to_string().repeat(32 * 1024)));
+        assert!(stream.ends_with(&last.to_string().repeat(32 * 1024)));
+        assert!(stream.contains("... 14464 bytes omitted ..."));
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn timeout_kills_the_process_group_and_does_not_start_the_entity() {
+    let repo = TestRepo::new();
+    repo.init("test");
+    let id = repo.plan("timeout");
+    let script = "echo $$ > condition-shell-pid; sh -c 'trap \"\" TERM; echo $$ > condition-descendant-pid; while :; do :; done' </dev/null >/dev/null 2>/dev/null & wait";
+    assert_success(&repo.axon(&["when", "command", &id, script]));
+    let before = repo.snapshot(&id);
+
+    let output = repo.axon(&["start", &id, "--condition-timeout", "500ms"]);
+    assert_failure(&output);
+    let diagnostic = stderr(&output);
+    assert!(diagnostic.contains(&id), "{diagnostic}");
+    assert!(diagnostic.contains("timed out after 500ms"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("TERM followed by KILL after 1s grace"),
+        "{diagnostic}"
+    );
+    assert_eq!(repo.snapshot(&id), before);
+
+    for name in ["condition-shell-pid", "condition-descendant-pid"] {
+        let pid = wait_for_file(&repo.root().join(name))
+            .trim()
+            .parse()
+            .unwrap();
+        assert_process_exits(pid);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn ctrl_c_terminates_descendants_and_does_not_start_the_entity() {
+    use std::process::Stdio;
+
+    let repo = TestRepo::new();
+    repo.init("test");
+    let id = repo.plan("interrupt");
+    let script = "echo $$ > interrupt-shell-pid; sh -c 'echo $$ > interrupt-descendant-pid; while :; do sleep 1; done' & wait";
+    assert_success(&repo.axon(&["when", "command", &id, script]));
+    let before = repo.snapshot(&id);
+
+    let child = repo
+        .axon_command()
+        .args(["start", &id, "--condition-timeout", "10s"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let descendant = wait_for_file(&repo.root().join("interrupt-descendant-pid"))
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let diagnostic = stderr(&output);
+    assert!(diagnostic.contains("interrupted by Ctrl-C"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("process group termination"),
+        "{diagnostic}"
+    );
+    assert_eq!(repo.snapshot(&id), before);
+    assert_process_exits(descendant);
 }
 
 #[test]

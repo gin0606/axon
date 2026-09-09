@@ -523,14 +523,18 @@ impl Store {
             )),
         })
     }
-    pub fn open(trace: bool, report: impl FnOnce(&db::migration::Outcome)) -> Result<Self> {
+    pub fn open(
+        trace: bool,
+        condition_timeout: std::time::Duration,
+        report: impl FnOnce(&db::migration::Outcome),
+    ) -> Result<Self> {
         let (root, is_git) = root(false)?;
         check_index(&root, is_git)?;
         let (backend, path) = discover(&root, is_git)?;
         let evaluation = Rc::new(if trace {
-            Evaluation::tracing(root.clone())
+            Evaluation::tracing(root.clone(), condition_timeout)
         } else {
-            Evaluation::new(root.clone())
+            Evaluation::with_timeout(root.clone(), condition_timeout)
         });
         match backend {
             Backend::File => {
