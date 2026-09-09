@@ -18,6 +18,8 @@ agentに任せた仕事の状況や、以前に残した情報を自分で確認
 
 `ready`と`triage`は条件に合う候補だけを表示します。そこに見つからない記録も、`list`で探せます。例えば、終了した仕事だけなら`axon list --progress ended`、採用済みで未着手の仕事なら`axon list --disposition accepted --progress not-started`です。後者には、待ち条件などでまだ着手できないものも含まれます。特定の計画はGroupのIDを`show`へ渡すと、配下の構造と待ちを確認できます。
 
+端末上で表示を消したり偽装したりしないよう、保存した文章や外部コマンド出力に含まれる制御文字は`\x1b`、`\t`、`\r`などの見える形で表示されます。通常の改行とUnicode文字はそのままで、保存内容や`export`の生成データは変更されません。
+
 ### 過去の結果や計画の変更を読む
 
 `show`には全Noteと進行履歴が出ます。Noteが多ければ`axon note list <id>`で一覧を見て、`axon note show <id> <note-id>`で一件を読めます。

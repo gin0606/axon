@@ -418,31 +418,38 @@ fn human_output_keeps_non_terminal_output_plain() {
 }
 
 #[test]
-fn human_output_preserves_escape_sequences_stored_in_content() {
+fn human_output_visibly_escapes_terminal_sequences_stored_in_content() {
     let repo = TestRepo::new();
     repo.init("test");
     let title = "title \u{1b}[35mmagenta\u{1b}[0m";
     let description = "description \u{1b}[31mred\u{1b}[0m";
     let note = "note \u{1b}[32mgreen\u{1b}[0m";
     let reason = "reason \u{1b}[34mblue\u{1b}[0m";
+    let visible = |value: &str| value.replace('\u{1b}', "\\x1b");
     let created = repo.axon(&["plan", title, "-m", description]);
     let issue = created_id(&created);
-    assert!(stdout(&created).contains(title));
+    assert!(stdout(&created).contains(&visible(title)));
     assert_success(&repo.axon(&["note", "add", &issue, "-m", note]));
 
     let show = stdout(&repo.axon(&["show", &issue]));
-    assert!(show.contains(title));
-    assert!(show.contains(description));
-    assert!(show.contains(note));
-    assert!(stdout(&repo.axon(&["list"])).contains(title));
-    assert!(stdout(&repo.axon(&["note", "show", &issue, &repo.note_id(&issue, 1)])).contains(note));
+    assert!(show.contains(&visible(title)));
+    assert!(show.contains(&visible(description)));
+    assert!(show.contains(&visible(note)));
+    assert!(stdout(&repo.axon(&["list"])).contains(&visible(title)));
+    assert!(
+        stdout(&repo.axon(&["note", "show", &issue, &repo.note_id(&issue, 1)]))
+            .contains(&visible(note))
+    );
     assert!(
         stdout(&repo.axon(&["revision", "show", &issue, &repo.revision_id(&issue, 1)]))
-            .contains(description)
+            .contains(&visible(description))
     );
 
     assert_success(&repo.axon(&["decide", "undecide", &issue, "-r", reason]));
-    assert!(stdout(&repo.axon(&["log", &issue])).contains(reason));
+    assert!(stdout(&repo.axon(&["log", &issue])).contains(&visible(reason)));
+    let saved = repo.snapshot(&issue);
+    assert_eq!(saved.title, title);
+    assert_eq!(saved.description.as_deref(), Some(description));
 }
 
 #[cfg(unix)]

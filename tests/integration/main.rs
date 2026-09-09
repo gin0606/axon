@@ -16,3 +16,4 @@ mod manual;
 mod merge_cli;
 mod migration;
 mod mutation_diagnostics;
+mod terminal_safety;

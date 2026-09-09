@@ -68,7 +68,8 @@ fn trace_reports_normal_results_without_changing_default_output() {
     let repo = TestRepo::new();
     repo.init("test");
     let id = repo.plan("trace output");
-    let script = "printf 'child-out'; printf '\\377child-err' >&2; exit 0";
+    let script =
+        "printf 'child-out\\033[2J'; printf '\\377child-err\\033]0;spoof\\007' >&2; exit 0";
     assert_success(&repo.axon(&["when", "command", &id, script]));
 
     let ordinary = repo.axon(&["ready"]);
@@ -83,12 +84,13 @@ fn trace_reports_normal_results_without_changing_default_output() {
         &format!("Condition trace: {id}"),
         &format!("cwd: {}", repo.root().display()),
         "result: satisfied (exit 0)",
-        "stdout:\nchild-out\n",
-        "stderr:\n�child-err\n",
+        "stdout:\nchild-out\\x1b[2J\n",
+        "stderr:\n�child-err\\x1b]0;spoof\\x07\n",
         &format!("End condition trace: {id}"),
     ] {
         assert!(trace.contains(expected), "{trace}");
     }
+    assert_no_terminal_controls(&trace);
 
     assert_success(&repo.axon(&["when", "command", &id, "exit 1"]));
     let waiting = repo.axon(&["ready", "--trace-conditions"]);
@@ -160,7 +162,7 @@ fn evaluation_failure_is_diagnostic_and_start_is_not_written() {
     let repo = TestRepo::new();
     repo.init("test");
     let id = repo.plan("failing wait");
-    let script = "echo call >> calls; echo diagnostic-out; echo diagnostic-err >&2; exit 23";
+    let script = "echo call >> calls; printf 'diagnostic-out\\033[2J\\n'; printf 'diagnostic-err\\033]0;spoof\\007\\n' >&2; exit 23 # \u{1b}\t\r\u{85}";
     assert_success(&repo.axon(&["when", "command", &id, script]));
     let before = repo.snapshot(&id);
     for args in [
@@ -173,9 +175,17 @@ fn evaluation_failure_is_diagnostic_and_start_is_not_written() {
         assert_failure(&output);
         assert!(stdout(&output).is_empty());
         let error = stderr(&output);
-        for expected in [&id, script, "23", "diagnostic-out", "diagnostic-err"] {
+        for expected in [
+            &id,
+            "printf 'diagnostic-out\\033",
+            "# \\x1b\\t\\r\\x85",
+            "23",
+            "diagnostic-out\\x1b[2J",
+            "diagnostic-err\\x1b]0;spoof\\x07",
+        ] {
             assert!(error.contains(expected), "{error}");
         }
+        assert_no_terminal_controls(&error);
         assert!(!error.contains("Condition trace:"), "{error}");
         assert_eq!(repo.snapshot(&id), before);
     }
@@ -187,6 +197,12 @@ fn evaluation_failure_is_diagnostic_and_start_is_not_written() {
     assert_success(&repo.axon(&["when", "clear", &id]));
     assert!(repo.snapshot(&id).resurface_command.is_none());
     assert_success(&repo.axon(&["show", &id]));
+}
+
+fn assert_no_terminal_controls(value: &str) {
+    assert!(value.chars().all(|character| {
+        character == '\n' || !matches!(character, '\u{00}'..='\u{1f}' | '\u{7f}'..='\u{9f}')
+    }));
 }
 
 #[cfg(unix)]

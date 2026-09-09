@@ -417,7 +417,10 @@ fn prepare_created(
         },
     )?;
     crate::write_mutation_output(
-        &format!("Workspace: {}\n", workspace.display()),
+        &format!(
+            "Workspace: {}\n",
+            crate::display::human_text(workspace.display())
+        ),
         crate::OutputDecoration::Plain,
         &format!("merge workspace at {}", workspace.display()),
     )?;
@@ -640,7 +643,10 @@ fn apply_with(workspace: &Path, mut checkpoint: impl FnMut(&str) -> Result<()>) 
     checkpoint("after-replace")
         .map_err(|e| format!("result unknown after replace: {e}; inspect retained candidate"))?;
     crate::write_mutation_output(
-        &format!("Applied: {}\n", manifest.output.display()),
+        &format!(
+            "Applied: {}\n",
+            crate::display::human_text(manifest.output.display())
+        ),
         crate::OutputDecoration::Plain,
         &format!("destination at {}", manifest.output.display()),
     )?;
