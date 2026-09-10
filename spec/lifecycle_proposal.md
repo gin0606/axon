@@ -4,6 +4,24 @@
 
 説明と実行可能なモデルをこのファイルで管理する。[Quint の literate 形式](https://quint.sh/docs/literate)に従い、`lmt` で `target/literate/` 配下に共有する基本遷移、単独 Issue、計画と子 Issue の統合モデル、到達性の補助探索、候補一覧の評価、文面・Note・状態変更履歴の6ファイルを生成する。生成ファイルは直接編集しない。
 
+## モデル化と実装検証の分担
+
+すべての設計判断を Quint の状態に追加することはしない。状態・関係・操作の相互作用に不確実性がある部分をモデル化し、実行環境や付随情報の取得・保存は設計判断として記述して実装側で検証する。モデルへ残す検証専用の観測値も、対象の性質を確かめるために必要な範囲に留める。
+
+2026-09-11 に既存の実行可能モデルを見直し、次の分担とした。
+
+| 対象 | 扱いと理由 |
+| --- | --- |
+| lifecycle、包含、dependency | 遷移の前提・循環・終了条件が相互作用するため維持する |
+| 候補一覧の評価範囲・結果共有・失敗 | 評価省略が候補の取りこぼしや失敗の見落としにつながらないかを検査するため維持する |
+| 条件コマンドの不透明な識別子 | 条件の置き換えと保持を区別するため維持し、実コマンドや環境はモデル化しない |
+| 文面・Note・状態変更履歴 | 編集可能状態、追記専用性、履歴と状態の一致を検査するため維持する |
+| 履歴の日時・任意の理由 | 遷移に影響せず値の保持を調べるだけだったため、探索から外し実装検証へ移す |
+| 記録者情報・エージェント連携・外部コマンドの実行環境 | 操作の可否に使わない付随情報や実行詳細として、設計判断と実装検証で扱う |
+| 重複着手 | モデル上は既存の原子的な状態遷移で扱い、実際の競合は保存処理の並行テストで確認する |
+
+同一時刻の履歴が上書きされないこと、日時・理由・記録者情報の保持、自動取得と取得不能時の継続、Note の同内容追記の区別、保存失敗時の原子性は実装側の検証対象とする。独立した claim の状態やエージェント別の状態は追加しない。基本モデル・統合モデル・到達性の補助探索は、それぞれの検証範囲を維持し、変更に関係のある検査を選んで実行する。
+
 ## 状態
 
 提案として登録した直後の `Undecided`（未判断）から開始する。登録操作自体は扱わない。未判断は記録済みの提案であり、実施の約束を意味しない。採用によって `NotStarted`（未着手）へ進む。
@@ -1394,7 +1412,7 @@ module lifecycle_reachability {
 
 入れ子の計画と所属変更、提案・採用済みの新規登録、Issue・計画間の dependency、再浮上と判断候補・着手候補・着手中の関係を、計画3件・Issue枠3件の範囲で扱う。取りやめた計画は再検討後に構成を変更できるが、完了した計画には再開経路を持たせない。
 
-最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。claim、実際の ID 発行や永続化は検証対象外である。文面編集・Note・状態変更履歴は後述の情報モデルで扱う。一覧やコマンドの構成はまだ決めない。条件の種類・設定と評価失敗は、後述の「候補一覧の評価と失敗」で扱う。
+最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。実際の ID 発行や永続化は検証対象外である。独立した claim を持たない判断は後述する。文面編集・Note・状態変更履歴は後述の情報モデルで扱う。一覧やコマンドの構成はまだ決めない。条件の種類・設定と評価失敗は、後述の「候補一覧の評価と失敗」で扱う。
 
 `NotEvaluated` は意味上の評価除外であり、外部コマンドを実際に呼ばないことや評価コストは実装側で別途検証する。この統合モデルでは自身の条件の意味と親による候補の除外を分ける。実際に観測する範囲と呼び出し内の結果共有は、後述の候補一覧モデルへ具体化する。
 
@@ -1909,19 +1927,32 @@ Note は、調査結果・作業結果・申し送り・訂正など、状態変
 
 Note と状態変更履歴を、一つの時系列に並べて表示することは可能だが、表示方法はまだ決めない。保存上の区別は、実際に起きた遷移を自動記録することと、自由な補足を追加することの区別である。
 
+### 記録者情報とエージェント連携
+
+Note・状態変更履歴には、任意の記録者情報 `{ actor: string, data: object }` を添えられる。`actor` は `codex`・`claude`・人間など記録元を示す文字列で、固定の列挙型にはしない。`data` は連携側が用途に応じた情報を入れるオブジェクトとし、例えば `{"actor":"codex","data":{"session_id":"..."}}` のように元の作業をたどる手掛かりを保持する。通常表示は actor を中心とし、詳細確認時には data も取得できるようにする。
+
+記録者情報は、連携側が環境変数などから取得可能な範囲を自動で埋める。利用者が操作のたびに session ID 付きでコマンドを呼ぶことは要求しない。actor が分かり session ID が取れない場合は取得できた範囲を残し、記録元も分からない場合は記録者情報を省略できる。情報が取得できないことだけで Note 追加や状態変更を失敗させない。
+
+エージェント固有の検出・メタデータ構築は、本体の状態モデルや記録の保存処理から分離する。Rust の crate として切り出す構成を想定し、具体的な構成、環境変数、検出の優先順位は実装設計で決める。Axon 本体は受け取った情報を保持・表示し、エージェントごとの必須項目や session の探索・生存確認・ログ解析は持たない。メタデータは記録時点の手掛かりであり、ログの存続やセッションの再開を保証するものではない。
+
+### claim を独立して持たない
+
+複数のエージェント・セッションによる別々の Issue の並行作業は想定するが、独立した claim・予約状態・作業所有者は持たない。重複着手は、現在の状態と既存の前提を確認して未着手から着手中へ原子的に更新することで防ぐ。先に着手された同じ Entity への二度目の着手は拒否する。
+
+記録者情報は履歴をたどるために使い、完了・解放などの操作権限や排他制御には使わない。現在の作業の経緯を調べる場合も履歴を参照し、履歴と別の claim 情報を同期する仕組みを増やさない。自動解放や、作業者がいなくなったことを理由とする自動状態変更も行わない。
+
 ### 情報モデルの範囲
 
 以下は Issue・Group に共通するローカルな情報操作を、固定2 Entity で調べる。lifecycle の基本遷移は `lifecycle_rules` を再利用する。包含・dependency・Group の最終確認による追加の遷移制約は、前段の統合モデルで扱う。このモデルが許す基本遷移だけで、実際の Group や依存を持つ Issue の操作が許可されるわけではない。
 
-文面・Note・理由の内容は不透明な整数へ抽象化し、文字列処理は扱わない。日時も記録する観測値として整数へ抽象化する。同時刻の遷移を区別できるよう、履歴は時刻をキーにせず追記列で表す。このモデルは未判断の登録済み Entity から開始し、登録操作と初期状態の記録は扱わない。実時刻の取得、精度、時計補正、公開 ID、actor、記録の表示順、永続化と保存失敗はこのモデル外である。文面の過去値を持つ `observation` は検証専用の ghost state であり、製品に編集履歴を保存する提案ではない。
+文面・Note の内容は、不透明な整数で更新・保持を区別する。履歴は変更前後の状態だけを持つ追記列へ抽象化する。日時・任意の理由・記録者情報は設計上の保存項目として残すが、操作の可否や状態遷移に影響しないため Quint の探索変数にはしない。同時刻の遷移も別の記録として保持する契約と、各付随情報の保存は実装側で検証する。このモデルは未判断の登録済み Entity から開始し、登録操作と初期状態の記録は扱わない。実時刻の取得、精度、時計補正、公開 ID、actor、記録の表示順、永続化と保存失敗はこのモデル外である。文面の過去値を持つ `observation` は検証専用の ghost state であり、製品に編集履歴を保存する提案ではない。
 
 ```quint target/literate/lifecycle_information.qnt +=
 module lifecycle_information {
   import lifecycle_rules.* from "lifecycle_rules"
 
   type Id = int
-  type Reason = NoReason | Because(int)
-  type TransitionRecord = { before: Lifecycle, after: Lifecycle, at: int, reason: Reason }
+  type TransitionRecord = { before: Lifecycle, after: Lifecycle }
   type EntityInformation = {
     lifecycle: Lifecycle,
     title: int,
@@ -1930,7 +1961,7 @@ module lifecycle_information {
     history: List[TransitionRecord],
   }
   type Event = Initial | TitleEdited(Id) | DescriptionEdited(Id) | NoteAdded({ id: Id, body: int })
-    | Transitioned({ id: Id, op: Operation, at: int, reason: Reason })
+    | Transitioned({ id: Id, op: Operation })
   type Observation = { before: Id -> EntityInformation, event: Event }
   pure val IDS = Set(0, 1)
   pure val TEXTS = Set(0, 1, 2)
@@ -1952,10 +1983,10 @@ module lifecycle_information {
   pure def applyTitle(e: EntityInformation, value: int): EntityInformation = { ...e, title: value }
   pure def applyDescription(e: EntityInformation, value: int): EntityInformation = { ...e, description: value }
   pure def applyNote(e: EntityInformation, body: int): EntityInformation = { ...e, notes: e.notes.append(body) }
-  pure def applyTransition(e: EntityInformation, op: Operation, at: int, reason: Reason): EntityInformation = {
+  pure def applyTransition(e: EntityInformation, op: Operation): EntityInformation = {
     val targetState = applyOperation(e.lifecycle, op)
     { ...e, lifecycle: targetState,
-      history: e.history.append({ before: e.lifecycle, after: targetState, at: at, reason: reason }) }
+      history: e.history.append({ before: e.lifecycle, after: targetState }) }
   }
   action editTitle(id: Id, value: int): bool = all {
     canEditTitle(information.get(id), value),
@@ -1971,18 +2002,16 @@ module lifecycle_information {
     information' = information.set(id, applyNote(information.get(id), body)),
     observation' = { before: information, event: NoteAdded({ id: id, body: body }) },
   }
-  action transition(id: Id, op: Operation, at: int, reason: Reason): bool = all {
+  action transition(id: Id, op: Operation): bool = all {
     canPerform(information.get(id).lifecycle, op),
-    information' = information.set(id, applyTransition(information.get(id), op, at, reason)),
-    observation' = { before: information, event: Transitioned({ id: id, op: op, at: at, reason: reason }) },
+    information' = information.set(id, applyTransition(information.get(id), op)),
+    observation' = { before: information, event: Transitioned({ id: id, op: op }) },
   }
   action step = {
     nondet id = IDS.oneOf()
     nondet value = TEXTS.oneOf()
     nondet op = OPERATIONS.oneOf()
-    nondet at = Set(0, 1, 2).oneOf()
-    nondet reason = Set(NoReason, Because(0), Because(1)).oneOf()
-    any { editTitle(id, value), editDescription(id, value), addNote(id, value), transition(id, op, at, reason) }
+    any { editTitle(id, value), editDescription(id, value), addNote(id, value), transition(id, op) }
   }
   pure def affected(event: Event): Set[Id] = match event {
     | Initial => Set()
@@ -2018,7 +2047,7 @@ module lifecycle_information {
           canPerform(before.lifecycle, change.op),
           after.lifecycle == applyOperation(before.lifecycle, change.op),
           after.history == before.history.append({
-            before: before.lifecycle, after: after.lifecycle, at: change.at, reason: change.reason,
+            before: before.lifecycle, after: after.lifecycle,
           }),
           after.title == before.title, after.description == before.description, after.notes == before.notes,
         }
@@ -2085,30 +2114,15 @@ module lifecycle_information {
     | NoteAdded(change) => information.get(change.id).notes.select(body => body == change.body).length() > 1
     | _ => false
   }
-  val wReasonProvided = match observation.event {
-    | Transitioned(change) => change.reason != NoReason
-    | _ => false
-  }
-  val wReasonOmitted = match observation.event {
-    | Transitioned(change) => change.reason == NoReason
-    | _ => false
-  }
-  val wSameTimestampRetained = match observation.event {
-    | Transitioned(change) => {
-        val h = information.get(change.id).history
-        if (h.length() < 2) false else h.nth(h.length() - 2).at == h.nth(h.length() - 1).at
-      }
-    | _ => false
-  }
 
 }
 ```
 
 ### 情報モデルの検査と再現
 
-2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成・型検査後、Quint 0.32.0、Rust backend、8 threads、10,000 traces、最大60 steps、入力 seed `2026091013` で実行した。7 invariant に反例はなく、21 witness はすべて1 trace以上で観測された。着手中の文面編集は2,501 traces、再検討後の編集は6,585 traces、完了後の Note 追加は940 traces、同時刻の複数遷移の記録保持は6,854 tracesで観測された。これは bounded random simulation であり、全状態の証明や保存処理の原子性を実装で検証した結果ではない。
+2026-09-11、日時・理由とその3 witness を探索から外した情報モデルを、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成・型検査後、Quint 0.32.0、Rust backend、8 threads、10,000 traces、最大60 steps、入力 seed `2026091101` で実行した。7 invariant に反例はなく、残した18 witness はすべて1 trace以上で観測された。着手中の文面編集は2,591 traces、再検討後の編集は6,590 traces、完了後の Note 追加は922 tracesで観測された。これは bounded random simulation であり、全状態の証明ではない。
 
-この変更では既存5モデルの実行可能な定義を変更せず、情報操作の検査を追加した。状態変更と履歴を一体で確定すること、拒否・保存失敗で片方だけを残さないことは、実装側でも検証する。
+今回の変更では他の5モデルの実行可能な定義は変更していない。日時・理由・記録者情報の取得と保持、状態変更と履歴の保存の原子性、実際の並行着手はこの探索では検証しておらず、実装側で確認する。以下は簡素化後のモデルの再現手順である。
 
 ```sh
 lmt spec/lifecycle_proposal.md
@@ -2126,7 +2140,7 @@ witnesses = re.findall(r"val (w\w+)\s*=", source)
 subprocess.run([
     "quint", "run", "target/literate/lifecycle_information.qnt",
     "--invariants", *invariants, "--witnesses", *witnesses,
-    "--max-samples", "10000", "--max-steps", "60", "--seed", "2026091013",
+    "--max-samples", "10000", "--max-steps", "60", "--seed", "2026091101",
     "--backend", "rust", "--n-threads", "8", "--verbosity", "1",
 ], check=True)
 ```
