@@ -1,8 +1,8 @@
 # Progress と採否を統合する検討用モデル
 
-この literate specification は、Issue 1 件の Progress と採否を単一の lifecycle にまとめる案と、状態から独立した再浮上の導出を扱う。現行の仕様・既存モデルを置き換えるものではない。
+この literate specification は、Progress と採否を単一の lifecycle にまとめる案を扱う。単独 Issue の再浮上と、計画・子 Issue の着手境界を別モジュールで段階的に検討する。既存機能やデータ形式との互換性を前提にせず、新しい土台として設計するためのモデルであり、このファイルの追加・更新で現行実装や既存モデルは変更しない。
 
-説明と実行可能なモデルをこのファイルで管理する。[Quint の literate 形式](https://quint.sh/docs/literate)に従い、`lmt` で `target/literate/lifecycle_proposal.qnt` を生成する。生成ファイルは直接編集しない。
+説明と実行可能なモデルをこのファイルで管理する。[Quint の literate 形式](https://quint.sh/docs/literate)に従い、`lmt` で `target/literate/` 配下に共有する基本遷移、単独 Issue、計画と子 Issue の3ファイルを生成する。生成ファイルは直接編集しない。
 
 ## 状態
 
@@ -10,10 +10,17 @@
 
 採否を決めるためのまとまった調査は、別の Issue として採用・着手する。元の改善案は未判断のままにできる。この使い分けのために状態を増やさず、複数 Issue の関係は後の検討に残す。
 
-```quint target/literate/lifecycle_proposal.qnt +=
-module lifecycle_proposal {
+状態の種類と基本遷移は Issue と計画で共有する。共有する純粋な定義だけを `lifecycle_rules.qnt` に生成する。
+
+```quint target/literate/lifecycle_rules.qnt +=
+module lifecycle_rules {
   type Lifecycle = Undecided | NotStarted | InProgress | Completed | Cancelled
   type Operation = Accept | Withdraw | Start | Release | Complete | Cancel | Reconsider
+```
+
+```quint target/literate/lifecycle_proposal.qnt +=
+module lifecycle_proposal {
+  import lifecycle_rules.* from "lifecycle_rules"
   type Event = Initialized | LifecycleOperation(Operation) | ConditionChanged
 
   var lifecycle: Lifecycle
@@ -60,7 +67,7 @@ module lifecycle_proposal {
 
 各操作は原子的に実行され、前提を満たさない操作は無効となる。完了ではすべての lifecycle 操作が無効になる。外部入力はその後も変化できるが、完了を取り消さない。完了への到達を強制する公平性は仮定しない。
 
-```quint target/literate/lifecycle_proposal.qnt +=
+```quint target/literate/lifecycle_rules.qnt +=
   pure def canPerform(current: Lifecycle, op: Operation): bool =
     match op {
       | Accept => current == Undecided
@@ -82,6 +89,7 @@ module lifecycle_proposal {
       | Cancel => Cancelled
       | Reconsider => Undecided
     }
+}
 ```
 
 ## 検証のための観測
@@ -239,13 +247,13 @@ module lifecycle_proposal {
 }
 ```
 
-## 対象外
+## 単独 Issue モデルの対象外
 
 claim、dependency、Group、declaration 編集、履歴保存、CLI、永続化、actor の権限判定は含めない。再浮上条件の種類・設定操作、一覧への表示、浮上と着手許可の接続もまだ扱わない。明示操作の許可条件は前段の lifecycle モデルを維持している。
 
 条件定義を固定しているため、取りやめ時の定義の保存や読み戻しは検証しない。`NotEvaluated` は意味上の評価除外を表すもので、実際に外部コマンドが呼ばれないこと、読み取りコスト、実行失敗・副作用は実装側で別途検証する。
 
-## 再現と結果
+## 単独 Issue モデルの再現と結果
 
 Quint と [lmt](https://github.com/driusan/lmt) を使用する。`lmt` がなければ `go install github.com/driusan/lmt@latest` で導入し、Go のインストール先の `bin` を PATH に加える。以下は repository root から実行する。
 
@@ -268,3 +276,217 @@ quint run target/literate/lifecycle_proposal.qnt \
 ```
 
 合意した状態・遷移・初期状態・検討範囲を変更するときは、このファイルを更新し、実行用モデルを再生成して再検証する。次の検討では、この状態遷移で実際の使い方を表現できるかを確認してから範囲を広げる。
+
+## 計画と子 Issue の着手境界
+
+計画1件と、固定所属の子 Issue 2件を共有状態として扱う。会社の ITS の依頼を実装計画へ分解し、子 Issue を別々に作業した後、計画全体を最終確認する用途を想定する。既存 Group の仕様や互換性を引き継ぐためのモデルではない。
+
+計画と子は同じ5状態を持つが、採用はそれぞれ明示する。計画が採用済みでも、未判断の子をそのまま所属させられる。計画・子のどちらの操作も、もう一方の保存状態を自動変更しない。
+
+```quint target/literate/group_lifecycle_proposal.qnt +=
+module group_lifecycle_proposal {
+  import lifecycle_rules.* from "lifecycle_rules"
+
+  type IssueId = int
+  pure val ISSUES: Set[IssueId] = Set(0, 1)
+  pure val OPERATIONS = Set(Accept, Withdraw, Start, Release, Complete, Cancel, Reconsider)
+
+  type PlanState = {
+    group: Lifecycle,
+    children: IssueId -> Lifecycle,
+  }
+  type PlanEvent = Initial | GroupOperation(Operation) | ChildOperation({ id: IssueId, op: Operation })
+  type PlanObservation = {
+    before: PlanState,
+    event: PlanEvent,
+    reviewPassed: bool,
+  }
+
+  var plan: PlanState
+  var observation: PlanObservation
+```
+
+### 計画の操作
+
+子への着手前に親を明示的に着手する。逆方向では、進行中の子がいる間は親を未着手へ戻せない。計画を完了・取りやめにするには、全子 Issue が完了または取りやめでなければならない。
+
+完了には、さらに計画全体の最終確認が通ったという前提を置く。`reviewPassed` は完了操作時の確認結果の抽象入力であり、実際の CLI 引数、確認結果の保存、専用操作か最終チェック Issue かを決定するものではない。
+
+```quint target/literate/group_lifecycle_proposal.qnt +=
+  pure def terminal(current: Lifecycle): bool = Set(Completed, Cancelled).contains(current)
+  pure def allChildrenTerminal(s: PlanState): bool =
+    ISSUES.forall(id => terminal(s.children.get(id)))
+  pure def hasWorkingChild(s: PlanState): bool =
+    ISSUES.exists(id => s.children.get(id) == InProgress)
+
+  pure def canGroup(s: PlanState, op: Operation, reviewPassed: bool): bool = and {
+    canPerform(s.group, op),
+    op != Release or not(hasWorkingChild(s)),
+    not(Set(Complete, Cancel).contains(op)) or allChildrenTerminal(s),
+    op != Complete or reviewPassed,
+  }
+
+  pure def applyGroup(s: PlanState, op: Operation): PlanState =
+    { ...s, group: applyOperation(s.group, op) }
+
+  pure def observeGroup(s: PlanState, op: Operation, passed: bool): PlanObservation = {
+    before: s,
+    event: GroupOperation(op),
+    reviewPassed: passed,
+  }
+
+  action init = {
+    val initial = { group: Undecided, children: ISSUES.mapBy(_ => Undecided) }
+    all {
+      plan' = initial,
+      observation' = { before: initial, event: Initial, reviewPassed: false },
+    }
+  }
+
+  action performGroup(op: Operation, reviewPassed: bool): bool = all {
+    canGroup(plan, op, reviewPassed),
+    plan' = applyGroup(plan, op),
+    observation' = observeGroup(plan, op, reviewPassed),
+  }
+```
+
+### 子 Issue の操作
+
+子は、自身が採用済みで、親が進行中のときだけ着手できる。親の完了後は子も固定する。親が取りやめの間は、子の取りやめを未判断へ戻せない。先に親を明示的に再検討し、その後で必要な子を個別に再検討する。
+
+取りやめた計画の再検討は暫定的に許可する。別計画として登録する方式も代替案として残す。再検討によって完了した子は戻らず、取りやめた子も自動では戻らない。
+
+```quint target/literate/group_lifecycle_proposal.qnt +=
+  pure def canChild(s: PlanState, id: IssueId, op: Operation): bool = and {
+    canPerform(s.children.get(id), op),
+    s.group != Completed,
+    op != Start or s.group == InProgress,
+    not(terminal(s.group)) or terminal(applyOperation(s.children.get(id), op)),
+  }
+
+  pure def applyChild(s: PlanState, id: IssueId, op: Operation): PlanState =
+    { ...s, children: s.children.set(id, applyOperation(s.children.get(id), op)) }
+
+  pure def observeChild(s: PlanState, id: IssueId, op: Operation): PlanObservation = {
+    before: s,
+    event: ChildOperation({ id: id, op: op }),
+    reviewPassed: false,
+  }
+
+  action performChild(id: IssueId, op: Operation): bool = all {
+    canChild(plan, id, op),
+    plan' = applyChild(plan, id, op),
+    observation' = observeChild(plan, id, op),
+  }
+
+  action step = {
+    nondet id = ISSUES.oneOf()
+    nondet op = OPERATIONS.oneOf()
+    nondet passed = Set(false, true).oneOf()
+    any {
+      performGroup(op, passed),
+      performChild(id, op),
+    }
+  }
+```
+
+### 親子の性質と到達性
+
+親の着手前に子へ着手できないこと、進行中の子を残して親を解放できないこと、親子の操作が他の Entity を自動更新しないことを調べる。子が全部終了しても親は進行中に留まり、最終確認を経た明示完了を待てる。未判断の子がある間は完了も取りやめもできない。
+
+```quint target/literate/group_lifecycle_proposal.qnt +=
+  pure def groupOperationAvailable(s: PlanState): bool =
+    OPERATIONS.exists(op => canGroup(s, op, true))
+  pure def childOperationAvailable(s: PlanState): bool =
+    ISSUES.exists(id => OPERATIONS.exists(op => canChild(s, id, op)))
+
+  def sawChild(op: Operation): bool = match observation.event {
+    | ChildOperation(change) => change.op == op
+    | _ => false
+  }
+
+  val wGroupAccept = observation.event == GroupOperation(Accept)
+  val wGroupWithdraw = observation.event == GroupOperation(Withdraw)
+  val wGroupStart = observation.event == GroupOperation(Start)
+  val wGroupRelease = observation.event == GroupOperation(Release)
+  val wGroupComplete = observation.event == GroupOperation(Complete)
+  val wGroupCancel = observation.event == GroupOperation(Cancel)
+  val wGroupReconsider = observation.event == GroupOperation(Reconsider)
+  val wChildAccept = sawChild(Accept)
+  val wChildWithdraw = sawChild(Withdraw)
+  val wChildStart = sawChild(Start)
+  val wChildRelease = sawChild(Release)
+  val wChildComplete = sawChild(Complete)
+  val wChildCancel = sawChild(Cancel)
+  val wChildReconsider = sawChild(Reconsider)
+
+  val wMixedAdoption = Set(NotStarted, InProgress).contains(plan.group)
+    and ISSUES.exists(id => plan.children.get(id) == Undecided)
+    and ISSUES.exists(id => plan.children.get(id) == NotStarted)
+  val wParentStartRequired = plan.group == NotStarted
+    and ISSUES.exists(id => plan.children.get(id) == NotStarted and not(canChild(plan, id, Start)))
+  val wParentReleaseBlocked = hasWorkingChild(plan) and not(canGroup(plan, Release, false))
+  val wAwaitingFinalCheck = plan.group == InProgress and allChildrenTerminal(plan)
+  val wFailedCheckCannotComplete = wAwaitingFinalCheck and not(canGroup(plan, Complete, false))
+  val wGroupReconsiderPreservesChildren = wGroupReconsider
+    and plan.group == Undecided and plan.children == observation.before.children
+  val wCompletedWithCancelledChild = plan.group == Completed
+    and ISSUES.exists(id => plan.children.get(id) == Cancelled)
+  val wCompletedAllChildrenDone = plan.group == Completed
+    and ISSUES.forall(id => plan.children.get(id) == Completed)
+  val wBothChildrenWorking = ISSUES.forall(id => plan.children.get(id) == InProgress)
+  val wUndecidedChildBlocksClosure = plan.group == InProgress
+    and ISSUES.exists(id => plan.children.get(id) == Undecided)
+    and not(canGroup(plan, Complete, true)) and not(canGroup(plan, Cancel, false))
+
+  val invParentOfWorkingChild = hasWorkingChild(plan) implies plan.group == InProgress
+  val invClosedChildrenTerminal = terminal(plan.group) implies allChildrenTerminal(plan)
+  val invCompletedPlanFrozen = plan.group == Completed
+    implies (not(groupOperationAvailable(plan)) and not(childOperationAvailable(plan)))
+  val invCompletedChildrenStayCompleted = ISSUES.forall(id =>
+    observation.before.children.get(id) == Completed implies plan.children.get(id) == Completed)
+  val invCompletionReviewed = (plan.group == Completed and observation.before.group != Completed)
+    implies (observation.event == GroupOperation(Complete) and observation.reviewPassed)
+  val invOperationScope = match observation.event {
+    | Initial => plan == observation.before
+    | GroupOperation(_) => plan.children == observation.before.children
+    | ChildOperation(change) => plan.group == observation.before.group
+      and ISSUES.exclude(Set(change.id)).forall(id =>
+        plan.children.get(id) == observation.before.children.get(id))
+  }
+  val invNoUnexpectedDeadEnd = plan.group != Completed
+    implies (groupOperationAvailable(plan) or childOperationAvailable(plan))
+}
+```
+
+### 今回の境界
+
+親の構成を固定しているため、所属変更、計画外への移動、最終チェックで不足が分かった後の Issue 追加、完了後の構成固定そのものはまだ検証しない。完了した計画の配下の取りやめ Issue を未判断へ戻せないことは、このモデルで検証する。
+
+最終チェックが不合格なら計画を完了しないことは扱うが、その不足内容や修正工程は扱わない。入れ子の計画、dependency、claim、親の再浮上条件と子の浮上・着手の関係も対象外とする。単独 Issue モデルの再浮上の性質と、この親子モデルの性質が同時に成立することは、今後両モデルを組み合わせて検証する必要がある。
+
+計画の完了後に操作がなくなるのは意図した終了であり、取りやめた計画には再検討の経路を残す。最終確認に必ず合格することや、計画が必ず完了することは仮定しない。
+
+### 親子モデルの再現と結果
+
+2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成後、Quint 0.32.0、Rust backend、10,000 traces、最大 120 steps、入力 seed `2026091003` で以下を実行した。7 invariant に反例はなく、24 witness はすべて 1 trace 以上で観測された。全子が完了して計画も完了するケースは2 traces、両子が同時に進行中になるケースは176 tracesで観測された。到達性は確認できたが、全状態の証明ではない。
+
+基本遷移を共有ファイルへ抽出した単独 Issue モデルも、上記の seed `2026091002`・10,000 traces・最大80 stepsで再実行し、9 invariant に反例なし・19 witness 到達を確認した。
+
+```sh
+lmt spec/lifecycle_proposal.md
+quint typecheck target/literate/group_lifecycle_proposal.qnt
+quint run target/literate/group_lifecycle_proposal.qnt \
+  --invariants invParentOfWorkingChild invClosedChildrenTerminal \
+    invCompletedPlanFrozen invCompletedChildrenStayCompleted invCompletionReviewed \
+    invOperationScope invNoUnexpectedDeadEnd \
+  --witnesses wGroupAccept wGroupWithdraw wGroupStart wGroupRelease \
+    wGroupComplete wGroupCancel wGroupReconsider \
+    wChildAccept wChildWithdraw wChildStart wChildRelease \
+    wChildComplete wChildCancel wChildReconsider \
+    wMixedAdoption wParentStartRequired wParentReleaseBlocked \
+    wAwaitingFinalCheck wFailedCheckCannotComplete wGroupReconsiderPreservesChildren \
+    wCompletedWithCancelledChild wCompletedAllChildrenDone wBothChildrenWorking \
+    wUndecidedChildBlocksClosure \
+  --max-samples 10000 --max-steps 120 --seed 2026091003 --backend rust --verbosity 1
+```
