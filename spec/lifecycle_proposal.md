@@ -1,6 +1,6 @@
 # Progress と採否を統合する検討用モデル
 
-この literate specification は、Progress と採否を単一の lifecycle にまとめる案を扱う。単独 Issue の再浮上と、計画・子 Issue の着手境界、所属変更、Issue 間の dependency を別モジュールで段階的に検討する。既存機能やデータ形式との互換性を前提にせず、新しい土台として設計するためのモデルであり、このファイルの追加・更新で現行実装や既存モデルは変更しない。
+この literate specification は、Progress と採否を単一の lifecycle にまとめる案を扱う。単独 Issue の再浮上を基本モデルで扱い、計画・子 Issue の着手境界、所属変更、Issue 間の dependency、再浮上による候補の選別を統合モデルで検討する。既存機能やデータ形式との互換性を前提にせず、新しい土台として設計するためのモデルであり、このファイルの追加・更新で現行実装や既存モデルは変更しない。
 
 説明と実行可能なモデルをこのファイルで管理する。[Quint の literate 形式](https://quint.sh/docs/literate)に従い、`lmt` で `target/literate/` 配下に共有する基本遷移、単独 Issue、計画と子 Issue の3ファイルを生成する。生成ファイルは直接編集しない。
 
@@ -277,7 +277,7 @@ quint run target/literate/lifecycle_proposal.qnt \
 
 合意した状態・遷移・初期状態・検討範囲を変更するときは、このファイルを更新し、実行用モデルを再生成して再検証する。次の検討では、この状態遷移で実際の使い方を表現できるかを確認してから範囲を広げる。
 
-## 計画・所属・Issue 間の dependency
+## 計画・所属・dependency・再浮上
 
 計画2件、Issue 用の固定 ID 3件を使う。最初は2 Issue が計画0に所属し、残り1件は未登録の枠とする。未登録はモデルの探索領域を有限にする仕組みであり、新しい lifecycle ではない。計画・Issue は未判断から始まり、各々を明示的に採用する。
 
@@ -300,15 +300,20 @@ module group_lifecycle_proposal {
     parents: Id -> Parent,
     dependencies: Id -> Set[Id],
   }
+  type Conditions = { groups: Id -> bool, issues: Id -> bool }
+  type ConditionResult = NotEvaluated | Evaluated(bool)
   type PlanEvent = Initial
+    | GroupConditionChanged(Id)
+    | IssueConditionChanged(Id)
     | GroupOperation({ id: Id, op: Operation })
     | IssueOperation({ id: Id, op: Operation })
     | Reparent({ id: Id, parent: Parent })
     | RegisterIssue({ id: Id, parent: Parent })
     | AddDependency({ source: Id, target: Id })
     | RemoveDependency({ source: Id, target: Id })
-  type PlanObservation = { before: PlanState, event: PlanEvent, reviewPassed: bool }
+  type PlanObservation = { before: PlanState, beforeConditions: Conditions, event: PlanEvent, reviewPassed: bool }
   var plan: PlanState
+  var conditions: Conditions
   var observation: PlanObservation
 ```
 
@@ -357,8 +362,8 @@ module group_lifecycle_proposal {
   pure def applyIssue(s: PlanState, id: Id, op: Operation): PlanState =
     { ...s, issues: s.issues.set(id, applyOperation(s.issues.get(id), op)) }
 
-  pure def observe(s: PlanState, event: PlanEvent, passed: bool): PlanObservation =
-    { before: s, event: event, reviewPassed: passed }
+  pure def observe(s: PlanState, c: Conditions, event: PlanEvent, passed: bool): PlanObservation =
+    { before: s, beforeConditions: c, event: event, reviewPassed: passed }
 
   action init = {
     val initial = {
@@ -368,20 +373,24 @@ module group_lifecycle_proposal {
       parents: ISSUES.mapBy(id => if (id == 2) Unassigned else InGroup(0)),
       dependencies: ISSUES.mapBy(_ => Set()),
     }
+    val initialConditions = { groups: GROUPS.mapBy(_ => false), issues: ISSUES.mapBy(_ => false) }
     all {
       plan' = initial,
-      observation' = observe(initial, Initial, false),
+      conditions' = initialConditions,
+      observation' = observe(initial, initialConditions, Initial, false),
     }
   }
   action performGroup(id: Id, op: Operation, passed: bool): bool = all {
     canGroup(plan, id, op, passed),
     plan' = applyGroup(plan, id, op),
-    observation' = observe(plan, GroupOperation({ id: id, op: op }), passed),
+    conditions' = conditions,
+    observation' = observe(plan, conditions, GroupOperation({ id: id, op: op }), passed),
   }
   action performIssue(id: Id, op: Operation): bool = all {
     canIssue(plan, id, op),
     plan' = applyIssue(plan, id, op),
-    observation' = observe(plan, IssueOperation({ id: id, op: op }), false),
+    conditions' = conditions,
+    observation' = observe(plan, conditions, IssueOperation({ id: id, op: op }), false),
   }
 
 ```
@@ -406,7 +415,8 @@ module group_lifecycle_proposal {
   action moveIssue(id: Id, parent: Parent): bool = all {
     canMove(plan, id, parent),
     plan' = applyMove(plan, id, parent),
-    observation' = observe(plan, Reparent({ id: id, parent: parent }), false),
+    conditions' = conditions,
+    observation' = observe(plan, conditions, Reparent({ id: id, parent: parent }), false),
   }
 
   pure def canRegister(s: PlanState, id: Id, parent: Parent): bool = and {
@@ -422,7 +432,8 @@ module group_lifecycle_proposal {
   action registerIssue(id: Id, parent: Parent): bool = all {
     canRegister(plan, id, parent),
     plan' = applyRegister(plan, id, parent),
-    observation' = observe(plan, RegisterIssue({ id: id, parent: parent }), false),
+    conditions' = conditions,
+    observation' = observe(plan, conditions, RegisterIssue({ id: id, parent: parent }), false),
   }
 
 ```
@@ -452,7 +463,8 @@ module group_lifecycle_proposal {
   action addDependency(source: Id, target: Id): bool = all {
     canAddDependency(plan, source, target),
     plan' = applyAddDependency(plan, source, target),
-    observation' = observe(plan, AddDependency({ source: source, target: target }), false),
+    conditions' = conditions,
+    observation' = observe(plan, conditions, AddDependency({ source: source, target: target }), false),
   }
 ```
 
@@ -467,13 +479,78 @@ module group_lifecycle_proposal {
   action removeDependency(source: Id, target: Id): bool = all {
     canRemoveDependency(plan, source, target),
     plan' = applyRemoveDependency(plan, source, target),
-    observation' = observe(plan, RemoveDependency({ source: source, target: target }), false),
+    conditions' = conditions,
+    observation' = observe(plan, conditions, RemoveDependency({ source: source, target: target }), false),
+  }
+```
+
+### 再浮上・着手候補・着手中
+
+再浮上条件は、各計画・Issue の成立・不成立を外部入力として扱う。条件の種類や設定操作は今回も抽象化する。以下の三つを分け、一覧のコマンド構成や表示形式は決めない。
+
+| 導出する集合 | 条件 |
+| --- | --- |
+| 着手可能な Issue | 未着手、親があれば進行中、全依存先が完了 |
+| 着手候補の Issue | 着手可能で、自身と親が浮上している |
+| 着手中の Issue | 進行中。自身・親の浮上状態や追加された未完了の依存に関係なく含む |
+
+計画自身も、未着手なら明示的に着手可能とし、候補に出すときだけ自身の浮上を要求する。進行中の計画は非浮上でも着手中に含む。再浮上は候補の表示を制御し、明示的な着手や完了、所属・依存変更の可否には加えない。この表示と明示操作の分離は暫定採用の判断である。
+
+取りやめ・完了の Entity は条件を評価せず、浮上しない。親が非浮上なら子を着手候補から外すが、子の状態や条件は変えない。評価結果は保存せず、入力と状態から導出する。
+
+```quint target/literate/group_lifecycle_proposal.qnt +=
+  pure def groupConditionResult(s: PlanState, c: Conditions, id: Id): ConditionResult =
+    if (terminal(s.groups.get(id))) NotEvaluated else Evaluated(c.groups.get(id))
+  pure def issueConditionResult(s: PlanState, c: Conditions, id: Id): ConditionResult =
+    if (not(s.registered.contains(id)) or terminal(s.issues.get(id))) NotEvaluated
+    else Evaluated(c.issues.get(id))
+  pure def parentSurfaced(s: PlanState, c: Conditions, parent: Parent): bool = match parent {
+    | Unassigned => true
+    | InGroup(id) => groupConditionResult(s, c, id) == Evaluated(true)
+  }
+  pure def startableIssues(s: PlanState): Set[Id] = s.registered.filter(id => canIssue(s, id, Start))
+  pure def candidateIssues(s: PlanState, c: Conditions): Set[Id] =
+    startableIssues(s).filter(id => issueConditionResult(s, c, id) == Evaluated(true)
+      and parentSurfaced(s, c, s.parents.get(id)))
+  pure def workingIssues(s: PlanState): Set[Id] =
+    s.registered.filter(id => s.issues.get(id) == InProgress)
+  pure def startableGroups(s: PlanState): Set[Id] = GROUPS.filter(id => canGroup(s, id, Start, false))
+  pure def candidateGroups(s: PlanState, c: Conditions): Set[Id] =
+    startableGroups(s).filter(id => groupConditionResult(s, c, id) == Evaluated(true))
+  pure def workingGroups(s: PlanState): Set[Id] = GROUPS.filter(id => s.groups.get(id) == InProgress)
+```
+
+外部入力の変化は、保存する lifecycle・所属・dependency を変えない。取りやめ・完了の間にも外界は変化するが、その Entity の条件を評価するという意味ではない。
+
+```quint target/literate/group_lifecycle_proposal.qnt +=
+  pure def canChangeGroupCondition(c: Conditions, id: Id, satisfied: bool): bool =
+    c.groups.get(id) != satisfied
+  pure def applyGroupCondition(c: Conditions, id: Id, satisfied: bool): Conditions =
+    { ...c, groups: c.groups.set(id, satisfied) }
+  action changeGroupCondition(id: Id, satisfied: bool): bool = all {
+    canChangeGroupCondition(conditions, id, satisfied),
+    plan' = plan,
+    conditions' = applyGroupCondition(conditions, id, satisfied),
+    observation' = observe(plan, conditions, GroupConditionChanged(id), false),
+  }
+```
+
+```quint target/literate/group_lifecycle_proposal.qnt +=
+  pure def canChangeIssueCondition(s: PlanState, c: Conditions, id: Id, satisfied: bool): bool =
+    s.registered.contains(id) and c.issues.get(id) != satisfied
+  pure def applyIssueCondition(c: Conditions, id: Id, satisfied: bool): Conditions =
+    { ...c, issues: c.issues.set(id, satisfied) }
+  action changeIssueCondition(id: Id, satisfied: bool): bool = all {
+    canChangeIssueCondition(plan, conditions, id, satisfied),
+    plan' = plan,
+    conditions' = applyIssueCondition(conditions, id, satisfied),
+    observation' = observe(plan, conditions, IssueConditionChanged(id), false),
   }
 ```
 
 ### 探索
 
-基本遷移、所属変更、新規登録、dependency の追加・削除を混ぜて実行する。登録済み集合と所属は別に保持し、計画の外へ出しても Issue を削除しない。同じ所属の再指定は無効とする。ID は固定集合から選び、未登録 ID の再利用・削除は扱わない。
+基本遷移、所属変更、新規登録、dependency の追加・削除、再浮上条件の成立・不成立を混ぜて実行する。条件入力はすべて不成立から開始し、登録済み Issue と計画について両方向へ変化できる。これは探索の開始点であり、製品の再浮上条件の初期値を決めるものではない。登録済み集合と所属は別に保持し、計画の外へ出しても Issue を削除しない。同じ所属の再指定は無効とする。ID は固定集合から選び、未登録 ID の再利用・削除は扱わない。
 
 ```quint target/literate/group_lifecycle_proposal.qnt +=
   action step = {
@@ -490,6 +567,8 @@ module group_lifecycle_proposal {
       registerIssue(id, parent),
       addDependency(id, target),
       removeDependency(id, target),
+      changeGroupCondition(group, passed),
+      changeIssueCondition(id, passed),
     }
   }
 ```
@@ -509,9 +588,13 @@ module group_lifecycle_proposal {
 - 着手・完了時に全依存先が完了しており、完了後もその前提は満たされたままである。
 - 完了した Issue 自身の dependency は固定される。
 - dependency 操作は lifecycle や所属を変えず、他の操作は dependency を変えない。
+- 条件入力の変化は保存状態・着手可否・着手中の集合を変えず、明示操作は条件入力を変えない。
+- 着手候補は着手可能なものに限り、自身と親の浮上条件に一致する。
+- 進行中の Issue と計画は、非浮上でも着手中に含む。
+- 未登録・取りやめ・完了の Issue と、取りやめ・完了の計画は条件を評価しない。
 - 未終了の仕事や再検討可能な計画が残っている間、全 lifecycle 操作が行き止まりにならない。
 
-到達性では各操作に加え、進行中の移動、未判断を計画外へ出して完了可能になる場合、最終確認待ちからの新規 Issue 追加を観測する。dependency については、進行中の追加、計画をまたぐ依存、前提の取りやめによる阻害、前提の完了による着手・完了解禁、直接・間接循環の拒否を確認する。
+到達性では各操作に加え、進行中の移動、未判断を計画外へ出して完了可能になる場合、最終確認待ちからの新規 Issue 追加を観測する。dependency については、進行中の追加、計画をまたぐ依存、前提の取りやめによる阻害、前提の完了による着手・完了解禁、直接・間接循環の拒否を確認する。再浮上については、親の条件変化による候補の除外と復帰、非浮上のままの明示的な着手、進行中の仕事の保持を確認する。
 
 ```quint target/literate/group_lifecycle_proposal.qnt +=
   def sawGroup(op: Operation): bool = match observation.event {
@@ -620,6 +703,8 @@ module group_lifecycle_proposal {
     (plan.groups.get(g) == Completed and observation.before.groups.get(g) != Completed)
       implies (observation.event == GroupOperation({ id: g, op: Complete }) and observation.reviewPassed))
   val invOperationScope = match observation.event {
+    | GroupConditionChanged(_) => plan == observation.before
+    | IssueConditionChanged(_) => plan == observation.before
     | RemoveDependency(_) => plan.groups == observation.before.groups
       and plan.issues == observation.before.issues
       and plan.parents == observation.before.parents
@@ -738,6 +823,121 @@ module group_lifecycle_proposal {
       and not(canAddDependency(plan, source, target))))
   val invSelfDependencyRejected = plan.registered.forall(id => not(canAddDependency(plan, id, id)))
 
+  val invConditionInputScope = match observation.event {
+    | IssueConditionChanged(changed) => conditions.groups == observation.beforeConditions.groups
+        and ISSUES.exclude(Set(changed)).forall(id => conditions.issues.get(id) == observation.beforeConditions.issues.get(id))
+    | GroupConditionChanged(changed) => conditions.issues == observation.beforeConditions.issues
+        and GROUPS.exclude(Set(changed)).forall(id => conditions.groups.get(id) == observation.beforeConditions.groups.get(id))
+    | _ => conditions == observation.beforeConditions
+  }
+  val wGroupConditionRose = match observation.event {
+    | GroupConditionChanged(id) => conditions.groups.get(id)
+    | _ => false
+  }
+  val wGroupConditionFell = match observation.event {
+    | GroupConditionChanged(id) => not(conditions.groups.get(id))
+    | _ => false
+  }
+
+  val wIssueConditionRose = match observation.event {
+    | IssueConditionChanged(id) => conditions.issues.get(id)
+    | _ => false
+  }
+  val wIssueConditionFell = match observation.event {
+    | IssueConditionChanged(id) => not(conditions.issues.get(id))
+    | _ => false
+  }
+  val invTerminalConditionsNotEvaluated = and {
+    GROUPS.forall(id => terminal(plan.groups.get(id))
+      implies groupConditionResult(plan, conditions, id) == NotEvaluated),
+    ISSUES.forall(id => (not(plan.registered.contains(id)) or terminal(plan.issues.get(id)))
+      implies issueConditionResult(plan, conditions, id) == NotEvaluated),
+  }
+  val invCandidatesAreStartable = candidateIssues(plan, conditions).subseteq(startableIssues(plan))
+    and candidateGroups(plan, conditions).subseteq(startableGroups(plan))
+  val invCandidateDefinition = and {
+    candidateIssues(plan, conditions) == plan.registered.filter(id => and {
+      plan.issues.get(id) == NotStarted,
+      parentWorking(plan, plan.parents.get(id)),
+      prerequisitesComplete(plan, id),
+      conditions.issues.get(id),
+      match plan.parents.get(id) {
+        | Unassigned => true
+        | InGroup(group) => conditions.groups.get(group)
+      },
+    }),
+    candidateGroups(plan, conditions) == GROUPS.filter(id =>
+      plan.groups.get(id) == NotStarted and conditions.groups.get(id)),
+  }
+  val invWorkingVisibility = and {
+    workingIssues(plan) == plan.registered.filter(id => plan.issues.get(id) == InProgress),
+    workingGroups(plan) == GROUPS.filter(id => plan.groups.get(id) == InProgress),
+  }
+  val invConditionChangesPreserveEligibility = match observation.event {
+    | GroupConditionChanged(_) => startableIssues(plan) == startableIssues(observation.before)
+        and startableGroups(plan) == startableGroups(observation.before)
+        and workingIssues(plan) == workingIssues(observation.before)
+        and workingGroups(plan) == workingGroups(observation.before)
+    | IssueConditionChanged(_) => startableIssues(plan) == startableIssues(observation.before)
+        and startableGroups(plan) == startableGroups(observation.before)
+        and workingIssues(plan) == workingIssues(observation.before)
+        and workingGroups(plan) == workingGroups(observation.before)
+    | _ => true
+  }
+  val wCandidateIssue = candidateIssues(plan, conditions).size() > 0
+  val wCandidateGroup = candidateGroups(plan, conditions).size() > 0
+  val wStartHiddenIssue = match observation.event {
+    | IssueOperation(change) => change.op == Start
+        and not(observation.beforeConditions.issues.get(change.id))
+        and workingIssues(plan).contains(change.id)
+    | _ => false
+  }
+  val wStartUnderHiddenParent = match observation.event {
+    | IssueOperation(change) => change.op == Start
+        and not(parentSurfaced(observation.before, observation.beforeConditions, observation.before.parents.get(change.id)))
+        and workingIssues(plan).contains(change.id)
+    | _ => false
+  }
+  val wStartHiddenGroup = match observation.event {
+    | GroupOperation(change) => change.op == Start
+        and not(observation.beforeConditions.groups.get(change.id))
+        and workingGroups(plan).contains(change.id)
+    | _ => false
+  }
+  val wParentHidesCandidate = match observation.event {
+    | GroupConditionChanged(group) => not(conditions.groups.get(group))
+        and children(plan, group).exists(id =>
+          candidateIssues(observation.before, observation.beforeConditions).contains(id)
+          and not(candidateIssues(plan, conditions).contains(id)))
+    | _ => false
+  }
+  val wParentResurfacesCandidate = match observation.event {
+    | GroupConditionChanged(group) => conditions.groups.get(group)
+        and children(plan, group).exists(id =>
+          not(candidateIssues(observation.before, observation.beforeConditions).contains(id))
+          and candidateIssues(plan, conditions).contains(id))
+    | _ => false
+  }
+  val wParentHiddenKeepsWorkingChild = match observation.event {
+    | GroupConditionChanged(group) => not(conditions.groups.get(group))
+        and children(plan, group).exists(id => workingIssues(plan).contains(id))
+    | _ => false
+  }
+  val wIssueHiddenKeepsWorking = match observation.event {
+    | IssueConditionChanged(id) => not(conditions.issues.get(id)) and workingIssues(plan).contains(id)
+    | _ => false
+  }
+  val wCompletedIssueConditionIgnored = match observation.event {
+    | IssueConditionChanged(id) => conditions.issues.get(id) and plan.issues.get(id) == Completed
+        and issueConditionResult(plan, conditions, id) == NotEvaluated
+    | _ => false
+  }
+  val wCancelledGroupConditionIgnored = match observation.event {
+    | GroupConditionChanged(id) => conditions.groups.get(id) and plan.groups.get(id) == Cancelled
+        and groupConditionResult(plan, conditions, id) == NotEvaluated
+    | _ => false
+  }
+
   val invMembershipValid = and {
     plan.registered.subseteq(ISSUES),
     ISSUES.forall(id => PARENTS.contains(plan.parents.get(id))),
@@ -765,17 +965,19 @@ module group_lifecycle_proposal {
 
 ### 今回の境界
 
-所属変更、未判断での新規登録、Issue 間の dependency を、計画2件・Issue枠3件の範囲で扱う。取りやめた計画は再検討後に構成を変更できるが、完了した計画には再開経路を持たせない。
+所属変更、未判断での新規登録、Issue 間の dependency、再浮上と着手候補・着手中の関係を、計画2件・Issue枠3件の範囲で扱う。取りやめた計画は再検討後に構成を変更できるが、完了した計画には再開経路を持たせない。
 
-最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。入れ子の計画、計画そのものへの dependency、claim、再浮上と親子の着手・所属変更・dependency の組み合わせ、declaration 編集、実際の ID 発行や永続化は検証対象外である。単独 Issue の再浮上モデルとの統合は後の検討に残す。
+最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。入れ子の計画、計画そのものへの dependency、claim、declaration 編集、実際の ID 発行や永続化は検証対象外である。条件の種類・設定・評価失敗、未判断の提案を表示する条件、一覧やコマンドの具体的な構成もまだ決めない。
+
+`NotEvaluated` は意味上の評価除外であり、外部コマンドを実際に呼ばないことや評価コストは実装側で別途検証する。自身の条件の評価と親による候補の除外を分けており、親が非浮上の場合に子の外部条件の評価を省略する実装までは定めない。
 
 循環の検査はこの3 ID の全グラフを対象とするが、4件以上の具体的なグラフは探索していない。依存先が取りやめでも依存元の取りやめを強制せず、依存関係の見直しや再検討を明示操作に残す。行き止まりがないという性質は整理・再判断の操作も含み、当初の計画どおり必ず完了できることを意味しない。
 
 このモデルには、追加できる Issue が1件だけという探索上の上限がある。新規登録が無効になることは、製品で追加件数を制限する提案ではない。無限件数への一般化や、必ず最終確認に合格し計画が完了することは保証しない。
 
-### 所属・dependency モデルの再現と結果
+### 統合モデルの再現と結果
 
-2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成後、Quint 0.32.0、Rust backend、10,000 traces、最大200 steps、入力 seed `2026091005` で実行した。17 invariant に反例はなく、44 witness はすべて1 trace以上で観測された。進行中への未完了依存追加は2,182 traces、依存先の完了で着手可能になるケースは104 traces、完了可能になるケースは9 tracesで観測された。直接・間接循環の拒否も観測された。これは bounded random simulation の結果であり、全状態の証明ではない。
+2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成後、Quint 0.32.0、Rust backend、10,000 traces、最大200 steps、入力 seed `2026091006` で実行した。23 invariant に反例はなく、59 witness はすべて1 trace以上で観測された。非浮上の親の配下で明示的に着手するケースは392 traces、親を非浮上にしても進行中の子を保持するケースは439 tracesで観測された。既存の所属・dependency の到達目標もすべて観測された。これは bounded random simulation の結果であり、全状態の証明ではない。
 
 単独 Issue と再浮上のモデル、および共有する基本遷移のコードは変更していない。
 
@@ -791,6 +993,8 @@ quint run target/literate/group_lifecycle_proposal.qnt \
     invDependencyOperationScope invDependenciesValid invDependenciesAcyclic \
     invCompletedPrerequisites invStartAndCompleteRequirePrerequisites \
     invCompletedDependenciesFrozen invSelfDependencyRejected \
+    invConditionInputScope invTerminalConditionsNotEvaluated invCandidatesAreStartable \
+    invCandidateDefinition invWorkingVisibility invConditionChangesPreserveEligibility \
   --witnesses \
     wGroupAccept wGroupWithdraw wGroupStart \
     wGroupRelease wGroupComplete wGroupCancel \
@@ -807,5 +1011,9 @@ quint run target/literate/group_lifecycle_proposal.qnt \
     wCrossPlanDependency wDependOnCompletedIssue wDependencyRetainedOnMove \
     wCancelledPrerequisiteBlocks wPrerequisiteCompletionUnblocksStart \
     wPrerequisiteCompletionUnblocksFinish wIndirectCycleRejected wDirectCycleRejected \
-  --max-samples 10000 --max-steps 200 --seed 2026091005 --backend rust --verbosity 1
+    wGroupConditionRose wGroupConditionFell wIssueConditionRose wIssueConditionFell \
+    wCandidateIssue wCandidateGroup wStartHiddenIssue wStartUnderHiddenParent wStartHiddenGroup \
+    wParentHidesCandidate wParentResurfacesCandidate wParentHiddenKeepsWorkingChild \
+    wIssueHiddenKeepsWorking wCompletedIssueConditionIgnored wCancelledGroupConditionIgnored \
+  --max-samples 10000 --max-steps 200 --seed 2026091006 --backend rust --verbosity 1
 ```
