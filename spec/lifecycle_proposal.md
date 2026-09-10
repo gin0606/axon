@@ -2,7 +2,7 @@
 
 この literate specification は、Progress と採否を単一の lifecycle にまとめる案を扱う。単独 Issue の再浮上を基本モデルで扱い、計画・子 Issue の着手境界、所属変更、Issue・計画間の dependency、再浮上による候補の選別を統合モデルで検討する。既存機能やデータ形式との互換性を前提にせず、新しい土台として設計するためのモデルであり、このファイルの追加・更新で現行実装や既存モデルは変更しない。
 
-説明と実行可能なモデルをこのファイルで管理する。[Quint の literate 形式](https://quint.sh/docs/literate)に従い、`lmt` で `target/literate/` 配下に共有する基本遷移、単独 Issue、計画と子 Issue の統合モデル、到達性の補助探索、候補一覧の評価の5ファイルを生成する。生成ファイルは直接編集しない。
+説明と実行可能なモデルをこのファイルで管理する。[Quint の literate 形式](https://quint.sh/docs/literate)に従い、`lmt` で `target/literate/` 配下に共有する基本遷移、単独 Issue、計画と子 Issue の統合モデル、到達性の補助探索、候補一覧の評価、文面・Note・状態変更履歴の6ファイルを生成する。生成ファイルは直接編集しない。
 
 ## 状態
 
@@ -1394,7 +1394,7 @@ module lifecycle_reachability {
 
 入れ子の計画と所属変更、提案・採用済みの新規登録、Issue・計画間の dependency、再浮上と判断候補・着手候補・着手中の関係を、計画3件・Issue枠3件の範囲で扱う。取りやめた計画は再検討後に構成を変更できるが、完了した計画には再開経路を持たせない。
 
-最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。claim、declaration 編集、実際の ID 発行や永続化は検証対象外である。一覧やコマンドの構成はまだ決めない。条件の種類・設定と評価失敗は、後述の「候補一覧の評価と失敗」で扱う。
+最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。claim、実際の ID 発行や永続化は検証対象外である。文面編集・Note・状態変更履歴は後述の情報モデルで扱う。一覧やコマンドの構成はまだ決めない。条件の種類・設定と評価失敗は、後述の「候補一覧の評価と失敗」で扱う。
 
 `NotEvaluated` は意味上の評価除外であり、外部コマンドを実際に呼ばないことや評価コストは実装側で別途検証する。この統合モデルでは自身の条件の意味と親による候補の除外を分ける。実際に観測する範囲と呼び出し内の結果共有は、後述の候補一覧モデルへ具体化する。
 
@@ -1891,6 +1891,242 @@ subprocess.run([
     "--init", "queryInit", "--step", "queryStep",
     "--invariants", *invariants, "--witnesses", *witnesses,
     "--max-samples", "10000", "--max-steps", "60", "--seed", "2026091012",
+    "--backend", "rust", "--n-threads", "8", "--verbosity", "1",
+], check=True)
+```
+
+## 文面・Note・状態変更履歴
+
+### 情報の役割と編集範囲
+
+Issue・Group とも、title・description は現在の内容を保持する。未判断・未着手・着手中は状態を変えずに編集でき、完了・取りやめ後は固定する。取りやめた Entity は明示的に再検討して未判断へ戻せば編集できる。完了には再開経路がないため、後からの訂正・補足は Note に追記する。この規則は title・description の規則であり、所属・dependency は前段で定めた変更条件に従う。
+
+現行の採否による declaration の固定、採用時の全文保存、文面の編集履歴は今回採用しない。着手中の計画の具体化・修正のために、作業の解放や採用撤回を要求しない。完了条件をエージェントが都合よく緩和・削除することへの対処は、skill による運用とセッションログでの確認に任せる。Axon 単独では、完了前の文面の書き換えや、採用時からの差分を検証できない。残したい変更理由は Note で補足する。
+
+Note は、調査結果・作業結果・申し送り・訂正など、状態変更と独立した情報を残す。どの状態でも追加でき、追加しても状態は変えない。追記専用とし、既存 Note は編集・削除せず、訂正は新しい Note とする。今の運用で困っておらず、後から制限を厳しくするより緩めるほうが運用コストが低いことを、この選択の理由とする。同じ内容の追記も、それぞれ別の記録として残す。
+
+状態変更履歴は Note と別の役割を持ち、成功した lifecycle 遷移ごとに、変更前の状態・変更後の状態・日時・任意の理由を自動記録する。状態変更と履歴追加は一体で確定し、片方だけを保存しない。拒否された遷移は成功履歴を作らない。履歴も既存記録を保持し、後からの理由の補足・訂正は Note に追記する。文面編集や Note 追加を lifecycle 遷移として履歴へ混ぜず、状態変更時に文面の全文も保存しない。
+
+Note と状態変更履歴を、一つの時系列に並べて表示することは可能だが、表示方法はまだ決めない。保存上の区別は、実際に起きた遷移を自動記録することと、自由な補足を追加することの区別である。
+
+### 情報モデルの範囲
+
+以下は Issue・Group に共通するローカルな情報操作を、固定2 Entity で調べる。lifecycle の基本遷移は `lifecycle_rules` を再利用する。包含・dependency・Group の最終確認による追加の遷移制約は、前段の統合モデルで扱う。このモデルが許す基本遷移だけで、実際の Group や依存を持つ Issue の操作が許可されるわけではない。
+
+文面・Note・理由の内容は不透明な整数へ抽象化し、文字列処理は扱わない。日時も記録する観測値として整数へ抽象化する。同時刻の遷移を区別できるよう、履歴は時刻をキーにせず追記列で表す。このモデルは未判断の登録済み Entity から開始し、登録操作と初期状態の記録は扱わない。実時刻の取得、精度、時計補正、公開 ID、actor、記録の表示順、永続化と保存失敗はこのモデル外である。文面の過去値を持つ `observation` は検証専用の ghost state であり、製品に編集履歴を保存する提案ではない。
+
+```quint target/literate/lifecycle_information.qnt +=
+module lifecycle_information {
+  import lifecycle_rules.* from "lifecycle_rules"
+
+  type Id = int
+  type Reason = NoReason | Because(int)
+  type TransitionRecord = { before: Lifecycle, after: Lifecycle, at: int, reason: Reason }
+  type EntityInformation = {
+    lifecycle: Lifecycle,
+    title: int,
+    description: int,
+    notes: List[int],
+    history: List[TransitionRecord],
+  }
+  type Event = Initial | TitleEdited(Id) | DescriptionEdited(Id) | NoteAdded({ id: Id, body: int })
+    | Transitioned({ id: Id, op: Operation, at: int, reason: Reason })
+  type Observation = { before: Id -> EntityInformation, event: Event }
+  pure val IDS = Set(0, 1)
+  pure val TEXTS = Set(0, 1, 2)
+  pure val OPERATIONS = Set(Accept, Withdraw, Start, Release, Complete, Cancel, Reconsider)
+  var information: Id -> EntityInformation
+  var observation: Observation
+
+  pure val initialInformation: Id -> EntityInformation = IDS.mapBy(_ => {
+    lifecycle: Undecided, title: 0, description: 0, notes: List(), history: List(),
+  })
+  action init = all {
+    information' = initialInformation,
+    observation' = { before: initialInformation, event: Initial },
+  }
+  pure def editable(e: EntityInformation): bool =
+    Set(Undecided, NotStarted, InProgress).contains(e.lifecycle)
+  pure def canEditTitle(e: EntityInformation, value: int): bool = editable(e) and e.title != value
+  pure def canEditDescription(e: EntityInformation, value: int): bool = editable(e) and e.description != value
+  pure def applyTitle(e: EntityInformation, value: int): EntityInformation = { ...e, title: value }
+  pure def applyDescription(e: EntityInformation, value: int): EntityInformation = { ...e, description: value }
+  pure def applyNote(e: EntityInformation, body: int): EntityInformation = { ...e, notes: e.notes.append(body) }
+  pure def applyTransition(e: EntityInformation, op: Operation, at: int, reason: Reason): EntityInformation = {
+    val targetState = applyOperation(e.lifecycle, op)
+    { ...e, lifecycle: targetState,
+      history: e.history.append({ before: e.lifecycle, after: targetState, at: at, reason: reason }) }
+  }
+  action editTitle(id: Id, value: int): bool = all {
+    canEditTitle(information.get(id), value),
+    information' = information.set(id, applyTitle(information.get(id), value)),
+    observation' = { before: information, event: TitleEdited(id) },
+  }
+  action editDescription(id: Id, value: int): bool = all {
+    canEditDescription(information.get(id), value),
+    information' = information.set(id, applyDescription(information.get(id), value)),
+    observation' = { before: information, event: DescriptionEdited(id) },
+  }
+  action addNote(id: Id, body: int): bool = all {
+    information' = information.set(id, applyNote(information.get(id), body)),
+    observation' = { before: information, event: NoteAdded({ id: id, body: body }) },
+  }
+  action transition(id: Id, op: Operation, at: int, reason: Reason): bool = all {
+    canPerform(information.get(id).lifecycle, op),
+    information' = information.set(id, applyTransition(information.get(id), op, at, reason)),
+    observation' = { before: information, event: Transitioned({ id: id, op: op, at: at, reason: reason }) },
+  }
+  action step = {
+    nondet id = IDS.oneOf()
+    nondet value = TEXTS.oneOf()
+    nondet op = OPERATIONS.oneOf()
+    nondet at = Set(0, 1, 2).oneOf()
+    nondet reason = Set(NoReason, Because(0), Because(1)).oneOf()
+    any { editTitle(id, value), editDescription(id, value), addNote(id, value), transition(id, op, at, reason) }
+  }
+  pure def affected(event: Event): Set[Id] = match event {
+    | Initial => Set()
+    | TitleEdited(id) => Set(id)
+    | DescriptionEdited(id) => Set(id)
+    | NoteAdded(change) => Set(change.id)
+    | Transitioned(change) => Set(change.id)
+  }
+  val invOtherEntitiesUnchanged = IDS.exclude(affected(observation.event)).forall(id =>
+    information.get(id) == observation.before.get(id))
+  val invTextEditScope = match observation.event {
+    | TitleEdited(id) => editable(observation.before.get(id))
+      and information.get(id) == { ...observation.before.get(id), title: information.get(id).title }
+    | DescriptionEdited(id) => editable(observation.before.get(id))
+      and information.get(id) == { ...observation.before.get(id), description: information.get(id).description }
+    | _ => true
+  }
+  val invTerminalTextFixed = IDS.forall(id => not(editable(observation.before.get(id))) implies
+    (information.get(id).title == observation.before.get(id).title
+      and information.get(id).description == observation.before.get(id).description))
+  val invNoteAppendOnly = match observation.event {
+    | NoteAdded(change) => information.get(change.id) == {
+        ...observation.before.get(change.id),
+        notes: observation.before.get(change.id).notes.append(change.body),
+      }
+    | _ => IDS.forall(id => information.get(id).notes == observation.before.get(id).notes)
+  }
+  val invTransitionAndHistoryAtomic = match observation.event {
+    | Transitioned(change) => {
+        val before = observation.before.get(change.id)
+        val after = information.get(change.id)
+        and {
+          canPerform(before.lifecycle, change.op),
+          after.lifecycle == applyOperation(before.lifecycle, change.op),
+          after.history == before.history.append({
+            before: before.lifecycle, after: after.lifecycle, at: change.at, reason: change.reason,
+          }),
+          after.title == before.title, after.description == before.description, after.notes == before.notes,
+        }
+      }
+    | _ => IDS.forall(id => information.get(id).lifecycle == observation.before.get(id).lifecycle
+      and information.get(id).history == observation.before.get(id).history)
+  }
+  val invHistoryExplainsCurrentState = IDS.forall(id => {
+    val e = information.get(id)
+    val replay = e.history.foldl({ valid: true, current: Undecided }, (acc, entry) => {
+      valid: acc.valid and acc.current == entry.before and OPERATIONS.exists(op =>
+        canPerform(entry.before, op) and applyOperation(entry.before, op) == entry.after),
+      current: entry.after,
+    })
+    replay.valid and replay.current == e.lifecycle
+  })
+  val invCompletedStaysCompleted = IDS.forall(id =>
+    observation.before.get(id).lifecycle == Completed implies information.get(id).lifecycle == Completed)
+
+  pure def isTransition(event: Event, op: Operation): bool = match event {
+    | Transitioned(change) => change.op == op
+    | _ => false
+  }
+  val wAccept = isTransition(observation.event, Accept)
+  val wWithdraw = isTransition(observation.event, Withdraw)
+  val wStart = isTransition(observation.event, Start)
+  val wRelease = isTransition(observation.event, Release)
+  val wComplete = isTransition(observation.event, Complete)
+  val wCancel = isTransition(observation.event, Cancel)
+  val wReconsider = isTransition(observation.event, Reconsider)
+  val wTitleEdit = match observation.event { | TitleEdited(_) => true | _ => false }
+  val wDescriptionEdit = match observation.event { | DescriptionEdited(_) => true | _ => false }
+  val wEditAfterAcceptance = affected(observation.event).exists(id =>
+    (wTitleEdit or wDescriptionEdit) and information.get(id).lifecycle == NotStarted)
+  val wEditWhileWorking = affected(observation.event).exists(id =>
+    (wTitleEdit or wDescriptionEdit) and information.get(id).lifecycle == InProgress)
+  val wEditAfterReconsider = affected(observation.event).exists(id => {
+    val h = information.get(id).history
+    if (h.length() == 0) false else
+      (wTitleEdit or wDescriptionEdit) and h.nth(h.length() - 1).before == Cancelled
+        and h.nth(h.length() - 1).after == Undecided
+  })
+  val wNoteUndecided = match observation.event {
+    | NoteAdded(change) => information.get(change.id).lifecycle == Undecided
+    | _ => false
+  }
+  val wNoteNotStarted = match observation.event {
+    | NoteAdded(change) => information.get(change.id).lifecycle == NotStarted
+    | _ => false
+  }
+  val wNoteInProgress = match observation.event {
+    | NoteAdded(change) => information.get(change.id).lifecycle == InProgress
+    | _ => false
+  }
+  val wNoteCompleted = match observation.event {
+    | NoteAdded(change) => information.get(change.id).lifecycle == Completed
+    | _ => false
+  }
+  val wNoteCancelled = match observation.event {
+    | NoteAdded(change) => information.get(change.id).lifecycle == Cancelled
+    | _ => false
+  }
+  val wRepeatedNote = match observation.event {
+    | NoteAdded(change) => information.get(change.id).notes.select(body => body == change.body).length() > 1
+    | _ => false
+  }
+  val wReasonProvided = match observation.event {
+    | Transitioned(change) => change.reason != NoReason
+    | _ => false
+  }
+  val wReasonOmitted = match observation.event {
+    | Transitioned(change) => change.reason == NoReason
+    | _ => false
+  }
+  val wSameTimestampRetained = match observation.event {
+    | Transitioned(change) => {
+        val h = information.get(change.id).history
+        if (h.length() < 2) false else h.nth(h.length() - 2).at == h.nth(h.length() - 1).at
+      }
+    | _ => false
+  }
+
+}
+```
+
+### 情報モデルの検査と再現
+
+2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成・型検査後、Quint 0.32.0、Rust backend、8 threads、10,000 traces、最大60 steps、入力 seed `2026091013` で実行した。7 invariant に反例はなく、21 witness はすべて1 trace以上で観測された。着手中の文面編集は2,501 traces、再検討後の編集は6,585 traces、完了後の Note 追加は940 traces、同時刻の複数遷移の記録保持は6,854 tracesで観測された。これは bounded random simulation であり、全状態の証明や保存処理の原子性を実装で検証した結果ではない。
+
+この変更では既存5モデルの実行可能な定義を変更せず、情報操作の検査を追加した。状態変更と履歴を一体で確定すること、拒否・保存失敗で片方だけを残さないことは、実装側でも検証する。
+
+```sh
+lmt spec/lifecycle_proposal.md
+quint typecheck target/literate/lifecycle_information.qnt
+```
+
+```python
+from pathlib import Path
+import re
+import subprocess
+
+source = Path("target/literate/lifecycle_information.qnt").read_text()
+invariants = re.findall(r"val (inv\w+)\s*=", source)
+witnesses = re.findall(r"val (w\w+)\s*=", source)
+subprocess.run([
+    "quint", "run", "target/literate/lifecycle_information.qnt",
+    "--invariants", *invariants, "--witnesses", *witnesses,
+    "--max-samples", "10000", "--max-steps", "60", "--seed", "2026091013",
     "--backend", "rust", "--n-threads", "8", "--verbosity", "1",
 ], check=True)
 ```
