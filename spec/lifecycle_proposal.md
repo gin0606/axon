@@ -6,7 +6,7 @@
 
 ## 状態
 
-登録直後の `Undecided`（未判断）から開始する。登録操作自体は扱わない。未判断は記録済みの提案であり、実施の約束を意味しない。採用によって `NotStarted`（未着手）へ進む。
+提案として登録した直後の `Undecided`（未判断）から開始する。登録操作自体は扱わない。未判断は記録済みの提案であり、実施の約束を意味しない。採用によって `NotStarted`（未着手）へ進む。
 
 採否を決めるためのまとまった調査は、別の Issue として採用・着手する。元の改善案は未判断のままにできる。この使い分けのために状態を増やさず、複数 Issue の関係は後の検討に残す。
 
@@ -132,7 +132,7 @@ module lifecycle_proposal {
 
 ## 初期状態と探索
 
-登録直後の未判断から始め、採用済み・完了済みの観測はどちらも偽にする。各操作は許可条件と状態更新を組み合わせる。`step` は7操作と外部入力の変化を探索候補にし、許可条件を満たすものだけが実行される。外部入力はまず不成立から開始し、成立・不成立の両方向へ変化できる。
+提案として登録した直後の未判断から始め、採用済み・完了済みの観測はどちらも偽にする。各操作は許可条件と状態更新を組み合わせる。`step` は7操作と外部入力の変化を探索候補にし、許可条件を満たすものだけが実行される。外部入力はまず不成立から開始し、成立・不成立の両方向へ変化できる。
 
 外部入力の変化は lifecycle を変更しない。取りやめ・完了の間にも外界は変化し得るので、入力の変化は許すが、条件の評価対象には戻さない。これは対象外の Entity に対して外部コマンドを実行するという意味ではない。
 
@@ -279,7 +279,7 @@ quint run target/literate/lifecycle_proposal.qnt \
 
 ## 計画・所属・dependency・再浮上
 
-計画2件、Issue 用の固定 ID 3件を使う。最初は2 Issue が計画0に所属し、残り1件は未登録の枠とする。未登録はモデルの探索領域を有限にする仕組みであり、新しい lifecycle ではない。計画・Issue は未判断から始まり、各々を明示的に採用する。
+計画2件、Issue 用の固定 ID 3件を使う。最初は2 Issue が計画0に所属し、残り1件は未登録の枠とする。未登録はモデルの探索領域を有限にする仕組みであり、新しい lifecycle ではない。初期配置の計画・Issue は未判断から始める。追加する Issue には、未判断の提案と採用済みの仕事の二つの登録経路を設ける。計画そのものの登録操作は今回のモデル外である。
 
 所属は最大一つで、所属なしも許す。所属変更は既存の親子の制約を壊さない限り許可し、lifecycle を変えない。完了・取りやめの計画への追加と、そこからの取り外しは不可とする。取りやめた計画は、明示的に再検討へ戻せば構成を変更できる。この取りやめ時の構成固定と計画の再検討は暫定採用の判断であり、運用上の負担が分かれば見直す。
 
@@ -289,6 +289,7 @@ module group_lifecycle_proposal {
 
   type Id = int
   type Parent = Unassigned | InGroup(Id)
+  type Registration = Proposal | AdoptedWork
   pure val GROUPS = Set(0, 1)
   pure val ISSUES = Set(0, 1, 2)
   pure val PARENTS = Set(Unassigned, InGroup(0), InGroup(1))
@@ -308,7 +309,7 @@ module group_lifecycle_proposal {
     | GroupOperation({ id: Id, op: Operation })
     | IssueOperation({ id: Id, op: Operation })
     | Reparent({ id: Id, parent: Parent })
-    | RegisterIssue({ id: Id, parent: Parent })
+    | RegisterIssue({ id: Id, parent: Parent, registration: Registration })
     | AddDependency({ source: Id, target: Id })
     | RemoveDependency({ source: Id, target: Id })
   type PlanObservation = { before: PlanState, beforeConditions: Conditions, event: PlanEvent, reviewPassed: bool }
@@ -399,7 +400,9 @@ module group_lifecycle_proposal {
 
 進行中の Issue は、所属なしにするか、進行中の別計画へ移せる。移動元・移動先に計画がある場合は、どちらも完了・取りやめでないことを検査する。移動のためだけに release と start を挟む必要はなく、移動によって採用や進行の状態は変わらない。
 
-未登録の枠は、計画内または計画外へ未判断で登録する。登録しただけでは着手できない。最終確認待ちの計画に不足 Issue を追加した場合、その Issue が未判断なので、計画は再び完了できなくなる。実際に最終確認が不合格となった理由はモデル外である。
+未登録の枠は、計画内または計画外へ登録する。提案の記録（capture 相当）は `Undecided`、採用済みの仕事の登録（plan 相当）は `NotStarted` とする。登録操作は与えられた採否を反映し、採用判断そのものは代行しない。判断の主体や CLI 名はここでは定めない。
+
+どちらも登録だけでは進行中にならない。採用済みの登録後も、明示的な着手には親計画と dependency の条件を要求する。最終確認待ちの計画に不足 Issue を追加した場合、どちらの経路でも未終了の子が増えるため、計画は再び完了できなくなる。実際に最終確認が不合格となった理由はモデル外である。
 
 ```quint target/literate/group_lifecycle_proposal.qnt +=
   pure def destinationAllowed(s: PlanState, parent: Parent, current: Lifecycle): bool =
@@ -419,21 +422,25 @@ module group_lifecycle_proposal {
     observation' = observe(plan, conditions, Reparent({ id: id, parent: parent }), false),
   }
 
+  pure def registrationLifecycle(registration: Registration): Lifecycle = match registration {
+    | Proposal => Undecided
+    | AdoptedWork => NotStarted
+  }
   pure def canRegister(s: PlanState, id: Id, parent: Parent): bool = and {
     not(s.registered.contains(id)),
-    destinationAllowed(s, parent, Undecided),
+    parentOpen(s, parent),
   }
-  pure def applyRegister(s: PlanState, id: Id, parent: Parent): PlanState = {
+  pure def applyRegister(s: PlanState, id: Id, parent: Parent, registration: Registration): PlanState = {
     ...s,
     registered: s.registered.union(Set(id)),
-    issues: s.issues.set(id, Undecided),
+    issues: s.issues.set(id, registrationLifecycle(registration)),
     parents: s.parents.set(id, parent),
   }
-  action registerIssue(id: Id, parent: Parent): bool = all {
+  action registerIssue(id: Id, parent: Parent, registration: Registration): bool = all {
     canRegister(plan, id, parent),
-    plan' = applyRegister(plan, id, parent),
+    plan' = applyRegister(plan, id, parent, registration),
     conditions' = conditions,
-    observation' = observe(plan, conditions, RegisterIssue({ id: id, parent: parent }), false),
+    observation' = observe(plan, conditions, RegisterIssue({ id: id, parent: parent, registration: registration }), false),
   }
 
 ```
@@ -560,11 +567,12 @@ module group_lifecycle_proposal {
     nondet passed = Set(false, true).oneOf()
     nondet parent = PARENTS.oneOf()
     nondet target = ISSUES.oneOf()
+    nondet registration = Set(Proposal, AdoptedWork).oneOf()
     any {
       performGroup(group, op, passed),
       performIssue(id, op),
       moveIssue(id, parent),
-      registerIssue(id, parent),
+      registerIssue(id, parent, registration),
       addDependency(id, target),
       removeDependency(id, target),
       changeGroupCondition(group, passed),
@@ -582,7 +590,7 @@ module group_lifecycle_proposal {
 - 完了・取りやめの計画の構成は変わらず、追加・取り外し操作も許可されない。
 - 計画の完了は、最終確認を経た明示操作でのみ起きる。
 - 所属変更は lifecycle を変えず、各操作は他の Entity を自動更新しない。
-- 新規登録は未判断であり、採用を代行しない。
+- 新規登録は与えられた採否に対応する初期状態となり、自動で着手しない。
 - 未登録の枠が計画に混入せず、所属は高々一つである。
 - dependency は登録済み Issue 間だけを参照し、自己依存・循環を持たない。
 - 着手・完了時に全依存先が完了しており、完了後もその前提は満たされたままである。
@@ -663,6 +671,24 @@ module group_lifecycle_proposal {
     | RegisterIssue(_) => true
     | _ => false
   }
+  val wRegisterProposal = match observation.event {
+    | RegisterIssue(change) => change.registration == Proposal
+    | _ => false
+  }
+  val wRegisterAdopted = match observation.event {
+    | RegisterIssue(change) => change.registration == AdoptedWork
+    | _ => false
+  }
+  val wAdoptedRegistrationWaitsForParent = match observation.event {
+    | RegisterIssue(change) => change.registration == AdoptedWork
+      and GROUPS.exists(g => change.parent == InGroup(g) and plan.groups.get(g) == NotStarted)
+      and not(canIssue(plan, change.id, Start))
+    | _ => false
+  }
+  val wAdoptedRegistrationCanStart = match observation.event {
+    | RegisterIssue(change) => change.registration == AdoptedWork and canIssue(plan, change.id, Start)
+    | _ => false
+  }
   val wRegisterOutside = match observation.event {
     | RegisterIssue(change) => change.parent == Unassigned
     | _ => false
@@ -722,7 +748,7 @@ module group_lifecycle_proposal {
     | RegisterIssue(change) => and {
         plan.groups == observation.before.groups,
         plan.registered == observation.before.registered.union(Set(change.id)),
-        plan.issues.get(change.id) == Undecided,
+        plan.parents.get(change.id) == change.parent,
         ISSUES.exclude(Set(change.id)).forall(id =>
           plan.issues.get(id) == observation.before.issues.get(id)
           and plan.parents.get(id) == observation.before.parents.get(id)),
@@ -943,9 +969,15 @@ module group_lifecycle_proposal {
     ISSUES.forall(id => PARENTS.contains(plan.parents.get(id))),
     ISSUES.exclude(plan.registered).forall(id => plan.parents.get(id) == Unassigned),
   }
-  val invRegistrationNeverAdopts = match observation.event {
-    | RegisterIssue(change) => plan.issues.get(change.id) == Undecided
-      and not(canIssue(plan, change.id, Start))
+  val invRegistrationMatchesDecision = match observation.event {
+    | RegisterIssue(change) => match change.registration {
+        | Proposal => plan.issues.get(change.id) == Undecided and not(canIssue(plan, change.id, Start))
+        | AdoptedWork => plan.issues.get(change.id) == NotStarted
+      }
+    | _ => true
+  }
+  val invRegistrationNeverStarts = match observation.event {
+    | RegisterIssue(change) => not(workingIssues(plan).contains(change.id))
     | _ => true
   }
   val invClosedEditsDisabled = GROUPS.forall(g => terminal(plan.groups.get(g)) implies
@@ -965,7 +997,7 @@ module group_lifecycle_proposal {
 
 ### 今回の境界
 
-所属変更、未判断での新規登録、Issue 間の dependency、再浮上と着手候補・着手中の関係を、計画2件・Issue枠3件の範囲で扱う。取りやめた計画は再検討後に構成を変更できるが、完了した計画には再開経路を持たせない。
+所属変更、提案・採用済みの新規登録、Issue 間の dependency、再浮上と着手候補・着手中の関係を、計画2件・Issue枠3件の範囲で扱う。取りやめた計画は再検討後に構成を変更できるが、完了した計画には再開経路を持たせない。
 
 最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。入れ子の計画、計画そのものへの dependency、claim、declaration 編集、実際の ID 発行や永続化は検証対象外である。条件の種類・設定・評価失敗、未判断の提案を表示する条件、一覧やコマンドの具体的な構成もまだ決めない。
 
@@ -977,7 +1009,7 @@ module group_lifecycle_proposal {
 
 ### 統合モデルの再現と結果
 
-2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成後、Quint 0.32.0、Rust backend、10,000 traces、最大200 steps、入力 seed `2026091006` で実行した。23 invariant に反例はなく、59 witness はすべて1 trace以上で観測された。非浮上の親の配下で明示的に着手するケースは392 traces、親を非浮上にしても進行中の子を保持するケースは439 tracesで観測された。既存の所属・dependency の到達目標もすべて観測された。これは bounded random simulation の結果であり、全状態の証明ではない。
+2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成・型検査後、Quint 0.32.0、Rust backend、8 threads、10,000 traces、最大200 steps、入力 seed `2026091007` で実行した。24 invariant に反例はなく、63 witness はすべて1 trace以上で観測された。提案としての登録は5,026 traces、採用済みの登録は4,974 traces、採用済みでも未着手の親を待つ登録は266 tracesで観測された。既存の所属・dependency・再浮上の到達目標もすべて観測された。これは bounded random simulation の結果であり、全状態の証明ではない。
 
 単独 Issue と再浮上のモデル、および共有する基本遷移のコードは変更していない。
 
@@ -988,7 +1020,7 @@ quint run target/literate/group_lifecycle_proposal.qnt \
   --invariants \
     invParentOfWorkingChild invClosedChildrenTerminal invCompletedStayCompleted \
     invClosedStructureFrozen invCompletionReviewed invOperationScope \
-    invMembershipValid invRegistrationNeverAdopts invClosedEditsDisabled \
+    invMembershipValid invRegistrationMatchesDecision invRegistrationNeverStarts invClosedEditsDisabled \
     invNoUnexpectedDeadEnd \
     invDependencyOperationScope invDependenciesValid invDependenciesAcyclic \
     invCompletedPrerequisites invStartAndCompleteRequirePrerequisites \
@@ -1006,6 +1038,7 @@ quint run target/literate/group_lifecycle_proposal.qnt \
     wBothChildrenWorking wUndecidedChildBlocksClosure wAttach \
     wDetach wMoveBetweenPlans wWorkingDetach \
     wWorkingMove wRegister wRegisterOutside \
+    wRegisterProposal wRegisterAdopted wAdoptedRegistrationWaitsForParent wAdoptedRegistrationCanStart \
     wAddAfterFinalCheckReady wReconsiderAllowsMembership wRemoveUndecidedForCompletion \
     wAddDependency wRemoveDependency wAddDuringWorkBlocksCompletion \
     wCrossPlanDependency wDependOnCompletedIssue wDependencyRetainedOnMove \
@@ -1015,5 +1048,5 @@ quint run target/literate/group_lifecycle_proposal.qnt \
     wCandidateIssue wCandidateGroup wStartHiddenIssue wStartUnderHiddenParent wStartHiddenGroup \
     wParentHidesCandidate wParentResurfacesCandidate wParentHiddenKeepsWorkingChild \
     wIssueHiddenKeepsWorking wCompletedIssueConditionIgnored wCancelledGroupConditionIgnored \
-  --max-samples 10000 --max-steps 200 --seed 2026091006 --backend rust --verbosity 1
+  --max-samples 10000 --max-steps 200 --seed 2026091007 --backend rust --n-threads 8 --verbosity 1
 ```
