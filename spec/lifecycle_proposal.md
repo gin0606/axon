@@ -2,7 +2,7 @@
 
 この literate specification は、Progress と採否を単一の lifecycle にまとめる案を扱う。単独 Issue の再浮上を基本モデルで扱い、計画・子 Issue の着手境界、所属変更、Issue・計画間の dependency、再浮上による候補の選別を統合モデルで検討する。既存機能やデータ形式との互換性を前提にせず、新しい土台として設計するためのモデルであり、このファイルの追加・更新で現行実装や既存モデルは変更しない。
 
-説明と実行可能なモデルをこのファイルで管理する。[Quint の literate 形式](https://quint.sh/docs/literate)に従い、`lmt` で `target/literate/` 配下に共有する基本遷移、単独 Issue、計画と子 Issue の統合モデル、到達性の補助探索の4ファイルを生成する。生成ファイルは直接編集しない。
+説明と実行可能なモデルをこのファイルで管理する。[Quint の literate 形式](https://quint.sh/docs/literate)に従い、`lmt` で `target/literate/` 配下に共有する基本遷移、単独 Issue、計画と子 Issue の統合モデル、到達性の補助探索、候補一覧の評価の5ファイルを生成する。生成ファイルは直接編集しない。
 
 ## 状態
 
@@ -1394,9 +1394,9 @@ module lifecycle_reachability {
 
 入れ子の計画と所属変更、提案・採用済みの新規登録、Issue・計画間の dependency、再浮上と判断候補・着手候補・着手中の関係を、計画3件・Issue枠3件の範囲で扱う。取りやめた計画は再検討後に構成を変更できるが、完了した計画には再開経路を持たせない。
 
-最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。claim、declaration 編集、実際の ID 発行や永続化は検証対象外である。条件の種類・設定・評価失敗、一覧やコマンドの具体的な構成はまだ決めない。
+最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。claim、declaration 編集、実際の ID 発行や永続化は検証対象外である。具体的な条件の種類、一覧やコマンドの構成はまだ決めない。条件の設定と評価失敗は、後述の「候補一覧の評価と失敗」で扱う。
 
-`NotEvaluated` は意味上の評価除外であり、外部コマンドを実際に呼ばないことや評価コストは実装側で別途検証する。自身の条件の評価と親による候補の除外を分けており、親が非浮上の場合に子の外部条件の評価を省略する実装までは定めない。
+`NotEvaluated` は意味上の評価除外であり、外部コマンドを実際に呼ばないことや評価コストは実装側で別途検証する。この統合モデルでは自身の条件の意味と親による候補の除外を分ける。実際に観測する範囲と呼び出し内の結果共有は、後述の候補一覧モデルへ具体化する。
 
 前提の循環検査は計画3件・Issue枠3件の範囲を対象とする。より多い Entity を含む具体的なグラフは探索していない。依存先が取りやめでも依存元の取りやめを強制せず、依存関係の見直しや再検討を明示操作に残す。完了した祖先の配下にある取りやめ済み Entity は、再検討可能な仕事として数えない。行き止まりがないという性質は整理・再判断の操作も含み、当初の計画どおり必ず完了できることを意味しない。
 
@@ -1486,4 +1486,352 @@ for step, witnesses in [
         "--max-samples", "100", "--max-steps", "100", "--seed", "2026091011",
         "--backend", "rust", "--n-threads", "8", "--verbosity", "1",
     ], check=True)
+```
+
+## 候補一覧の評価と失敗
+
+条件が未設定なら常に浮上する。設定済みの条件は、その時点で候補に出してよいかを判定し、表示によって消費しない。成立後も再評価し、外界が変われば未成立や判定失敗にもなりうる。日付条件のように成立が持続する条件も、この契約に含む。
+
+現行は再浮上を着手の成立検査にも使うが、今回のモデルでは候補表示に限定する。明示操作は従来の lifecycle・包含・dependency の許可条件だけを使い、再浮上条件を評価しない。条件の設定・訂正・解除も評価せずに行い、壊れた条件を修復できる。
+
+候補一覧に必要な判定が失敗したら、一覧の取得自体をエラーとする。未成立へ丸めず、判定できた一部の候補を成功結果として返さない。この失敗方針は現行と共通だが、評価が必要な範囲は新モデルの候補定義から決め直す。
+
+- 状態・親の着手・dependency だけで候補にならないと確定する Entity は、自身の候補判定のためには評価しない。判断候補は dependency の完了や親の着手を求めない。
+- 残った候補の祖先を上から評価し、祖先が未浮上ならその配下を評価しない。完了・取りやめは評価しない。
+- 候補自身ではない進行中の親でも、子の候補判定に必要なら評価する。
+- 一回の一覧取得で各 Entity を最大一回評価し、子や別の参照から同じ結果を共有する。次の取得では結果を引き継がない。
+
+この節は、上の統合モデルの状態・許可条件を再利用して、一覧取得を複数の観測ステップへ具体化する。上の bool 入力と候補集合は失敗のない場合の意味を定める抽象モデルとして残し、評価回数・省略・失敗はこの節で扱う。両者の候補が一致することも検査する。
+
+保存する条件は `Unset` と二つの設定識別子へ抽象化する。識別子は設定の訂正を区別するためだけの値で、条件の種類や上限ではない。外部の結果は評価時に成立・未成立・失敗から選び、同じ呼び出し中だけ `Listing` に保持する。`Listing` と直前の観測は検証用の一時状態であり、Entity への保存項目ではない。`previousCache` は前回と異なる結果への到達性を調べる ghost state で、評価や候補判定では参照しない。
+
+```quint target/literate/candidate_evaluation.qnt +=
+module candidate_evaluation {
+  import lifecycle_rules.* from "lifecycle_rules"
+  import group_lifecycle_proposal.* from "group_lifecycle_proposal"
+
+  type Setting = Unset | Configured(int)
+  type ObservationResult = Unevaluated | Satisfied | Unsatisfied | EvaluationFailed
+  type ListingKind = JudgmentList | StartList
+  type ListingStatus = Idle | Running | Succeeded(Set[Entity]) | Failed(Entity)
+  type Listing = {
+    kind: ListingKind,
+    status: ListingStatus,
+    base: Set[Entity],
+    cache: Entity -> ObservationResult,
+    counts: Entity -> int,
+    previousCache: Entity -> ObservationResult,
+  }
+  type ListingEvent = ListingInitialized | Began | EvaluatedEntity(Entity)
+    | Published | SettingEdited(Entity) | PlanChanged
+  type ListingObservation = {
+    beforePlan: PlanState,
+    beforeSettings: Entity -> Setting,
+    beforeListing: Listing,
+    event: ListingEvent,
+  }
+  var settings: Entity -> Setting
+  var listing: Listing
+  var listingObservation: ListingObservation
+
+  pure def emptyListing(kind: ListingKind): Listing = {
+    kind: kind, status: Idle, base: Set(),
+    cache: REFS.mapBy(_ => Unevaluated), counts: REFS.mapBy(_ => 0),
+    previousCache: REFS.mapBy(_ => Unevaluated),
+  }
+  action queryInit = all {
+    init,
+    settings' = REFS.mapBy(_ => Unset),
+    listing' = emptyListing(JudgmentList),
+    listingObservation' = {
+      beforePlan: {
+        groups: GROUPS.mapBy(_ => Undecided), issues: ISSUES.mapBy(_ => Undecided),
+        registered: Set(0, 1), parents: ISSUES.mapBy(id => if (id == 2) Unassigned else InGroup(0)),
+        groupParents: GROUPS.mapBy(_ => Unassigned), dependencies: REFS.mapBy(_ => Set()),
+      },
+      beforeSettings: REFS.mapBy(_ => Unset), beforeListing: emptyListing(JudgmentList),
+      event: ListingInitialized,
+    },
+  }
+  pure def ancestors(s: PlanState, e: Entity): Set[Entity] =
+    ancestorGroups(s, entityParent(s, e)).map(GroupRef)
+  pure def baseCandidates(s: PlanState, kind: ListingKind): Set[Entity] = {
+    val selected = match kind {
+      | JudgmentList => entities(s).filter(e => entityState(s, e) == Undecided)
+      | StartList => startableIssues(s).map(IssueRef).union(startableGroups(s).map(GroupRef))
+    }
+    selected.filter(e => ancestors(s, e).forall(a => not(terminal(entityState(s, a)))))
+  }
+  pure def requiredEntities(s: PlanState, q: Listing): Set[Entity] =
+    q.base.union(q.base.map(e => ancestors(s, e)).flatten())
+  pure def parentsSatisfied(s: PlanState, q: Listing, e: Entity): bool =
+    ancestors(s, e).forall(a => q.cache.get(a) == Satisfied)
+  pure def pending(s: PlanState, q: Listing): Set[Entity] =
+    requiredEntities(s, q).filter(e => q.cache.get(e) == Unevaluated and parentsSatisfied(s, q, e))
+  pure def visible(s: PlanState, q: Listing): Set[Entity] =
+    q.base.filter(e => q.cache.get(e) == Satisfied and parentsSatisfied(s, q, e))
+  def recordListing(event: ListingEvent): ListingObservation = {
+    beforePlan: plan, beforeSettings: settings, beforeListing: listing, event: event,
+  }
+  action preserveBase = all {
+    plan' = plan, conditions' = conditions, observation' = observation,
+  }
+  action beginListing(kind: ListingKind): bool = all {
+    listing.status != Running,
+    preserveBase,
+    settings' = settings,
+    listing' = { ...emptyListing(kind), status: Running, base: baseCandidates(plan, kind),
+      previousCache: listing.cache },
+    listingObservation' = recordListing(Began),
+  }
+  action evaluateEntity(e: Entity, result: ObservationResult): bool = all {
+    listing.status == Running,
+    pending(plan, listing).contains(e),
+    Set(Satisfied, Unsatisfied, EvaluationFailed).contains(result),
+    settings.get(e) == Unset implies result == Satisfied,
+    preserveBase,
+    settings' = settings,
+    listing' = {
+      ...listing,
+      status: if (result == EvaluationFailed) Failed(e) else Running,
+      cache: listing.cache.set(e, result),
+      counts: listing.counts.set(e, listing.counts.get(e) + 1),
+    },
+    listingObservation' = recordListing(EvaluatedEntity(e)),
+  }
+  action publishListing = all {
+    listing.status == Running,
+    pending(plan, listing).size() == 0,
+    preserveBase,
+    settings' = settings,
+    listing' = { ...listing, status: Succeeded(visible(plan, listing)) },
+    listingObservation' = recordListing(Published),
+  }
+  action editSetting(e: Entity, setting: Setting): bool = all {
+    listing.status != Running,
+    entities(plan).contains(e),
+    settings.get(e) != setting,
+    preserveBase,
+    settings' = settings.set(e, setting),
+    listing' = emptyListing(listing.kind),
+    listingObservation' = recordListing(SettingEdited(e)),
+  }
+  action changePlan = all {
+    listing.status != Running,
+    step,
+    settings' = settings,
+    listing' = emptyListing(listing.kind),
+    listingObservation' = recordListing(PlanChanged),
+  }
+  action queryStep = {
+    nondet e = REFS.oneOf()
+    nondet setting = Set(Unset, Configured(0), Configured(1)).oneOf()
+    nondet kind = Set(JudgmentList, StartList).oneOf()
+    nondet result = Set(Satisfied, Unsatisfied, EvaluationFailed).oneOf()
+    any {
+      changePlan,
+      editSetting(e, setting),
+      beginListing(kind),
+      evaluateEntity(e, result),
+      publishListing,
+    }
+  }
+
+  pure def observedConditions(q: Listing, unseen: bool): Conditions = {
+    val satisfied = REFS.mapBy(e => match q.cache.get(e) {
+      | Satisfied => true
+      | Unevaluated => unseen
+      | _ => false
+    })
+    { groups: GROUPS.mapBy(g => satisfied.get(GroupRef(g))),
+      issues: ISSUES.mapBy(i => satisfied.get(IssueRef(i))) }
+  }
+  pure def abstractCandidates(s: PlanState, q: Listing, unseen: bool): Set[Entity] = {
+    val c = observedConditions(q, unseen)
+    match q.kind {
+      | JudgmentList => judgmentIssues(s, c).map(IssueRef).union(judgmentGroups(s, c).map(GroupRef))
+      | StartList => candidateIssues(s, c).map(IssueRef).union(candidateGroups(s, c).map(GroupRef))
+    }
+  }
+  val invQueryPreservesPlan = listingObservation.event != PlanChanged
+    implies plan == listingObservation.beforePlan
+  val invSettingsOwnership = match listingObservation.event {
+    | SettingEdited(e) => REFS.exclude(Set(e)).forall(other =>
+        settings.get(other) == listingObservation.beforeSettings.get(other))
+    | _ => settings == listingObservation.beforeSettings
+  }
+  val invAtMostOnce = REFS.forall(e => Set(0, 1).contains(listing.counts.get(e))
+    and ((listing.counts.get(e) == 0) iff (listing.cache.get(e) == Unevaluated)))
+  val invEvaluationScope = REFS.forall(e => listing.counts.get(e) == 1 implies and {
+    requiredEntities(plan, listing).contains(e),
+    not(terminal(entityState(plan, e))),
+    parentsSatisfied(plan, listing, e),
+  })
+  val invUnsetSatisfied = REFS.forall(e =>
+    settings.get(e) == Unset and listing.counts.get(e) == 1 implies listing.cache.get(e) == Satisfied)
+  val invFreshInvocation = listingObservation.event == Began implies
+    REFS.forall(e => listing.counts.get(e) == 0 and listing.cache.get(e) == Unevaluated)
+  val invCacheShared = match listingObservation.event {
+    | EvaluatedEntity(e) => and {
+        listingObservation.beforeListing.cache.get(e) == Unevaluated,
+        REFS.exclude(Set(e)).forall(other => listing.cache.get(other)
+          == listingObservation.beforeListing.cache.get(other)),
+        listing.counts.get(e) == listingObservation.beforeListing.counts.get(e) + 1,
+      }
+    | Published => listing.cache == listingObservation.beforeListing.cache
+      and listing.counts == listingObservation.beforeListing.counts
+    | _ => true
+  }
+  val invFailureIsError = match listing.status {
+    | Failed(e) => listing.cache.get(e) == EvaluationFailed
+      and REFS.exclude(Set(e)).forall(other => listing.cache.get(other) != EvaluationFailed)
+    | _ => REFS.forall(e => listing.cache.get(e) != EvaluationFailed)
+  }
+  val invFailureImmediate = match listingObservation.event {
+    | EvaluatedEntity(e) => (listing.cache.get(e) == EvaluationFailed) iff (listing.status == Failed(e))
+    | _ => true
+  }
+  val invSuccessfulListingComplete = match listing.status {
+    | Succeeded(result) => and {
+        result == abstractCandidates(plan, listing, false),
+        result == abstractCandidates(plan, listing, true),
+        pending(plan, listing).size() == 0,
+      }
+    | _ => true
+  }
+  val invNoEvaluationForEditsOrWork = match listingObservation.event {
+    | SettingEdited(_) => listing.status == Idle and REFS.forall(e => listing.counts.get(e) == 0)
+    | PlanChanged => listing.status == Idle and REFS.forall(e => listing.counts.get(e) == 0)
+    | _ => true
+  }
+  val invBaseStableDuringQuery = listing.status != Idle
+    implies listing.base == baseCandidates(plan, listing.kind)
+  val invNoUnresolvedPublication = listing.status == Running and pending(plan, listing).size() == 0
+    implies listing.base.forall(e => listing.cache.get(e) != Unevaluated
+      or ancestors(plan, e).exists(a => listing.cache.get(a) == Unsatisfied))
+
+  val wBeginJudgment = listingObservation.event == Began and listing.kind == JudgmentList
+  val wBeginStart = listingObservation.event == Began and listing.kind == StartList
+  val wListingSuccess = listingObservation.event == Published and (match listing.status {
+    | Succeeded(result) => result.size() > 0
+    | _ => false
+  })
+  val wEmptyListing = listingObservation.event == Published and listing.status == Succeeded(Set())
+  val wListingFailure = match listingObservation.event {
+    | EvaluatedEntity(e) => listing.status == Failed(e)
+    | _ => false
+  }
+  val wUnsetEvaluated = match listingObservation.event {
+    | EvaluatedEntity(e) => settings.get(e) == Unset and listing.cache.get(e) == Satisfied
+    | _ => false
+  }
+  val wConfiguredSatisfied = match listingObservation.event {
+    | EvaluatedEntity(e) => settings.get(e) != Unset and listing.cache.get(e) == Satisfied
+    | _ => false
+  }
+  val wUnsatisfiedSuccess = listingObservation.event == Published
+    and REFS.exists(e => listing.cache.get(e) == Unsatisfied)
+  val wSetCondition = match listingObservation.event {
+    | SettingEdited(e) => listingObservation.beforeSettings.get(e) == Unset and settings.get(e) != Unset
+    | _ => false
+  }
+  val wCorrectCondition = match listingObservation.event {
+    | SettingEdited(e) => listingObservation.beforeSettings.get(e) != Unset and settings.get(e) != Unset
+    | _ => false
+  }
+  val wClearFailedCondition = match listingObservation.event {
+    | SettingEdited(e) => listingObservation.beforeListing.status == Failed(e) and settings.get(e) == Unset
+    | _ => false
+  }
+  val wCorrectFailedCondition = match listingObservation.event {
+    | SettingEdited(e) => listingObservation.beforeListing.status == Failed(e) and settings.get(e) != Unset
+    | _ => false
+  }
+  val wReevaluateChanged = match listingObservation.event {
+    | EvaluatedEntity(e) => listing.previousCache.get(e) == Satisfied and listing.cache.get(e) == Unsatisfied
+    | _ => false
+  }
+  val wFailureRecovers = match listingObservation.event {
+    | EvaluatedEntity(e) => listing.previousCache.get(e) == EvaluationFailed and listing.cache.get(e) == Satisfied
+    | _ => false
+  }
+  val wSatisfiedNotConsumed = match listingObservation.event {
+    | EvaluatedEntity(e) => settings.get(e) != Unset
+      and listing.previousCache.get(e) == Satisfied and listing.cache.get(e) == Satisfied
+    | _ => false
+  }
+  val wHiddenDescendantSkipped = listingObservation.event == Published and listing.base.exists(e =>
+    settings.get(e) != Unset and listing.cache.get(e) == Unevaluated
+      and ancestors(plan, e).exists(a => listing.cache.get(a) == Unsatisfied))
+  val wSharedParentOnce = listingObservation.event == Published and GROUPS.exists(g =>
+    listing.base.filter(e => ancestors(plan, e).contains(GroupRef(g))).size() >= 2
+      and settings.get(GroupRef(g)) != Unset and listing.counts.get(GroupRef(g)) == 1)
+  val wWorkingParentEvaluated = listingObservation.event == Published and GROUPS.exists(g =>
+    plan.groups.get(g) == InProgress and not(listing.base.contains(GroupRef(g)))
+      and listing.counts.get(GroupRef(g)) == 1)
+  val wTerminalSkipped = listingObservation.event == Published and entities(plan).exists(e =>
+    terminal(entityState(plan, e)) and settings.get(e) != Unset and listing.counts.get(e) == 0)
+  val wDependencyBlockedSkipped = listingObservation.event == Published and listing.kind == StartList
+    and plan.registered.exists(i => plan.issues.get(i) == NotStarted
+      and not(prerequisitesComplete(plan, IssueRef(i))) and settings.get(IssueRef(i)) != Unset
+      and listing.counts.get(IssueRef(i)) == 0)
+  val wJudgmentDespiteDependency = listingObservation.event == Published and listing.kind == JudgmentList
+    and listing.base.exists(e => not(prerequisitesComplete(plan, e)) and visible(plan, listing).contains(e))
+  val wStartAfterEvaluationFailure = listingObservation.event == PlanChanged
+    and (match observation.event {
+      | IssueOperation(change) => change.op == Start
+        and listingObservation.beforeListing.status == Failed(IssueRef(change.id))
+      | GroupOperation(change) => change.op == Start
+        and listingObservation.beforeListing.status == Failed(GroupRef(change.id))
+      | _ => false
+    })
+  val wNestedAncestorSkipped = wHiddenDescendantSkipped and listing.base.exists(e =>
+    ancestors(plan, e).size() >= 2 and settings.get(e) != Unset
+      and listing.cache.get(e) == Unevaluated
+      and ancestors(plan, e).exists(a => listing.cache.get(a) == Unsatisfied))
+  val wNoEligibleSkipsConfigured = wEmptyListing and listing.base.size() == 0
+    and entities(plan).exists(e => settings.get(e) != Unset)
+    and REFS.forall(e => listing.counts.get(e) == 0)
+
+}
+```
+
+### 一覧モデルの検証範囲
+
+成功時には、未評価の入力をすべて成立と仮定しても、すべて未成立と仮定しても、上の抽象モデルと同じ候補集合になることを検査する。これにより、評価を省いた入力が候補の欠落を隠していないかを調べる。失敗は成功の候補集合とは異なる variant で表し、失敗した Entity を保持する。途中で観測した候補は成功結果として公開しない。
+
+評価済みの各 Entity が必要な候補かその祖先であること、全祖先の成立後にだけ評価すること、評価回数の上限、同一呼び出し内の cache 保持と次回の初期化を検査する。条件編集と既存の明示操作は評価処理を呼ばず、一覧取得や外部結果は保存した計画・条件を変えない。成立の持続、次回の未成立化、失敗からの回復はそれぞれ到達目標として扱う。
+
+一覧取得中の lifecycle・包含・dependency・条件設定は固定し、明示操作は取得の間に行う。これは単一呼び出しを調べるための前提であり、並行更新や snapshot の実装契約を決めるものではない。外部の結果は Entity ごとの評価時に選ぶため、異なる Entity の条件を同一瞬間に観測する保証も置かない。独立した枝の評価順は非決定的で、最初の失敗で取得を終了する。エラー時にどの枝まで観測済みかは保証しない。
+
+上の基本・統合モデルの `false` 初期入力は、未成立の外部入力から探索を始める指定であり、条件未設定の初期値ではない。この一覧モデルはすべて `Unset` から開始し、未設定が成立として扱われることを検査する。未設定の成立判定も観測ステップとして数えるが、外部コマンドを呼ぶという意味ではない。
+
+具体的な条件の種類・構文・終了コード、診断の表示形式、非実行閲覧のコマンド、timeout・process 管理・永続化・並行実行はモデル外である。実際の外部コマンドを呼ばないことや呼び出し回数は実装側でも検証する。判断候補と着手候補は意味上の取得単位であり、CLI を別コマンドにする決定ではない。
+
+### 一覧モデルの再現と結果
+
+2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成し、Quint 0.32.0 で型検査後、Rust backend、8 threads、10,000 traces、最大60 steps、入力 seed `2026091012` で実行した。追加した13 invariant に反例はなく、全24 witness が1 trace以上で観測された。同じ親の評価共有は3,107 traces、入れ子の祖先による評価省略は858 traces、dependency 未完了による着手候補の評価省略は600 traces、評価に失敗した当の Entity への明示的な着手は25 tracesで観測された。これは bounded random simulation の結果であり、全状態の証明ではない。
+
+以下は repository root で実行する。既存の統合モデルの遷移・候補定義は変更せず、この一覧モデルで追加した不変条件と到達目標を検査する。
+
+```sh
+lmt spec/lifecycle_proposal.md
+quint typecheck target/literate/candidate_evaluation.qnt
+```
+
+```python
+from pathlib import Path
+import re
+import subprocess
+
+source = Path("target/literate/candidate_evaluation.qnt").read_text()
+invariants = re.findall(r"val (inv\w+)\s*=", source)
+witnesses = re.findall(r"val (w\w+)\s*=", source)
+subprocess.run([
+    "quint", "run", "target/literate/candidate_evaluation.qnt",
+    "--init", "queryInit", "--step", "queryStep",
+    "--invariants", *invariants, "--witnesses", *witnesses,
+    "--max-samples", "10000", "--max-steps", "60", "--seed", "2026091012",
+    "--backend", "rust", "--n-threads", "8", "--verbosity", "1",
+], check=True)
 ```
