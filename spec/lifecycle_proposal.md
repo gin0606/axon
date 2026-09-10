@@ -279,9 +279,9 @@ quint run target/literate/lifecycle_proposal.qnt \
 
 ## 計画・所属・dependency・再浮上
 
-計画2件、Issue 用の固定 ID 3件を使う。最初は2 Issue が計画0に所属し、残り1件は未登録の枠とする。未登録はモデルの探索領域を有限にする仕組みであり、新しい lifecycle ではない。初期配置の計画・Issue は未判断から始める。追加する Issue には、未判断の提案と採用済みの仕事の二つの登録経路を設ける。計画そのものの登録操作は今回のモデル外である。
+計画3件、Issue 用の固定 ID 3件を使う。最初は2 Issue が計画0に所属し、残り1件は未登録の枠とする。未登録はモデルの探索領域を有限にする仕組みであり、新しい lifecycle ではない。初期配置の計画・Issue は未判断から始め、計画はすべて所属なしとする。計画も最大一つの親計画を持ち、Issue と子計画を同じ階層に置ける。追加する Issue には、未判断の提案と採用済みの仕事の二つの登録経路を設ける。計画そのものの登録操作は今回のモデル外である。
 
-所属は最大一つで、所属なしも許す。所属変更は既存の親子の制約を壊さない限り許可し、lifecycle を変えない。完了・取りやめの計画への追加と、そこからの取り外しは不可とする。取りやめた計画は、明示的に再検討へ戻せば構成を変更できる。この取りやめ時の構成固定と計画の再検討は暫定採用の判断であり、運用上の負担が分かれば見直す。
+Issue・計画とも所属は最大一つで、所属なしも許す。計画の自己包含と、子孫の下への移動による循環を禁止する。所属変更は既存の親子の制約を壊さない限り許可し、lifecycle を変えない。完了・取りやめの計画への追加と、そこからの取り外しは不可とする。取りやめた計画は、明示的に再検討へ戻せば構成を変更できる。この取りやめ時の構成固定と計画の再検討は暫定採用の判断であり、運用上の負担が分かれば見直す。
 
 ```quint target/literate/group_lifecycle_proposal.qnt +=
 module group_lifecycle_proposal {
@@ -290,15 +290,16 @@ module group_lifecycle_proposal {
   type Id = int
   type Parent = Unassigned | InGroup(Id)
   type Registration = Proposal | AdoptedWork
-  pure val GROUPS = Set(0, 1)
+  pure val GROUPS = Set(0, 1, 2)
   pure val ISSUES = Set(0, 1, 2)
-  pure val PARENTS = Set(Unassigned, InGroup(0), InGroup(1))
+  pure val PARENTS = Set(Unassigned, InGroup(0), InGroup(1), InGroup(2))
   pure val OPERATIONS = Set(Accept, Withdraw, Start, Release, Complete, Cancel, Reconsider)
   type PlanState = {
     groups: Id -> Lifecycle,
     issues: Id -> Lifecycle,
     registered: Set[Id],
     parents: Id -> Parent,
+    groupParents: Id -> Parent,
     dependencies: Id -> Set[Id],
   }
   type Conditions = { groups: Id -> bool, issues: Id -> bool }
@@ -309,6 +310,7 @@ module group_lifecycle_proposal {
     | GroupOperation({ id: Id, op: Operation })
     | IssueOperation({ id: Id, op: Operation })
     | Reparent({ id: Id, parent: Parent })
+    | ReparentGroup({ id: Id, parent: Parent })
     | RegisterIssue({ id: Id, parent: Parent, registration: Registration })
     | AddDependency({ source: Id, target: Id })
     | RemoveDependency({ source: Id, target: Id })
@@ -320,18 +322,33 @@ module group_lifecycle_proposal {
 
 ### 親子の lifecycle
 
-子への着手には、子自身の採用と親の進行中を要求する。所属なしの Issue にも、基本遷移に加えて dependency の着手・完了条件を適用する。進行中の子があれば親を未着手へ戻せない。計画の完了・取りやめには全所属 Issue の終了が必要で、未判断もその妨げになる。
+子への着手には、子自身の採用と親の進行中を要求する。所属なしの Issue にも、基本遷移に加えて dependency の着手・完了条件を適用する。進行中の子があれば親を未着手へ戻せない。計画の完了・取りやめには直属の Issue・子計画のすべてが終了している必要があり、未判断もその妨げになる。子計画への着手にも親の進行中を要求するため、進行中の Entity の祖先はすべて進行中になる。各階層で明示的に着手し、子への着手で親を自動変更しない。
 
-完了にはさらに計画全体の最終確認が通ったという入力を要求する。`reviewPassed` は確認結果の抽象入力であり、CLI 引数や保存方法、専用操作か最終チェック Issue かを決めるものではない。空の計画でもこの確認を省略しない。子の終了だけで親を自動終了しない。
+完了にはさらに、その計画全体の最終確認が通ったという入力を要求する。画面単位の子計画にも、機能全体の親計画にも、それぞれ独立した最終確認がある。`reviewPassed` は確認結果の抽象入力であり、CLI 引数や保存方法、専用操作か最終チェック Issue かを決めるものではない。空の計画でもこの確認を省略しない。子の終了だけで親を自動終了しない。
 
 ```quint target/literate/group_lifecycle_proposal.qnt +=
   pure def terminal(current: Lifecycle): bool = Set(Completed, Cancelled).contains(current)
   pure def children(s: PlanState, group: Id): Set[Id] =
     s.registered.filter(id => s.parents.get(id) == InGroup(group))
+  pure def childGroups(s: PlanState, group: Id): Set[Id] =
+    GROUPS.filter(id => s.groupParents.get(id) == InGroup(group))
+  pure def parentSet(parent: Parent): Set[Id] = match parent {
+    | Unassigned => Set()
+    | InGroup(id) => Set(id)
+  }
+  pure def ancestorGroups(s: PlanState, parent: Parent): Set[Id] =
+    GROUPS.fold(parentSet(parent), (seen, _) =>
+      seen.union(seen.map(id => parentSet(s.groupParents.get(id))).flatten()))
+  pure def descendantGroups(s: PlanState, group: Id): Set[Id] =
+    GROUPS.filter(id => ancestorGroups(s, s.groupParents.get(id)).contains(group))
+  pure def descendantIssues(s: PlanState, group: Id): Set[Id] =
+    s.registered.filter(id => ancestorGroups(s, s.parents.get(id)).contains(group))
   pure def allChildrenTerminal(s: PlanState, group: Id): bool =
     children(s, group).forall(id => terminal(s.issues.get(id)))
+      and childGroups(s, group).forall(id => terminal(s.groups.get(id)))
   pure def hasWorkingChild(s: PlanState, group: Id): bool =
     children(s, group).exists(id => s.issues.get(id) == InProgress)
+      or childGroups(s, group).exists(id => s.groups.get(id) == InProgress)
   pure def parentOpen(s: PlanState, parent: Parent): bool = match parent {
     | Unassigned => true
     | InGroup(group) => not(terminal(s.groups.get(group)))
@@ -343,6 +360,8 @@ module group_lifecycle_proposal {
 
   pure def canGroup(s: PlanState, id: Id, op: Operation, passed: bool): bool = and {
     canPerform(s.groups.get(id), op),
+    parentOpen(s, s.groupParents.get(id)),
+    op != Start or parentWorking(s, s.groupParents.get(id)),
     op != Release or not(hasWorkingChild(s, id)),
     not(Set(Complete, Cancel).contains(op)) or allChildrenTerminal(s, id),
     op != Complete or passed,
@@ -372,6 +391,7 @@ module group_lifecycle_proposal {
       issues: ISSUES.mapBy(_ => Undecided),
       registered: Set(0, 1),
       parents: ISSUES.mapBy(id => if (id == 2) Unassigned else InGroup(0)),
+      groupParents: GROUPS.mapBy(_ => Unassigned),
       dependencies: ISSUES.mapBy(_ => Set()),
     }
     val initialConditions = { groups: GROUPS.mapBy(_ => false), issues: ISSUES.mapBy(_ => false) }
@@ -398,7 +418,9 @@ module group_lifecycle_proposal {
 
 ### 所属変更と新規登録
 
-進行中の Issue は、所属なしにするか、進行中の別計画へ移せる。移動元・移動先に計画がある場合は、どちらも完了・取りやめでないことを検査する。移動のためだけに release と start を挟む必要はなく、移動によって採用や進行の状態は変わらない。
+進行中の Issue・計画は、所属なしにするか、進行中の別計画へ移せる。移動元・移動先に計画がある場合は、どちらも完了・取りやめでないことを検査する。移動のためだけに release と start を挟む必要はなく、移動によって採用や進行の状態は変わらない。
+
+計画の移動は、その計画の親だけを付け替える。配下の所属・lifecycle・dependency は保持され、部分木全体が移る。完了・取りやめた計画でも、自身の親が終了していなければ、その内部構成を変えずに移せる。これは終了済み Issue の移動と同じ制約である。
 
 未登録の枠は、計画内または計画外へ登録する。提案の記録（capture 相当）は `Undecided`、採用済みの仕事の登録（plan 相当）は `NotStarted` とする。登録操作は与えられた採否を反映し、採用判断そのものは代行しない。判断の主体や CLI 名はここでは定めない。
 
@@ -420,6 +442,21 @@ module group_lifecycle_proposal {
     plan' = applyMove(plan, id, parent),
     conditions' = conditions,
     observation' = observe(plan, conditions, Reparent({ id: id, parent: parent }), false),
+  }
+
+  pure def canMoveGroup(s: PlanState, id: Id, parent: Parent): bool = and {
+    s.groupParents.get(id) != parent,
+    parentOpen(s, s.groupParents.get(id)),
+    destinationAllowed(s, parent, s.groups.get(id)),
+    not(ancestorGroups(s, parent).contains(id)),
+  }
+  pure def applyMoveGroup(s: PlanState, id: Id, parent: Parent): PlanState =
+    { ...s, groupParents: s.groupParents.set(id, parent) }
+  action moveGroup(id: Id, parent: Parent): bool = all {
+    canMoveGroup(plan, id, parent),
+    plan' = applyMoveGroup(plan, id, parent),
+    conditions' = conditions,
+    observation' = observe(plan, conditions, ReparentGroup({ id: id, parent: parent }), false),
   }
 
   pure def registrationLifecycle(registration: Registration): Lifecycle = match registration {
@@ -497,16 +534,16 @@ module group_lifecycle_proposal {
 
 | 導出する集合 | 条件 |
 | --- | --- |
-| 判断候補の Issue | 未判断で、自身と親が浮上している。親の着手・依存先の完了は要求しない |
+| 判断候補の Issue | 未判断で、自身とすべての祖先が浮上している。親の着手・依存先の完了は要求しない |
 | 着手可能な Issue | 未着手、親があれば進行中、全依存先が完了 |
-| 着手候補の Issue | 着手可能で、自身と親が浮上している |
+| 着手候補の Issue | 着手可能で、自身とすべての祖先が浮上している |
 | 着手中の Issue | 進行中。自身・親の浮上状態や追加された未完了の依存に関係なく含む |
 
-未判断の計画は、自身が浮上していれば判断候補とする。判断候補は採否を検討するための集合であり、候補への出入りで採否や進行状態を変えない。dependency は着手・完了の前提であり、採否を先に決めることを妨げない。
+未判断の計画は、自身とすべての祖先が浮上していれば判断候補とする。判断候補は採否を検討するための集合であり、候補への出入りで採否や進行状態を変えない。dependency は着手・完了の前提であり、採否を先に決めることを妨げない。
 
-計画自身も、未着手なら明示的に着手可能とし、候補に出すときだけ自身の浮上を要求する。進行中の計画は非浮上でも着手中に含む。再浮上は候補の表示を制御し、明示的な採否判断、着手や完了、所属・依存変更の可否には加えない。この表示と明示操作の分離は暫定採用の判断である。
+計画自身も、未着手で、親がある場合はその親が進行中なら明示的に着手可能とし、候補に出すときだけ自身とすべての祖先の浮上を要求する。進行中の計画は非浮上でも着手中に含む。再浮上は候補の表示を制御し、明示的な採否判断、着手や完了、所属・依存変更の可否には加えない。この表示と明示操作の分離は暫定採用の判断である。
 
-取りやめ・完了の Entity は条件を評価せず、浮上しない。親が非浮上なら子を判断候補・着手候補から外すが、子の状態や条件は変えない。評価結果は保存せず、入力と状態から導出する。
+取りやめ・完了の Entity は条件を評価せず、浮上しない。祖先のいずれかが非浮上なら子孫を判断候補・着手候補から外すが、子の状態や条件は変えない。評価結果は保存せず、入力と状態から導出する。
 
 ```quint target/literate/group_lifecycle_proposal.qnt +=
   pure def groupConditionResult(s: PlanState, c: Conditions, id: Id): ConditionResult =
@@ -514,17 +551,16 @@ module group_lifecycle_proposal {
   pure def issueConditionResult(s: PlanState, c: Conditions, id: Id): ConditionResult =
     if (not(s.registered.contains(id)) or terminal(s.issues.get(id))) NotEvaluated
     else Evaluated(c.issues.get(id))
-  pure def parentSurfaced(s: PlanState, c: Conditions, parent: Parent): bool = match parent {
-    | Unassigned => true
-    | InGroup(id) => groupConditionResult(s, c, id) == Evaluated(true)
-  }
+  pure def parentSurfaced(s: PlanState, c: Conditions, parent: Parent): bool =
+    ancestorGroups(s, parent).forall(id => groupConditionResult(s, c, id) == Evaluated(true))
   pure def judgmentIssues(s: PlanState, c: Conditions): Set[Id] =
     s.registered.filter(id => s.issues.get(id) == Undecided
       and issueConditionResult(s, c, id) == Evaluated(true)
       and parentSurfaced(s, c, s.parents.get(id)))
   pure def judgmentGroups(s: PlanState, c: Conditions): Set[Id] =
     GROUPS.filter(id => s.groups.get(id) == Undecided
-      and groupConditionResult(s, c, id) == Evaluated(true))
+      and groupConditionResult(s, c, id) == Evaluated(true)
+      and parentSurfaced(s, c, s.groupParents.get(id)))
   pure def startableIssues(s: PlanState): Set[Id] = s.registered.filter(id => canIssue(s, id, Start))
   pure def candidateIssues(s: PlanState, c: Conditions): Set[Id] =
     startableIssues(s).filter(id => issueConditionResult(s, c, id) == Evaluated(true)
@@ -533,7 +569,8 @@ module group_lifecycle_proposal {
     s.registered.filter(id => s.issues.get(id) == InProgress)
   pure def startableGroups(s: PlanState): Set[Id] = GROUPS.filter(id => canGroup(s, id, Start, false))
   pure def candidateGroups(s: PlanState, c: Conditions): Set[Id] =
-    startableGroups(s).filter(id => groupConditionResult(s, c, id) == Evaluated(true))
+    startableGroups(s).filter(id => groupConditionResult(s, c, id) == Evaluated(true)
+      and parentSurfaced(s, c, s.groupParents.get(id)))
   pure def workingGroups(s: PlanState): Set[Id] = GROUPS.filter(id => s.groups.get(id) == InProgress)
 ```
 
@@ -567,7 +604,7 @@ module group_lifecycle_proposal {
 
 ### 探索
 
-基本遷移、所属変更、新規登録、dependency の追加・削除、再浮上条件の成立・不成立を混ぜて実行する。条件入力はすべて不成立から開始し、登録済み Issue と計画について両方向へ変化できる。これは探索の開始点であり、製品の再浮上条件の初期値を決めるものではない。登録済み集合と所属は別に保持し、計画の外へ出しても Issue を削除しない。同じ所属の再指定は無効とする。ID は固定集合から選び、未登録 ID の再利用・削除は扱わない。
+基本遷移、Issue・計画の所属変更、新規登録、dependency の追加・削除、再浮上条件の成立・不成立を混ぜて実行する。条件入力はすべて不成立から開始し、登録済み Issue と計画について両方向へ変化できる。これは探索の開始点であり、製品の再浮上条件の初期値を決めるものではない。登録済み集合と所属は別に保持し、計画の外へ出しても Issue を削除しない。同じ所属の再指定は無効とする。ID は固定集合から選び、未登録 ID の再利用・削除は扱わない。
 
 ```quint target/literate/group_lifecycle_proposal.qnt +=
   action step = {
@@ -582,6 +619,7 @@ module group_lifecycle_proposal {
       performGroup(group, op, passed),
       performIssue(id, op),
       moveIssue(id, parent),
+      moveGroup(group, parent),
       registerIssue(id, parent, registration),
       addDependency(id, target),
       removeDependency(id, target),
@@ -601,20 +639,22 @@ module group_lifecycle_proposal {
 - 計画の完了は、最終確認を経た明示操作でのみ起きる。
 - 所属変更は lifecycle を変えず、各操作は他の Entity を自動更新しない。
 - 新規登録は与えられた採否に対応する初期状態となり、自動で着手しない。
-- 未登録の枠が計画に混入せず、所属は高々一つである。
+- 未登録の枠が計画に混入せず、Issue・計画の所属は高々一つで、包含は循環しない。
+- 進行中の Entity の祖先はすべて進行中で、終了した計画の子孫はすべて終了している。
+- 計画を移動しても、その子孫の集合・内部の所属・状態は変わらない。
 - dependency は登録済み Issue 間だけを参照し、自己依存・循環を持たない。
 - 着手・完了時に全依存先が完了しており、完了後もその前提は満たされたままである。
 - 完了した Issue 自身の dependency は固定される。
 - dependency 操作は lifecycle や所属を変えず、他の操作は dependency を変えない。
 - 条件入力の変化は保存状態・着手可否・着手中の集合を変えず、明示操作は条件入力を変えない。
-- 判断候補は未判断かつ自身・親が浮上しているものとし、dependency の変更は判断候補を変えない。
+- 判断候補は未判断かつ自身・全祖先が浮上しているものとし、dependency の変更は判断候補を変えない。
 - 判断候補は着手候補・着手中と重ならない。
-- 着手候補は着手可能なものに限り、自身と親の浮上条件に一致する。
+- 着手候補は着手可能なものに限り、自身と全祖先の浮上条件に一致する。
 - 進行中の Issue と計画は、非浮上でも着手中に含む。
 - 未登録・取りやめ・完了の Issue と、取りやめ・完了の計画は条件を評価しない。
 - 未終了の仕事や再検討可能な計画が残っている間、全 lifecycle 操作が行き止まりにならない。
 
-到達性では各操作に加え、進行中の移動、未判断を計画外へ出して完了可能になる場合、最終確認待ちからの新規 Issue 追加を観測する。dependency については、進行中の追加、計画をまたぐ依存、前提の取りやめによる阻害、前提の完了による着手・完了解禁、直接・間接循環の拒否を確認する。再浮上については、親の条件変化による候補の除外と復帰、非浮上のままの明示的な着手、進行中の仕事の保持を確認する。判断候補については、親が未着手のケース、未完了の依存先があるケース、親の浮上による除外と復帰を観測する。親が非浮上でも明示的に採用でき、依存先の完了前にも採用できることを確認する。
+到達性では各操作に加え、進行中の移動、未判断を計画外へ出して完了可能になる場合、最終確認待ちからの新規 Issue 追加を観測する。dependency については、進行中の追加、計画をまたぐ依存、前提の取りやめによる阻害、前提の完了による着手・完了解禁、直接・間接循環の拒否を確認する。再浮上については、親の条件変化による候補の除外と復帰、非浮上のままの明示的な着手、進行中の仕事の保持を確認する。判断候補については、親が未着手のケース、未完了の依存先があるケース、親の浮上による除外と復帰を観測する。親が非浮上でも明示的に採用でき、依存先の完了前にも採用できることを確認する。入れ子については三階層の包含、Issue と子計画の混在、進行中の部分木の移動、子計画が親の着手・終了に与える制約、各階層の完了・取りやめ、間接的な包含循環の拒否を観測する。
 
 ```quint target/literate/group_lifecycle_proposal.qnt +=
   def sawGroup(op: Operation): bool = match observation.event {
@@ -652,7 +692,8 @@ module group_lifecycle_proposal {
   val wCompletedWithCancelledChild = GROUPS.exists(g => plan.groups.get(g) == Completed
     and children(plan, g).exists(id => plan.issues.get(id) == Cancelled))
   val wCompletedAllChildrenDone = GROUPS.exists(g => plan.groups.get(g) == Completed
-    and children(plan, g).size() > 0 and children(plan, g).forall(id => plan.issues.get(id) == Completed))
+    and children(plan, g).size() > 0 and children(plan, g).forall(id => plan.issues.get(id) == Completed)
+    and childGroups(plan, g).forall(id => plan.groups.get(id) == Completed))
   val wBothChildrenWorking = GROUPS.exists(g =>
     children(plan, g).filter(id => plan.issues.get(id) == InProgress).size() >= 2)
   val wUndecidedChildBlocksClosure = GROUPS.exists(g => plan.groups.get(g) == InProgress
@@ -736,7 +777,8 @@ module group_lifecycle_proposal {
       observation.before.issues.get(id) == Completed implies plan.issues.get(id) == Completed),
   }
   val invClosedStructureFrozen = GROUPS.forall(g => terminal(observation.before.groups.get(g))
-    implies children(plan, g) == children(observation.before, g))
+    implies (children(plan, g) == children(observation.before, g)
+      and childGroups(plan, g) == childGroups(observation.before, g)))
   val invCompletionReviewed = GROUPS.forall(g =>
     (plan.groups.get(g) == Completed and observation.before.groups.get(g) != Completed)
       implies (observation.event == GroupOperation({ id: g, op: Complete }) and observation.reviewPassed))
@@ -748,6 +790,10 @@ module group_lifecycle_proposal {
       and plan.parents == observation.before.parents
       and plan.registered == observation.before.registered
     | AddDependency(_) => plan.groups == observation.before.groups
+      and plan.issues == observation.before.issues
+      and plan.parents == observation.before.parents
+      and plan.registered == observation.before.registered
+    | ReparentGroup(_) => plan.groups == observation.before.groups
       and plan.issues == observation.before.issues
       and plan.parents == observation.before.parents
       and plan.registered == observation.before.registered
@@ -899,25 +945,24 @@ module group_lifecycle_proposal {
       parentWorking(plan, plan.parents.get(id)),
       prerequisitesComplete(plan, id),
       conditions.issues.get(id),
-      match plan.parents.get(id) {
-        | Unassigned => true
-        | InGroup(group) => conditions.groups.get(group)
-      },
+      ancestorGroups(plan, plan.parents.get(id)).forall(g => conditions.groups.get(g)),
     }),
     candidateGroups(plan, conditions) == GROUPS.filter(id =>
-      plan.groups.get(id) == NotStarted and conditions.groups.get(id)),
+      plan.groups.get(id) == NotStarted and parentWorking(plan, plan.groupParents.get(id))
+        and conditions.groups.get(id)
+        and ancestorGroups(plan, plan.groupParents.get(id)).forall(g => conditions.groups.get(g))),
   }
   val invJudgmentDefinition = and {
     judgmentIssues(plan, conditions) == plan.registered.filter(id => and {
       plan.issues.get(id) == Undecided,
       conditions.issues.get(id),
-      match plan.parents.get(id) {
-        | Unassigned => true
-        | InGroup(group) => not(terminal(plan.groups.get(group))) and conditions.groups.get(group)
-      },
+      ancestorGroups(plan, plan.parents.get(id)).forall(g =>
+        not(terminal(plan.groups.get(g))) and conditions.groups.get(g)),
     }),
     judgmentGroups(plan, conditions) == GROUPS.filter(id =>
-      plan.groups.get(id) == Undecided and conditions.groups.get(id)),
+      plan.groups.get(id) == Undecided and conditions.groups.get(id)
+        and ancestorGroups(plan, plan.groupParents.get(id)).forall(g =>
+          not(terminal(plan.groups.get(g))) and conditions.groups.get(g))),
   }
   val invJudgmentSeparateFromWork = and {
     judgmentIssues(plan, conditions).intersect(candidateIssues(plan, conditions)).size() == 0,
@@ -1031,6 +1076,7 @@ module group_lifecycle_proposal {
   val invMembershipValid = and {
     plan.registered.subseteq(ISSUES),
     ISSUES.forall(id => PARENTS.contains(plan.parents.get(id))),
+    GROUPS.forall(id => PARENTS.contains(plan.groupParents.get(id))),
     ISSUES.exclude(plan.registered).forall(id => plan.parents.get(id) == Unassigned),
   }
   val invRegistrationMatchesDecision = match observation.event {
@@ -1050,8 +1096,76 @@ module group_lifecycle_proposal {
       not(canRegister(plan, id, InGroup(g))),
       plan.parents.get(id) == InGroup(g) implies PARENTS.forall(parent => not(canMove(plan, id, parent))),
     }))
+  val invGroupParentsScope = match observation.event {
+    | ReparentGroup(change) => plan.groupParents.get(change.id) == change.parent
+      and GROUPS.exclude(Set(change.id)).forall(g => plan.groupParents.get(g) == observation.before.groupParents.get(g))
+      and descendantGroups(plan, change.id) == descendantGroups(observation.before, change.id)
+      and descendantIssues(plan, change.id) == descendantIssues(observation.before, change.id)
+    | _ => plan.groupParents == observation.before.groupParents
+  }
+  val invContainmentAcyclic = GROUPS.forall(g => not(ancestorGroups(plan, plan.groupParents.get(g)).contains(g)))
+  val invWorkingAncestors = and {
+    GROUPS.forall(g => plan.groups.get(g) == InProgress implies
+      ancestorGroups(plan, plan.groupParents.get(g)).forall(a => plan.groups.get(a) == InProgress)),
+    plan.registered.forall(id => plan.issues.get(id) == InProgress implies
+      ancestorGroups(plan, plan.parents.get(id)).forall(a => plan.groups.get(a) == InProgress)),
+  }
+  val invClosedDescendantsTerminal = GROUPS.forall(g => terminal(plan.groups.get(g)) implies and {
+    descendantGroups(plan, g).forall(id => terminal(plan.groups.get(id))),
+    descendantIssues(plan, g).forall(id => terminal(plan.issues.get(id))),
+  })
+  val invGroupClosedEditsDisabled = GROUPS.forall(g => terminal(plan.groups.get(g)) implies
+    GROUPS.forall(id => not(canMoveGroup(plan, id, InGroup(g)))
+      and (plan.groupParents.get(id) == InGroup(g) implies
+        PARENTS.forall(parent => not(canMoveGroup(plan, id, parent))))))
+  val invContainmentCycleEditsDisabled = GROUPS.forall(g =>
+    not(canMoveGroup(plan, g, InGroup(g)))
+      and descendantGroups(plan, g).forall(d => not(canMoveGroup(plan, g, InGroup(d)))))
+  val wGroupAttach = match observation.event {
+    | ReparentGroup(change) => observation.before.groupParents.get(change.id) == Unassigned and change.parent != Unassigned
+    | _ => false
+  }
+  val wGroupDetach = match observation.event {
+    | ReparentGroup(change) => change.parent == Unassigned
+    | _ => false
+  }
+  val wGroupMoveBetweenPlans = match observation.event {
+    | ReparentGroup(change) => observation.before.groupParents.get(change.id) != Unassigned and change.parent != Unassigned
+    | _ => false
+  }
+  val wWorkingSubtreeMove = wGroupMoveBetweenPlans and match observation.event {
+    | ReparentGroup(change) => plan.groups.get(change.id) == InProgress
+      and descendantIssues(plan, change.id).exists(id => plan.issues.get(id) == InProgress)
+    | _ => false
+  }
+  val wThreeGroupLevels = GROUPS.exists(g => ancestorGroups(plan, plan.groupParents.get(g)).size() == 2)
+  val wMixedChildren = GROUPS.exists(g => children(plan, g).size() > 0 and childGroups(plan, g).size() > 0)
+  val wNestedIssueWorking = plan.registered.exists(id => plan.issues.get(id) == InProgress
+    and ancestorGroups(plan, plan.parents.get(id)).size() >= 2)
+  val wGroupWaitsForParentStart = GROUPS.exists(g => plan.groups.get(g) == NotStarted
+    and not(parentWorking(plan, plan.groupParents.get(g))) and not(canGroup(plan, g, Start, false)))
+  val wGroupReleaseBlockedByGroup = GROUPS.exists(g => plan.groups.get(g) == InProgress
+    and childGroups(plan, g).exists(id => plan.groups.get(id) == InProgress)
+    and not(canGroup(plan, g, Release, false)))
+  val wUndecidedGroupBlocksClosure = GROUPS.exists(g => plan.groups.get(g) == InProgress
+    and childGroups(plan, g).exists(id => plan.groups.get(id) == Undecided)
+    and not(canGroup(plan, g, Complete, true)) and not(canGroup(plan, g, Cancel, false)))
+  val wParentCompletesAfterGroup = match observation.event {
+    | GroupOperation(change) => change.op == Complete
+      and childGroups(plan, change.id).exists(g => plan.groups.get(g) == Completed)
+    | _ => false
+  }
+  val wNestedGroupCancel = match observation.event {
+    | GroupOperation(change) => change.op == Cancel and plan.groupParents.get(change.id) != Unassigned
+      and children(plan, change.id).size() > 0
+    | _ => false
+  }
+  val wIndirectContainmentCycleRejected = GROUPS.exists(g => GROUPS.exists(d =>
+    ancestorGroups(plan, plan.groupParents.get(d)).contains(g)
+      and plan.groupParents.get(d) != InGroup(g) and not(canMoveGroup(plan, g, InGroup(d)))))
   val invNoUnexpectedDeadEnd =
-    (GROUPS.exists(g => plan.groups.get(g) != Completed)
+    (GROUPS.exists(g => plan.groups.get(g) != Completed
+      and ancestorGroups(plan, plan.groupParents.get(g)).forall(a => plan.groups.get(a) != Completed))
       or plan.registered.exists(id => not(terminal(plan.issues.get(id))))) implies or {
         GROUPS.exists(g => OPERATIONS.exists(op => canGroup(plan, g, op, true))),
         plan.registered.exists(id => OPERATIONS.exists(op => canIssue(plan, id, op))),
@@ -1061,19 +1175,19 @@ module group_lifecycle_proposal {
 
 ### 今回の境界
 
-所属変更、提案・採用済みの新規登録、Issue 間の dependency、再浮上と判断候補・着手候補・着手中の関係を、計画2件・Issue枠3件の範囲で扱う。取りやめた計画は再検討後に構成を変更できるが、完了した計画には再開経路を持たせない。
+入れ子の計画と所属変更、提案・採用済みの新規登録、Issue 間の dependency、再浮上と判断候補・着手候補・着手中の関係を、計画3件・Issue枠3件の範囲で扱う。取りやめた計画は再検討後に構成を変更できるが、完了した計画には再開経路を持たせない。
 
-最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。入れ子の計画、計画そのものへの dependency、claim、declaration 編集、実際の ID 発行や永続化は検証対象外である。条件の種類・設定・評価失敗、一覧やコマンドの具体的な構成はまだ決めない。
+最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。計画そのものへの dependency、claim、declaration 編集、実際の ID 発行や永続化は検証対象外である。条件の種類・設定・評価失敗、一覧やコマンドの具体的な構成はまだ決めない。
 
 `NotEvaluated` は意味上の評価除外であり、外部コマンドを実際に呼ばないことや評価コストは実装側で別途検証する。自身の条件の評価と親による候補の除外を分けており、親が非浮上の場合に子の外部条件の評価を省略する実装までは定めない。
 
-循環の検査はこの3 ID の全グラフを対象とするが、4件以上の具体的なグラフは探索していない。依存先が取りやめでも依存元の取りやめを強制せず、依存関係の見直しや再検討を明示操作に残す。行き止まりがないという性質は整理・再判断の操作も含み、当初の計画どおり必ず完了できることを意味しない。
+dependency の循環検査はこの3 Issue ID の全グラフを対象とするが、4件以上の具体的なグラフは探索していない。依存先が取りやめでも依存元の取りやめを強制せず、依存関係の見直しや再検討を明示操作に残す。完了した祖先の配下にある取りやめ済み Entity は、再検討可能な仕事として数えない。行き止まりがないという性質は整理・再判断の操作も含み、当初の計画どおり必ず完了できることを意味しない。
 
-このモデルには、追加できる Issue が1件だけという探索上の上限がある。新規登録が無効になることは、製品で追加件数を制限する提案ではない。無限件数への一般化や、必ず最終確認に合格し計画が完了することは保証しない。
+包含は計画3件の範囲で検査し、計画が四階層以上となる具体的な木は探索しない。このモデルには、追加できる Issue が1件だけという探索上の上限がある。新規登録が無効になることは、製品で追加件数を制限する提案ではない。無限件数への一般化や、必ず最終確認に合格し計画が完了することは保証しない。
 
 ### 統合モデルの再現と結果
 
-2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成・型検査後、Quint 0.32.0、Rust backend、8 threads、10,000 traces、最大200 steps、入力 seed `2026091007` で実行した。27 invariant に反例はなく、71 witness はすべて1 trace以上で観測された。親が未着手でも判断候補となるケースは7,999 traces、未完了の依存先があっても判断候補となるケースは9,851 traces、親が非浮上でも明示的に採用するケースは6,548 tracesで観測された。既存の所属・dependency・再浮上の到達目標もすべて観測された。これは bounded random simulation の結果であり、全状態の証明ではない。
+2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成・型検査後、Quint 0.32.0、Rust backend、8 threads、10,000 traces、最大200 steps、入力 seed `2026091009` で実行した。33 invariant に反例はなく、84 witness はすべて1 trace以上で観測された。三階層の計画は9,864 traces、入れ子の配下での Issue 着手は115 traces、完了した子計画を含む親の完了は29 traces、進行中の Issue を伴う計画間の部分木移動は1 traceで観測された。既存の登録・所属・dependency・再浮上の到達目標もすべて観測された。これは bounded random simulation の結果であり、全状態の証明ではない。
 
 単独 Issue と再浮上のモデル、および共有する基本遷移のコードは変更していない。
 
@@ -1084,14 +1198,15 @@ quint run target/literate/group_lifecycle_proposal.qnt \
   --invariants \
     invParentOfWorkingChild invClosedChildrenTerminal invCompletedStayCompleted \
     invClosedStructureFrozen invCompletionReviewed invOperationScope \
-    invMembershipValid invRegistrationMatchesDecision invRegistrationNeverStarts invClosedEditsDisabled \
-    invNoUnexpectedDeadEnd \
     invDependencyOperationScope invDependenciesValid invDependenciesAcyclic \
-    invCompletedPrerequisites invStartAndCompleteRequirePrerequisites \
-    invCompletedDependenciesFrozen invSelfDependencyRejected \
-    invConditionInputScope invTerminalConditionsNotEvaluated invCandidatesAreStartable \
-    invCandidateDefinition invWorkingVisibility invConditionChangesPreserveEligibility \
-    invJudgmentDefinition invJudgmentSeparateFromWork invDependencyEditsPreserveJudgment \
+    invCompletedPrerequisites invStartAndCompleteRequirePrerequisites invCompletedDependenciesFrozen \
+    invSelfDependencyRejected invConditionInputScope invTerminalConditionsNotEvaluated \
+    invCandidatesAreStartable invCandidateDefinition invJudgmentDefinition \
+    invJudgmentSeparateFromWork invDependencyEditsPreserveJudgment invWorkingVisibility \
+    invConditionChangesPreserveEligibility invMembershipValid invRegistrationMatchesDecision \
+    invRegistrationNeverStarts invClosedEditsDisabled invGroupParentsScope \
+    invContainmentAcyclic invWorkingAncestors invClosedDescendantsTerminal \
+    invGroupClosedEditsDisabled invContainmentCycleEditsDisabled invNoUnexpectedDeadEnd \
   --witnesses \
     wGroupAccept wGroupWithdraw wGroupStart \
     wGroupRelease wGroupComplete wGroupCancel \
@@ -1102,18 +1217,24 @@ quint run target/literate/group_lifecycle_proposal.qnt \
     wFailedCheckCannotComplete wCompletedWithCancelledChild wCompletedAllChildrenDone \
     wBothChildrenWorking wUndecidedChildBlocksClosure wAttach \
     wDetach wMoveBetweenPlans wWorkingDetach \
-    wWorkingMove wRegister wRegisterOutside \
-    wRegisterProposal wRegisterAdopted wAdoptedRegistrationWaitsForParent wAdoptedRegistrationCanStart \
-    wAddAfterFinalCheckReady wReconsiderAllowsMembership wRemoveUndecidedForCompletion \
-    wAddDependency wRemoveDependency wAddDuringWorkBlocksCompletion \
-    wCrossPlanDependency wDependOnCompletedIssue wDependencyRetainedOnMove \
-    wCancelledPrerequisiteBlocks wPrerequisiteCompletionUnblocksStart \
+    wWorkingMove wRegister wRegisterProposal \
+    wRegisterAdopted wAdoptedRegistrationWaitsForParent wAdoptedRegistrationCanStart \
+    wRegisterOutside wAddAfterFinalCheckReady wReconsiderAllowsMembership \
+    wRemoveUndecidedForCompletion wAddDependency wAddDuringWorkBlocksCompletion \
+    wRemoveDependency wCrossPlanDependency wDependOnCompletedIssue \
+    wDependencyRetainedOnMove wCancelledPrerequisiteBlocks wPrerequisiteCompletionUnblocksStart \
     wPrerequisiteCompletionUnblocksFinish wIndirectCycleRejected wDirectCycleRejected \
-    wGroupConditionRose wGroupConditionFell wIssueConditionRose wIssueConditionFell \
-    wCandidateIssue wCandidateGroup wStartHiddenIssue wStartUnderHiddenParent wStartHiddenGroup \
-    wParentHidesCandidate wParentResurfacesCandidate wParentHiddenKeepsWorkingChild \
-    wIssueHiddenKeepsWorking wCompletedIssueConditionIgnored wCancelledGroupConditionIgnored \
-    wJudgmentIssue wJudgmentGroup wJudgmentBeforeParentStart wJudgmentWithUnfinishedPrerequisite \
-    wParentHidesJudgment wParentResurfacesJudgment wAcceptUnderHiddenParent wAcceptWithUnfinishedPrerequisite \
-  --max-samples 10000 --max-steps 200 --seed 2026091007 --backend rust --n-threads 8 --verbosity 1
+    wGroupConditionRose wGroupConditionFell wIssueConditionRose \
+    wIssueConditionFell wJudgmentIssue wJudgmentGroup \
+    wJudgmentBeforeParentStart wJudgmentWithUnfinishedPrerequisite wParentHidesJudgment \
+    wParentResurfacesJudgment wAcceptUnderHiddenParent wAcceptWithUnfinishedPrerequisite \
+    wCandidateIssue wCandidateGroup wStartHiddenIssue \
+    wStartUnderHiddenParent wStartHiddenGroup wParentHidesCandidate \
+    wParentResurfacesCandidate wParentHiddenKeepsWorkingChild wIssueHiddenKeepsWorking \
+    wCompletedIssueConditionIgnored wCancelledGroupConditionIgnored wGroupAttach \
+    wGroupDetach wGroupMoveBetweenPlans wWorkingSubtreeMove \
+    wThreeGroupLevels wMixedChildren wNestedIssueWorking \
+    wGroupWaitsForParentStart wGroupReleaseBlockedByGroup wUndecidedGroupBlocksClosure \
+    wParentCompletesAfterGroup wNestedGroupCancel wIndirectContainmentCycleRejected \
+  --max-samples 10000 --max-steps 200 --seed 2026091009 --backend rust --n-threads 8 --verbosity 1
 ```
