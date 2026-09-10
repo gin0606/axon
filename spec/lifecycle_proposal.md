@@ -277,216 +277,377 @@ quint run target/literate/lifecycle_proposal.qnt \
 
 合意した状態・遷移・初期状態・検討範囲を変更するときは、このファイルを更新し、実行用モデルを再生成して再検証する。次の検討では、この状態遷移で実際の使い方を表現できるかを確認してから範囲を広げる。
 
-## 計画と子 Issue の着手境界
+## 計画と Issue の所属
 
-計画1件と、固定所属の子 Issue 2件を共有状態として扱う。会社の ITS の依頼を実装計画へ分解し、子 Issue を別々に作業した後、計画全体を最終確認する用途を想定する。既存 Group の仕様や互換性を引き継ぐためのモデルではない。
+計画2件、Issue 用の固定 ID 3件を使う。最初は2 Issue が計画0に所属し、残り1件は未登録の枠とする。未登録はモデルの探索領域を有限にする仕組みであり、新しい lifecycle ではない。計画・Issue は未判断から始まり、各々を明示的に採用する。
 
-計画と子は同じ5状態を持つが、採用はそれぞれ明示する。計画が採用済みでも、未判断の子をそのまま所属させられる。計画・子のどちらの操作も、もう一方の保存状態を自動変更しない。
+所属は最大一つで、所属なしも許す。所属変更は既存の親子の制約を壊さない限り許可し、lifecycle を変えない。完了・取りやめの計画への追加と、そこからの取り外しは不可とする。取りやめた計画は、明示的に再検討へ戻せば構成を変更できる。この取りやめ時の構成固定と計画の再検討は暫定採用の判断であり、運用上の負担が分かれば見直す。
 
 ```quint target/literate/group_lifecycle_proposal.qnt +=
 module group_lifecycle_proposal {
   import lifecycle_rules.* from "lifecycle_rules"
 
-  type IssueId = int
-  pure val ISSUES: Set[IssueId] = Set(0, 1)
+  type Id = int
+  type Parent = Unassigned | InGroup(Id)
+  pure val GROUPS = Set(0, 1)
+  pure val ISSUES = Set(0, 1, 2)
+  pure val PARENTS = Set(Unassigned, InGroup(0), InGroup(1))
   pure val OPERATIONS = Set(Accept, Withdraw, Start, Release, Complete, Cancel, Reconsider)
-
   type PlanState = {
-    group: Lifecycle,
-    children: IssueId -> Lifecycle,
+    groups: Id -> Lifecycle,
+    issues: Id -> Lifecycle,
+    registered: Set[Id],
+    parents: Id -> Parent,
   }
-  type PlanEvent = Initial | GroupOperation(Operation) | ChildOperation({ id: IssueId, op: Operation })
-  type PlanObservation = {
-    before: PlanState,
-    event: PlanEvent,
-    reviewPassed: bool,
-  }
-
+  type PlanEvent = Initial
+    | GroupOperation({ id: Id, op: Operation })
+    | IssueOperation({ id: Id, op: Operation })
+    | Reparent({ id: Id, parent: Parent })
+    | RegisterIssue({ id: Id, parent: Parent })
+  type PlanObservation = { before: PlanState, event: PlanEvent, reviewPassed: bool }
   var plan: PlanState
   var observation: PlanObservation
 ```
 
-### 計画の操作
+### 親子の lifecycle
 
-子への着手前に親を明示的に着手する。逆方向では、進行中の子がいる間は親を未着手へ戻せない。計画を完了・取りやめにするには、全子 Issue が完了または取りやめでなければならない。
+子への着手には、子自身の採用と親の進行中を要求する。所属なしの Issue は自身の基本遷移だけに従う。進行中の子があれば親を未着手へ戻せない。計画の完了・取りやめには全所属 Issue の終了が必要で、未判断もその妨げになる。
 
-完了には、さらに計画全体の最終確認が通ったという前提を置く。`reviewPassed` は完了操作時の確認結果の抽象入力であり、実際の CLI 引数、確認結果の保存、専用操作か最終チェック Issue かを決定するものではない。
+完了にはさらに計画全体の最終確認が通ったという入力を要求する。`reviewPassed` は確認結果の抽象入力であり、CLI 引数や保存方法、専用操作か最終チェック Issue かを決めるものではない。空の計画でもこの確認を省略しない。子の終了だけで親を自動終了しない。
 
 ```quint target/literate/group_lifecycle_proposal.qnt +=
   pure def terminal(current: Lifecycle): bool = Set(Completed, Cancelled).contains(current)
-  pure def allChildrenTerminal(s: PlanState): bool =
-    ISSUES.forall(id => terminal(s.children.get(id)))
-  pure def hasWorkingChild(s: PlanState): bool =
-    ISSUES.exists(id => s.children.get(id) == InProgress)
-
-  pure def canGroup(s: PlanState, op: Operation, reviewPassed: bool): bool = and {
-    canPerform(s.group, op),
-    op != Release or not(hasWorkingChild(s)),
-    not(Set(Complete, Cancel).contains(op)) or allChildrenTerminal(s),
-    op != Complete or reviewPassed,
+  pure def children(s: PlanState, group: Id): Set[Id] =
+    s.registered.filter(id => s.parents.get(id) == InGroup(group))
+  pure def allChildrenTerminal(s: PlanState, group: Id): bool =
+    children(s, group).forall(id => terminal(s.issues.get(id)))
+  pure def hasWorkingChild(s: PlanState, group: Id): bool =
+    children(s, group).exists(id => s.issues.get(id) == InProgress)
+  pure def parentOpen(s: PlanState, parent: Parent): bool = match parent {
+    | Unassigned => true
+    | InGroup(group) => not(terminal(s.groups.get(group)))
+  }
+  pure def parentWorking(s: PlanState, parent: Parent): bool = match parent {
+    | Unassigned => true
+    | InGroup(group) => s.groups.get(group) == InProgress
   }
 
-  pure def applyGroup(s: PlanState, op: Operation): PlanState =
-    { ...s, group: applyOperation(s.group, op) }
-
-  pure def observeGroup(s: PlanState, op: Operation, passed: bool): PlanObservation = {
-    before: s,
-    event: GroupOperation(op),
-    reviewPassed: passed,
+  pure def canGroup(s: PlanState, id: Id, op: Operation, passed: bool): bool = and {
+    canPerform(s.groups.get(id), op),
+    op != Release or not(hasWorkingChild(s, id)),
+    not(Set(Complete, Cancel).contains(op)) or allChildrenTerminal(s, id),
+    op != Complete or passed,
   }
+  pure def applyGroup(s: PlanState, id: Id, op: Operation): PlanState =
+    { ...s, groups: s.groups.set(id, applyOperation(s.groups.get(id), op)) }
+
+  pure def canIssue(s: PlanState, id: Id, op: Operation): bool = and {
+    s.registered.contains(id),
+    canPerform(s.issues.get(id), op),
+    parentOpen(s, s.parents.get(id)),
+    op != Start or parentWorking(s, s.parents.get(id)),
+  }
+  pure def applyIssue(s: PlanState, id: Id, op: Operation): PlanState =
+    { ...s, issues: s.issues.set(id, applyOperation(s.issues.get(id), op)) }
+
+  pure def observe(s: PlanState, event: PlanEvent, passed: bool): PlanObservation =
+    { before: s, event: event, reviewPassed: passed }
 
   action init = {
-    val initial = { group: Undecided, children: ISSUES.mapBy(_ => Undecided) }
+    val initial = {
+      groups: GROUPS.mapBy(_ => Undecided),
+      issues: ISSUES.mapBy(_ => Undecided),
+      registered: Set(0, 1),
+      parents: ISSUES.mapBy(id => if (id == 2) Unassigned else InGroup(0)),
+    }
     all {
       plan' = initial,
-      observation' = { before: initial, event: Initial, reviewPassed: false },
+      observation' = observe(initial, Initial, false),
     }
   }
-
-  action performGroup(op: Operation, reviewPassed: bool): bool = all {
-    canGroup(plan, op, reviewPassed),
-    plan' = applyGroup(plan, op),
-    observation' = observeGroup(plan, op, reviewPassed),
+  action performGroup(id: Id, op: Operation, passed: bool): bool = all {
+    canGroup(plan, id, op, passed),
+    plan' = applyGroup(plan, id, op),
+    observation' = observe(plan, GroupOperation({ id: id, op: op }), passed),
   }
+  action performIssue(id: Id, op: Operation): bool = all {
+    canIssue(plan, id, op),
+    plan' = applyIssue(plan, id, op),
+    observation' = observe(plan, IssueOperation({ id: id, op: op }), false),
+  }
+
 ```
 
-### 子 Issue の操作
+### 所属変更と新規登録
 
-子は、自身が採用済みで、親が進行中のときだけ着手できる。親の完了後は子も固定する。親が取りやめの間は、子の取りやめを未判断へ戻せない。先に親を明示的に再検討し、その後で必要な子を個別に再検討する。
+進行中の Issue は、所属なしにするか、進行中の別計画へ移せる。移動元・移動先に計画がある場合は、どちらも完了・取りやめでないことを検査する。移動のためだけに release と start を挟む必要はなく、移動によって採用や進行の状態は変わらない。
 
-取りやめた計画の再検討は暫定的に許可する。別計画として登録する方式も代替案として残す。再検討によって完了した子は戻らず、取りやめた子も自動では戻らない。
+未登録の枠は、計画内または計画外へ未判断で登録する。登録しただけでは着手できない。最終確認待ちの計画に不足 Issue を追加した場合、その Issue が未判断なので、計画は再び完了できなくなる。実際に最終確認が不合格となった理由はモデル外である。
 
 ```quint target/literate/group_lifecycle_proposal.qnt +=
-  pure def canChild(s: PlanState, id: IssueId, op: Operation): bool = and {
-    canPerform(s.children.get(id), op),
-    s.group != Completed,
-    op != Start or s.group == InProgress,
-    not(terminal(s.group)) or terminal(applyOperation(s.children.get(id), op)),
+  pure def destinationAllowed(s: PlanState, parent: Parent, current: Lifecycle): bool =
+    parentOpen(s, parent) and (current != InProgress or parentWorking(s, parent))
+  pure def canMove(s: PlanState, id: Id, parent: Parent): bool = and {
+    s.registered.contains(id),
+    s.parents.get(id) != parent,
+    parentOpen(s, s.parents.get(id)),
+    destinationAllowed(s, parent, s.issues.get(id)),
+  }
+  pure def applyMove(s: PlanState, id: Id, parent: Parent): PlanState =
+    { ...s, parents: s.parents.set(id, parent) }
+  action moveIssue(id: Id, parent: Parent): bool = all {
+    canMove(plan, id, parent),
+    plan' = applyMove(plan, id, parent),
+    observation' = observe(plan, Reparent({ id: id, parent: parent }), false),
   }
 
-  pure def applyChild(s: PlanState, id: IssueId, op: Operation): PlanState =
-    { ...s, children: s.children.set(id, applyOperation(s.children.get(id), op)) }
-
-  pure def observeChild(s: PlanState, id: IssueId, op: Operation): PlanObservation = {
-    before: s,
-    event: ChildOperation({ id: id, op: op }),
-    reviewPassed: false,
+  pure def canRegister(s: PlanState, id: Id, parent: Parent): bool = and {
+    not(s.registered.contains(id)),
+    destinationAllowed(s, parent, Undecided),
+  }
+  pure def applyRegister(s: PlanState, id: Id, parent: Parent): PlanState = {
+    ...s,
+    registered: s.registered.union(Set(id)),
+    issues: s.issues.set(id, Undecided),
+    parents: s.parents.set(id, parent),
+  }
+  action registerIssue(id: Id, parent: Parent): bool = all {
+    canRegister(plan, id, parent),
+    plan' = applyRegister(plan, id, parent),
+    observation' = observe(plan, RegisterIssue({ id: id, parent: parent }), false),
   }
 
-  action performChild(id: IssueId, op: Operation): bool = all {
-    canChild(plan, id, op),
-    plan' = applyChild(plan, id, op),
-    observation' = observeChild(plan, id, op),
-  }
+```
 
+### 探索
+
+基本遷移、所属変更、新規登録を混ぜて実行する。登録済み集合と所属は別に保持し、計画の外へ出しても Issue を削除しない。同じ所属の再指定は無効とする。ID は固定集合から選び、未登録 ID の再利用・削除は扱わない。
+
+```quint target/literate/group_lifecycle_proposal.qnt +=
   action step = {
+    nondet group = GROUPS.oneOf()
     nondet id = ISSUES.oneOf()
     nondet op = OPERATIONS.oneOf()
     nondet passed = Set(false, true).oneOf()
+    nondet parent = PARENTS.oneOf()
     any {
-      performGroup(op, passed),
-      performChild(id, op),
+      performGroup(group, op, passed),
+      performIssue(id, op),
+      moveIssue(id, parent),
+      registerIssue(id, parent),
     }
   }
 ```
 
-### 親子の性質と到達性
+### 性質と到達性
 
-親の着手前に子へ着手できないこと、進行中の子を残して親を解放できないこと、親子の操作が他の Entity を自動更新しないことを調べる。子が全部終了しても親は進行中に留まり、最終確認を経た明示完了を待てる。未判断の子がある間は完了も取りやめもできない。
+`observation` は直前の状態と操作の検証専用記録であり、製品の保存項目ではない。以下を確認する。
+
+- 進行中の子の親は進行中であり、終了した計画の子はすべて終了している。
+- 完了済みの計画・Issue は完了のまま。
+- 完了・取りやめの計画の構成は変わらず、追加・取り外し操作も許可されない。
+- 計画の完了は、最終確認を経た明示操作でのみ起きる。
+- 所属変更は lifecycle を変えず、各操作は他の Entity を自動更新しない。
+- 新規登録は未判断であり、採用を代行しない。
+- 未登録の枠が計画に混入せず、所属は高々一つである。
+- 未終了の仕事や再検討可能な計画が残っている間、全 lifecycle 操作が行き止まりにならない。
+
+到達性では各操作に加え、進行中の移動、未判断を計画外へ出して完了可能になる場合、最終確認待ちからの新規 Issue 追加を観測する。
 
 ```quint target/literate/group_lifecycle_proposal.qnt +=
-  pure def groupOperationAvailable(s: PlanState): bool =
-    OPERATIONS.exists(op => canGroup(s, op, true))
-  pure def childOperationAvailable(s: PlanState): bool =
-    ISSUES.exists(id => OPERATIONS.exists(op => canChild(s, id, op)))
+  def sawGroup(op: Operation): bool = match observation.event {
+    | GroupOperation(change) => change.op == op
+    | _ => false
+  }
+  def sawIssue(op: Operation): bool = match observation.event {
+    | IssueOperation(change) => change.op == op
+    | _ => false
+  }
+  val wGroupAccept = sawGroup(Accept)
+  val wGroupWithdraw = sawGroup(Withdraw)
+  val wGroupStart = sawGroup(Start)
+  val wGroupRelease = sawGroup(Release)
+  val wGroupComplete = sawGroup(Complete)
+  val wGroupCancel = sawGroup(Cancel)
+  val wGroupReconsider = sawGroup(Reconsider)
+  val wIssueAccept = sawIssue(Accept)
+  val wIssueWithdraw = sawIssue(Withdraw)
+  val wIssueStart = sawIssue(Start)
+  val wIssueRelease = sawIssue(Release)
+  val wIssueComplete = sawIssue(Complete)
+  val wIssueCancel = sawIssue(Cancel)
+  val wIssueReconsider = sawIssue(Reconsider)
+  val wMixedAdoption = GROUPS.exists(g => Set(NotStarted, InProgress).contains(plan.groups.get(g))
+    and children(plan, g).exists(id => plan.issues.get(id) == Undecided)
+    and children(plan, g).exists(id => plan.issues.get(id) == NotStarted))
+  val wParentStartRequired = GROUPS.exists(g => plan.groups.get(g) == NotStarted
+    and children(plan, g).exists(id => plan.issues.get(id) == NotStarted and not(canIssue(plan, id, Start))))
+  val wParentReleaseBlocked = GROUPS.exists(g => hasWorkingChild(plan, g) and not(canGroup(plan, g, Release, false)))
+  val wAwaitingFinalCheck = GROUPS.exists(g => plan.groups.get(g) == InProgress
+    and children(plan, g).size() > 0 and allChildrenTerminal(plan, g))
+  val wFailedCheckCannotComplete = GROUPS.exists(g => plan.groups.get(g) == InProgress
+    and children(plan, g).size() > 0 and allChildrenTerminal(plan, g) and not(canGroup(plan, g, Complete, false)))
+  val wCompletedWithCancelledChild = GROUPS.exists(g => plan.groups.get(g) == Completed
+    and children(plan, g).exists(id => plan.issues.get(id) == Cancelled))
+  val wCompletedAllChildrenDone = GROUPS.exists(g => plan.groups.get(g) == Completed
+    and children(plan, g).size() > 0 and children(plan, g).forall(id => plan.issues.get(id) == Completed))
+  val wBothChildrenWorking = GROUPS.exists(g =>
+    children(plan, g).filter(id => plan.issues.get(id) == InProgress).size() >= 2)
+  val wUndecidedChildBlocksClosure = GROUPS.exists(g => plan.groups.get(g) == InProgress
+    and children(plan, g).exists(id => plan.issues.get(id) == Undecided)
+    and not(canGroup(plan, g, Complete, true)) and not(canGroup(plan, g, Cancel, false)))
 
-  def sawChild(op: Operation): bool = match observation.event {
-    | ChildOperation(change) => change.op == op
+  val wAttach = match observation.event {
+    | Reparent(change) => observation.before.parents.get(change.id) == Unassigned and change.parent != Unassigned
+    | _ => false
+  }
+  val wDetach = match observation.event {
+    | Reparent(change) => change.parent == Unassigned
+    | _ => false
+  }
+  val wMoveBetweenPlans = match observation.event {
+    | Reparent(change) => observation.before.parents.get(change.id) != Unassigned and change.parent != Unassigned
+    | _ => false
+  }
+  val wWorkingDetach = wDetach and match observation.event {
+    | Reparent(change) => plan.issues.get(change.id) == InProgress
+    | _ => false
+  }
+  val wWorkingMove = wMoveBetweenPlans and match observation.event {
+    | Reparent(change) => plan.issues.get(change.id) == InProgress
+    | _ => false
+  }
+  val wRegister = match observation.event {
+    | RegisterIssue(_) => true
+    | _ => false
+  }
+  val wRegisterOutside = match observation.event {
+    | RegisterIssue(change) => change.parent == Unassigned
+    | _ => false
+  }
+  val wAddAfterFinalCheckReady = match observation.event {
+    | RegisterIssue(change) => GROUPS.exists(g => change.parent == InGroup(g)
+        and observation.before.groups.get(g) == InProgress
+        and children(observation.before, g).size() > 0
+        and allChildrenTerminal(observation.before, g)
+        and not(canGroup(plan, g, Complete, true)))
+    | _ => false
+  }
+  val wReconsiderAllowsMembership = match observation.event {
+    | GroupOperation(change) => change.op == Reconsider and ISSUES.exists(id =>
+        canMove(plan, id, InGroup(change.id))
+        or (plan.parents.get(id) == InGroup(change.id) and canMove(plan, id, Unassigned)))
+    | _ => false
+  }
+  val wRemoveUndecidedForCompletion = match observation.event {
+    | Reparent(change) => observation.before.issues.get(change.id) == Undecided
+      and GROUPS.exists(g => observation.before.parents.get(change.id) == InGroup(g)
+        and plan.groups.get(g) == InProgress and canGroup(plan, g, Complete, true))
     | _ => false
   }
 
-  val wGroupAccept = observation.event == GroupOperation(Accept)
-  val wGroupWithdraw = observation.event == GroupOperation(Withdraw)
-  val wGroupStart = observation.event == GroupOperation(Start)
-  val wGroupRelease = observation.event == GroupOperation(Release)
-  val wGroupComplete = observation.event == GroupOperation(Complete)
-  val wGroupCancel = observation.event == GroupOperation(Cancel)
-  val wGroupReconsider = observation.event == GroupOperation(Reconsider)
-  val wChildAccept = sawChild(Accept)
-  val wChildWithdraw = sawChild(Withdraw)
-  val wChildStart = sawChild(Start)
-  val wChildRelease = sawChild(Release)
-  val wChildComplete = sawChild(Complete)
-  val wChildCancel = sawChild(Cancel)
-  val wChildReconsider = sawChild(Reconsider)
-
-  val wMixedAdoption = Set(NotStarted, InProgress).contains(plan.group)
-    and ISSUES.exists(id => plan.children.get(id) == Undecided)
-    and ISSUES.exists(id => plan.children.get(id) == NotStarted)
-  val wParentStartRequired = plan.group == NotStarted
-    and ISSUES.exists(id => plan.children.get(id) == NotStarted and not(canChild(plan, id, Start)))
-  val wParentReleaseBlocked = hasWorkingChild(plan) and not(canGroup(plan, Release, false))
-  val wAwaitingFinalCheck = plan.group == InProgress and allChildrenTerminal(plan)
-  val wFailedCheckCannotComplete = wAwaitingFinalCheck and not(canGroup(plan, Complete, false))
-  val wGroupReconsiderPreservesChildren = wGroupReconsider
-    and plan.group == Undecided and plan.children == observation.before.children
-  val wCompletedWithCancelledChild = plan.group == Completed
-    and ISSUES.exists(id => plan.children.get(id) == Cancelled)
-  val wCompletedAllChildrenDone = plan.group == Completed
-    and ISSUES.forall(id => plan.children.get(id) == Completed)
-  val wBothChildrenWorking = ISSUES.forall(id => plan.children.get(id) == InProgress)
-  val wUndecidedChildBlocksClosure = plan.group == InProgress
-    and ISSUES.exists(id => plan.children.get(id) == Undecided)
-    and not(canGroup(plan, Complete, true)) and not(canGroup(plan, Cancel, false))
-
-  val invParentOfWorkingChild = hasWorkingChild(plan) implies plan.group == InProgress
-  val invClosedChildrenTerminal = terminal(plan.group) implies allChildrenTerminal(plan)
-  val invCompletedPlanFrozen = plan.group == Completed
-    implies (not(groupOperationAvailable(plan)) and not(childOperationAvailable(plan)))
-  val invCompletedChildrenStayCompleted = ISSUES.forall(id =>
-    observation.before.children.get(id) == Completed implies plan.children.get(id) == Completed)
-  val invCompletionReviewed = (plan.group == Completed and observation.before.group != Completed)
-    implies (observation.event == GroupOperation(Complete) and observation.reviewPassed)
-  val invOperationScope = match observation.event {
-    | Initial => plan == observation.before
-    | GroupOperation(_) => plan.children == observation.before.children
-    | ChildOperation(change) => plan.group == observation.before.group
-      and ISSUES.exclude(Set(change.id)).forall(id =>
-        plan.children.get(id) == observation.before.children.get(id))
+  val invParentOfWorkingChild = plan.registered.forall(id =>
+    plan.issues.get(id) == InProgress implies parentWorking(plan, plan.parents.get(id)))
+  val invClosedChildrenTerminal = GROUPS.forall(g =>
+    terminal(plan.groups.get(g)) implies allChildrenTerminal(plan, g))
+  val invCompletedStayCompleted = and {
+    GROUPS.forall(g => observation.before.groups.get(g) == Completed implies plan.groups.get(g) == Completed),
+    observation.before.registered.forall(id =>
+      observation.before.issues.get(id) == Completed implies plan.issues.get(id) == Completed),
   }
-  val invNoUnexpectedDeadEnd = plan.group != Completed
-    implies (groupOperationAvailable(plan) or childOperationAvailable(plan))
+  val invClosedStructureFrozen = GROUPS.forall(g => terminal(observation.before.groups.get(g))
+    implies children(plan, g) == children(observation.before, g))
+  val invCompletionReviewed = GROUPS.forall(g =>
+    (plan.groups.get(g) == Completed and observation.before.groups.get(g) != Completed)
+      implies (observation.event == GroupOperation({ id: g, op: Complete }) and observation.reviewPassed))
+  val invOperationScope = match observation.event {
+    | Reparent(change) => and {
+        plan.groups == observation.before.groups,
+        plan.issues == observation.before.issues,
+        plan.registered == observation.before.registered,
+        ISSUES.exclude(Set(change.id)).forall(id => plan.parents.get(id) == observation.before.parents.get(id)),
+      }
+    | RegisterIssue(change) => and {
+        plan.groups == observation.before.groups,
+        plan.registered == observation.before.registered.union(Set(change.id)),
+        plan.issues.get(change.id) == Undecided,
+        ISSUES.exclude(Set(change.id)).forall(id =>
+          plan.issues.get(id) == observation.before.issues.get(id)
+          and plan.parents.get(id) == observation.before.parents.get(id)),
+      }
+    | Initial => plan == observation.before
+    | GroupOperation(change) => and {
+        plan.issues == observation.before.issues,
+        plan.parents == observation.before.parents,
+        plan.registered == observation.before.registered,
+        GROUPS.exclude(Set(change.id)).forall(g => plan.groups.get(g) == observation.before.groups.get(g)),
+      }
+    | IssueOperation(change) => and {
+        plan.groups == observation.before.groups,
+        plan.parents == observation.before.parents,
+        plan.registered == observation.before.registered,
+        ISSUES.exclude(Set(change.id)).forall(id => plan.issues.get(id) == observation.before.issues.get(id)),
+      }
+  }
+  val invMembershipValid = and {
+    plan.registered.subseteq(ISSUES),
+    ISSUES.forall(id => PARENTS.contains(plan.parents.get(id))),
+    ISSUES.exclude(plan.registered).forall(id => plan.parents.get(id) == Unassigned),
+  }
+  val invRegistrationNeverAdopts = match observation.event {
+    | RegisterIssue(change) => plan.issues.get(change.id) == Undecided
+      and not(canIssue(plan, change.id, Start))
+    | _ => true
+  }
+  val invClosedEditsDisabled = GROUPS.forall(g => terminal(plan.groups.get(g)) implies
+    ISSUES.forall(id => and {
+      not(canMove(plan, id, InGroup(g))),
+      not(canRegister(plan, id, InGroup(g))),
+      plan.parents.get(id) == InGroup(g) implies PARENTS.forall(parent => not(canMove(plan, id, parent))),
+    }))
+  val invNoUnexpectedDeadEnd =
+    (GROUPS.exists(g => plan.groups.get(g) != Completed)
+      or plan.registered.exists(id => not(terminal(plan.issues.get(id))))) implies or {
+        GROUPS.exists(g => OPERATIONS.exists(op => canGroup(plan, g, op, true))),
+        plan.registered.exists(id => OPERATIONS.exists(op => canIssue(plan, id, op))),
+      }
 }
 ```
 
 ### 今回の境界
 
-親の構成を固定しているため、所属変更、計画外への移動、最終チェックで不足が分かった後の Issue 追加、完了後の構成固定そのものはまだ検証しない。完了した計画の配下の取りやめ Issue を未判断へ戻せないことは、このモデルで検証する。
+所属変更と未判断での新規登録を、計画2件・Issue枠3件の範囲で扱う。取りやめた計画は再検討後に構成を変更できるが、完了した計画には再開経路を持たせない。
 
-最終チェックが不合格なら計画を完了しないことは扱うが、その不足内容や修正工程は扱わない。入れ子の計画、dependency、claim、親の再浮上条件と子の浮上・着手の関係も対象外とする。単独 Issue モデルの再浮上の性質と、この親子モデルの性質が同時に成立することは、今後両モデルを組み合わせて検証する必要がある。
+最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。入れ子の計画、dependency、claim、再浮上と親子の着手・所属変更の組み合わせ、declaration 編集、実際の ID 発行や永続化は検証対象外である。単独 Issue の再浮上モデルとの統合は後の検討に残す。
 
-計画の完了後に操作がなくなるのは意図した終了であり、取りやめた計画には再検討の経路を残す。最終確認に必ず合格することや、計画が必ず完了することは仮定しない。
+このモデルには、追加できる Issue が1件だけという探索上の上限がある。新規登録が無効になることは、製品で追加件数を制限する提案ではない。無限件数への一般化や、必ず最終確認に合格し計画が完了することは保証しない。
 
-### 親子モデルの再現と結果
+### 所属モデルの再現と結果
 
-2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成後、Quint 0.32.0、Rust backend、10,000 traces、最大 120 steps、入力 seed `2026091003` で以下を実行した。7 invariant に反例はなく、24 witness はすべて 1 trace 以上で観測された。全子が完了して計画も完了するケースは2 traces、両子が同時に進行中になるケースは176 tracesで観測された。到達性は確認できたが、全状態の証明ではない。
+2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成後、Quint 0.32.0、Rust backend、10,000 traces、最大200 steps、入力 seed `2026091004` で実行した。10 invariant に反例はなく、33 witness はすべて1 trace以上で観測された。進行中の計画間移動は194 traces、最終確認待ちからの新規登録は2 tracesで観測された。これは bounded random simulation の結果であり、全状態の証明ではない。
 
-基本遷移を共有ファイルへ抽出した単独 Issue モデルも、上記の seed `2026091002`・10,000 traces・最大80 stepsで再実行し、9 invariant に反例なし・19 witness 到達を確認した。
+単独 Issue と再浮上のモデル、および共有する基本遷移のコードは変更していない。
 
 ```sh
 lmt spec/lifecycle_proposal.md
 quint typecheck target/literate/group_lifecycle_proposal.qnt
 quint run target/literate/group_lifecycle_proposal.qnt \
-  --invariants invParentOfWorkingChild invClosedChildrenTerminal \
-    invCompletedPlanFrozen invCompletedChildrenStayCompleted invCompletionReviewed \
-    invOperationScope invNoUnexpectedDeadEnd \
-  --witnesses wGroupAccept wGroupWithdraw wGroupStart wGroupRelease \
-    wGroupComplete wGroupCancel wGroupReconsider \
-    wChildAccept wChildWithdraw wChildStart wChildRelease \
-    wChildComplete wChildCancel wChildReconsider \
-    wMixedAdoption wParentStartRequired wParentReleaseBlocked \
-    wAwaitingFinalCheck wFailedCheckCannotComplete wGroupReconsiderPreservesChildren \
-    wCompletedWithCancelledChild wCompletedAllChildrenDone wBothChildrenWorking \
-    wUndecidedChildBlocksClosure \
-  --max-samples 10000 --max-steps 120 --seed 2026091003 --backend rust --verbosity 1
+  --invariants \
+    invParentOfWorkingChild invClosedChildrenTerminal invCompletedStayCompleted \
+    invClosedStructureFrozen invCompletionReviewed invOperationScope \
+    invMembershipValid invRegistrationNeverAdopts invClosedEditsDisabled \
+    invNoUnexpectedDeadEnd \
+  --witnesses \
+    wGroupAccept wGroupWithdraw wGroupStart \
+    wGroupRelease wGroupComplete wGroupCancel \
+    wGroupReconsider wIssueAccept wIssueWithdraw \
+    wIssueStart wIssueRelease wIssueComplete \
+    wIssueCancel wIssueReconsider wMixedAdoption \
+    wParentStartRequired wParentReleaseBlocked wAwaitingFinalCheck \
+    wFailedCheckCannotComplete wCompletedWithCancelledChild wCompletedAllChildrenDone \
+    wBothChildrenWorking wUndecidedChildBlocksClosure wAttach \
+    wDetach wMoveBetweenPlans wWorkingDetach \
+    wWorkingMove wRegister wRegisterOutside \
+    wAddAfterFinalCheckReady wReconsiderAllowsMembership wRemoveUndecidedForCompletion \
+  --max-samples 10000 --max-steps 200 --seed 2026091004 --backend rust --verbosity 1
 ```
