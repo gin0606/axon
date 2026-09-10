@@ -1,6 +1,6 @@
 # Progress と採否を統合する検討用モデル
 
-この literate specification は、Progress と採否を単一の lifecycle にまとめる案を扱う。単独 Issue の再浮上と、計画・子 Issue の着手境界を別モジュールで段階的に検討する。既存機能やデータ形式との互換性を前提にせず、新しい土台として設計するためのモデルであり、このファイルの追加・更新で現行実装や既存モデルは変更しない。
+この literate specification は、Progress と採否を単一の lifecycle にまとめる案を扱う。単独 Issue の再浮上と、計画・子 Issue の着手境界、所属変更、Issue 間の dependency を別モジュールで段階的に検討する。既存機能やデータ形式との互換性を前提にせず、新しい土台として設計するためのモデルであり、このファイルの追加・更新で現行実装や既存モデルは変更しない。
 
 説明と実行可能なモデルをこのファイルで管理する。[Quint の literate 形式](https://quint.sh/docs/literate)に従い、`lmt` で `target/literate/` 配下に共有する基本遷移、単独 Issue、計画と子 Issue の3ファイルを生成する。生成ファイルは直接編集しない。
 
@@ -277,7 +277,7 @@ quint run target/literate/lifecycle_proposal.qnt \
 
 合意した状態・遷移・初期状態・検討範囲を変更するときは、このファイルを更新し、実行用モデルを再生成して再検証する。次の検討では、この状態遷移で実際の使い方を表現できるかを確認してから範囲を広げる。
 
-## 計画と Issue の所属
+## 計画・所属・Issue 間の dependency
 
 計画2件、Issue 用の固定 ID 3件を使う。最初は2 Issue が計画0に所属し、残り1件は未登録の枠とする。未登録はモデルの探索領域を有限にする仕組みであり、新しい lifecycle ではない。計画・Issue は未判断から始まり、各々を明示的に採用する。
 
@@ -298,12 +298,15 @@ module group_lifecycle_proposal {
     issues: Id -> Lifecycle,
     registered: Set[Id],
     parents: Id -> Parent,
+    dependencies: Id -> Set[Id],
   }
   type PlanEvent = Initial
     | GroupOperation({ id: Id, op: Operation })
     | IssueOperation({ id: Id, op: Operation })
     | Reparent({ id: Id, parent: Parent })
     | RegisterIssue({ id: Id, parent: Parent })
+    | AddDependency({ source: Id, target: Id })
+    | RemoveDependency({ source: Id, target: Id })
   type PlanObservation = { before: PlanState, event: PlanEvent, reviewPassed: bool }
   var plan: PlanState
   var observation: PlanObservation
@@ -311,7 +314,7 @@ module group_lifecycle_proposal {
 
 ### 親子の lifecycle
 
-子への着手には、子自身の採用と親の進行中を要求する。所属なしの Issue は自身の基本遷移だけに従う。進行中の子があれば親を未着手へ戻せない。計画の完了・取りやめには全所属 Issue の終了が必要で、未判断もその妨げになる。
+子への着手には、子自身の採用と親の進行中を要求する。所属なしの Issue にも、基本遷移に加えて dependency の着手・完了条件を適用する。進行中の子があれば親を未着手へ戻せない。計画の完了・取りやめには全所属 Issue の終了が必要で、未判断もその妨げになる。
 
 完了にはさらに計画全体の最終確認が通ったという入力を要求する。`reviewPassed` は確認結果の抽象入力であり、CLI 引数や保存方法、専用操作か最終チェック Issue かを決めるものではない。空の計画でもこの確認を省略しない。子の終了だけで親を自動終了しない。
 
@@ -341,11 +344,15 @@ module group_lifecycle_proposal {
   pure def applyGroup(s: PlanState, id: Id, op: Operation): PlanState =
     { ...s, groups: s.groups.set(id, applyOperation(s.groups.get(id), op)) }
 
+  pure def prerequisitesComplete(s: PlanState, id: Id): bool =
+    s.dependencies.get(id).forall(target => s.issues.get(target) == Completed)
+
   pure def canIssue(s: PlanState, id: Id, op: Operation): bool = and {
     s.registered.contains(id),
     canPerform(s.issues.get(id), op),
     parentOpen(s, s.parents.get(id)),
     op != Start or parentWorking(s, s.parents.get(id)),
+    not(Set(Start, Complete).contains(op)) or prerequisitesComplete(s, id),
   }
   pure def applyIssue(s: PlanState, id: Id, op: Operation): PlanState =
     { ...s, issues: s.issues.set(id, applyOperation(s.issues.get(id), op)) }
@@ -359,6 +366,7 @@ module group_lifecycle_proposal {
       issues: ISSUES.mapBy(_ => Undecided),
       registered: Set(0, 1),
       parents: ISSUES.mapBy(id => if (id == 2) Unassigned else InGroup(0)),
+      dependencies: ISSUES.mapBy(_ => Set()),
     }
     all {
       plan' = initial,
@@ -419,9 +427,53 @@ module group_lifecycle_proposal {
 
 ```
 
+### Issue 間の dependency
+
+依存先がすべて完了するまで、依存元は着手・完了できない。依存先の取りやめは条件を満たさない。進行中でも未完了の依存先を追加でき、lifecycle は変えない。この着手後の追加は暫定採用の判断である。
+
+完了した Issue 自身の依存関係は固定する。完了済み Issue を、別の Issue が前提として参照することは許す。未完了の Issue の前提は、判断に応じて追加・削除する。所属変更は dependency を保持し、計画をまたぐ依存と所属なしの Issue への依存を許す。
+
+自己依存と、任意長の循環を追加時に拒否する。モデルでは3 ID を使い、最大3辺の到達集合を求める。完了済み Issue もグラフから除外しない。
+
+```quint target/literate/group_lifecycle_proposal.qnt +=
+  pure def reachable(s: PlanState, source: Id): Set[Id] =
+    ISSUES.fold(Set(), (seen, _) => seen.union(s.dependencies.get(source))
+      .union(seen.map(id => s.dependencies.get(id)).flatten()))
+  pure def canAddDependency(s: PlanState, source: Id, target: Id): bool = and {
+    s.registered.contains(source),
+    s.registered.contains(target),
+    s.issues.get(source) != Completed,
+    source != target,
+    not(s.dependencies.get(source).contains(target)),
+    not(reachable(s, target).contains(source)),
+  }
+  pure def applyAddDependency(s: PlanState, source: Id, target: Id): PlanState =
+    { ...s, dependencies: s.dependencies.set(source, s.dependencies.get(source).union(Set(target))) }
+  action addDependency(source: Id, target: Id): bool = all {
+    canAddDependency(plan, source, target),
+    plan' = applyAddDependency(plan, source, target),
+    observation' = observe(plan, AddDependency({ source: source, target: target }), false),
+  }
+```
+
+```quint target/literate/group_lifecycle_proposal.qnt +=
+  pure def canRemoveDependency(s: PlanState, source: Id, target: Id): bool = and {
+    s.registered.contains(source),
+    s.issues.get(source) != Completed,
+    s.dependencies.get(source).contains(target),
+  }
+  pure def applyRemoveDependency(s: PlanState, source: Id, target: Id): PlanState =
+    { ...s, dependencies: s.dependencies.set(source, s.dependencies.get(source).exclude(Set(target))) }
+  action removeDependency(source: Id, target: Id): bool = all {
+    canRemoveDependency(plan, source, target),
+    plan' = applyRemoveDependency(plan, source, target),
+    observation' = observe(plan, RemoveDependency({ source: source, target: target }), false),
+  }
+```
+
 ### 探索
 
-基本遷移、所属変更、新規登録を混ぜて実行する。登録済み集合と所属は別に保持し、計画の外へ出しても Issue を削除しない。同じ所属の再指定は無効とする。ID は固定集合から選び、未登録 ID の再利用・削除は扱わない。
+基本遷移、所属変更、新規登録、dependency の追加・削除を混ぜて実行する。登録済み集合と所属は別に保持し、計画の外へ出しても Issue を削除しない。同じ所属の再指定は無効とする。ID は固定集合から選び、未登録 ID の再利用・削除は扱わない。
 
 ```quint target/literate/group_lifecycle_proposal.qnt +=
   action step = {
@@ -430,11 +482,14 @@ module group_lifecycle_proposal {
     nondet op = OPERATIONS.oneOf()
     nondet passed = Set(false, true).oneOf()
     nondet parent = PARENTS.oneOf()
+    nondet target = ISSUES.oneOf()
     any {
       performGroup(group, op, passed),
       performIssue(id, op),
       moveIssue(id, parent),
       registerIssue(id, parent),
+      addDependency(id, target),
+      removeDependency(id, target),
     }
   }
 ```
@@ -450,9 +505,13 @@ module group_lifecycle_proposal {
 - 所属変更は lifecycle を変えず、各操作は他の Entity を自動更新しない。
 - 新規登録は未判断であり、採用を代行しない。
 - 未登録の枠が計画に混入せず、所属は高々一つである。
+- dependency は登録済み Issue 間だけを参照し、自己依存・循環を持たない。
+- 着手・完了時に全依存先が完了しており、完了後もその前提は満たされたままである。
+- 完了した Issue 自身の dependency は固定される。
+- dependency 操作は lifecycle や所属を変えず、他の操作は dependency を変えない。
 - 未終了の仕事や再検討可能な計画が残っている間、全 lifecycle 操作が行き止まりにならない。
 
-到達性では各操作に加え、進行中の移動、未判断を計画外へ出して完了可能になる場合、最終確認待ちからの新規 Issue 追加を観測する。
+到達性では各操作に加え、進行中の移動、未判断を計画外へ出して完了可能になる場合、最終確認待ちからの新規 Issue 追加を観測する。dependency については、進行中の追加、計画をまたぐ依存、前提の取りやめによる阻害、前提の完了による着手・完了解禁、直接・間接循環の拒否を確認する。
 
 ```quint target/literate/group_lifecycle_proposal.qnt +=
   def sawGroup(op: Operation): bool = match observation.event {
@@ -561,6 +620,14 @@ module group_lifecycle_proposal {
     (plan.groups.get(g) == Completed and observation.before.groups.get(g) != Completed)
       implies (observation.event == GroupOperation({ id: g, op: Complete }) and observation.reviewPassed))
   val invOperationScope = match observation.event {
+    | RemoveDependency(_) => plan.groups == observation.before.groups
+      and plan.issues == observation.before.issues
+      and plan.parents == observation.before.parents
+      and plan.registered == observation.before.registered
+    | AddDependency(_) => plan.groups == observation.before.groups
+      and plan.issues == observation.before.issues
+      and plan.parents == observation.before.parents
+      and plan.registered == observation.before.registered
     | Reparent(change) => and {
         plan.groups == observation.before.groups,
         plan.issues == observation.before.issues,
@@ -589,6 +656,88 @@ module group_lifecycle_proposal {
         ISSUES.exclude(Set(change.id)).forall(id => plan.issues.get(id) == observation.before.issues.get(id)),
       }
   }
+  val invDependencyOperationScope = match observation.event {
+    | RemoveDependency(change) => ISSUES.exclude(Set(change.source)).forall(id =>
+        plan.dependencies.get(id) == observation.before.dependencies.get(id))
+    | AddDependency(change) => ISSUES.exclude(Set(change.source)).forall(id =>
+        plan.dependencies.get(id) == observation.before.dependencies.get(id))
+    | _ => plan.dependencies == observation.before.dependencies
+  }
+  val invDependenciesValid = ISSUES.forall(source =>
+    plan.dependencies.get(source).subseteq(plan.registered)
+      and (not(plan.registered.contains(source)) implies plan.dependencies.get(source).size() == 0))
+  val invDependenciesAcyclic = ISSUES.forall(id => not(reachable(plan, id).contains(id)))
+  val invCompletedPrerequisites = plan.registered.forall(id =>
+    plan.issues.get(id) == Completed implies prerequisitesComplete(plan, id))
+  val invStartAndCompleteRequirePrerequisites = match observation.event {
+    | IssueOperation(change) => Set(Start, Complete).contains(change.op)
+        implies prerequisitesComplete(observation.before, change.id)
+    | _ => true
+  }
+  val invCompletedDependenciesFrozen = observation.before.registered.forall(id =>
+    observation.before.issues.get(id) == Completed
+      implies plan.dependencies.get(id) == observation.before.dependencies.get(id))
+  val wAddDependency = match observation.event {
+    | AddDependency(_) => true
+    | _ => false
+  }
+  val wAddDuringWorkBlocksCompletion = match observation.event {
+    | AddDependency(change) => plan.issues.get(change.source) == InProgress
+        and plan.issues.get(change.target) != Completed
+        and not(canIssue(plan, change.source, Complete))
+    | _ => false
+  }
+
+  val wRemoveDependency = match observation.event {
+    | RemoveDependency(_) => true
+    | _ => false
+  }
+  val wCrossPlanDependency = match observation.event {
+    | AddDependency(change) => plan.parents.get(change.source) != Unassigned
+        and plan.parents.get(change.target) != Unassigned
+        and plan.parents.get(change.source) != plan.parents.get(change.target)
+    | _ => false
+  }
+  val wDependOnCompletedIssue = match observation.event {
+    | AddDependency(change) => plan.issues.get(change.target) == Completed
+    | _ => false
+  }
+  val wDependencyRetainedOnMove = match observation.event {
+    | Reparent(change) => plan.dependencies == observation.before.dependencies
+        and (plan.dependencies.get(change.id).size() > 0
+          or plan.registered.exists(id => plan.dependencies.get(id).contains(change.id)))
+    | _ => false
+  }
+  val wCancelledPrerequisiteBlocks = plan.registered.exists(id =>
+    Set(NotStarted, InProgress).contains(plan.issues.get(id))
+      and parentWorking(plan, plan.parents.get(id))
+      and plan.dependencies.get(id).exists(target => plan.issues.get(target) == Cancelled)
+      and not(canIssue(plan, id, Start)) and not(canIssue(plan, id, Complete)))
+  val wPrerequisiteCompletionUnblocksStart = match observation.event {
+    | IssueOperation(change) => change.op == Complete and plan.registered.exists(id =>
+        plan.dependencies.get(id).contains(change.id)
+          and not(prerequisitesComplete(observation.before, id)) and canIssue(plan, id, Start))
+    | _ => false
+  }
+  val wPrerequisiteCompletionUnblocksFinish = match observation.event {
+    | IssueOperation(change) => change.op == Complete and plan.registered.exists(id =>
+        plan.dependencies.get(id).contains(change.id)
+          and not(prerequisitesComplete(observation.before, id)) and canIssue(plan, id, Complete))
+    | _ => false
+  }
+  val wIndirectCycleRejected = plan.registered.exists(source => plan.registered.exists(target => and {
+    source != target,
+    plan.issues.get(source) != Completed,
+    not(plan.dependencies.get(source).contains(target)),
+    not(plan.dependencies.get(target).contains(source)),
+    reachable(plan, target).contains(source),
+    not(canAddDependency(plan, source, target)),
+  }))
+  val wDirectCycleRejected = plan.registered.exists(source => plan.registered.exists(target =>
+    plan.issues.get(source) != Completed and plan.dependencies.get(target).contains(source)
+      and not(canAddDependency(plan, source, target))))
+  val invSelfDependencyRejected = plan.registered.forall(id => not(canAddDependency(plan, id, id)))
+
   val invMembershipValid = and {
     plan.registered.subseteq(ISSUES),
     ISSUES.forall(id => PARENTS.contains(plan.parents.get(id))),
@@ -616,15 +765,17 @@ module group_lifecycle_proposal {
 
 ### 今回の境界
 
-所属変更と未判断での新規登録を、計画2件・Issue枠3件の範囲で扱う。取りやめた計画は再検討後に構成を変更できるが、完了した計画には再開経路を持たせない。
+所属変更、未判断での新規登録、Issue 間の dependency を、計画2件・Issue枠3件の範囲で扱う。取りやめた計画は再検討後に構成を変更できるが、完了した計画には再開経路を持たせない。
 
-最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。入れ子の計画、dependency、claim、再浮上と親子の着手・所属変更の組み合わせ、declaration 編集、実際の ID 発行や永続化は検証対象外である。単独 Issue の再浮上モデルとの統合は後の検討に残す。
+最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。入れ子の計画、計画そのものへの dependency、claim、再浮上と親子の着手・所属変更・dependency の組み合わせ、declaration 編集、実際の ID 発行や永続化は検証対象外である。単独 Issue の再浮上モデルとの統合は後の検討に残す。
+
+循環の検査はこの3 ID の全グラフを対象とするが、4件以上の具体的なグラフは探索していない。依存先が取りやめでも依存元の取りやめを強制せず、依存関係の見直しや再検討を明示操作に残す。行き止まりがないという性質は整理・再判断の操作も含み、当初の計画どおり必ず完了できることを意味しない。
 
 このモデルには、追加できる Issue が1件だけという探索上の上限がある。新規登録が無効になることは、製品で追加件数を制限する提案ではない。無限件数への一般化や、必ず最終確認に合格し計画が完了することは保証しない。
 
-### 所属モデルの再現と結果
+### 所属・dependency モデルの再現と結果
 
-2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成後、Quint 0.32.0、Rust backend、10,000 traces、最大200 steps、入力 seed `2026091004` で実行した。10 invariant に反例はなく、33 witness はすべて1 trace以上で観測された。進行中の計画間移動は194 traces、最終確認待ちからの新規登録は2 tracesで観測された。これは bounded random simulation の結果であり、全状態の証明ではない。
+2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成後、Quint 0.32.0、Rust backend、10,000 traces、最大200 steps、入力 seed `2026091005` で実行した。17 invariant に反例はなく、44 witness はすべて1 trace以上で観測された。進行中への未完了依存追加は2,182 traces、依存先の完了で着手可能になるケースは104 traces、完了可能になるケースは9 tracesで観測された。直接・間接循環の拒否も観測された。これは bounded random simulation の結果であり、全状態の証明ではない。
 
 単独 Issue と再浮上のモデル、および共有する基本遷移のコードは変更していない。
 
@@ -637,6 +788,9 @@ quint run target/literate/group_lifecycle_proposal.qnt \
     invClosedStructureFrozen invCompletionReviewed invOperationScope \
     invMembershipValid invRegistrationNeverAdopts invClosedEditsDisabled \
     invNoUnexpectedDeadEnd \
+    invDependencyOperationScope invDependenciesValid invDependenciesAcyclic \
+    invCompletedPrerequisites invStartAndCompleteRequirePrerequisites \
+    invCompletedDependenciesFrozen invSelfDependencyRejected \
   --witnesses \
     wGroupAccept wGroupWithdraw wGroupStart \
     wGroupRelease wGroupComplete wGroupCancel \
@@ -649,5 +803,9 @@ quint run target/literate/group_lifecycle_proposal.qnt \
     wDetach wMoveBetweenPlans wWorkingDetach \
     wWorkingMove wRegister wRegisterOutside \
     wAddAfterFinalCheckReady wReconsiderAllowsMembership wRemoveUndecidedForCompletion \
-  --max-samples 10000 --max-steps 200 --seed 2026091004 --backend rust --verbosity 1
+    wAddDependency wRemoveDependency wAddDuringWorkBlocksCompletion \
+    wCrossPlanDependency wDependOnCompletedIssue wDependencyRetainedOnMove \
+    wCancelledPrerequisiteBlocks wPrerequisiteCompletionUnblocksStart \
+    wPrerequisiteCompletionUnblocksFinish wIndirectCycleRejected wDirectCycleRejected \
+  --max-samples 10000 --max-steps 200 --seed 2026091005 --backend rust --verbosity 1
 ```
