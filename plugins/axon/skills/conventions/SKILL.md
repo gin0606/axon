@@ -1,50 +1,16 @@
 ---
 name: conventions
-description: Axon公式kitの上に、自律実行とユーザー判断の境界、重複確認、調査、Note、権限処理を加える個人用協業規約。他のaxon plugin skillの共通基盤として使い、Axon自体の意味論としては扱わない。
+description: 新lifecycle Axon kitに、対象選択・重複確認・自律実行の個人用方針を加える。
 ---
 
-# 個人用Axon協業規約
+# 個人用協業方針
 
-このskillは`axon-kit:conventions`を前提とし、Axonの意味論ではなく個人用ワークフローの方針を追加する。公式kitと矛盾する場合は操作を止め、差異を報告する。
+`axon-kit:conventions` を前提とする。対象と目的、範囲、完了条件、採用判断が確定していれば、必要な調査・内容構成・操作・検証・安全な再試行を自律して行う。workflowの明示呼出しは、そのworkflowが列挙した範囲と終端の権限を与える。新しい目的、重要な公開仕様、採用判断、戻しにくい選択が必要なら呼び出し側へ返す。
 
-## 自律実行とユーザー判断を分ける
+triage/tasksから着手対象を選ぶのはユーザーの意思決定。ただし明示workflowが範囲と選択権限を与えた場合はその範囲で選べる。状態操作だけから実装・commit・pushへ権限を広げない。
 
-目的、scope、完了条件、明示された効果、既存の確定情報から一意に決まる範囲は、エージェントが調査、内容の構成、操作、検証、安全な復旧まで自律して進める。明示された効果を実行直前に再確認しない。明示的に呼び出されたworkflowは、宣言された終端まで、そのworkflowが与えた対象範囲と権限の中で継続できる。
+新規登録前にlistと必要なshow・Noteを調べ、同じ目的・範囲・完了条件・kind・構造の未終了Entityとの重複を確認する。一意に同じものなら再利用し、曖昧なら判断を返す。合意した目的の具体化と構造の整合は自律できるが、新しい目的や採用判断を加えない。
 
-ユーザーへ返すのは、依頼と確定情報から復元できず、何を、なぜ、いつ行うかを変える重要な意思決定である。目的、scope、完了条件、採否、時期、計画の意味、複数の妥当な選択肢から価値判断で選ぶ事項が該当する。操作の技術的な大きさだけを理由に確認を増やさない。
+既存Entity変更前にはshowと関連log・Note、必要な祖先を読む。実行中と分かるworkerや共有worktreeの未調整変更があれば直列化・分離を調整する。actor/sessionだけで所有者や終了を判断しない。
 
-`ready`または`triage`から着手対象や判断対象を選ぶことは、このリポジトリではユーザーの意思決定とする。ただし、ユーザーが対象を指定した場合、または明示的な上位workflowが対象選択の範囲を与えた場合は、その範囲内で選択できる。
-
-## 合意済みの計画構造を自律して整える
-
-目的、scope、完了条件の認識が揃っている場合、その計画を正確かつ実行可能に表す構造は自律して整える。
-
-- 親Groupが合意済みscopeから一意に決まる場合は設定する。候補が複数ある場合、または親の変更が計画の意味を変える場合は確認する。
-- 合意済み成果に論理的に必要な先行条件はdependencyとして設定する。任意の順序付け、代替前提の選択、採用判断を伴うdependencyは確認する。
-- 合意済みscopeを実行可能な単位へ分け、子Entity、包含、必要なdependencyを作れる。新しい目的、scope、公開仕様、採用判断、独立した完了単位を加える場合は確認する。
-
-固定declarationの構造変更に必要な、Undecidedへの一時的な移行、関係の反映、合意済みDispositionへの再判断は一つの機械的な操作列として自律して完了する。
-
-## 既存情報と波及を調べる
-
-既存Entityを変更するときは、まず`axon show <id> --skip-command-evaluation`で保存情報を読み、判断またはdeclarationに関係するDeclaration Revisionと`axon log <id>`を確認する。readiness、surfaced、active scopeなどの導出値が判断に必要な場合だけ、通常の`show`やfrontierを別に評価する。古いNoteやRevisionを年齢だけで無関係とみなさない。
-
-terminal状態が変わるDisposition操作、`done`、または完全な波及確認が必要な操作では、対象の`axon show <id> --skip-command-evaluation`からdependent、Groupの祖先と子孫、`AfterEntity waiter`を調べ、active scope、`ready`、`triage`を必要な範囲で確認する。waiterがGroupの場合は、必要に応じてそのGroupを個別に`show`して子孫への影響を確認する。
-
-## 新規Entityの重複を扱う
-
-新規登録前に`axon list --terminal=false --skip-command-evaluation`と必要なfrontierを確認する。`--search`はtitle、description、Note本文のリテラル一致で候補を絞る用途に限り、一つの検索で該当しないことを意味的な重複なしの根拠にしない。同じ目的、scope、完了条件、kind、構造的役割、Dispositionを持つ未終端Entityが一つだけあり、依頼が新しいIDではなく成果の記録を求めている場合は、そのEntityを再利用する。
-
-Dispositionの不一致、Ended、cross-kind、scopeや構造的役割の差、複数候補がある場合は、再利用、再判断、新規作成をユーザーへ返す。部分的に重なるだけのEntityは登録を妨げない。ユーザーが新しいIDの作成を明示した場合は、その選択に従う。
-
-## Noteとreasonを分ける
-
-後続作業に必要な確定済みの実装・調査結果、制約、申し送りは、対象と情報分類が明確なら本文を構成してNoteへ追加する。ユーザーの判断を代弁する本文、または対象か情報分類が曖昧な場合だけ確認する。
-
-単なる進捗実況、定型的な開始・完了報告、状態変更reasonと同じ内容はNoteにしない。`axon decide`、`axon when`、`axon release`には、判断または作業状況から復元できるreasonを付ける。releaseやdoneに先立つNoteは、保存と番号を確認してから状態を変更し、後続操作が失敗しても再追加しない。
-
-## 失敗と権限不足を扱う
-
-入力と現在状態を照合でき、同じ効果へ収束する再試行は自律して行う。結果不明、競合、重複作成の可能性、rollback、補償操作、別の最終状態が必要な場合は停止し、観測済みの状態と必要な判断を示す。
-
-active backendの保存先へのmutationだけがsandboxに拒否された場合は、そのmutation commandだけをホストの許可機構で再実行する。特にGit内のSQLiteはcommon Git directoryの親の`.axon/axon.db`を共有し、current worktree外への書込みになり得る。file backendはcurrent worktreeのGit管理対象になり得る`.axon/state.jsonl`を変更するため、Axon操作の権限をstage、commit、merge、破棄の権限へ広げず、変更artifactを呼び出し元へ返す。別worktreeの未統合snapshotやclaimはcurrent worktreeから観測できない。読み取りcommandや他のprogramまで権限を広げず、再実行できなければ状態を推測せず未反映として報告する。
+確定した結果・制約・申し送りはNoteへ、状態変更理由はreasonへ分ける。Note保存を確認してから後続状態操作へ進む。結果不明を成功扱いにせず、保存先やホスト権限の扱いはkitに従う。

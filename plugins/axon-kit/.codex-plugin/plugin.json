@@ -1,7 +1,7 @@
 {
   "name": "axon-kit",
   "version": "0.1.0+codex.20260908040044",
-  "description": "再利用可能な Axon モデルと、安全に tracker を操作するための capability 集",
+  "description": "単一lifecycle版Axonの操作契約とSQLite初回運用",
   "author": {
     "name": "gin0606"
   },
@@ -9,8 +9,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Axon Skill Kit",
-    "shortDescription": "安全な Axon tracker 操作を組み立てます。",
-    "longDescription": "実装 workflow を規定せず、Axon の状態・情報 contract と、Entity 操作、backend 初期化、migration、file snapshot merge に特化した capability を提供します。",
+    "shortDescription": "単一lifecycleで計画・記録・作業状態を扱います。",
+    "longDescription": "単一lifecycle版Axonの操作契約とSQLite初回運用",
     "developerName": "gin0606",
     "category": "Productivity",
     "capabilities": [
@@ -18,9 +18,9 @@
       "Write"
     ],
     "defaultPrompt": [
-      "この懸念を判断せず Axon に記録してください。",
-      "この採用済み計画を Axon に登録してください。",
-      "この Axon storage を安全に初期化、移行、または merge してください。"
+      "この懸念をAxonに未判断として記録してください。",
+      "この採用済み計画をAxonに登録してください。",
+      "このAxon Entityの状態と記録を確認してください。"
     ]
   }
 }

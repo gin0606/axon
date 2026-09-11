@@ -1,3 +1,5 @@
+> 過去資料: 置換前の三軸CLIの手順。新lifecycle版では実行しない。現行の入口は同directoryの親のSKILL.mdを参照。
+
 # Declaration workflow
 
 declaration の file への export、canonicalize、apply、または declaration 操作の recover を行う前に、この reference を読む。

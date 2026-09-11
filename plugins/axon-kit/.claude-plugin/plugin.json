@@ -1,6 +1,6 @@
 {
   "name": "axon-kit",
-  "description": "再利用可能な Axon モデルと、安全に tracker を操作するための capability 集",
+  "description": "単一lifecycle版Axonの操作契約とSQLite初回運用",
   "version": "0.1.0",
   "author": {
     "name": "gin0606"

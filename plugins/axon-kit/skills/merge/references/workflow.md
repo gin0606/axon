@@ -1,3 +1,5 @@
+> 過去資料: 置換前の三軸CLIの手順。新lifecycle版では実行しない。現行の入口は同directoryの親のSKILL.mdを参照。
+
 # Axon snapshot merge workflow
 
 Axon file-backend merge の prepare、resolve、check、apply、recover を行う前に、この reference を読む。

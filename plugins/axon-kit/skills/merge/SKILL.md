@@ -1,20 +1,10 @@
 ---
 name: merge
-description: Axon file-backend snapshot の three-way merge を準備、解決、検証、公開する。axon merge workspace と file-backend conflict に使い、declaration YAML の merge や通常の Git merge/rebase 完了には使わない。
+description: 新lifecycle版で未提供のmerge操作を依頼されたとき、利用可能な境界を説明する。
 ---
 
-# Axon file snapshot を安全に merge する
+# mergeの境界
 
-`axon-kit:conventions` を使い、mutation contract を読む。この capability は Axon の merge workspace と candidate 公開を所有する。周辺の Git merge、staging、commit、rebase、conflict policy は所有しない。
+このcheckoutのSQLite入口ではこの操作を提供しない。選択したbinaryのhelpを確認し、未提供ならその事実を返す。旧CLIの手順を新保存先へ実行したり、保存ファイルを直接編集して補ったりしない。
 
-prepare、resolution、check、apply、Git driver の復旧、不確かな結果を扱う場合は、[merge workflow](references/workflow.md)を最後まで読む。
-
-## Git integration を分離する
-
-Driver 登録には install 後の通常の Git config を使い、`axon merge setup` は提供されない。File init が attribute と ignore rule を用意する。merge の依頼だけでは Git 設定の変更を許可しない。別途許可された場合、repository に `merge.axon.driver` を `axon merge driver %O %A %B`、`merge.axon.recursive` を `binary` として登録する。Axon は PATH 上に必要で、clone ごとに登録が必要である。Global 設定は任意であり必須ではない。
-
-`axon merge driver` を手動 merge command として呼び出さない。その `%O`、`%A`、`%B` argument と driver の temporary output path は Git が所有する。
-
-## 結果を返す
-
-operation mode、workspace と output path、input と candidate の digest、未解決 conflict または適用済み repair、検証と storage 結果の分類、変更した artifact、この capability 外に残る正確な Git 作業を返す。
+新規運用と手動持込みは [使い始める](../../../../docs/guide/getting-started.md) を参照する。file/mergeの設計は正本specにあるが、このskillから実装や切替へ広げない。

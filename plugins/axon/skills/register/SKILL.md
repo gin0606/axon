@@ -1,32 +1,8 @@
 ---
 name: register
-description: 新しいIssueまたはGroupの重複と計画の完成度を確認し、依頼から確定できるDisposition、declaration、構造、Resurface conditionで登録する個人用ワークフロー。既存Entityの変更や実装には使わない。
+description: 重複と計画の完成度を調べ、新しい懸念または採用済み計画を登録する。
 ---
 
-# 新しいAxon Entityを登録する
+# 登録
 
-`axon:conventions`と、最終状態に応じた`axon-kit:capture`または`axon-kit:plan`を使う。
-
-## 登録内容を確定する
-
-関連するコード、文書、Entityを必要な範囲で調べ、目的、scope、完了条件、kind、親Group、outgoing dependency、`Always`、`AtDate`、`AfterEntity`、`Manual`、`Command`のいずれかのResurface conditionを確定する。
-
-- ユーザーが実行または採用を明示していればAccepted、懸念や未解決事項の記録ならUndecidedとする。採否を読み取れない単独の「登録して」では確認する。
-- 一つの懸念または作業はIssue、複数Entityを含む明示的な計画範囲はGroupとする。合意済みscopeからkindを一意に決められない場合は確認する。
-- Resurface conditionは既定でAlwaysとする。明示された日付、待機先Entity、明示解除まで非浮上にするManual、または保存するshell commandをそのまま反映する。Commandは条件評価時に`/bin/sh -c`で実行されるため、文字列と実行影響が依頼から確定しない場合は作らない。単に「後で」のように条件を選べない場合は確認する。
-
-`axon:conventions`に従い、合意済みの目的、scope、完了条件から親、dependency、分解を自律して導く。計画の意味、採用、公開仕様、独立した完了単位を新たに決める必要がある場合だけユーザーへ返す。
-
-## 会話から独立したdeclarationを作る
-
-後続セッションが`axon show`だけを読んでも、なぜ存在し、何を満たせば終了かを理解できるtitleとdescriptionにする。会話内だけの指示語、比較対象、略称を残さない。観測と提案を区別し、登録後に得られる結果や申し送りをdescriptionの予約欄にしない。
-
-ユーザーが示した内容と調査で確定した事実からdeclarationを構成する。通常の実装詳細は実装者に委ねる。目的、scope、完了条件そのものを補って発明する必要がある場合は、登録前にその判断を確認する。重要な意思決定を加えていなければ、完成した文面だけを理由に再確認を求めない。
-
-## 重複を解決して登録する
-
-`axon:conventions`の重複確認を行う。完全に一致する未終端Entityを再利用できる場合は、そのIDと現在状態を結果とする。Dispositionの不一致、Ended、cross-kind、scopeの差、複数候補がある場合はユーザーの選択を得る。新しいIDの作成が明示されていれば新規登録する。
-
-採否未判断なら`axon-kit:capture`、採用済みなら`axon-kit:plan`を使い、作成結果と関係を確認する。このskillは登録と検証で終了し、同じ依頼が明示的に実装workflowまで含み、そのworkflowへ引き渡す場合を除いてstartや実装へ進まない。
-
-作成または再利用したID、kind、declaration、Control state、重複判断、readinessへの影響、未解決事項を報告する。
+`axon:conventions` と `axon-kit:capture / plan` を使う。listと関連show・Noteで重複を確認し、未判断の懸念はcapture、採用済みで目的・完了条件が確定した計画はplanへ渡す。kind、親、依存は依頼から確定できるものだけにする。新しい採用判断は創作しない。既存Entityの変更はtriageへ渡す。保存IDと本文・状態・関係を照合する。

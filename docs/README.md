@@ -1,25 +1,23 @@
 # ドキュメント
 
-単一 lifecycle の再構築の正本は [literate spec](../spec/lifecycle_proposal.md)、新しい実装の入口は [共通コア](development/lifecycle-core.md) です。以下の利用ガイド・参照仕様・既存モデルは三軸 CLI の資料です。新ライブラリの仕様としては使いません。新 binary と `tests/smoke.rs` は [SQLite CLI](development/lifecycle-sqlite.md) の新仕様を対象にします。未参照の旧 module と `tests/integration`・`tests/common` は過去の三軸実装・検証資料です。
+単一 lifecycle の再構築の正本は [literate spec](../spec/lifecycle_proposal.md)、新しい実装の入口は [共通コア](development/lifecycle-core.md) です。利用ガイドは新lifecycleに対応しています。旧reference/design・既存の三軸モデルは過去資料として区別し、新ライブラリの仕様には使いません。新 binary と `tests/smoke.rs` は [SQLite CLI](development/lifecycle-sqlite.md) の新仕様を対象にします。未参照の旧 module と `tests/integration`・`tests/common` は過去の三軸実装・検証資料です。
 
-新 binary の利用は [SQLite CLI](development/lifecycle-sqlite.md) から確認してください。以下は旧 CLI の資料一覧です。旧 CLI では[使い始める](guide/getting-started.md)が導入の入口です。CLIと公式kitの導入、backendの選択、agentへの相談例をまとめています。axonを作った動機や設計のこだわりは[README](../README.md)にあります。
+新binaryの利用は [使い始める](guide/getting-started.md) から確認してください。
 
 ## 利用者向け
 
 | 文書 | 読む目的 |
 | --- | --- |
-| [使い始める](guide/getting-started.md) | 導入、backendの選択、agentと使い始める入口 |
-| [日常の操作](guide/usage.md) | 状況・記録の確認、後で扱うことの記録、次の仕事の選択、途中の仕事への復帰、計画の分解 |
-| [状態と用語](guide/concepts.md) | CLIに出る状態名、候補に出る条件、計画とNoteの区別 |
-| [backendとworktree](guide/storage.md) | SQLiteとfile、Gitでの管理、backendの切替 |
-
-まず「使い始める」を試し、その後は目的に合うページを参照できます。すべてを順番に読む必要はありません。CodexでSQLiteの共有DBへの書き込みがsandboxに阻まれる場合は、補足の[Codexでのアクセス設定に必要な情報](guide/codex.md)を参照してください。
-
-コマンドの構文と全optionは`axon help <command path>`または`axon <command path> --help`で確認できます。`axon docs`は端末で読む状態モデルと基本操作の説明です（英語）。
-
-状況や過去の記録を自分で見たいときは、[参照コマンドの使い分け](guide/usage.md#状況や記録を確認する)から選べます。
+| [使い始める](guide/getting-started.md) | 新binary選択、独立SQLite試用、手動持込み、同梱skill |
+| [日常の操作](guide/usage.md) | 候補、状態変更、Group最終確認、記録参照 |
+| [状態と用語](guide/concepts.md) | 単一lifecycleと関係 |
+| [保存先とworktree](guide/storage.md) | SQLite共有、探索・初期化の境界 |
+| [Agentからのアクセス](guide/codex.md) | ホスト権限と保存先 |
+| [記録者連携](development/lifecycle-recorder.md) | 自動取得と詳細参照 |
 
 ## 開発者向け
+
+以下のreference/designは、冒頭で示した新lifecycle文書と検証方針を除き、置換前の三軸実装の過去資料です。新CLIの操作手順として使わないでください。
 
 以下は仕様の正確な確認、axon本体の変更、設計経緯の調査のための資料です。利用者向けガイドはこれらの要約であり、独立した仕様としては扱いません。
 
