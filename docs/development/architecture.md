@@ -1,5 +1,7 @@
 # アーキテクチャ
 
+この文書は置換前の三軸 CLI の資料です。単一 lifecycle の再構築は [正本 spec](../../spec/lifecycle_proposal.md) と [新しい共通コア](../development/lifecycle-core.md) を参照してください。
+
 [状態モデル](../reference/state-model.md) と [情報モデル](../reference/information-model.md)
 を実装へ落とす際の型境界、保存構造、原子性を定める。
 設計の比較と導入経緯は [設計判断](../design/decisions.md) を参照する。

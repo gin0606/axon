@@ -6,6 +6,8 @@ Axon 操作には、個人用協業方針として [`axon:conventions`](plugins/
 
 ## 作業時の参照先
 
+単一 lifecycle への再構築では [正本 spec](spec/lifecycle_proposal.md) と [新しい共通コア](docs/development/lifecycle-core.md) を参照する。`src/lib.rs` 以下が新実装、`src/main.rs` の module と binary 用テスト・以下の旧仕様資料は、置換前の三軸 CLI に属する。旧 Revision・claim の契約を新コアへ持ち込まない。
+
 変更対象に関係する設計判断と契約を確認する。全体の入口は [docs/README.md](docs/README.md)。設計変更とモデル検証は [検証方針](docs/development/verification.md) に従う。
 
 - 状態の意味、関係、導出値: [状態モデル](docs/reference/state-model.md)

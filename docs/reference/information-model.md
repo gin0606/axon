@@ -1,5 +1,7 @@
 # 情報モデル
 
+この文書は置換前の三軸 CLI の資料です。単一 lifecycle の再構築は [正本 spec](../../spec/lifecycle_proposal.md) と [新しい共通コア](../development/lifecycle-core.md) を参照してください。
+
 **位置づけ**: Entity が持つ情報の規範契約。
 
 この文書は、Entity の plan declaration と後から得られた追加情報を分離し、

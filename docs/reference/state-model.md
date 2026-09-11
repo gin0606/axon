@@ -1,5 +1,7 @@
 # 状態モデル
 
+この文書は置換前の三軸 CLI の資料です。単一 lifecycle の再構築は [正本 spec](../../spec/lifecycle_proposal.md) と [新しい共通コア](../development/lifecycle-core.md) を参照してください。
+
 Entity、Progress、Disposition、Resurface condition、関係と導出値の規範契約。
 情報の所有と変更制限は [情報モデル](information-model.md)、コマンドの入出力は
 [CLI 契約](cli.md)、設計理由と代替案は [設計判断](../design/decisions.md) を参照する。
