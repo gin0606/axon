@@ -1,5 +1,7 @@
 # axon
 
+単一 lifecycle 版の正本は [spec](spec/lifecycle_proposal.md)、新 binary の SQLite 利用入口は [SQLite CLI](docs/development/lifecycle-sqlite.md) です。以下の三軸・file 運用の説明は置換前の設計と利用の経緯です。
+
 CLIで個人のIssueと作業計画を管理する、ローカルのissue trackerです。[beads](https://github.com/gastownhall/beads)、[beads_rust](https://github.com/Dicklesworthstone/beads_rust)を使う中で、自分の好みに合わせて変えたいことが積み重なって作りました。
 
 ## 欲しかったもの

@@ -1,8 +1,8 @@
 # ドキュメント
 
-単一 lifecycle の再構築の正本は [literate spec](../spec/lifecycle_proposal.md)、新しい実装の入口は [共通コア](development/lifecycle-core.md) です。以下の利用ガイド・参照仕様・既存モデルは三軸 CLI の資料です。新ライブラリの仕様としては使いません。旧 CLI の置換まで、binary とそのテストは旧仕様を対象にします。
+単一 lifecycle の再構築の正本は [literate spec](../spec/lifecycle_proposal.md)、新しい実装の入口は [共通コア](development/lifecycle-core.md) です。以下の利用ガイド・参照仕様・既存モデルは三軸 CLI の資料です。新ライブラリの仕様としては使いません。新 binary と `tests/smoke.rs` は [SQLite CLI](development/lifecycle-sqlite.md) の新仕様を対象にします。未参照の旧 module と `tests/integration`・`tests/common` は過去の三軸実装・検証資料です。
 
-初めて使う場合は[使い始める](guide/getting-started.md)から読んでください。CLIと公式kitの導入、backendの選択、agentへの相談例をまとめています。axonを作った動機や設計のこだわりは[README](../README.md)にあります。
+新 binary の利用は [SQLite CLI](development/lifecycle-sqlite.md) から確認してください。以下は旧 CLI の資料一覧です。旧 CLI では[使い始める](guide/getting-started.md)が導入の入口です。CLIと公式kitの導入、backendの選択、agentへの相談例をまとめています。axonを作った動機や設計のこだわりは[README](../README.md)にあります。
 
 ## 利用者向け
 

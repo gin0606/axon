@@ -1,5 +1,4 @@
-//! Backend-independent implementation of `spec/lifecycle_proposal.md`.
-//!
-//! The binary still uses the earlier three-axis implementation while its adapters
-//! are replaced. This library never discovers or opens that binary's storage.
+//! Single-lifecycle core and adapters for `spec/lifecycle_proposal.md`.
 pub mod lifecycle;
+pub mod location;
+pub mod sqlite;
