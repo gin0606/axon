@@ -1,3 +1,4 @@
+// 過去資料: 置換前の三軸モデル。現行仕様は lifecycle_proposal.md を参照。
 // docs/reference/state-model.md で確定した、明示的な計画 group の拡張モデル。
 // ID 文字列、文面、永続化、履歴、claim、CLI 表示はモデルの対象外とする。
 // コア module を拡張せず、A / B / C の型をこの model 内で再掲する。

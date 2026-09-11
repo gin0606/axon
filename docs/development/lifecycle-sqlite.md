@@ -39,12 +39,12 @@ SQLite は `application_id`・`user_version`・schema・整合性と共通 snaps
 
 内部 Git 呼出しは `GIT_*` の override を除外し、現在 directory を探索の起点にする。Git 内では最寄りの `.git` と Git が返す root を照合し、bare repository・壊れた marker から祖先へ fallback しない。repository が探索境界。SQLite は common Git directory の親の `.axon/axon.db` を共有する。Git 外では最寄りの正本または `init.pending` を持つ祖先を選び、空の `.axon` と lock だけは無視する。混在・破損・不明 schema・初期化途中は別の保存先へ fallback しない。
 
-`init [prefix]` は既定 `axon` prefix の新規 SQLite 作成のみ。再実行・Git 外の入れ子初期化を拒否し、ignore・attributes・Git config を編集しない。backend 共通の OS lock 下で存在を照合し、同期した pending marker と一時DBを作り、hard link で正本を上書きせず公開する。公開後に directory を同期し、marker を除く。途中失敗は artifact の path を報告して保持する。writer を止め、marker・一時DB・正本を保全して手動で確認する。init を修復として再実行しない。
+`init [prefix]` は既定 `axon` prefix の新規作成で、SQLiteが既定。`--backend file` は [file保存](lifecycle-file.md) を参照する。再実行・Git 外の入れ子初期化を拒否し、ignore・attributes・Git config を編集しない。backend 共通の OS lock 下で存在を照合し、同期した pending marker と一時DBを作り、hard link で正本を上書きせず公開する。公開後に directory を同期し、marker を除く。途中失敗は artifact の path を報告して保持する。writer を止め、marker・一時DB・正本を保全して手動で確認する。init を修復として再実行しない。
 
 ## 検証境界
 
 `cargo test --lib --bin axon --test smoke` は共通コア、SQLite commit 拒否時の原子性、登録から Group 完了、入力・表示・出力失敗、並行 start と Note・別 Entity の保存、分岐統合済み snapshot の往復、旧・未知・破損 schema、混在・marker 拒否、Git 外の探索・境界、実 linked worktree 共有、並行 init を独立 fixture で検証する。実管理データも installed `axon` も使わない。
 
-旧 process 監督・file crash/merge・記録者・旧 CLI のテストは `tests/integration`・`tests/common` にある過去の検証資料で、新 binary のテストとして実行しない。対応する後続実装では検証目的を移植する。今回の I/O・CLI 接続はコアの lifecycle/包含/dependency の意味を変更しないため、新しい Quint 状態を加えない。
+旧 process 監督・file crash/merge・記録者・旧 CLI のテストは `archive/three-axis/tests` にある過去の検証資料で、新 binary のテストとして実行しない。process監督・file/merge・記録者の検証は新smokeと記録者crateで実行する。今回の I/O・CLI 接続はコアの lifecycle/包含/dependency の意味を変更しないため、新しい Quint 状態を加えない。
 
 記録者の自動取得・詳細参照は [記録者連携](lifecycle-recorder.md)、初回試用と手動持込みは [使い始める](../guide/getting-started.md) を参照する。

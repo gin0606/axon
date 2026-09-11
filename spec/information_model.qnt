@@ -1,3 +1,4 @@
+// 過去資料: 置換前の三軸モデル。現行仕様は lifecycle_proposal.md を参照。
 // docs/reference/information-model.md の規範契約を検査可能にしたモデル。
 //
 // 検査対象は「どの情報を誰が所有し、どの操作がどこを変えてよいか」に限る。

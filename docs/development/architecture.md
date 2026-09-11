@@ -37,7 +37,7 @@ Git/editor は lock に従わないため、同じ worktree の checkout/merge �
 
 ## スキーマ
 
-正は [src/db.rs](../../src/db.rs)。ここには構成と、そこから読み取りにくい意図だけ書く。
+正は [src/db.rs](../../archive/three-axis/src/db.rs)。ここには構成と、そこから読み取りにくい意図だけ書く。
 
 | テーブル | 役割 |
 | --- | --- |
