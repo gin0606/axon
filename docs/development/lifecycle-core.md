@@ -2,7 +2,17 @@
 
 正本は [literate spec](../../spec/lifecycle_proposal.md)。新しい [Rust library](../../src/lib.rs) の `lifecycle` module は SQL、filesystem、外部コマンド評価を呼ばない。`Snapshot` の操作と検査、`encode` / `decode` の byte 列を、後続の両 backend が共通で使う。`cargo test --lib` で独立したメモリ上の fixture を検証する。
 
-この境界が扱うのは、包含・dependency のない Issue / Group の基本遷移、文面編集、Note、分岐した記録と明示選択である。Group の追加 guard、包含・dependency と候補一覧、条件設定操作、保存 adapter、三者比較の自動統合、公開 CLI は後続の実装範囲。関係を持つ Entity を基本遷移だけで操作する入口はまだ提供しない。既存 `src/main.rs` の module と binary 用テストは置換前の三軸 CLI に属し、新仕様の規範にしない。
+この境界は Issue / Group の登録、基本遷移、包含・dependency の変更、文面編集、Note、分岐した記録と明示選択を扱う。候補一覧、条件設定操作、保存 adapter、三者比較の自動統合、公開 CLI は後続の実装範囲。既存 `src/main.rs` の module と binary 用テストは置換前の三軸 CLI に属し、新仕様の規範にしない。
+
+## 通常操作と構造
+
+`Current` は最大一つの親 Group と outgoing dependency 集合を保持する。`create`、`set_parent`、`add_dependency` / `remove_dependency` は候補 snapshot の全体検査後に確定し、拒否時は記録も現在値も変えない。同値の関係指定は成功した no-op とする。状態変更は `check_operation` と同じ前提を検査し、成功時だけ履歴を加える。外部条件は評価しない。
+
+子の着手には親の InProgress、着手・完了には直接依存先すべての Completed が必要になる。Group の解放は進行中の子がいると拒否し、完了・取りやめは未終了の子がいると拒否する。`perform(..., Operation::Complete, ...)` 自体を Group 全体の最終確認済みという明示入力とする。`check_operation` や子の終了は最終確認を記録せず、親を自動変更しない。
+
+終了した親の構成と配下の lifecycle は固定する。終了した Entity 自体の所属は、元と先の親が終了していなければ変更できる。InProgress の部分木は InProgress の親へ、または所属なしへ移動できる。Completed の outgoing dependency は固定し、Cancelled の依存編集は許す。
+
+全体検査は包含の参照・循環と、進行中の祖先、終了した Group の子孫、Completed の依存先を検査する。通常完了の前提を「直属の子、自身と全祖先の依存先」へ縮約し、動的な Entity 集合に Kahn 法を適用する。Completed / Cancelled もグラフに含む。codec と明示統合もこの検査を使い、統合では選択した終了済み Group の直属の子集合も保持する。
 
 ## 現在値と不変な記録
 

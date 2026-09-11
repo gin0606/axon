@@ -1,10 +1,11 @@
 //! Single-lifecycle records and in-memory operations, independent of SQL and I/O.
 //!
-//! This first boundary covers isolated Issues and Groups. Containment, dependency
-//! guards, automatic three-way merging, and durable publication belong to the
-//! subsequent layers; explicit integration here requires a choice for every Entity.
+//! Ordinary operations enforce lifecycle, containment and dependency constraints.
+//! Automatic three-way merging and durable publication belong to subsequent layers;
+//! explicit integration here requires a choice for every Entity.
 mod codec;
 mod model;
+mod relations;
 mod snapshot;
 
 pub use codec::{decode, encode};

@@ -55,6 +55,8 @@ impl Snapshot {
         if self.entities.contains_key(&id) {
             return Err(invalid(format!("duplicate Entity {id}")));
         }
+        self.require_open_parent(current.parent.as_ref())?;
+        let mut candidate = self.clone();
         let root = self.fresh_record_id();
         let record = StateRecord {
             id: root.clone(),
@@ -66,8 +68,8 @@ impl Snapshot {
                 initial: current.lifecycle,
             },
         };
-        self.states.insert(root.clone(), record);
-        self.entities.insert(
+        candidate.states.insert(root.clone(), record);
+        candidate.entities.insert(
             id.clone(),
             Entity {
                 id,
@@ -78,8 +80,11 @@ impl Snapshot {
                 current,
             },
         );
+        candidate.validate_relations()?;
+        *self = candidate;
         Ok(())
     }
+    /// `Complete` is the caller's explicit final confirmation for a Group.
     pub fn perform(
         &mut self,
         id: &EntityId,
@@ -87,6 +92,7 @@ impl Snapshot {
         reason: Option<String>,
         context: Context,
     ) -> Result<RecordId> {
+        self.check_operation(id, operation)?;
         let entity = self.entity(id)?;
         let before = entity.current.lifecycle;
         let after = operation.apply(before)?;
@@ -301,10 +307,31 @@ impl Snapshot {
             current.head = record_id;
             merged.entities.insert(id, current);
         }
+        for entity in merged.entities() {
+            if entity.kind == Kind::Group && !entity.current.lifecycle.editable() {
+                let source = match choices[&entity.id] {
+                    Side::Left => self,
+                    Side::Right => other,
+                };
+                let children = |snapshot: &Self| -> BTreeSet<EntityId> {
+                    snapshot
+                        .entities()
+                        .filter(|child| child.current.parent.as_ref() == Some(&entity.id))
+                        .map(|child| child.id.clone())
+                        .collect()
+                };
+                if children(source) != children(&merged) {
+                    return Err(invalid(
+                        "terminal Group composition differs from selected input",
+                    ));
+                }
+            }
+        }
         merged.validate()?;
         Ok(merged)
     }
     pub fn validate(&self) -> Result<()> {
+        self.validate_relations()?;
         if self.states.keys().any(|id| self.notes.contains_key(id)) {
             return Err(invalid("record ID reused across streams"));
         }
@@ -399,6 +426,13 @@ impl Snapshot {
             } = &head.event
         {
             let chosen = &inputs[*selected].current;
+            if current.lifecycle == Lifecycle::Completed
+                && current.dependencies != chosen.dependencies
+            {
+                return Err(invalid(
+                    "Completed dependencies differ from integration selection",
+                ));
+            }
             if current.title != chosen.title || current.description != chosen.description {
                 return Err(invalid("terminal text differs from integration selection"));
             }

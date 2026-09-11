@@ -26,6 +26,8 @@ fn current(lifecycle: Lifecycle) -> Current {
         title: "task".into(),
         description: "body\n日本語".into(),
         condition: Some("exit 1".into()),
+        parent: None,
+        dependencies: BTreeSet::new(),
     }
 }
 fn fixture(kind: Kind, lifecycle: Lifecycle) -> Snapshot {
@@ -868,4 +870,192 @@ fn nested_terminal_integration_inputs_cannot_change_recorded_text() {
             }
         }
     }
+}
+
+fn register(s: &mut Snapshot, name: &str, kind: Kind, parent: Option<&str>) {
+    let mut value = current(Lifecycle::NotStarted);
+    value.parent = parent.map(id);
+    s.create(id(name), kind, value, context(10)).unwrap();
+}
+fn perform(s: &mut Snapshot, name: &str, op: Operation) {
+    s.perform(&id(name), op, None, context(20)).unwrap();
+}
+fn rejected(s: &mut Snapshot, action: impl FnOnce(&mut Snapshot) -> Result<()>) {
+    let before = s.clone();
+    assert!(action(s).is_err());
+    assert_eq!(*s, before);
+    roundtrip(s);
+}
+
+#[test]
+fn nested_group_work_requires_explicit_start_and_final_confirmation() {
+    let mut s = Snapshot::new(StoreId::generate());
+    register(&mut s, "root", Kind::Group, None);
+    register(&mut s, "nested", Kind::Group, Some("root"));
+    register(&mut s, "child", Kind::Issue, Some("nested"));
+    rejected(&mut s, |s| {
+        s.perform(&id("child"), Operation::Start, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "root", Operation::Start);
+    perform(&mut s, "nested", Operation::Start);
+    perform(&mut s, "child", Operation::Withdraw);
+    for op in [Operation::Complete, Operation::Cancel] {
+        rejected(&mut s, |s| {
+            s.perform(&id("nested"), op, None, context(1)).map(|_| ())
+        });
+    }
+    perform(&mut s, "child", Operation::Accept);
+    perform(&mut s, "child", Operation::Start);
+    for name in ["root", "nested"] {
+        rejected(&mut s, |s| {
+            s.perform(&id(name), Operation::Release, None, context(1))
+                .map(|_| ())
+        });
+    }
+    perform(&mut s, "child", Operation::Cancel);
+    assert_eq!(
+        s.entity(&id("nested")).unwrap().current.lifecycle,
+        Lifecycle::InProgress
+    );
+    assert!(
+        s.check_operation(&id("nested"), Operation::Complete)
+            .is_ok()
+    );
+    rejected(&mut s, |s| {
+        s.perform(&id("root"), Operation::Complete, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "nested", Operation::Complete);
+    perform(&mut s, "root", Operation::Complete);
+    rejected(&mut s, |s| {
+        s.perform(&id("child"), Operation::Reconsider, None, context(1))
+            .map(|_| ())
+    });
+    rejected(&mut s, |s| s.set_parent(&id("nested"), None));
+    roundtrip(&s);
+}
+
+#[test]
+fn dependency_added_during_work_blocks_completion_without_releasing() {
+    let mut s = Snapshot::new(StoreId::generate());
+    register(&mut s, "work", Kind::Issue, None);
+    register(&mut s, "needs", Kind::Group, None);
+    perform(&mut s, "work", Operation::Start);
+    let head = s.entity(&id("work")).unwrap().head.clone();
+    s.add_dependency(&id("work"), &id("needs")).unwrap();
+    assert_eq!(s.entity(&id("work")).unwrap().head, head);
+    rejected(&mut s, |s| {
+        s.perform(&id("work"), Operation::Complete, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "needs", Operation::Cancel);
+    rejected(&mut s, |s| {
+        s.perform(&id("work"), Operation::Complete, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "work", Operation::Release);
+    rejected(&mut s, |s| {
+        s.perform(&id("work"), Operation::Start, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "needs", Operation::Reconsider);
+    perform(&mut s, "needs", Operation::Accept);
+    perform(&mut s, "needs", Operation::Start);
+    rejected(&mut s, |s| {
+        s.perform(&id("work"), Operation::Start, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "needs", Operation::Complete);
+    perform(&mut s, "work", Operation::Start);
+    perform(&mut s, "work", Operation::Complete);
+    rejected(&mut s, |s| s.remove_dependency(&id("work"), &id("needs")));
+    roundtrip(&s);
+}
+
+#[test]
+fn registration_and_relation_cycles_are_atomic_for_dynamic_nested_plans() {
+    let mut s = Snapshot::new(StoreId::generate());
+    for i in 0..20 {
+        let parent = format!("g{}", i - 1);
+        register(
+            &mut s,
+            &format!("g{i}"),
+            Kind::Group,
+            if i == 0 { None } else { Some(&parent) },
+        );
+    }
+    register(&mut s, "leaf", Kind::Issue, Some("g19"));
+    for (source, target) in [("g0", "leaf"), ("leaf", "g0"), ("leaf", "leaf")] {
+        rejected(&mut s, |s| s.add_dependency(&id(source), &id(target)));
+    }
+    rejected(&mut s, |s| s.set_parent(&id("g0"), Some(id("g19"))));
+    rejected(&mut s, |s| s.set_parent(&id("g0"), Some(id("leaf"))));
+    let mut value = current(Lifecycle::Undecided);
+    value.parent = Some(id("g19"));
+    value.dependencies.insert(id("g0"));
+    rejected(&mut s, |s| {
+        s.create(id("new"), Kind::Issue, value, context(1))
+    });
+    register(&mut s, "other", Kind::Group, None);
+    register(&mut s, "otherchild", Kind::Issue, Some("other"));
+    s.add_dependency(&id("g0"), &id("otherchild")).unwrap();
+    rejected(&mut s, |s| s.add_dependency(&id("other"), &id("leaf")));
+    rejected(&mut s, |s| s.set_parent(&id("otherchild"), Some(id("g19"))));
+    perform(&mut s, "otherchild", Operation::Cancel);
+    rejected(&mut s, |s| s.add_dependency(&id("otherchild"), &id("leaf")));
+}
+
+#[test]
+fn terminal_group_composition_and_working_subtree_moves() {
+    let mut s = Snapshot::new(StoreId::generate());
+    for name in ["a", "b", "c"] {
+        register(&mut s, name, Kind::Group, None);
+    }
+    register(&mut s, "child", Kind::Group, Some("a"));
+    register(&mut s, "leaf", Kind::Issue, Some("child"));
+    for name in ["a", "b", "child", "leaf"] {
+        perform(&mut s, name, Operation::Start);
+    }
+    rejected(&mut s, |s| s.set_parent(&id("child"), Some(id("c"))));
+    s.set_parent(&id("child"), Some(id("b"))).unwrap();
+    assert_eq!(
+        s.entity(&id("leaf")).unwrap().current.parent,
+        Some(id("child"))
+    );
+    s.set_parent(&id("child"), None).unwrap();
+    perform(&mut s, "leaf", Operation::Cancel);
+    perform(&mut s, "child", Operation::Cancel);
+    s.set_parent(&id("child"), Some(id("c"))).unwrap();
+    rejected(&mut s, |s| s.set_parent(&id("leaf"), None));
+    let mut value = current(Lifecycle::NotStarted);
+    value.parent = Some(id("child"));
+    rejected(&mut s, |s| {
+        s.create(id("new"), Kind::Group, value, context(1))
+    });
+    perform(&mut s, "child", Operation::Reconsider);
+    s.set_parent(&id("leaf"), None).unwrap();
+}
+
+#[test]
+fn integration_and_decode_enforce_combined_relations() {
+    let mut base = Snapshot::new(StoreId::generate());
+    register(&mut base, "a", Kind::Group, None);
+    register(&mut base, "b", Kind::Issue, None);
+    let mut left = base.clone();
+    let mut right = base;
+    left.add_dependency(&id("a"), &id("b")).unwrap();
+    right.add_dependency(&id("b"), &id("a")).unwrap();
+    let choices = BTreeMap::from([(id("a"), Side::Left), (id("b"), Side::Right)]);
+    assert!(left.integrate(&right, &choices, None, context(1)).is_err());
+    left.remove_dependency(&id("a"), &id("b")).unwrap();
+    right.remove_dependency(&id("b"), &id("a")).unwrap();
+    perform(&mut left, "a", Operation::Cancel);
+    perform(&mut right, "b", Operation::Cancel);
+    right.set_parent(&id("b"), Some(id("a"))).unwrap();
+    assert!(left.integrate(&right, &choices, None, context(1)).is_err());
+    // Direct construction also goes through the validator used by the codec.
+    right.entities.get_mut(&id("a")).unwrap().current.parent = Some(id("b"));
+    assert!(right.validate().is_err());
+    assert!(encode(&right).is_err());
 }

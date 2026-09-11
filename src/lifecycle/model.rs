@@ -107,6 +107,8 @@ pub struct Current {
     pub lifecycle: Lifecycle,
     /// None means no condition. The core never executes a stored command.
     pub condition: Option<String>,
+    pub parent: Option<EntityId>,
+    pub dependencies: BTreeSet<EntityId>,
 }
 impl Current {
     pub(crate) fn validate(&self) -> Result<()> {
