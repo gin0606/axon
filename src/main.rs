@@ -27,6 +27,16 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// snapshot を統合する（入力の保全・検査・適用）
+    Merge {
+        #[command(subcommand)]
+        command: Merge,
+    },
+    /// 保存形式と全snapshotを検査する（条件は実行しない）
+    Storage {
+        #[command(subcommand)]
+        command: Storage,
+    },
     /// 新しい保存先を初期化する（既定 SQLite）
     Init {
         prefix: Option<String>,
@@ -93,6 +103,39 @@ enum Command {
     Dep {
         #[command(subcommand)]
         command: Dependency,
+    },
+}
+#[derive(Subcommand)]
+enum Storage {
+    Check { snapshot: PathBuf },
+}
+#[derive(Subcommand)]
+#[command(
+    after_help = "例: axon merge prepare --base base.jsonl --ours ours.jsonl --theirs theirs.jsonl --output .axon/state.jsonl --workspace .axon/merge-review\nresolution.json の choices を編集し、axon merge check WORKSPACE → axon merge apply WORKSPACE。\nGit driver 設定・stage・commit は利用者が行います。詳細: docs/development/lifecycle-file.md"
+)]
+enum Merge {
+    /// 入力を保存し、衝突と解決ファイルを用意する。正本は変更しない
+    Prepare {
+        #[arg(long)]
+        base: PathBuf,
+        #[arg(long)]
+        ours: PathBuf,
+        #[arg(long)]
+        theirs: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        workspace: PathBuf,
+    },
+    /// 解決案と候補全体を検査する
+    Check { workspace: PathBuf },
+    /// 検査済みの入力・出力を再照合して正本へ公開する
+    Apply { workspace: PathBuf },
+    /// Git merge driver: %O %A %B。衝突時は非0で終了し、%Aを保持する
+    Driver {
+        base: PathBuf,
+        ours: PathBuf,
+        theirs: PathBuf,
     },
 }
 #[derive(Args)]
@@ -396,20 +439,64 @@ fn branch_boundary<'a>(
 fn run(command: Command) -> Result<Output> {
     let cwd = std::env::current_dir()?;
     if let Command::Init { prefix, backend } = command {
-        if matches!(backend, Backend::File) {
-            return Err(sqlite::Error::Invalid(
-                "file backend is not yet available; no initialization was performed".into(),
-            ));
-        }
         let location = Location::discover(&cwd, true)?;
-        location.init(prefix.as_deref().unwrap_or("axon"))?;
+        location.init_backend(
+            prefix.as_deref().unwrap_or("axon"),
+            matches!(backend, Backend::File),
+        )?;
         return Ok(output(
             format!(
-                "Initialized SQLite at {}\n",
-                display::human_text(location.sqlite.display())
+                "Initialized {} at {}\n",
+                if matches!(backend, Backend::File) {
+                    "file"
+                } else {
+                    "SQLite"
+                },
+                display::human_text(
+                    if matches!(backend, Backend::File) {
+                        location.root.join(".axon/state.jsonl")
+                    } else {
+                        location.sqlite
+                    }
+                    .display()
+                )
             ),
             true,
         ));
+    }
+    match command {
+        Command::Storage {
+            command: Storage::Check { snapshot },
+        } => {
+            axon::file::decode(&std::fs::read(snapshot)?)?;
+            return Ok(output("Valid snapshot\n".into(), false));
+        }
+        Command::Merge { command } => {
+            let saved = matches!(command, Merge::Apply { .. } | Merge::Driver { .. });
+            match command {
+                Merge::Prepare {
+                    base,
+                    ours,
+                    theirs,
+                    output,
+                    workspace,
+                } => axon::file_merge::prepare(
+                    &base,
+                    &ours,
+                    &theirs,
+                    &output,
+                    &workspace,
+                    context(),
+                )?,
+                Merge::Check { workspace } => axon::file_merge::check(&workspace)?,
+                Merge::Apply { workspace } => axon::file_merge::apply(&workspace)?,
+                Merge::Driver { base, ours, theirs } => {
+                    axon::file_merge::driver(&base, &ours, &theirs, context())?
+                }
+            }
+            return Ok(output("Merge operation succeeded\n".into(), saved));
+        }
+        _ => {}
     }
     let location = Location::discover(&cwd, false)?;
     let mut store = location.open()?;
@@ -628,7 +715,7 @@ fn run(command: Command) -> Result<Output> {
     }
 }
 fn create(
-    store: &mut sqlite::Store,
+    store: &mut axon::location::Store,
     kind: Kind,
     lifecycle: Lifecycle,
     args: Create,

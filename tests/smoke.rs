@@ -1234,3 +1234,6 @@ fn recorder_help_is_available_without_a_store() {
     }
     assert!(!f.db().exists());
 }
+
+#[path = "lifecycle/file.rs"]
+mod file_lifecycle;

@@ -11,7 +11,7 @@
 | [使い始める](guide/getting-started.md) | 新binary選択、独立SQLite試用、手動持込み、同梱skill |
 | [日常の操作](guide/usage.md) | 候補、状態変更、Group最終確認、記録参照 |
 | [状態と用語](guide/concepts.md) | 単一lifecycleと関係 |
-| [保存先とworktree](guide/storage.md) | SQLite共有、探索・初期化の境界 |
+| [保存先とworktree](guide/storage.md) | SQLite共有、fileのworktree隔離、探索・初期化の境界 |
 | [Agentからのアクセス](guide/codex.md) | ホスト権限と保存先 |
 | [記録者連携](development/lifecycle-recorder.md) | 自動取得と詳細参照 |
 
@@ -64,3 +64,5 @@
 - 利用者向け文書は日本語で書き、CLIの識別子は実際の表記を併記する。段落内には手動改行を入れず、表示幅による折り返しに任せる。
 
 候補の `triage/tasks` と外部コマンドの実行契約は [候補一覧と外部条件](development/lifecycle-candidates.md) を参照する。
+
+[file保存とGit統合](development/lifecycle-file.md) は新lifecycleのwriter・merge CLI・Git driverの入口です。

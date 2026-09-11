@@ -189,7 +189,7 @@ pub struct Note {
     pub context: Context,
     pub body: String,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Side {
     Left,
     Right,

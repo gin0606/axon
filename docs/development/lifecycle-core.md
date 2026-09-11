@@ -2,7 +2,7 @@
 
 正本は [literate spec](../../spec/lifecycle_proposal.md)。新しい [Rust library](../../src/lib.rs) の `lifecycle` module は SQL、filesystem、外部コマンド評価を呼ばない。`Snapshot` の操作と検査、`encode` / `decode` の byte 列を、後続の両 backend が共通で使う。`cargo test --lib` で独立したメモリ上の fixture を検証する。
 
-この境界は Issue / Group の登録、基本遷移、包含・dependency の変更、文面編集、Note、分岐した記録と明示選択を扱う。候補評価は `candidates`、条件設定は `set_condition`、三者比較は `MergePlan` が扱う。file adapter と merge CLI は別の実装範囲。[SQLite CLI](lifecycle-sqlite.md) が保存 adapter と公開入口を提供する。未参照の旧 module と `tests/integration`・`tests/common` は置換前の三軸 CLI に属し、新仕様の規範にしない。
+この境界は Issue / Group の登録、基本遷移、包含・dependency の変更、文面編集、Note、分岐した記録と明示選択を扱う。候補評価は `candidates`、条件設定は `set_condition`、三者比較は `MergePlan` が扱う。file adapter と merge CLI は [file保存とGit統合](lifecycle-file.md) に接続する。[SQLite CLI](lifecycle-sqlite.md) が保存 adapter と公開入口を提供する。未参照の旧 module と `tests/integration`・`tests/common` は置換前の三軸 CLI に属し、新仕様の規範にしない。
 
 ## 通常操作と構造
 

@@ -33,7 +33,7 @@ cargo test --lib --bin axon --test smoke
 `--lib` は単一 lifecycle の共通コア・分岐・codec のテストを実行する。
 `--bin axon` は端末表示と条件プロセスの起動・trace flush失敗、`--test smoke` は新 SQLite binary の登録から Group 完了、Note・log、並行操作、schema 拒否、保存先探索・init、入出力失敗を独立 fixture で検証する。
 
-旧 `tests/integration`・`tests/common` は新 binary から参照しない過去の検証資料である。process監督と記録者の検証は新smokeへ移植済み。`cargo test` はworkspaceの記録者crate単体テストも実行する。file保存・mergeの検証目的は、それぞれの新実装へ接続するときに移植する。旧 schema migration の互換検証は新仕様の要件にしない。以降の旧モデル・coverage の個別名も過去の三軸実装に属する。
+旧 `tests/integration`・`tests/common` は新 binary から参照しない過去の検証資料である。process監督と記録者の検証は新smokeへ移植済み。`cargo test` はworkspaceの記録者crate単体テストも実行する。file保存・mergeは `tests/lifecycle/file.rs` をsmokeから実行し、実worktree、driver、index、並行writer、drift拒否を検証する。旧 schema migration の互換検証は新仕様の要件にしない。以降の旧モデル・coverage の個別名も過去の三軸実装に属する。
 
 オプションなしの`cargo test`は引き続きsmokeを含む全test targetの標準入口であり、
 上記を含まない契約はfull verificationで検査する。Lefthookの各jobは失敗時にcommitを

@@ -30,7 +30,7 @@ cd "$AXON_TRIAL_DIR"
 "$AXON_BIN" note list ID --recorder-details
 ```
 
-初期化は新規作成専用です。SQLiteの置き場所とGit worktree共有は [保存先](storage.md) を参照してください。file backendとmergeは後続実装の境界で、このSQLite利用手順には含めません。
+初期化は新規作成専用です。SQLiteの置き場所とGit worktree共有は [保存先](storage.md) を参照してください。file backendとmergeの利用手順は [file保存とGit統合](../development/lifecycle-file.md) を参照してください。
 
 ## Agent向けskill
 
