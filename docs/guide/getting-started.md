@@ -1,6 +1,6 @@
 # 使い始める
 
-単一 lifecycle の新 CLI を、まず独立した SQLite 保存先で試します。既存の PATH 上の `axon` と、この checkout でビルドした binary は別物として扱ってください。
+単一 lifecycle の新 CLI を、独立した保存先で試します。既存の PATH 上の `axon` と、この checkout でビルドした binary は別物として扱ってください。
 
 ## インストールと対応環境
 
@@ -31,6 +31,25 @@ cd "$AXON_TRIAL_DIR"
 ```
 
 初期化は新規作成専用です。SQLiteの置き場所とGit worktree共有は [保存先](storage.md) を参照してください。file backendとmergeの利用手順は [file保存とGit統合](../development/lifecycle-file.md) を参照してください。
+
+## 保存方式を選ぶ
+
+| 方式 | 用途と共有の単位 |
+| --- | --- |
+| SQLite（既定） | 同じrepositoryのworktreeで一つの保存先を共有する |
+| file | worktreeごとに分岐して、Gitで計画と記録を取り込む |
+
+fileを試す場合は、上のSQLite試用先と別の空directoryで初期化します。
+
+```sh
+AXON_FILE_TRIAL_DIR="$(mktemp -d)"
+cd "$AXON_FILE_TRIAL_DIR"
+git init
+"$AXON_BIN" init trial --backend file
+"$AXON_BIN" plan --title 'Gitで共有する仕事' -m '目的と完了条件'
+```
+
+通常操作は両方式で同じです。fileのGit driver登録・追跡・競合解決は [file保存とGit統合](../development/lifecycle-file.md#git-driver) に従います。backendの変更にinitを使わず、新規保存先を別に選びます。
 
 ## Agent向けskill
 

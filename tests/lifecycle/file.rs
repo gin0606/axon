@@ -625,3 +625,142 @@ fn git_index_fixtures_do_not_touch_an_inherited_hook_index() {
         );
     }
 }
+
+#[test]
+fn worktree_conflict_resolution_preserves_operations_and_finishes_group() {
+    let f = Fixture::new();
+    git(&f.0, &["init", "-q"]);
+    init_file(&f);
+    let group = f
+        .ok(&["group", "plan", "--title", "delivery"])
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    let id = f
+        .ok(&["plan", "--title", "job", "--parent", &group])
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    f.ok(&["start", &group]);
+    f.ok(&["start", &id]);
+    git(
+        &f.0,
+        &[
+            "add",
+            ".axon/state.jsonl",
+            ".axon/.gitignore",
+            ".gitattributes",
+        ],
+    );
+    let commit = |path: &Path, message: &str| {
+        git(
+            path,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-qam",
+                message,
+            ],
+        );
+    };
+    commit(&f.0, "base");
+    let a = Fixture::new();
+    let b = Fixture::new();
+    git(
+        &f.0,
+        &["worktree", "add", "-qb", "finished", a.0.to_str().unwrap()],
+    );
+    git(
+        &f.0,
+        &["worktree", "add", "-qb", "remaining", b.0.to_str().unwrap()],
+    );
+    a.ok(&["done", &id]);
+    a.ok(&["note", "add", &id, "-m", "completed branch evidence"]);
+    b.ok(&["release", &id, "-r", "remaining work"]);
+    b.ok(&["note", "add", &id, "-m", "remaining branch evidence"]);
+    commit(&a.0, "finish");
+    commit(&b.0, "release");
+    let driver = format!("'{}' merge driver %O %A %B", env!("CARGO_BIN_EXE_axon"));
+    git(&f.0, &["config", "merge.axon.driver", &driver]);
+    let merge = git_output(
+        &a.0,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "merge",
+            "--no-edit",
+            "remaining",
+        ],
+    );
+    assert!(!merge.status.success());
+    failure(a.run(&["show", &id]));
+    let inputs = Fixture::new();
+    let paths = [
+        inputs.0.join("base"),
+        inputs.0.join("ours"),
+        inputs.0.join("theirs"),
+    ];
+    for (stage, path) in paths.iter().enumerate() {
+        let out = git_output(
+            &a.0,
+            &["show", &format!(":{}:.axon/state.jsonl", stage + 1)],
+        );
+        assert!(out.status.success());
+        fs::write(path, out.stdout).unwrap();
+    }
+    let workspace = a.0.join(".axon/review");
+    failure(a.run(&[
+        "merge",
+        "prepare",
+        "--base",
+        paths[0].to_str().unwrap(),
+        "--ours",
+        paths[1].to_str().unwrap(),
+        "--theirs",
+        paths[2].to_str().unwrap(),
+        "--output",
+        state(&a).to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+    ]));
+    resolve(&workspace, &eid(&id));
+    a.ok(&["merge", "check", workspace.to_str().unwrap()]);
+    a.ok(&["merge", "apply", workspace.to_str().unwrap()]);
+    a.ok(&["storage", "check", state(&a).to_str().unwrap()]);
+    failure(a.run(&["start", &id]));
+    git(&a.0, &["add", ".axon/state.jsonl"]);
+    commit(&a.0, "resolve remaining work");
+    assert!(git_output(&a.0, &["ls-files", "-u"]).stdout.is_empty());
+    let merged = snapshot(&a);
+    let entity_id = eid(&id);
+    assert_eq!(
+        merged.entity(&entity_id).unwrap().current.lifecycle,
+        Lifecycle::NotStarted
+    );
+    assert_eq!(merged.notes(&entity_id).unwrap().len(), 2);
+    let log = a.ok(&["log", &id]);
+    assert!(log.contains("InProgress → Completed"));
+    assert!(log.contains("InProgress → NotStarted"));
+    assert!(log.contains("統合"));
+    a.ok(&["start", &id]);
+    a.ok(&["done", &id]);
+    assert!(a.ok(&["show", &group]).contains("最終確認待ち"));
+    let notes = a.ok(&["note", "list", &id]);
+    assert!(notes.contains("completed branch evidence"));
+    assert!(notes.contains("remaining branch evidence"));
+    a.ok(&["done", &group]);
+    commit(&a.0, "verify delivery");
+    git(&f.0, &["merge", "--ff-only", "finished"]);
+    assert!(f.ok(&["tasks"]).is_empty());
+    assert_eq!(
+        snapshot(&b).entity(&entity_id).unwrap().current.lifecycle,
+        Lifecycle::NotStarted
+    );
+}

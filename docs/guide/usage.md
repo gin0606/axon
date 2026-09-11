@@ -28,6 +28,12 @@
 
 Groupのdone前には目的・完了条件、全子孫の終了、成果の統合と必要な検証を確認します。showの直属の子を辿り、必要な本文・Note・logを読んで不足を確認します。全子孫Noteの一括取得は必須ではありません。子の終了だけで親を自動完了せず、Groupに対するdone自体を計画全体の最終確認済みという入力にします。
 
+## 並行作業と引継ぎ
+
+SQLiteを共有するworktreeでは、同じ未着手Entityへの並行startは一つだけ成功します。失敗側はshow・logで現在値を読み、実行中のworkerと調整してください。記録者情報を所有権として扱わず、作業終了を確認してから継続・releaseを判断します。
+
+fileの別worktreeでは同じEntityをそれぞれstartできます。Gitで取り込むまで互いの作業は見えません。異なる現在値の衝突はEntity全体で選び、両側のNoteと実操作の履歴を保持します。同じworktreeでGit更新とAxon書込みを並行しないでください。統合後は [明示的な統合](../development/lifecycle-file.md#明示的な統合) に従って検査・stageし、show・Note・logで成果を確認して通常操作へ戻ります。
+
 ## 再浮上
 
 `when set ID --command 'test -f ready.txt'` は条件を保存し、`when clear ID` は解除します。保存時には実行しません。triage/tasksだけが必要な条件を `/bin/sh -c` で評価し、終了0は成立、1は未成立、その他は一覧の失敗です。`--condition-timeout` と `--trace-conditions` の契約は [外部条件](../development/lifecycle-candidates.md) を参照してください。
