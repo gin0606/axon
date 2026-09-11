@@ -9,7 +9,12 @@ repository = "https://github.com/gin0606/axon"
 readme = "README.md"
 publish = false
 
+[workspace]
+members = ["crates/axon-recorder"]
+default-members = [".", "crates/axon-recorder"]
+
 [dependencies]
+axon-recorder = { path = "crates/axon-recorder" }
 anstream = "1.0.0"
 anstyle = "1.0.14"
 blake3 = "1.8.2"

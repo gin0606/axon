@@ -96,6 +96,7 @@ version = "0.1.0"
 dependencies = [
  "anstream",
  "anstyle",
+ "axon-recorder",
  "blake3",
  "chrono",
  "clap",
@@ -108,6 +109,10 @@ dependencies = [
  "serde_json",
  "thiserror",
 ]
+
+[[package]]
+name = "axon-recorder"
+version = "0.1.0"
 
 [[package]]
 name = "base64"

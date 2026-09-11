@@ -19,7 +19,7 @@ use std::{
 #[command(
     version,
     about = "Issue と Group を単一 lifecycle で管理するローカル tracker",
-    after_help = "新しい保存先で axon init → axon plan --title '仕事' → axon start ID → axon done ID。\n旧 schema の自動移行は行いません。Group の done は計画全体の最終確認済みという明示入力です。"
+    after_help = "新しい保存先で axon init → axon plan --title '仕事' → axon start ID → axon done ID。\n導入: docs/guide/getting-started.md。記録者は環境から任意取得し、log / note list --recorder-details で詳細確認。\n旧 schema の自動移行は行いません。Group の done は計画全体の最終確認済みという明示入力です。"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -61,7 +61,12 @@ enum Command {
         command: Notes,
     },
     /// 状態変更と統合の経緯を表示する
-    Log { id: String },
+    Log {
+        id: String,
+        /// 保存済みの記録者 data を JSON で併記する
+        #[arg(long)]
+        recorder_details: bool,
+    },
     /// 未判断を採用する
     Accept(Change),
     /// 未着手の採用を撤回する
@@ -200,6 +205,9 @@ enum Dependency {
 enum Notes {
     List {
         id: String,
+        /// 保存済みの記録者 data を JSON で併記する
+        #[arg(long)]
+        recorder_details: bool,
     },
     Add {
         id: String,
@@ -220,7 +228,14 @@ fn id(value: String) -> Result<EntityId> {
 fn context() -> Context {
     Context {
         at: Utc::now(),
-        recorder: None,
+        recorder: axon_recorder::detect().map(|recorder| Recorder {
+            actor: recorder.actor,
+            data: recorder
+                .data
+                .into_iter()
+                .map(|(key, value)| (key, value.into()))
+                .collect(),
+        }),
     }
 }
 fn row(snapshot: &Snapshot, entity: &Entity) -> String {
@@ -347,6 +362,16 @@ fn actor(context: &Context) -> String {
         .map(|r| display::human_text(&r.actor))
         .unwrap_or_else(|| "—".into())
 }
+fn recorder_display(context: &Context, details: bool) -> String {
+    let mut text = actor(context);
+    if details && let Some(recorder) = &context.recorder {
+        text.push_str("  data: ");
+        text.push_str(&display::human_text(
+            serde_json::to_string(&recorder.data).expect("JSON object"),
+        ));
+    }
+    text
+}
 struct Output {
     text: String,
     saved: bool,
@@ -427,7 +452,10 @@ fn run(command: Command) -> Result<Output> {
                     .map(|e| row(&snapshot, e))
                     .collect(),
                 Command::Show { id: value } => show(&snapshot, snapshot.entity(&id(value)?)?)?,
-                Command::Log { id: value } => {
+                Command::Log {
+                    id: value,
+                    recorder_details,
+                } => {
                     let mut text = String::new();
                     let mut previous = None;
                     for record in snapshot.history(&id(value)?)? {
@@ -462,13 +490,17 @@ fn run(command: Command) -> Result<Output> {
                         text.push_str(&format!(
                             "{}  {}  {description}\n",
                             display::timestamp(&record.context.at),
-                            actor(&record.context)
+                            recorder_display(&record.context, recorder_details)
                         ));
                     }
                     text
                 }
                 Command::Note {
-                    command: Notes::List { id: value },
+                    command:
+                        Notes::List {
+                            id: value,
+                            recorder_details,
+                        },
                 } => {
                     let mut text = String::new();
                     let mut previous = None;
@@ -478,7 +510,7 @@ fn run(command: Command) -> Result<Output> {
                             "{}  {}  {}\n{}\n\n",
                             note.id,
                             display::timestamp(&note.context.at),
-                            actor(&note.context),
+                            recorder_display(&note.context, recorder_details),
                             display::human_text(&note.body)
                         ));
                     }

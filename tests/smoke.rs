@@ -1091,3 +1091,146 @@ fn condition_trace_and_failure_preserve_utf8_across_capture_boundary() {
         assert!(!diagnostic.contains('�'));
     }
 }
+
+fn without_recorder(command: &mut Command) -> &mut Command {
+    for name in [
+        "AXON_ACTOR",
+        "AXON_SESSION_ID",
+        "CODEX_THREAD_ID",
+        "CODEX_SANDBOX",
+        "CLAUDECODE",
+        "CLAUDE_CODE",
+        "AI_AGENT",
+        "USER",
+    ] {
+        command.env_remove(name);
+    }
+    command
+}
+
+#[test]
+fn recorder_is_automatic_durable_optional_and_not_an_operation_guard() {
+    let f = Fixture::new();
+    f.init();
+    let created = success(
+        without_recorder(&mut f.command())
+            .env("CODEX_THREAD_ID", "original-session")
+            .args(["plan", "--title", "provenance"])
+            .output()
+            .unwrap(),
+    );
+    let id = created.split_whitespace().next().unwrap();
+    success(
+        without_recorder(&mut f.command())
+            .args(["start", id])
+            .output()
+            .unwrap(),
+    );
+    success(
+        without_recorder(&mut f.command())
+            .env("CODEX_SANDBOX", "seatbelt")
+            .args(["note", "add", id, "-m", "partial metadata"])
+            .output()
+            .unwrap(),
+    );
+    success(
+        without_recorder(&mut f.command())
+            .env("AXON_ACTOR", "another-worker")
+            .args(["done", id])
+            .output()
+            .unwrap(),
+    );
+    let normal = f.ok(&["log", id]);
+    assert!(normal.contains("codex"));
+    assert!(!normal.contains("original-session"));
+    let details = success(
+        without_recorder(&mut f.command())
+            .env("CODEX_THREAD_ID", "current-session")
+            .args(["log", id, "--recorder-details"])
+            .output()
+            .unwrap(),
+    );
+    assert!(details.contains(r#"data: {"session_id":"original-session"}"#));
+    assert!(!details.contains("current-session"));
+    assert!(details.contains("another-worker  data: {}"));
+    let notes = f.ok(&["note", "list", id, "--recorder-details"]);
+    assert!(notes.contains("codex  data: {}"));
+    let store = Store::open(&f.db()).unwrap();
+    let (_, snapshot) = store.read().unwrap();
+    let history = snapshot.history(&eid(id)).unwrap();
+    assert_eq!(history.len(), 3);
+    assert!(history[1].context.recorder.is_none());
+    assert_eq!(
+        history[0].context.recorder.as_ref().unwrap().data["session_id"],
+        "original-session"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_recorder_environment_does_not_block_writes() {
+    use std::os::unix::ffi::OsStringExt;
+    let f = Fixture::new();
+    f.init();
+    let invalid = std::ffi::OsString::from_vec(vec![0xff]);
+    let created = success(
+        without_recorder(&mut f.command())
+            .env("AXON_ACTOR", &invalid)
+            .env("CODEX_THREAD_ID", &invalid)
+            .args(["capture", "--title", "unknown recorder"])
+            .output()
+            .unwrap(),
+    );
+    let id = created.split_whitespace().next().unwrap();
+    success(
+        without_recorder(&mut f.command())
+            .env("AXON_ACTOR", "custom")
+            .env("AXON_SESSION_ID", invalid)
+            .args(["note", "add", id, "-m", "still saved"])
+            .output()
+            .unwrap(),
+    );
+    assert!(f.ok(&["log", id, "--recorder-details"]).contains("—"));
+    assert!(
+        f.ok(&["note", "list", id, "--recorder-details"])
+            .contains("custom  data: {}")
+    );
+}
+
+#[test]
+fn recorder_details_preserve_unknown_json_and_escape_terminal_controls() {
+    let f = Fixture::new();
+    f.init();
+    let id = f.plan("unknown metadata");
+    let mut store = Store::open(&f.db()).unwrap();
+    store
+        .update(|_, snapshot| {
+            let mut ctx = context();
+            ctx.recorder = Some(Recorder {
+                actor: "future\x1b[31m-agent".into(),
+                data: BTreeMap::from([(
+                    "nested".into(),
+                    serde_json::json!({"number": 17, "array": [true, null], "text": "\x1b[31m"}),
+                )]),
+            });
+            snapshot.add_note(&eid(&id), "unknown actor".into(), ctx)?;
+            Ok(())
+        })
+        .unwrap();
+    let normal = f.ok(&["note", "list", &id]);
+    assert!(!normal.contains('\x1b'));
+    assert!(!normal.contains("nested"));
+    let details = f.ok(&["note", "list", &id, "--recorder-details"]);
+    assert!(!details.contains('\x1b'));
+    assert!(details.contains(r#""array":[true,null]"#));
+    assert!(details.contains(r#""number":17"#));
+}
+
+#[test]
+fn recorder_help_is_available_without_a_store() {
+    let f = Fixture::new();
+    for args in [vec!["log", "--help"], vec!["note", "list", "--help"]] {
+        assert!(f.ok(&args).contains("--recorder-details"));
+    }
+    assert!(!f.db().exists());
+}
