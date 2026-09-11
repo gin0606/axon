@@ -1184,3 +1184,477 @@ fn candidate_evaluation_matches_boolean_oracle_for_all_three_level_conditions() 
         }
     }
 }
+
+fn merge(base: &Snapshot, left: &Snapshot, right: &Snapshot) -> Result<Snapshot> {
+    MergePlan::prepare(base, left, right)?.resolve(&BTreeMap::new(), None, context(100))
+}
+
+#[test]
+fn three_way_selects_whole_values_and_keeps_independent_records() {
+    let mut base = fixture(Kind::Issue, Lifecycle::NotStarted);
+    base.create(
+        id("second"),
+        Kind::Issue,
+        current(Lifecycle::NotStarted),
+        context(1),
+    )
+    .unwrap();
+    let mut left = base.clone();
+    let mut right = base.clone();
+    left.write(&id("item"), Some("left".into()), None).unwrap();
+    right
+        .write(&id("second"), None, Some("right".into()))
+        .unwrap();
+    let ln = left
+        .add_note(&id("item"), "same".into(), context(1))
+        .unwrap();
+    let rn = right
+        .add_note(&id("item"), "same".into(), context(1))
+        .unwrap();
+    let result = merge(&base, &left, &right).unwrap();
+    assert_eq!(
+        result.entity(&id("item")).unwrap().current,
+        left.entity(&id("item")).unwrap().current
+    );
+    assert_eq!(
+        result.entity(&id("second")).unwrap().current,
+        right.entity(&id("second")).unwrap().current
+    );
+    assert_eq!(result.note(&ln).unwrap(), left.note(&ln).unwrap());
+    assert_eq!(result.note(&rn).unwrap(), right.note(&rn).unwrap());
+    roundtrip(&result);
+    for branch in [&left, &right, &base, &result] {
+        assert_eq!(merge(&base, &result, branch).unwrap(), result);
+        assert_eq!(merge(&base, branch, &result).unwrap(), result);
+    }
+}
+
+#[test]
+fn three_way_current_value_matrix_is_entity_granular() {
+    let base = fixture(Kind::Issue, Lifecycle::NotStarted);
+    // Independent edits to different fields remain different Entity values.
+    for l in 0..4 {
+        for r in 0..4 {
+            let edit = |choice, s: &mut Snapshot| match choice {
+                0 => (),
+                1 => s.write(&id("item"), Some("title".into()), None).unwrap(),
+                2 => s
+                    .write(&id("item"), None, Some("description".into()))
+                    .unwrap(),
+                _ => s
+                    .set_condition(&id("item"), Some("exit 17".into()))
+                    .unwrap(),
+            };
+            let mut left = base.clone();
+            let mut right = base.clone();
+            edit(l, &mut left);
+            edit(r, &mut right);
+            let plan = MergePlan::prepare(&base, &left, &right).unwrap();
+            let conflict = l != 0 && r != 0 && l != r;
+            assert_eq!(plan.conflicts().len(), usize::from(conflict));
+            assert_eq!(
+                plan.resolve(&BTreeMap::new(), None, context(5)).is_err(),
+                conflict
+            );
+            if conflict {
+                for side in [Side::Left, Side::Right] {
+                    let selected = plan
+                        .resolve(&BTreeMap::from([(id("item"), side)]), None, context(5))
+                        .unwrap();
+                    let source = if side == Side::Left { &left } else { &right };
+                    assert_eq!(
+                        selected.entity(&id("item")).unwrap().current,
+                        source.entity(&id("item")).unwrap().current
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn three_way_incomplete_selection_retains_actual_transitions_and_is_idempotent() {
+    let mut base = fixture(Kind::Issue, Lifecycle::NotStarted);
+    base.perform(&id("item"), Operation::Start, None, context(2))
+        .unwrap();
+    let mut left = base.clone();
+    let mut right = base.clone();
+    let complete = left
+        .perform(&id("item"), Operation::Complete, None, context(0))
+        .unwrap();
+    let release = right
+        .perform(&id("item"), Operation::Release, None, context(9))
+        .unwrap();
+    let plan = MergePlan::prepare(&base, &left, &right).unwrap();
+    assert_eq!(plan.conflicts().len(), 1);
+    let result = plan
+        .resolve(
+            &BTreeMap::from([(id("item"), Side::Right)]),
+            Some("continue work".into()),
+            context(1),
+        )
+        .unwrap();
+    assert_eq!(
+        result.entity(&id("item")).unwrap().current.lifecycle,
+        Lifecycle::NotStarted
+    );
+    assert_eq!(result.states.len(), base.states.len() + 3);
+    assert_eq!(
+        result.state_record(&complete).unwrap(),
+        left.state_record(&complete).unwrap()
+    );
+    assert_eq!(
+        result.state_record(&release).unwrap(),
+        right.state_record(&release).unwrap()
+    );
+    for branch in [&left, &right] {
+        assert_eq!(merge(&base, &result, branch).unwrap(), result);
+        assert_eq!(merge(&base, branch, &result).unwrap(), result);
+    }
+    let mut continued = result.clone();
+    continued
+        .perform(&id("item"), Operation::Start, None, context(3))
+        .unwrap();
+    assert_eq!(merge(&base, &continued, &left).unwrap(), continued);
+    roundtrip(&continued);
+}
+
+#[test]
+fn three_way_text_and_completion_conflict_and_equal_parallel_states_keep_both() {
+    let mut base = fixture(Kind::Issue, Lifecycle::NotStarted);
+    base.perform(&id("item"), Operation::Start, None, context(1))
+        .unwrap();
+    let mut left = base.clone();
+    let mut right = base.clone();
+    left.write(&id("item"), None, Some("new work".into()))
+        .unwrap();
+    right
+        .perform(&id("item"), Operation::Complete, None, context(2))
+        .unwrap();
+    assert_eq!(
+        MergePlan::prepare(&base, &left, &right)
+            .unwrap()
+            .conflicts()
+            .len(),
+        1
+    );
+    left = base.clone();
+    left.perform(&id("item"), Operation::Complete, None, context(2))
+        .unwrap();
+    let result = merge(&base, &left, &right).unwrap();
+    assert_eq!(result.states.len(), base.states.len() + 3);
+    assert_eq!(
+        result.entity(&id("item")).unwrap().current.lifecycle,
+        Lifecycle::Completed
+    );
+    assert_eq!(merge(&base, &right, &result).unwrap(), result);
+}
+
+#[test]
+fn three_way_detects_combined_cycles_and_can_override_automatic_choices() {
+    let mut base = fixture(Kind::Issue, Lifecycle::NotStarted);
+    base.create(
+        id("second"),
+        Kind::Issue,
+        current(Lifecycle::NotStarted),
+        context(1),
+    )
+    .unwrap();
+    let mut left = base.clone();
+    let mut right = base.clone();
+    left.add_dependency(&id("item"), &id("second")).unwrap();
+    right.add_dependency(&id("second"), &id("item")).unwrap();
+    let plan = MergePlan::prepare(&base, &left, &right).unwrap();
+    assert!(plan.conflicts().is_empty());
+    assert!(plan.resolve(&BTreeMap::new(), None, context(1)).is_err());
+    let result = plan
+        .resolve(
+            &BTreeMap::from([(id("second"), Side::Left)]),
+            None,
+            context(1),
+        )
+        .unwrap();
+    assert_eq!(
+        result
+            .entity(&id("second"))
+            .unwrap()
+            .current
+            .dependencies
+            .len(),
+        0
+    );
+    assert!(
+        plan.resolve(
+            &BTreeMap::from([(id("unknown"), Side::Right)]),
+            None,
+            context(1)
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn three_way_terminal_group_composition_cannot_take_new_or_moved_children() {
+    for terminal in [Operation::Complete, Operation::Cancel] {
+        let mut base = fixture(Kind::Group, Lifecycle::NotStarted);
+        base.perform(&id("item"), Operation::Start, None, context(1))
+            .unwrap();
+        base.create(
+            id("child"),
+            Kind::Issue,
+            current(Lifecycle::NotStarted),
+            context(1),
+        )
+        .unwrap();
+        let mut left = base.clone();
+        left.perform(&id("item"), terminal, None, context(2))
+            .unwrap();
+        for new_child in [true, false] {
+            let mut right = base.clone();
+            if new_child {
+                let mut value = current(Lifecycle::NotStarted);
+                value.parent = Some(id("item"));
+                right
+                    .create(id("new"), Kind::Issue, value, context(1))
+                    .unwrap();
+                right
+                    .perform(&id("new"), Operation::Cancel, None, context(2))
+                    .unwrap();
+            } else {
+                right.set_parent(&id("child"), Some(id("item"))).unwrap();
+                right
+                    .perform(&id("child"), Operation::Cancel, None, context(2))
+                    .unwrap();
+            }
+            let plan = MergePlan::prepare(&base, &left, &right).unwrap();
+            assert!(
+                plan.resolve(&BTreeMap::new(), None, context(3))
+                    .unwrap_err()
+                    .0
+                    .contains("composition")
+            );
+            let result = plan
+                .resolve(
+                    &BTreeMap::from([(id("item"), Side::Right)]),
+                    None,
+                    context(3),
+                )
+                .unwrap();
+            assert_eq!(
+                result.entity(&id("item")).unwrap().current.lifecycle,
+                Lifecycle::InProgress
+            );
+        }
+    }
+}
+
+#[test]
+fn three_way_rejects_record_identity_collisions_and_missing_base_records() {
+    let mut base = fixture(Kind::Issue, Lifecycle::NotStarted);
+    let n = base
+        .add_note(&id("item"), "base".into(), context(1))
+        .unwrap();
+    let mut bad = base.clone();
+    bad.notes.get_mut(&n).unwrap().body = "different".into();
+    assert!(MergePlan::prepare(&base, &base, &bad).is_err());
+    assert!(MergePlan::prepare(&Snapshot::new(base.store.clone()), &base, &bad).is_err());
+    bad.notes.remove(&n);
+    assert!(MergePlan::prepare(&base, &base, &bad).is_err());
+    let mut other = Snapshot::new(base.store.clone());
+    other
+        .create(
+            id("item"),
+            Kind::Issue,
+            current(Lifecycle::NotStarted),
+            context(10),
+        )
+        .unwrap();
+    assert!(MergePlan::prepare(&Snapshot::new(base.store.clone()), &base, &other).is_err());
+    assert!(MergePlan::prepare(&Snapshot::new(StoreId::generate()), &base, &base).is_err());
+}
+
+#[test]
+fn three_way_note_only_and_new_entities_do_not_invent_state_history() {
+    let base = fixture(Kind::Issue, Lifecycle::NotStarted);
+    let mut left = base.clone();
+    let mut right = base.clone();
+    left.add_note(&id("item"), "left".into(), context(1))
+        .unwrap();
+    right
+        .add_note(&id("item"), "right".into(), context(1))
+        .unwrap();
+    left.create(
+        id("left"),
+        Kind::Issue,
+        current(Lifecycle::NotStarted),
+        context(1),
+    )
+    .unwrap();
+    right
+        .create(
+            id("right"),
+            Kind::Issue,
+            current(Lifecycle::NotStarted),
+            context(1),
+        )
+        .unwrap();
+    let result = merge(&base, &left, &right).unwrap();
+    assert_eq!(result.states.len(), 3);
+    assert_eq!(result.notes.len(), 2);
+    assert_eq!(result.entities.len(), 3);
+    assert_eq!(merge(&base, &result, &left).unwrap(), result);
+}
+
+#[test]
+fn three_way_does_not_confuse_same_head_text_with_an_observed_candidate() {
+    let base = fixture(Kind::Issue, Lifecycle::NotStarted);
+    let mut left = base.clone();
+    let mut right = base.clone();
+    left.write(&id("item"), Some("left".into()), None).unwrap();
+    right
+        .write(&id("item"), Some("right".into()), None)
+        .unwrap();
+    let integrated = MergePlan::prepare(&base, &left, &right)
+        .unwrap()
+        .resolve(
+            &BTreeMap::from([(id("item"), Side::Left)]),
+            None,
+            context(1),
+        )
+        .unwrap();
+    right
+        .write(&id("item"), Some("different later edit".into()), None)
+        .unwrap();
+    assert_eq!(
+        MergePlan::prepare(&base, &integrated, &right)
+            .unwrap()
+            .conflicts()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn three_way_terminal_group_selection_fixes_descendant_lifecycles_and_nested_membership() {
+    let mut base = fixture(Kind::Group, Lifecycle::NotStarted);
+    base.perform(&id("item"), Operation::Start, None, context(1))
+        .unwrap();
+    let mut child = current(Lifecycle::NotStarted);
+    child.parent = Some(id("item"));
+    base.create(id("child"), Kind::Group, child.clone(), context(1))
+        .unwrap();
+    base.create(id("sibling"), Kind::Group, child, context(1))
+        .unwrap();
+    base.perform(&id("child"), Operation::Start, None, context(1))
+        .unwrap();
+    base.perform(&id("sibling"), Operation::Start, None, context(1))
+        .unwrap();
+    let mut grandchild = current(Lifecycle::NotStarted);
+    grandchild.parent = Some(id("child"));
+    base.create(id("grandchild"), Kind::Issue, grandchild, context(1))
+        .unwrap();
+    base.perform(&id("grandchild"), Operation::Start, None, context(1))
+        .unwrap();
+    let mut left = base.clone();
+    let mut right = base.clone();
+    left.perform(&id("grandchild"), Operation::Complete, None, context(2))
+        .unwrap();
+    right
+        .perform(&id("grandchild"), Operation::Cancel, None, context(2))
+        .unwrap();
+    for snapshot in [&mut left, &mut right] {
+        snapshot
+            .perform(&id("child"), Operation::Complete, None, context(3))
+            .unwrap();
+        snapshot
+            .perform(&id("sibling"), Operation::Complete, None, context(3))
+            .unwrap();
+        snapshot
+            .perform(&id("item"), Operation::Complete, None, context(4))
+            .unwrap();
+    }
+    let plan = MergePlan::prepare(&base, &left, &right).unwrap();
+    // The root's equal value still belongs to a particular input's composition.
+    assert!(
+        plan.resolve(
+            &BTreeMap::from([(id("grandchild"), Side::Right)]),
+            None,
+            context(5)
+        )
+        .is_err()
+    );
+    plan.resolve(
+        &BTreeMap::from([(id("grandchild"), Side::Left)]),
+        None,
+        context(5),
+    )
+    .unwrap();
+
+    let mut right = base.clone();
+    right
+        .set_parent(&id("grandchild"), Some(id("sibling")))
+        .unwrap();
+    right
+        .perform(&id("grandchild"), Operation::Complete, None, context(2))
+        .unwrap();
+    right
+        .perform(&id("child"), Operation::Complete, None, context(3))
+        .unwrap();
+    right
+        .perform(&id("sibling"), Operation::Complete, None, context(3))
+        .unwrap();
+    right
+        .perform(&id("item"), Operation::Complete, None, context(4))
+        .unwrap();
+    let plan = MergePlan::prepare(&base, &left, &right).unwrap();
+    assert!(
+        plan.resolve(
+            &BTreeMap::from([(id("grandchild"), Side::Right)]),
+            None,
+            context(5)
+        )
+        .is_err()
+    );
+    plan.resolve(
+        &BTreeMap::from([
+            (id("item"), Side::Right),
+            (id("child"), Side::Right),
+            (id("sibling"), Side::Right),
+            (id("grandchild"), Side::Right),
+        ]),
+        None,
+        context(5),
+    )
+    .unwrap();
+}
+
+#[test]
+fn three_way_preparation_resolution_and_repairs_never_execute_conditions() {
+    let marker =
+        std::env::temp_dir().join(format!("axon-merge-condition-{}", RecordId::generate()));
+    let command = format!("touch '{}'; exit 17", marker.display());
+    let mut base = fixture(Kind::Issue, Lifecycle::NotStarted);
+    base.set_condition(&id("item"), Some(command.clone()))
+        .unwrap();
+    let mut left = base.clone();
+    let mut right = base.clone();
+    left.write(&id("item"), Some("left".into()), None).unwrap();
+    right
+        .write(&id("item"), Some("right".into()), None)
+        .unwrap();
+    let plan = MergePlan::prepare(&base, &left, &right).unwrap();
+    let mut merged = plan
+        .resolve(
+            &BTreeMap::from([(id("item"), Side::Left)]),
+            None,
+            context(1),
+        )
+        .unwrap();
+    merged.set_condition(&id("item"), None).unwrap();
+    merged
+        .write(&id("item"), None, Some("repair".into()))
+        .unwrap();
+    merged.validate().unwrap();
+    roundtrip(&merged);
+    assert!(!marker.exists());
+}

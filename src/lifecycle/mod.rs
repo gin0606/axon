@@ -1,16 +1,18 @@
 //! Single-lifecycle records and in-memory operations, independent of SQL and I/O.
 //!
 //! Ordinary operations enforce lifecycle, containment and dependency constraints.
-//! Automatic three-way merging and durable publication belong to subsequent layers;
-//! explicit integration here requires a choice for every Entity.
+//! Three-way merging preserves records and validates whole-plan selections.
+//! Durable publication belongs to the storage adapters.
 mod candidates;
 mod codec;
+mod merge;
 mod model;
 mod relations;
 mod snapshot;
 
 pub use candidates::{CandidateList, candidates};
 pub use codec::{decode, encode};
+pub use merge::MergePlan;
 pub use model::*;
 pub use snapshot::Snapshot;
 

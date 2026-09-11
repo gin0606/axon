@@ -248,6 +248,16 @@ impl Snapshot {
         reason: Option<String>,
         context: Context,
     ) -> Result<Self> {
+        self.integrate_selected(other, choices, reason, context, false)
+    }
+    pub(crate) fn integrate_selected(
+        &self,
+        other: &Self,
+        choices: &BTreeMap<EntityId, Side>,
+        reason: Option<String>,
+        context: Context,
+        reuse: bool,
+    ) -> Result<Self> {
         self.validate()?;
         other.validate()?;
         if self.store != other.store {
@@ -282,6 +292,24 @@ impl Snapshot {
                     || left.created_at != right.created_at)
             {
                 return Err(invalid(format!("Entity identity collision {id}")));
+            }
+            let unselected = match choices[&id] {
+                Side::Left => right,
+                Side::Right => left,
+            };
+            if reuse
+                && (unselected.is_none()
+                    || unselected.is_some_and(|entity| entity == selected)
+                    || unselected
+                        .map(|entity| match choices[&id] {
+                            Side::Left => self.includes_candidate(selected, entity),
+                            Side::Right => other.includes_candidate(selected, entity),
+                        })
+                        .transpose()?
+                        .unwrap_or(false))
+            {
+                merged.entities.insert(id, selected.clone());
+                continue;
             }
             let inputs: Vec<_> = [left, right]
                 .into_iter()
@@ -321,14 +349,29 @@ impl Snapshot {
                     Side::Left => self,
                     Side::Right => other,
                 };
-                let children = |snapshot: &Self| -> BTreeSet<EntityId> {
-                    snapshot
-                        .entities()
-                        .filter(|child| child.current.parent.as_ref() == Some(&entity.id))
-                        .map(|child| child.id.clone())
-                        .collect()
-                };
-                if children(source) != children(&merged) {
+                let composition =
+                    |snapshot: &Self| -> BTreeMap<EntityId, (Option<EntityId>, Lifecycle)> {
+                        let mut found = BTreeMap::new();
+                        let mut pending = vec![entity.id.clone()];
+                        while let Some(parent) = pending.pop() {
+                            for child in snapshot
+                                .entities()
+                                .filter(|child| child.current.parent.as_ref() == Some(&parent))
+                            {
+                                if found
+                                    .insert(
+                                        child.id.clone(),
+                                        (child.current.parent.clone(), child.current.lifecycle),
+                                    )
+                                    .is_none()
+                                {
+                                    pending.push(child.id.clone());
+                                }
+                            }
+                        }
+                        found
+                    };
+                if composition(source) != composition(&merged) {
                     return Err(invalid(
                         "terminal Group composition differs from selected input",
                     ));
@@ -454,7 +497,7 @@ impl Snapshot {
         order(&self.notes, |note| (&note.entity, &note.parents))
     }
 }
-fn union<T: Clone + PartialEq>(
+pub(crate) fn union<T: Clone + PartialEq>(
     target: &mut BTreeMap<RecordId, T>,
     source: &BTreeMap<RecordId, T>,
 ) -> Result<()> {
