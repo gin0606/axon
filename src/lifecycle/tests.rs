@@ -1059,3 +1059,128 @@ fn integration_and_decode_enforce_combined_relations() {
     assert!(right.validate().is_err());
     assert!(encode(&right).is_err());
 }
+
+#[test]
+fn condition_edits_are_atomic_and_do_not_change_lifecycle_or_records() {
+    let mut snapshot = fixture(Kind::Issue, Lifecycle::NotStarted);
+    for operation in [None, Some(Operation::Start), Some(Operation::Complete)] {
+        if let Some(operation) = operation {
+            snapshot
+                .perform(&id("item"), operation, None, context(20))
+                .unwrap();
+        }
+        let before = snapshot.clone();
+        snapshot
+            .set_condition(&id("item"), Some("exit 23".into()))
+            .unwrap();
+        assert_eq!(
+            snapshot.entity(&id("item")).unwrap().head,
+            before.entity(&id("item")).unwrap().head
+        );
+        assert_eq!(
+            snapshot.history(&id("item")).unwrap(),
+            before.history(&id("item")).unwrap()
+        );
+        snapshot.set_condition(&id("item"), None).unwrap();
+        let cleared = snapshot.clone();
+        assert!(
+            snapshot
+                .set_condition(&id("item"), Some("  ".into()))
+                .is_err()
+        );
+        assert_eq!(snapshot, cleared);
+        assert!(snapshot.set_condition(&id("missing"), None).is_err());
+        assert_eq!(snapshot, cleared);
+        roundtrip(&snapshot);
+    }
+}
+
+#[test]
+fn candidate_evaluation_matches_boolean_oracle_for_all_three_level_conditions() {
+    let mut snapshot = fixture(Kind::Group, Lifecycle::NotStarted);
+    let mut child = current(Lifecycle::NotStarted);
+    child.parent = Some(id("item"));
+    snapshot
+        .create(id("nested"), Kind::Group, child, context(11))
+        .unwrap();
+    let mut leaf = current(Lifecycle::NotStarted);
+    leaf.parent = Some(id("nested"));
+    snapshot
+        .create(id("leaf"), Kind::Issue, leaf, context(12))
+        .unwrap();
+    let mut draft = current(Lifecycle::Undecided);
+    draft.parent = Some(id("nested"));
+    snapshot
+        .create(id("draft"), Kind::Issue, draft, context(13))
+        .unwrap();
+    for phase in 0..3 {
+        if phase > 0 {
+            snapshot
+                .perform(
+                    &id(if phase == 1 { "item" } else { "nested" }),
+                    Operation::Start,
+                    None,
+                    context(20 + phase),
+                )
+                .unwrap();
+        }
+        for bits in 0..16 {
+            let values = BTreeMap::from([
+                (id("item"), bits & 1 != 0),
+                (id("nested"), bits & 2 != 0),
+                (id("leaf"), bits & 4 != 0),
+                (id("draft"), bits & 8 != 0),
+            ]);
+            for kind in [CandidateList::Tasks, CandidateList::Triage] {
+                let mut calls = Vec::new();
+                let actual: Vec<_> = candidates(&snapshot, kind, |entity, _| {
+                    calls.push(entity.id.clone());
+                    Ok::<_, Error>(values[&entity.id])
+                })
+                .unwrap()
+                .into_iter()
+                .map(|e| e.id.clone())
+                .collect();
+                let expected: BTreeSet<_> = snapshot
+                    .entities()
+                    .filter(|entity| {
+                        let state = entity.current.lifecycle;
+                        if matches!(kind, CandidateList::Tasks) && state == Lifecycle::InProgress {
+                            return true;
+                        }
+                        if state
+                            != if matches!(kind, CandidateList::Tasks) {
+                                Lifecycle::NotStarted
+                            } else {
+                                Lifecycle::Undecided
+                            }
+                        {
+                            return false;
+                        }
+                        let mut cursor = *entity;
+                        loop {
+                            if !values[&cursor.id] {
+                                return false;
+                            }
+                            match &cursor.current.parent {
+                                Some(parent) => cursor = snapshot.entity(parent).unwrap(),
+                                None => return true,
+                            }
+                        }
+                    })
+                    .map(|e| e.id.clone())
+                    .collect();
+                assert_eq!(actual.into_iter().collect::<BTreeSet<_>>(), expected);
+                assert_eq!(calls.len(), calls.iter().collect::<BTreeSet<_>>().len());
+                for (index, called) in calls.iter().enumerate() {
+                    let mut cursor = snapshot.entity(called).unwrap();
+                    while let Some(parent) = &cursor.current.parent {
+                        assert!(values[parent]);
+                        assert!(calls[..index].contains(parent));
+                        cursor = snapshot.entity(parent).unwrap();
+                    }
+                }
+            }
+        }
+    }
+}

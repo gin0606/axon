@@ -1,3 +1,4 @@
+mod condition;
 mod display;
 
 use axon::{
@@ -11,6 +12,7 @@ use std::{
     collections::BTreeSet,
     io::{Read, Write},
     path::PathBuf,
+    time::Duration,
 };
 
 #[derive(Parser)]
@@ -42,6 +44,15 @@ enum Command {
     },
     /// 保存済み Entity を作成日時順に表示する（外部条件は評価しない）
     List,
+    /// 自身と祖先が浮上した未判断を表示する
+    Triage(CandidateOptions),
+    /// 浮上した未着手（依存・親の着手待ちを含む）と全着手中を表示する
+    Tasks(CandidateOptions),
+    /// 再浮上条件を設定・修復する（コマンドは実行しない）
+    When {
+        #[command(subcommand)]
+        command: When,
+    },
     /// 本文と直接の待ち理由、Group の直属の子を表示する
     Show { id: String },
     /// Note を追加または取得する
@@ -78,6 +89,43 @@ enum Command {
         #[command(subcommand)]
         command: Dependency,
     },
+}
+#[derive(Args)]
+#[command(
+    after_help = "例: axon tasks --condition-timeout 5 --trace-conditions\n条件は /bin/sh -c で実行し、0 は成立、1 は未成立、その他は一覧取得の失敗。\n作業場所は現在の Git worktree のルート（Git 外では管理ルート）。\nCtrl-C・timeout は子を含む process group へ TERM、1秒後も残れば KILL。\nstdout/stderr は各64 KiBまで保持し、超過時は先頭・末尾32 KiBを表示します。"
+)]
+struct CandidateOptions {
+    /// 外部コマンド1件のタイムアウト秒数（正の有限値）
+    #[arg(long, default_value = "30", value_parser = parse_timeout)]
+    condition_timeout: Duration,
+    /// 実行した条件の結果・stdout/stderrをstderrへ表示する
+    #[arg(long)]
+    trace_conditions: bool,
+}
+fn parse_timeout(value: &str) -> std::result::Result<Duration, String> {
+    let seconds: f64 = value
+        .parse()
+        .map_err(|_| "expected positive finite seconds")?;
+    let duration =
+        Duration::try_from_secs_f64(seconds).map_err(|_| "expected positive finite seconds")?;
+    if duration.is_zero() {
+        return Err("expected positive finite seconds".into());
+    }
+    Ok(duration)
+}
+#[derive(Subcommand)]
+enum When {
+    /// シェル文字列を保存・置換する（保存時に評価しない）
+    #[command(
+        after_help = "例: axon when set ID --command 'test -f ready.txt'\n終了0=成立、1=未成立、その他=判定失敗。壊れた条件も set / clear で修復できます。"
+    )]
+    Set {
+        id: String,
+        #[arg(long)]
+        command: String,
+    },
+    /// 条件を解除して常に浮上させる（lifecycleは変えない）
+    Clear { id: String },
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum Backend {
@@ -342,6 +390,8 @@ fn run(command: Command) -> Result<Output> {
     let mut store = location.open()?;
     match command {
         Command::List
+        | Command::Triage(_)
+        | Command::Tasks(_)
         | Command::Show { .. }
         | Command::Log { .. }
         | Command::Note {
@@ -349,6 +399,29 @@ fn run(command: Command) -> Result<Output> {
         } => {
             let (_, snapshot) = store.read()?;
             let text = match command {
+                Command::Triage(ref options) | Command::Tasks(ref options) => {
+                    let kind = if matches!(command, Command::Triage(_)) {
+                        CandidateList::Triage
+                    } else {
+                        CandidateList::Tasks
+                    };
+                    let evaluation = if options.trace_conditions {
+                        condition::Evaluation::tracing(location.root, options.condition_timeout)
+                    } else {
+                        condition::Evaluation::with_timeout(
+                            location.root,
+                            options.condition_timeout,
+                        )
+                    };
+                    candidates(&snapshot, kind, |entity, script| {
+                        evaluation
+                            .run_command(entity, script)
+                            .map_err(|e| sqlite::Error::Invalid(e.to_string()))
+                    })?
+                    .into_iter()
+                    .map(|e| row(&snapshot, e))
+                    .collect()
+                }
                 Command::List => sorted(snapshot.entities().collect())
                     .into_iter()
                     .map(|e| row(&snapshot, e))
@@ -472,6 +545,18 @@ fn run(command: Command) -> Result<Output> {
                 Ok(())
             })?;
             Ok(output(format!("{id}  Parent updated\n"), true))
+        }
+        Command::When { command } => {
+            let (value, command) = match command {
+                When::Set { id, command } => (id, Some(command)),
+                When::Clear { id } => (id, None),
+            };
+            let id = id(value)?;
+            store.update(|_, snapshot| {
+                snapshot.set_condition(&id, command)?;
+                Ok(())
+            })?;
+            Ok(output(format!("{id}  Condition updated\n"), true))
         }
         Command::Dep { command } => {
             let (value, needs, add) = match command {

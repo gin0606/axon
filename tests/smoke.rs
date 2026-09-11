@@ -685,3 +685,409 @@ fn inherited_git_overrides_do_not_select_a_foreign_store() {
     assert!(outside.join(".axon/axon.db").is_file());
     assert_eq!(before, fs::read(repo.join(".axon/axon.db")).unwrap());
 }
+
+fn set_when(f: &Fixture, id: &str, command: &str) {
+    f.ok(&["when", "set", id, "--command", command]);
+}
+fn new_entity(f: &Fixture, args: &[&str]) -> String {
+    f.ok(args).split_whitespace().next().unwrap().into()
+}
+
+#[test]
+fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation() {
+    let f = Fixture::new();
+    f.init();
+    let root = new_entity(&f, &["group", "plan", "--title", "root"]);
+    let nested = new_entity(
+        &f,
+        &["group", "plan", "--title", "nested", "--parent", &root],
+    );
+    let dep = f.plan("dependency");
+    let child = new_entity(
+        &f,
+        &[
+            "plan", "--title", "child", "--parent", &nested, "--needs", &dep,
+        ],
+    );
+    let draft = new_entity(&f, &["capture", "--title", "draft", "--parent", &nested]);
+    set_when(&f, &root, "echo root >> observations; test -f open");
+    set_when(&f, &nested, "echo nested >> observations");
+    set_when(&f, &child, "echo child >> observations");
+    set_when(&f, &draft, "echo draft >> observations");
+    let initial = f.ok(&["tasks"]);
+    assert!(initial.contains(&dep));
+    assert!(!initial.contains(&root));
+    assert!(!initial.contains(&child));
+    assert_eq!(
+        fs::read_to_string(f.0.join("observations")).unwrap(),
+        "root\n"
+    );
+    fs::write(f.0.join("open"), "").unwrap();
+    fs::write(f.0.join("observations"), "").unwrap();
+    let result = f.run(&["tasks", "--trace-conditions"]);
+    assert!(result.status.success());
+    let rows = String::from_utf8(result.stdout).unwrap();
+    for id in [&root, &nested, &child, &dep] {
+        assert!(rows.contains(id));
+    }
+    assert!(!rows.contains(&draft));
+    assert!(
+        rows.lines()
+            .find(|s| s.starts_with(&child))
+            .unwrap()
+            .contains("依存待ち")
+    );
+    assert_eq!(
+        fs::read_to_string(f.0.join("observations")).unwrap(),
+        "root\nnested\nchild\n"
+    );
+    let trace = String::from_utf8(result.stderr).unwrap();
+    assert_eq!(trace.matches("Condition trace:").count(), 3);
+    assert!(trace.find(&root).unwrap() < trace.find(&nested).unwrap());
+    assert!(trace.find(&nested).unwrap() < trace.find(&child).unwrap());
+    fs::write(f.0.join("observations"), "").unwrap();
+    assert!(f.ok(&["triage"]).contains(&draft));
+    assert_eq!(
+        fs::read_to_string(f.0.join("observations")).unwrap(),
+        "root\nnested\ndraft\n"
+    );
+    f.ok(&["start", &root]);
+    f.ok(&["start", &nested]);
+    fs::remove_file(f.0.join("open")).unwrap();
+    let rows = f.ok(&["tasks"]);
+    assert!(rows.contains(&root) && rows.contains(&nested));
+    assert!(!rows.contains(&child));
+    f.ok(&["cancel", &child]);
+    set_when(&f, &root, "exit 23");
+    fs::write(f.0.join("observations"), "").unwrap();
+    let rows = f.ok(&["tasks"]);
+    assert!(rows.contains(&root) && rows.contains(&nested));
+    assert!(
+        fs::read_to_string(f.0.join("observations"))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(failure(f.run(&["triage"])).contains("exit status: 23"));
+}
+
+#[test]
+fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
+    let f = Fixture::new();
+    f.init();
+    let root = new_entity(&f, &["group", "plan", "--title", "root"]);
+    let id = new_entity(&f, &["capture", "--title", "item", "--parent", &root]);
+    let script = "echo executed >> forbidden; exit 23";
+    set_when(&f, &root, script);
+    set_when(&f, &id, script);
+    for args in [
+        vec!["list"],
+        vec!["show", &id],
+        vec!["log", &id],
+        vec!["note", "list", &id],
+    ] {
+        f.ok(&args);
+    }
+    f.ok(&["accept", &id]);
+    f.ok(&["withdraw", &id]);
+    f.ok(&["accept", &id]);
+    f.ok(&["start", &root]);
+    f.ok(&["start", &id]);
+    f.ok(&["release", &id]);
+    f.ok(&["cancel", &id]);
+    set_when(&f, &id, script);
+    f.ok(&["reconsider", &id]);
+    f.ok(&["write", &id, "--title", "changed"]);
+    f.ok(&["group", "unset", &id]);
+    f.ok(&["group", "set", &id, "--parent", &root]);
+    f.ok(&["accept", &id]);
+    f.ok(&["start", &id]);
+    f.ok(&["done", &id]);
+    f.ok(&["done", &root]);
+    set_when(&f, &id, "exit 2");
+    f.ok(&["when", "clear", &id]);
+    f.ok(&["note", "add", &id, "-m", "supplement"]);
+    assert!(!f.0.join("forbidden").exists());
+    let before = Store::open(&f.db()).unwrap().read().unwrap().1;
+    assert!(f.ok(&["tasks"]).is_empty());
+    assert!(f.ok(&["triage"]).is_empty());
+    assert!(failure(f.run(&["when", "set", &id, "--command", " "])).contains("empty condition"));
+    assert_eq!(Store::open(&f.db()).unwrap().read().unwrap().1, before);
+}
+
+#[test]
+fn condition_results_diagnostics_and_repair_do_not_publish_partial_rows() {
+    let f = Fixture::new();
+    f.init();
+    let ongoing = f.plan("ongoing");
+    f.ok(&["start", &ongoing]);
+    let id = f.plan("condition");
+    set_when(
+        &f,
+        &id,
+        "printf '\\033bad\\377'; printf problem >&2; exit 23",
+    );
+    let before = Store::open(&f.db()).unwrap().read().unwrap().1;
+    let error = failure(f.run(&["tasks", "--trace-conditions"]));
+    for text in [
+        &id,
+        f.0.to_str().unwrap(),
+        "exit status: 23",
+        "\\x1bbad�",
+        "problem",
+    ] {
+        assert!(error.contains(text), "{error}");
+    }
+    assert!(!error.contains("Condition trace:"));
+    assert_eq!(Store::open(&f.db()).unwrap().read().unwrap().1, before);
+    set_when(&f, &id, "exit 1");
+    let out = f.run(&["tasks", "--trace-conditions"]);
+    assert!(!String::from_utf8(out.stdout).unwrap().contains(&id));
+    let trace = String::from_utf8(out.stderr).unwrap();
+    assert!(trace.contains("not satisfied (exit 1)"));
+    assert_eq!(trace.matches("(empty)").count(), 2);
+    set_when(&f, &id, "echo ignored; echo ignored >&2; exit 0");
+    let out = f.run(&["tasks"]);
+    assert!(out.status.success() && out.stderr.is_empty());
+    assert!(!String::from_utf8(out.stdout).unwrap().contains("ignored"));
+    set_when(&f, &id, "echo signal-detail >&2; kill -TERM $$");
+    assert!(failure(f.run(&["tasks"])).contains("signal-detail"));
+    f.ok(&["when", "clear", &id]);
+    assert!(f.ok(&["tasks"]).contains(&id));
+}
+
+#[test]
+fn condition_output_keeps_both_edges_per_stream_in_trace_and_failure() {
+    let f = Fixture::new();
+    f.init();
+    let id = f.plan("output");
+    let script = "awk 'BEGIN { for (i=0;i<40000;i++) printf \"A\"; for (i=0;i<40000;i++) printf \"B\" }'; awk 'BEGIN { for (i=0;i<40000;i++) printf \"C\"; for (i=0;i<40000;i++) printf \"D\" }' >&2";
+    for exit in [0, 23] {
+        set_when(&f, &id, &format!("{script}; exit {exit}"));
+        let out = f.run(&["tasks", "--trace-conditions"]);
+        assert_eq!(out.status.success(), exit == 0);
+        let err = String::from_utf8(out.stderr).unwrap();
+        for character in ['A', 'B', 'C', 'D'] {
+            assert!(err.contains(&character.to_string().repeat(32768)));
+        }
+        assert_eq!(err.matches("14464 bytes omitted").count(), 2);
+        assert!(err.len() < 133000);
+        if exit != 0 {
+            assert!(out.stdout.is_empty());
+        }
+    }
+}
+
+fn wait_pid(path: &Path) -> i32 {
+    let start = std::time::Instant::now();
+    loop {
+        if let Ok(text) = fs::read_to_string(path)
+            && let Ok(pid) = text.trim().parse()
+        {
+            return pid;
+        }
+        assert!(
+            start.elapsed().as_secs() < 10,
+            "PID not ready: {}",
+            path.display()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+fn assert_process_gone(pid: i32) {
+    let start = std::time::Instant::now();
+    loop {
+        if unsafe { libc::kill(pid, 0) } == -1 {
+            return;
+        }
+        let output = Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        if String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .starts_with('Z')
+        {
+            return;
+        }
+        assert!(start.elapsed().as_secs() < 5, "process {pid} remains");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+#[test]
+fn condition_timeout_and_ctrl_c_terminate_shell_and_descendants() {
+    let f = Fixture::new();
+    f.init();
+    let id = f.plan("interrupt");
+    let script = "echo $$ > shell-pid; sh -c 'trap \"\" TERM; echo $$ > descendant-pid; while :; do :; done' </dev/null >/dev/null 2>/dev/null & wait";
+    set_when(&f, &id, script);
+    let before = Store::open(&f.db()).unwrap().read().unwrap().1;
+    for interrupt in [false, true] {
+        let mut cmd = f.command();
+        cmd.args([
+            "tasks",
+            "--condition-timeout",
+            if interrupt { "10" } else { "0.5" },
+        ]);
+        let out = if interrupt {
+            fs::remove_file(f.0.join("descendant-pid")).ok();
+            let child = cmd
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            wait_pid(&f.0.join("descendant-pid"));
+            assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+            child.wait_with_output().unwrap()
+        } else {
+            cmd.output().unwrap()
+        };
+        let error = failure(out);
+        assert!(
+            error.contains(if interrupt {
+                "interrupted by Ctrl-C"
+            } else {
+                "timed out after 500ms"
+            }),
+            "{error}"
+        );
+        assert!(
+            error.contains("TERM followed by KILL after 1s grace"),
+            "{error}"
+        );
+        assert_process_gone(wait_pid(&f.0.join("shell-pid")));
+        assert_process_gone(wait_pid(&f.0.join("descendant-pid")));
+        assert_eq!(Store::open(&f.db()).unwrap().read().unwrap().1, before);
+    }
+}
+
+#[test]
+fn condition_default_timeout_is_thirty_seconds_in_a_real_process() {
+    let f = Fixture::new();
+    f.init();
+    let id = f.plan("default timeout");
+    set_when(&f, &id, "sleep 60");
+    let start = std::time::Instant::now();
+    let error = failure(f.run(&["tasks"]));
+    assert!(start.elapsed() >= std::time::Duration::from_secs(30));
+    assert!(error.contains("timed out after 30s"), "{error}");
+}
+
+#[test]
+fn candidate_help_timeout_validation_and_trace_sink_failure() {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let f = Fixture::new();
+    f.init();
+    let id = f.plan("trace");
+    let help = f.ok(&["tasks", "--help"]);
+    for text in [
+        "--condition-timeout",
+        "--trace-conditions",
+        "30",
+        "/bin/sh",
+        "64 KiB",
+        "TERM",
+        "KILL",
+    ] {
+        assert!(help.contains(text));
+    }
+    for value in ["0", "-1", "NaN", "inf", "1e100", "1e-100", "wrong"] {
+        failure(f.run(&["tasks", "--condition-timeout", value]));
+    }
+    set_when(&f, &id, "echo ran >> observed");
+    let mut cmd = f.command();
+    cmd.args(["tasks", "--trace-conditions"]);
+    let mut pipe = [0; 2];
+    assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+    assert_eq!(unsafe { libc::close(pipe[0]) }, 0);
+    let writer = unsafe { OwnedFd::from_raw_fd(pipe[1]) };
+    let out = cmd.stderr(Stdio::from(writer)).output().unwrap();
+    assert!(!out.status.success() && out.stdout.is_empty());
+    assert_eq!(fs::read_to_string(f.0.join("observed")).unwrap(), "ran\n");
+}
+
+#[test]
+fn condition_uses_current_worktree_or_management_root_and_inherits_environment() {
+    let f = Fixture::new();
+    f.init();
+    let id = f.plan("cwd");
+    set_when(
+        &f,
+        &id,
+        "pwd; test \"$AXON_TEST_CONDITION\" = inherited; test -f local-file",
+    );
+    fs::write(f.0.join("local-file"), "").unwrap();
+    fs::create_dir(f.0.join("subdir")).unwrap();
+    let out = command(&f.0.join("subdir"))
+        .env("AXON_TEST_CONDITION", "inherited")
+        .args(["tasks", "--trace-conditions"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8(out.stdout).unwrap().contains(&id));
+    assert!(
+        String::from_utf8(out.stderr)
+            .unwrap()
+            .contains(&format!("cwd: {}", f.0.display()))
+    );
+    git(&f.0, &["init", "-q"]);
+    git(
+        &f.0,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+    );
+    let other = Fixture::new();
+    git(
+        &f.0,
+        &["worktree", "add", "--detach", other.0.to_str().unwrap()],
+    );
+    fs::create_dir(other.0.join("subdir")).unwrap();
+    let script = "test \"$AXON_TEST_CONDITION\" = inherited && test -f local-file";
+    set_when(&f, &id, script);
+    let out = command(&other.0.join("subdir"))
+        .env("AXON_TEST_CONDITION", "inherited")
+        .args(["tasks", "--trace-conditions"])
+        .output()
+        .unwrap();
+    assert!(out.status.success() && out.stdout.is_empty());
+    assert!(
+        String::from_utf8(out.stderr)
+            .unwrap()
+            .contains(&format!("cwd: {}", other.0.display()))
+    );
+    fs::write(other.0.join("local-file"), "").unwrap();
+    let out = command(&other.0.join("subdir"))
+        .env("AXON_TEST_CONDITION", "inherited")
+        .args(["tasks"])
+        .output()
+        .unwrap();
+    assert!(success(out).contains(&id));
+}
+
+#[test]
+fn condition_trace_and_failure_preserve_utf8_across_capture_boundary() {
+    let f = Fixture::new();
+    f.init();
+    let id = f.plan("utf8");
+    let output = format!("{}日", "A".repeat(32767));
+    fs::write(f.0.join("utf8-output"), &output).unwrap();
+    for exit in [0, 23] {
+        set_when(
+            &f,
+            &id,
+            &format!("cat utf8-output; cat utf8-output >&2; exit {exit}"),
+        );
+        let out = f.run(&["tasks", "--trace-conditions"]);
+        assert_eq!(out.status.success(), exit == 0);
+        let diagnostic = String::from_utf8(out.stderr).unwrap();
+        assert_eq!(diagnostic.matches(&output).count(), 2);
+        assert!(!diagnostic.contains('�'));
+    }
+}

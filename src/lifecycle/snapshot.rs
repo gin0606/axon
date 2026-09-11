@@ -136,6 +136,14 @@ impl Snapshot {
         self.entities.get_mut(id).expect("checked Entity").current = current;
         Ok(())
     }
+    /// Replaces the optional shell string without evaluating it or changing lifecycle.
+    pub fn set_condition(&mut self, id: &EntityId, command: Option<String>) -> Result<()> {
+        let mut current = self.entity(id)?.current.clone();
+        current.condition = command;
+        current.validate()?;
+        self.entities.get_mut(id).expect("checked Entity").current = current;
+        Ok(())
+    }
     pub fn add_note(&mut self, id: &EntityId, body: String, context: Context) -> Result<RecordId> {
         self.entity(id)?;
         if body.trim().is_empty() {
