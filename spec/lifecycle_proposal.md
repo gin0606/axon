@@ -345,7 +345,7 @@ module group_lifecycle_proposal {
 
 子への着手には、子自身の採用と親の進行中を要求する。Issue・計画とも、基本遷移に加えて dependency の着手・完了条件を適用する。進行中の子があれば親を未着手へ戻せない。計画の完了・取りやめには直属の Issue・子計画のすべてが終了している必要があり、未判断もその妨げになる。子計画への着手にも親の進行中を要求するため、進行中の Entity の祖先はすべて進行中になる。各階層で明示的に着手し、子への着手で親を自動変更しない。
 
-完了にはさらに、その計画全体の最終確認が通ったという入力を要求する。画面単位の子計画にも、機能全体の親計画にも、それぞれ独立した最終確認がある。`reviewPassed` は確認結果の抽象入力であり、CLI 引数や保存方法、専用操作か最終チェック Issue かを決めるものではない。空の計画でもこの確認を省略しない。子の終了だけで親を自動終了しない。
+完了にはさらに、その計画全体の最終確認が通ったという入力を要求する。画面単位の子計画にも、機能全体の親計画にも、それぞれ独立した最終確認がある。`reviewPassed` は確認結果の抽象入力である。CLI では Group に対する `done <id>` の実行自体を最終確認済みの明示入力とし、別のレビュー済み状態や必須フラグを設けない。確認手順は呼び出し側の skill・運用で扱う。空の計画でもこの確認を省略しない。子の終了だけで親を自動終了しない。
 
 着手・完了・取りやめで要求する前提を `Requirement` にまとめる。
 
@@ -612,7 +612,7 @@ module group_lifecycle_proposal {
 
 ### 再浮上・判断候補・着手候補・着手中
 
-再浮上条件は、各計画・Issue の成立・不成立を外部入力として扱う。条件の種類や設定操作は今回も抽象化する。以下の集合を分け、一覧のコマンド構成や表示形式は決めない。
+再浮上条件は、各計画・Issue の成立・不成立を外部入力として扱う。条件の種類や設定操作は今回も抽象化する。以下は着手可能性と浮上を分けるための集合である。後述の `tasks` は着手候補に限定せず、浮上した未着手と全着手中を取得する。
 
 | 導出する集合 | 条件 |
 | --- | --- |
@@ -1412,7 +1412,7 @@ module lifecycle_reachability {
 
 入れ子の計画と所属変更、提案・採用済みの新規登録、Issue・計画間の dependency、再浮上と判断候補・着手候補・着手中の関係を、計画3件・Issue枠3件の範囲で扱う。取りやめた計画は再検討後に構成を変更できるが、完了した計画には再開経路を持たせない。
 
-最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。実際の ID 発行や永続化は検証対象外である。独立した claim を持たない判断は後述する。文面編集・Note・状態変更履歴は後述の情報モデルで扱う。一覧やコマンドの構成はまだ決めない。条件の種類・設定と評価失敗は、後述の「候補一覧の評価と失敗」で扱う。
+最終確認が通るかは抽象入力であり、確認工程の実装や不合格理由は扱わない。実際の ID 発行や永続化は検証対象外である。独立した claim を持たない判断は後述する。文面編集・Note・状態変更履歴は後述の情報モデルで扱う。一覧やコマンドの構成は後述の「CLI と表示」に定める。条件の種類・設定と評価失敗は、後述の「候補一覧の評価と失敗」で扱う。
 
 `NotEvaluated` は意味上の評価除外であり、外部コマンドを実際に呼ばないことや評価コストは実装側で別途検証する。この統合モデルでは自身の条件の意味と親による候補の除外を分ける。実際に観測する範囲と呼び出し内の結果共有は、後述の候補一覧モデルへ具体化する。
 
@@ -1529,16 +1529,16 @@ for step, witnesses in [
 
 現行は再浮上を着手の成立検査にも使うが、今回のモデルでは候補表示に限定する。明示操作は従来の lifecycle・包含・dependency の許可条件だけを使い、再浮上条件を評価しない。条件の設定・訂正・解除も評価せずに行い、壊れた条件を修復できる。
 
-候補一覧に必要な判定が失敗したら、一覧の取得自体をエラーとする。未成立へ丸めず、判定できた一部の候補を成功結果として返さない。この失敗方針は現行と共通だが、評価が必要な範囲は新モデルの候補定義から決め直す。
+`triage`・`tasks` に必要な判定が失敗したら、一覧の取得自体をエラーとする。未成立へ丸めず、判定できた一部の候補を成功結果として返さない。`tasks` でも着手中だけの部分結果は返さない。この失敗方針は現行と共通だが、評価が必要な範囲は新モデルの候補定義から決め直す。
 
-- 状態・親の着手・dependency だけで候補にならないと確定する Entity は、自身の候補判定のためには評価しない。判断候補は dependency の完了や親の着手を求めない。
+- `triage` は未判断、`tasks` の浮上判定は未着手を対象とし、どちらも dependency の完了や親の着手を要求しない。完了・取りやめや対象外の状態は、自身の表示のためには評価しない。`tasks` は着手中を浮上に関係なく加えるため、着手中の条件は未着手の子孫の表示に必要な祖先としてのみ評価する。
 - 残った候補の祖先を上から評価し、祖先が未浮上ならその配下を評価しない。完了・取りやめは評価しない。
 - 候補自身ではない進行中の親でも、子の候補判定に必要なら評価する。
 - 一回の一覧取得で各 Entity を最大一回評価し、子や別の参照から同じ結果を共有する。次の取得では結果を引き継がない。
 
 ### 外部コマンドの実行契約
 
-現行の[外部条件の評価契約](../docs/reference/cli.md#外部条件の評価)を比較材料として、以下の実行・診断の仕組みを採用する。現行の `start` などが行う条件評価まで引き継ぐものではなく、評価対象は上の候補一覧の契約に従う。CLI のコマンド名・オプション名・表示レイアウトは別途決める。
+現行の[外部条件の評価契約](../docs/reference/cli.md#外部条件の評価)を比較材料として、以下の実行・診断の仕組みを採用する。現行の `start` などが行う条件評価まで引き継ぐものではなく、評価対象は上の候補一覧の契約に従う。合意した CLI と通常表示は後述の「CLI と表示」に定める。timeout・trace などの細かなオプション表記は実装設計で揃える。
 
 #### 結果の解釈
 
@@ -1576,7 +1576,7 @@ trace の書き込み・flush が失敗した場合も、一覧取得をエラ�
 
 ### 評価契約のモデル化
 
-この節は、上の統合モデルの状態・許可条件を再利用して、一覧取得を複数の観測ステップへ具体化する。上の bool 入力と候補集合は失敗のない場合の意味を定める抽象モデルとして残し、評価回数・省略・失敗はこの節で扱う。両者の候補が一致することも検査する。
+この節は、上の統合モデルの状態・許可条件を再利用して、一覧取得を複数の観測ステップへ具体化する。上の bool 入力と候補集合は失敗のない場合の意味を定める抽象モデルとして残し、評価回数・省略・失敗はこの節で扱う。`triage` は上の判断候補、`tasks` は浮上した未着手と全着手中を合わせた抽象集合との一致を検査する。
 
 保存する条件は `Unset | ExternalCommand(int)` で表す。コマンド内容は不透明な識別子へ抽象化し、探索では二つの識別子を使って設定の置き換えを区別する。識別子の数はコマンド内容の探索上の制限であり、製品のコマンド種類や長さの上限ではない。一つの値を保持する型と `editSetting` の置き換えによって、条件を複数同時に保持しない。外部の結果は評価時に成立・未成立・失敗から選び、同じ呼び出し中だけ `Listing` に保持する。`Listing` と直前の観測は検証用の一時状態であり、Entity への保存項目ではない。`previousCache` は前回と異なる結果への到達性を調べる ghost state で、評価や候補判定では参照しない。
 
@@ -1587,7 +1587,7 @@ module candidate_evaluation {
 
   type Setting = Unset | ExternalCommand(int)
   type ObservationResult = Unevaluated | Satisfied | Unsatisfied | EvaluationFailed
-  type ListingKind = JudgmentList | StartList
+  type ListingKind = JudgmentList | TasksList
   type ListingStatus = Idle | Running | Succeeded(Set[Entity]) | Failed(Entity)
   type Listing = {
     kind: ListingKind,
@@ -1633,7 +1633,7 @@ module candidate_evaluation {
   pure def baseCandidates(s: PlanState, kind: ListingKind): Set[Entity] = {
     val selected = match kind {
       | JudgmentList => entities(s).filter(e => entityState(s, e) == Undecided)
-      | StartList => startableIssues(s).map(IssueRef).union(startableGroups(s).map(GroupRef))
+      | TasksList => entities(s).filter(e => entityState(s, e) == NotStarted)
     }
     selected.filter(e => ancestors(s, e).forall(a => not(terminal(entityState(s, a)))))
   }
@@ -1643,8 +1643,12 @@ module candidate_evaluation {
     ancestors(s, e).forall(a => q.cache.get(a) == Satisfied)
   pure def pending(s: PlanState, q: Listing): Set[Entity] =
     requiredEntities(s, q).filter(e => q.cache.get(e) == Unevaluated and parentsSatisfied(s, q, e))
-  pure def visible(s: PlanState, q: Listing): Set[Entity] =
-    q.base.filter(e => q.cache.get(e) == Satisfied and parentsSatisfied(s, q, e))
+  pure def workingEntities(s: PlanState): Set[Entity] =
+    entities(s).filter(e => entityState(s, e) == InProgress)
+  pure def visible(s: PlanState, q: Listing): Set[Entity] = {
+    val surfaced = q.base.filter(e => q.cache.get(e) == Satisfied and parentsSatisfied(s, q, e))
+    if (q.kind == TasksList) surfaced.union(workingEntities(s)) else surfaced
+  }
   def recordListing(event: ListingEvent): ListingObservation = {
     beforePlan: plan, beforeSettings: settings, beforeListing: listing, event: event,
   }
@@ -1701,7 +1705,7 @@ module candidate_evaluation {
   action queryStep = {
     nondet e = REFS.oneOf()
     nondet setting = Set(Unset, ExternalCommand(0), ExternalCommand(1)).oneOf()
-    nondet kind = Set(JudgmentList, StartList).oneOf()
+    nondet kind = Set(JudgmentList, TasksList).oneOf()
     nondet result = Set(Satisfied, Unsatisfied, EvaluationFailed).oneOf()
     any {
       changePlan,
@@ -1725,7 +1729,12 @@ module candidate_evaluation {
     val c = observedConditions(q, unseen)
     match q.kind {
       | JudgmentList => judgmentIssues(s, c).map(IssueRef).union(judgmentGroups(s, c).map(GroupRef))
-      | StartList => candidateIssues(s, c).map(IssueRef).union(candidateGroups(s, c).map(GroupRef))
+      | TasksList => workingEntities(s).union(entities(s).filter(e =>
+          entityState(s, e) == NotStarted and parentSurfaced(s, c, entityParent(s, e))
+            and (match e {
+              | IssueRef(i) => c.issues.get(i)
+              | GroupRef(g) => c.groups.get(g)
+            })))
     }
   }
   val invQueryPreservesPlan = listingObservation.event != PlanChanged
@@ -1786,7 +1795,7 @@ module candidate_evaluation {
       or ancestors(plan, e).exists(a => listing.cache.get(a) == Unsatisfied))
 
   val wBeginJudgment = listingObservation.event == Began and listing.kind == JudgmentList
-  val wBeginStart = listingObservation.event == Began and listing.kind == StartList
+  val wBeginTasks = listingObservation.event == Began and listing.kind == TasksList
   val wListingSuccess = listingObservation.event == Published and (match listing.status {
     | Succeeded(result) => result.size() > 0
     | _ => false
@@ -1846,10 +1855,25 @@ module candidate_evaluation {
       and listing.counts.get(GroupRef(g)) == 1)
   val wTerminalSkipped = listingObservation.event == Published and entities(plan).exists(e =>
     terminal(entityState(plan, e)) and settings.get(e) != Unset and listing.counts.get(e) == 0)
-  val wDependencyBlockedSkipped = listingObservation.event == Published and listing.kind == StartList
-    and plan.registered.exists(i => plan.issues.get(i) == NotStarted
-      and not(prerequisitesComplete(plan, IssueRef(i))) and settings.get(IssueRef(i)) != Unset
-      and listing.counts.get(IssueRef(i)) == 0)
+  val wDependencyBlockedVisible = listingObservation.event == Published and listing.kind == TasksList
+    and visible(plan, listing).exists(e => entityState(plan, e) == NotStarted
+      and not(prerequisitesComplete(plan, e)))
+  val wParentBlockedVisible = listingObservation.event == Published and listing.kind == TasksList
+    and visible(plan, listing).exists(e => entityState(plan, e) == NotStarted
+      and not(parentWorking(plan, entityParent(plan, e))))
+  val wWorkingHiddenVisible = listingObservation.event == Published and listing.kind == TasksList
+    and workingEntities(plan).exists(e => listing.cache.get(e) == Unsatisfied
+      and visible(plan, listing).contains(e))
+  val wWorkingConditionSkipped = listingObservation.event == Published and listing.kind == TasksList
+    and workingEntities(plan).exists(e => settings.get(e) != Unset
+      and listing.counts.get(e) == 0 and visible(plan, listing).contains(e))
+  val invTasksIncludesWorking = (match listing.status {
+    | Succeeded(result) => listing.kind == TasksList implies workingEntities(plan).subseteq(result)
+    | _ => true
+  })
+  val invWorkingEvaluationOnlyForDescendants = listing.kind == TasksList implies
+    workingEntities(plan).forall(e => listing.counts.get(e) == 1 implies
+      listing.base.exists(child => ancestors(plan, child).contains(e)))
   val wJudgmentDespiteDependency = listingObservation.event == Published and listing.kind == JudgmentList
     and listing.base.exists(e => not(prerequisitesComplete(plan, e)) and visible(plan, listing).contains(e))
   val wStartAfterEvaluationFailure = listingObservation.event == PlanChanged
@@ -1881,15 +1905,17 @@ module candidate_evaluation {
 
 上の基本・統合モデルの `false` 初期入力は、未成立の外部入力から探索を始める指定であり、条件未設定の初期値ではない。この一覧モデルはすべて `Unset` から開始し、未設定が成立として扱われることを検査する。未設定の成立判定も観測ステップとして数えるが、外部コマンドを呼ぶという意味ではない。
 
-上の実行契約は自然言語で定め、Quint では実行結果を成立・未成立・判定失敗へ抽象化する。shell・作業ディレクトリ・環境変数、終了コードの解釈、timeout・process group の終了、出力の上限・診断は実装側で検証する。実際に外部コマンドを呼ばないことや呼び出し回数も実装側の検証対象である。非実行閲覧のコマンド、永続化・並行実行は引き続きモデル外とする。判断候補と着手候補は意味上の取得単位であり、CLI を別コマンドにする決定ではない。
+上の実行契約は自然言語で定め、Quint では実行結果を成立・未成立・判定失敗へ抽象化する。shell・作業ディレクトリ・環境変数、終了コードの解釈、timeout・process group の終了、出力の上限・診断は実装側で検証する。実際に外部コマンドを呼ばないことや呼び出し回数も実装側の検証対象である。非実行閲覧のコマンド、永続化・並行実行は引き続きモデル外とする。このモデルは `triage` と `tasks` の取得を扱う。前段の統合モデルに残る着手候補は着手可能性と浮上の関係を検討した集合であり、`tasks` の対象集合ではない。
 
 ### 一覧モデルの再現と結果
 
-2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成し、Quint 0.32.0 で型検査後、Rust backend、8 threads、10,000 traces、最大60 steps、入力 seed `2026091012` で実行した。追加した13 invariant に反例はなく、全24 witness が1 trace以上で観測された。同じ親の評価共有は3,107 traces、入れ子の祖先による評価省略は858 traces、dependency 未完了による着手候補の評価省略は600 traces、評価に失敗した当の Entity への明示的な着手は25 tracesで観測された。これは bounded random simulation の結果であり、全状態の証明ではない。
+`tasks` 導入前の記録：2026-09-10、lmt `v0.0.0-20210421124901-62fe18f2f6a6` で生成し、Quint 0.32.0 で型検査後、Rust backend、8 threads、10,000 traces、最大60 steps、入力 seed `2026091012` で実行した。追加した13 invariant に反例はなく、全24 witness が1 trace以上で観測された。同じ親の評価共有は3,107 traces、入れ子の祖先による評価省略は858 traces、dependency 未完了による着手候補の評価省略は600 traces、評価に失敗した当の Entity への明示的な着手は25 tracesで観測された。これは bounded random simulation の結果であり、全状態の証明ではない。
 
 2026-09-10、条件を未設定・外部コマンドに限定する判断を反映し、`Configured` を `ExternalCommand` へ改名した。全5モデルのコードがこのコンストラクタ名の置換以外は直前の検証対象と同一であることを機械的に比較した。再生成・型検査後、同じ backend・thread 数・入力 seed、100 traces、最大60 steps、同じ13 invariant で実行確認し、反例はなかった。この確認では witness を再集計せず、上記10,000 tracesの検査は再実行していない。
 
-以下は repository root で実行する。既存の統合モデルの遷移・候補定義は変更せず、この一覧モデルで追加した不変条件と到達目標を検査する。
+2026-09-11、`StartList` を `TasksList` へ置き換え、浮上した未着手と全着手中を合わせる集合、および評価範囲を検証した。lmt で再生成し Quint 0.32.0 で型検査後、Rust backend、8 threads、10,000 traces、最大60 steps、入力 seed `2026091102` で実行した。15 invariant に反例はなく、27 witness はすべて1 trace以上で観測された。依存未完了の未着手の表示は1,268 traces、親の着手待ちの表示は3,539 traces、条件が未成立でも着手中を含む結果は23 traces、着手中自身の不要な条件評価の省略は164 tracesで観測された。これは bounded random simulation であり、全状態の証明ではない。実行可能な定義を変更したのは一覧モデルだけで、通常遷移・包含・依存・情報操作のモデルは再実行していない。
+
+以下は repository root で実行する。既存の統合モデルの遷移・候補定義は変更せず、この一覧モデルの `tasks` 対応後の不変条件と到達目標を検査する。
 
 ```sh
 lmt spec/lifecycle_proposal.md
@@ -1908,7 +1934,7 @@ subprocess.run([
     "quint", "run", "target/literate/candidate_evaluation.qnt",
     "--init", "queryInit", "--step", "queryStep",
     "--invariants", *invariants, "--witnesses", *witnesses,
-    "--max-samples", "10000", "--max-steps", "60", "--seed", "2026091012",
+    "--max-samples", "10000", "--max-steps", "60", "--seed", "2026091102",
     "--backend", "rust", "--n-threads", "8", "--verbosity", "1",
 ], check=True)
 ```
@@ -2144,6 +2170,95 @@ subprocess.run([
     "--backend", "rust", "--n-threads", "8", "--verbosity", "1",
 ], check=True)
 ```
+
+## CLI と表示
+
+### 情報を見る目的
+
+採否判断、着手する仕事の選択、着手から完遂、最終確認の四つを、情報を見る目的として扱う。Entity の保存状態とは別の分類であり、四種類の状態や専用画面を追加するものではない。再開・引継ぎ・計画修正は着手から完遂に含め、採否の再判断が必要なら採否判断へ戻る。
+
+利用者は ID を使って操作するため、表示の先頭は `ID / 種別 / 状況 / タイトル` とする。内部 field を並べて利用者に解読させず、その場の判断に必要な内容を短く示す。通常表示へ操作例やコマンド案内を毎回付けず、使い方は help へ置く。本文を機械的に要約・分類して判断材料を生成する機能は設けない。
+
+### 一覧の入口
+
+| コマンド | 表示対象・役割 |
+| --- | --- |
+| `axon triage` | 自身とすべての祖先が浮上した未判断の Issue・Group |
+| `axon tasks` | 自身とすべての祖先が浮上した未着手と、浮上を問わない着手中の Issue・Group |
+| `axon list` | 非浮上・完了・取りやめも含む保存済み Entity を、必要な条件で絞り込む汎用一覧 |
+
+`tasks` は依存先の完了待ちや親の着手待ちの未着手も含む。旧 `ready` の置き換えとして着手可能なものだけに限定しない。独立した `claims` 一覧は設けない。`list` と保存情報の `show` は外部条件コマンドを実行しない。専用一覧の取得は前述の評価契約に従う。
+
+一覧と Group の子一覧は、状態ごとに区切らず作成日時の古い順へ統一する。作成日時そのものを通常の各行へ表示する必要はない。同時刻の安定した並べ方や絞り込み option の具体的な綴りは実装設計で揃える。
+
+状況欄は保存された lifecycle だけの表示ではなく、保存状態と構造から導出する短い表現とする。再浮上条件の成立はこの欄での着手可能性の判定に使わない。
+
+| 保存状態・前提 | 状況欄 |
+| --- | --- |
+| Undecided | 未判断 |
+| NotStarted で親・dependency の着手前提を満たす | 着手可能 |
+| NotStarted で着手前提が不足 | 依存待ち |
+| InProgress で dependency が充足 | 着手中 |
+| InProgress で未完了の依存先がある | 着手中・依存待ち |
+| Completed | 完了 |
+| Cancelled | 取りやめ |
+
+親の着手待ちも「依存待ち」に含める。これは表示上のまとめ方で、保存する包含と明示 dependency の区別は維持する。Group の未終了の子は最終確認前の進捗として子一覧へ示し、明示 dependency と混ぜない。
+
+```text
+axon-screen   Group  着手中             画面Aを実装する
+axon-api      Issue  着手中・依存待ち   検索APIを実装する
+axon-form     Issue  着手可能           検索フォームを実装する
+axon-results  Issue  依存待ち           検索結果を表示する
+```
+
+例は架空の表示内容であり、空白幅・グルーピング・色などは実装時に調整する。
+
+### show と待ち理由
+
+`axon show <id>` は、ID・種別・状況・タイトル、Note 件数、所属計画の ID・タイトル、本文を基本とする。本文は保存された内容を表示する。Note 本文、履歴、内部の causal 情報、不要な設定・件数の羅列、操作コマンドの案内は通常表示から外す。Note があれば `5 notes` のように存在を示し、0件ならその表示を省略する。
+
+未充足の前提がある場合だけ、本文の前へ「着手に必要」または「完了に必要」を追加する。満たされていない直接の前提について、ID・種別・現在状態・タイトルと、必要な変化（親の着手または依存先の完了）を表示する。満たされた依存や依存先の先のツリーは常時展開しない。親の所属表示と待ち理由が同じ情報になる場合は、重複を避けて配置する。待ち理由の専用 `waits` コマンドは設けない。
+
+Group の場合は、この共通表示の末尾へ直属の子の一覧と短い集計を加える。孫以降を自動展開せず、子Groupの ID から確認する。子一覧も `ID / 種別 / 状況 / タイトル` と作成日時順で揃え、別の Dependencies 節へ同じ情報を再列挙しない。
+
+集計は `2/4件終了（完了1・取りやめ1）` のように、直属の子の終了数と完了・取りやめの違いが読める形とする。全状態の内訳や全子孫の集計を羅列しない。進行中の Group で、子が全員終了し自身の依存先も完了していれば「最終確認待ち」と表示できる。これは導出される案内であり、保存状態やレビュー済み状態を追加しない。
+
+### Note と履歴
+
+`axon note list <id>` は指定 Entity の Note 本文を日時・記録者とともに表示し、`axon note add <id> …` は追記する。編集・削除は設けない。通常の逐次記録は保存順に古いものから読み、分岐した記録は因果関係を保持して表示する。分岐間の先後を時刻から捏造しない。記録者の詳細情報を取得できることは維持するが、通常は actor を中心に表示する。
+
+`axon log <id>` は状態変更・統合の経緯を読む入口とする。変更前後の状態、日時、記録者、任意の理由を人が読める形で示す。統合では実際の操作と採用結果を区別し、内部の因果辺や記録 ID の羅列を通常表示へ出さない。
+
+最終確認は Group・必要な子の `show` と、それぞれの Note を読む操作を組み合わせる。Note から成果・検証結果を自動抽出しない。配下の全Noteをまとめて読む入口は初回の必須機能にせず、運用後に必要性を再検討する。
+
+### 登録・状態変更・編集
+
+以下を公開コマンドの基本構成とする。`A` は操作対象、`B` は依存先、`G` は親 Group の ID を表す。
+
+| 操作 | コマンド |
+| --- | --- |
+| 未判断の Issue / Group を登録 | `axon capture …` / `axon group capture …` |
+| 採用済みの Issue / Group を登録 | `axon plan …` / `axon group plan …` |
+| 採用 | `axon accept A` |
+| 採用撤回 | `axon withdraw A` |
+| 着手 | `axon start A` |
+| 作業を解放 | `axon release A` |
+| 完了 | `axon done A` |
+| 取りやめ | `axon cancel A` |
+| 再検討 | `axon reconsider A` |
+| タイトル・本文を編集 | `axon write A …` |
+| 親 Group を設定・変更 / 解除 | `axon group set A --parent G` / `axon group unset A` |
+| 依存先を追加 / 解除 | `axon dep add A --needs B` / `axon dep rm A --needs B` |
+| 再浮上条件を設定 / 解除 | `axon when set A --command '条件コマンド'` / `axon when clear A` |
+
+作成時だけ Issue・Group を呼び分け、作成後は同じ ID ベースの操作を使う。操作対象の ID は位置引数、関係先の ID は役割を明示する option とし、登録時の親・依存指定も `--parent`・`--needs` に揃える。`decide` の中間階層は設けない。
+
+`write` はタイトル・本文を編集し、lifecycle を変えない。長い本文はファイルから渡せる入口を用意し、登録時と揃える。`--title`、`--description-file` は説明に用いた案であり、本文・Note の標準入力やファイル入力を含む細かな option 契約は実装設計で揃える。
+
+Group への `done` の実行自体を「計画全体の最終確認が通った」という明示入力とする。Axon は子・依存・状態を検査し、確認作業は呼び出す人・エージェントの skill と運用で担う。必須のレビュー確認フラグや独立したレビュー済み状態は設けない。どの変更コマンドも合意済みの状態・包含・依存制約を迂回しない。
+
+表示・引数・並べ方・help の契約は実装側で検証し、Quint の保存状態を増やさない。`tasks` の集合と評価範囲は前述の一覧モデルで検証する。初期化・保存先・merge の公開 CLI は両 backend の契約と合わせて扱い、ここで決めた通常操作の名前から推測して追加しない。
 
 ## SQLite と file backend の実装範囲
 
