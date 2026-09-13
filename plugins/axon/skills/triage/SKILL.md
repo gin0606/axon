@@ -1,6 +1,6 @@
 ---
 name: triage
-description: 既存Entityを調査し、確定した判断・計画・関係・条件をAxon CLIで反映する。
+description: 既存Axon Entityを調査し、ユーザーの判断と合意済み計画から変更内容を整理・反映する個人用ワークフロー。
 ---
 
 # 調査と反映
