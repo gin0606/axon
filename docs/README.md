@@ -24,6 +24,7 @@
 | [共通コア](development/lifecycle-core.md) | 通常操作、記録、codec、三者比較 |
 | [SQLite CLI](development/lifecycle-sqlite.md) | 公開操作とSQLite adapter |
 | [file保存とGit統合](development/lifecycle-file.md) | writer、worktree、merge CLI・driver |
+| [専用移行ツール](../tools/lifecycle-migration/README.md) | 旧file/SQLiteから単一lifecycleへのbackup・変換・検証・明示適用 |
 | [候補と外部条件](development/lifecycle-candidates.md) | triage/tasksとprocess評価 |
 | [記録者連携](development/lifecycle-recorder.md) | 自動取得と保存済み詳細 |
 | [検証方針](development/verification.md) | CI、独立fixture、モデル検証の分担 |
