@@ -5,7 +5,7 @@ description: 指定Entityのstart・release・doneを同期する。実装、対
 
 # 作業状態を同期する
 
-`axon-kit:conventions` を使い、指定された新binaryと保存先を維持する。 show・logと関係する親・依存を照合する。startはNotStartedから、releaseとdoneはInProgressから実行する。すでにInProgressなら無条件に開始し直さず、作業の継続意図を呼び出し側へ返す。記録者情報から作業再開や所有権を推測しない。
+`axon-kit:conventions` を使い、共通契約で選択したbinary・対象rootを維持する。 show --details・logと関係する親・依存を照合する。startはNotStartedから、releaseとdoneはInProgressから実行する。すでにInProgressなら無条件に開始し直さず、作業の継続意図を呼び出し側へ返す。記録者情報から作業再開や所有権を推測しない。
 
 `start ID` はCLIの親・依存guardに従う。`release ID -r ...` は中断を表し、GroupではInProgress子孫がないことが必要。
 

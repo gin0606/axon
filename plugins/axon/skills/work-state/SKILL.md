@@ -5,7 +5,7 @@ description: 指定Entityのstart・release・doneを外部作業の完了条件
 
 # 指定した作業の状態を同期する
 
-`axon:conventions` と `axon-kit:work-state` を使う。対象と作業範囲は依頼または明示workflowが与える。show・logと必要なNote、祖先・依存を読み、lifecycleと外部作業の現在地を照合する。記録者だけで前workerの終了や引継ぎを推測しない。
+`axon:conventions` と `axon-kit:work-state` を使う。対象と作業範囲は依頼または明示workflowが与える。show --details・logと必要なNote、祖先・依存を読み、lifecycleと外部作業の現在地を照合する。記録者だけで前workerの終了や引継ぎを推測しない。
 
 startは指定したNotStartedに限る。中断・引継ぎは確定した現在地と残作業をNoteへ記録・確認してからreleaseする。継続と恒久終了を区別する。
 

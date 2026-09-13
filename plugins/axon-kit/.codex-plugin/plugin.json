@@ -1,7 +1,7 @@
 {
   "name": "axon-kit",
   "version": "0.1.0+codex.20260908040044",
-  "description": "単一lifecycle版Axonの操作契約とSQLite初回運用",
+  "description": "単一lifecycle版Axonの操作契約とSQLite・file backendの運用",
   "author": {
     "name": "gin0606"
   },
@@ -10,7 +10,7 @@
   "interface": {
     "displayName": "Axon Skill Kit",
     "shortDescription": "単一lifecycleで計画・記録・作業状態を扱います。",
-    "longDescription": "単一lifecycle版Axonの操作契約とSQLite初回運用",
+    "longDescription": "単一lifecycle版Axonの操作契約とSQLite・file backendの運用",
     "developerName": "gin0606",
     "category": "Productivity",
     "capabilities": [

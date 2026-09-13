@@ -5,6 +5,8 @@ description: 新lifecycle版で未提供のdeclaration操作を依頼された�
 
 # declarationの境界
 
-このcheckoutの新lifecycle CLIではこの操作を提供しない。選択したbinaryのhelpを確認し、未提供ならその事実を返す。旧CLIの手順を新保存先へ実行したり、保存ファイルを直接編集して補ったりしない。
+単一lifecycle版ではこの操作は未提供。まず共通conventionsに従って対象環境のbinaryを選ぶ。選択したbinaryのhelpを確認し、未提供ならその事実を返す。旧CLIの手順を新保存先へ実行したり、保存ファイルを直接編集して補ったりしない。
 
-新規運用と手動持込みは [使い始める](../../../../docs/guide/getting-started.md) を参照する。file/mergeの設計は正本specにあるが、このskillから実装や切替へ広げない。
+既存データやdeclaration artifactは保全し、元schema・backend・対象範囲と要求した変換を呼び出し側へ返す。新規登録だけで履歴・構造を含む移行完了を代用しない。新規運用の説明は選択したCLIの `docs`、初期化は `axon-kit:storage` を使う。変換器の実装、backend切替、旧dataの削除はこのskillから許可されない。
+
+将来の再検討では、旧workflowから保持する目的と安全性を [引継ぎ](references/workflow.md) で確認する。これは未提供のコマンドを実行する手順ではない。

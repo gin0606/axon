@@ -1,14 +1,25 @@
 ---
 name: conventions
-description: 単一lifecycle版Axonの状態・情報と安全なCLI操作の共通契約。
+description: Axonの単一lifecycle・情報モデルとCLI保存操作の共通契約。他のkitと利用側workflowの基盤に使い、対象選択、採用判断、実装、commitは規定しない。
 ---
 
-# Axon操作契約
+# Axonの共通操作契約
 
-このcheckoutの新lifecycle CLI向け。呼び出し元が与えたbinaryの絶対パスと保存先を固定する。`--help` に `tasks / accept / cancel` があることを照合する。PATH上の旧binaryや既存sessionにロード済みの旧skillへ混ぜない。導入は [利用ガイド](../../../../docs/guide/getting-started.md)。
+## 対象環境を固定する
 
-Entityを解釈するときは [モデル](references/model.md)、mutation前には [保存操作](references/mutations.md)、新規登録では [作成](references/creation.md) を読む。
+呼び出し側が指定したrepositoryまたは管理rootで操作する。binaryが指定されていればそれを使い、指定がなければその環境の `axon` を発見し、`axon --version` と `axon --help` を確認する。`tasks / accept / cancel` を持つ単一lifecycle版であること、必要なleaf helpの構文を照合して、実行ファイルとworking directoryを以後の操作で固定する。別repositoryのソースcheckoutは不要。このplugin内のreferenceと選択したCLIの `docs`・helpで手順を完結させる。
 
-対象、採用判断、実装やcommitの権限は呼び出し側が決める。CLIの操作可能性はそれらの権限を与えない。状態・関係・付随情報の意味はAxonが定義する。
+コマンドやschemaが非対応なら観測したversion・構文・対象を返す。PATHを勝手に別版へ切り替えたり、旧CLI、SQL、JSONL直接編集で操作を代替したりしない。実保存先の境界は [保存操作](references/mutations.md) に従う。
 
-構文が不確かなら選択したbinaryのhelpを確認する。不一致を独自の保存経路で補わず、観測内容を呼び出し側へ返す。要求した作用、最終状態、保存結果（適用済み・未適用・部分適用・不明）と関係への影響を報告する。
+## 必要な契約を読む
+
+- Entity・候補・情報を解釈する前に [モデルと参照](references/model.md)。
+- mutation前に [保存操作と再試行](references/mutations.md)。
+- 新規登録前に [作成と照合](references/creation.md)。
+- 初期化またはfile障害では [保存先と復旧](references/storage.md)。
+
+対象、採用判断、作業選択、実装・review・commitの権限は呼び出し側workflowが与える。kitはそれらを選ばない。CLIが操作を受け付けることも権限の根拠ではない。与えられた効果は重ねて確認せず実行できるが、意味を変える未確定な判断は呼び出し側へ返す。
+
+構文の不確実さは保存先不要のhelpで解決する。保存情報は `list`・`show --details`・`log`・`note` で調べ、外部条件の評価が必要なときだけ `triage / tasks` を使う。任意recorderは認証・lock・生存確認ではない。
+
+要求した作用、完全ID、保存結果（適用済み・未適用・部分適用・不明）、最終状態と関係への影響を返す。保存結果を確認するためだけの追加mutationはしない。

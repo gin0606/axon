@@ -1,6 +1,6 @@
 # 使い始める
 
-単一 lifecycle の新 CLI を、独立した保存先で試します。既存の PATH 上の `axon` と、この checkout でビルドした binary は別物として扱ってください。
+Axonは単一lifecycleでIssueとGroupを管理します。対応するbinaryをPATHから使う場合も、開発版を絶対パスで使う場合も、`axon --version` と `axon --help` で選んだ版を確認します。以下は既存環境を切り替えずに試す手順です。
 
 ## インストールと対応環境
 
@@ -53,9 +53,11 @@ git init
 
 ## Agent向けskill
 
-この checkout の [`plugins/axon-kit/skills`](../../plugins/axon-kit/skills) が新lifecycleの操作契約、[`plugins/axon/skills`](../../plugins/axon/skills) が任意の個人用協業方針です。利用中のagentに対応するローカルplugin読み込み方法でこのcheckoutを指定するか、必要なSKILL.mdを直接読ませ、選択したbinaryの絶対パスと保存先を一緒に渡してください。配布済みpluginや既存sessionに読み込まれたskillは旧版の可能性があります。自動で再インストール・切替はしません。
+[`axon-kit`](../../plugins/axon-kit/skills) は操作契約、[`axon`](../../plugins/axon/skills) は任意の個人用協業方針です。plugin内に必要なreferenceを同梱しているため、利用先repositoryにAxonのソースcheckoutを置く必要はありません。対応するCLIとpluginを対象環境へ導入し、管理するrepositoryで呼び出します。
 
-例えば「このcheckoutのaxon-kit conventionsとcaptureを読み、指定binaryでこの懸念を未判断として残して」と依頼できます。操作可能かは新binaryのhelpと照合します。判断する対象と任せる範囲は依頼が決めます。
+binaryを指定した場合はその指定を、未指定なら対象環境で発見した `axon` を使います。skillはversion・helpで対応を照合して実行ファイルとrootを固定します。旧版のCLIやsessionに読み込まれた旧skillが混在する場合は、その不一致を解決してから操作します。開発版の試用では上記の絶対パスを渡す方法も使えます。
+
+例えば「このrepositoryの懸念をAxonに未判断として記録して」と依頼できます。対象と任せる範囲は依頼が決め、登録から実装・commitの権限を推測しません。
 
 ## 旧データを持ち込む場合
 

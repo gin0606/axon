@@ -10,7 +10,7 @@ Rust 1.89以上で `cargo build --locked --bin axon` を実行し、生成され
 
 ## Agent向けskill
 
-[axon-kit](plugins/axon-kit/skills) は操作契約、[axon](plugins/axon/skills) は任意の個人用協業方針です。このcheckoutのskillとbinaryを組み合わせて利用してください。
+[axon-kit](plugins/axon-kit/skills) は操作契約、[axon](plugins/axon/skills) は任意の個人用協業方針です。対応するCLIとpluginを導入すれば、他のrepositoryでも利用できます。skillの参照資料はplugin内に同梱しています。
 
 ## 開発
 
