@@ -67,7 +67,10 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
     f.ok(&["release", &issue]);
     f.ok(&["start", &issue]);
     f.ok(&["done", &issue]);
-    assert!(f.ok(&["show", &group]).contains("最終確認待ち"));
+    assert!(
+        f.ok(&["show", &group])
+            .contains("Awaiting final confirmation")
+    );
     f.ok(&["done", &group]);
     assert!(f.ok(&["log", &issue]).contains("Completed"));
     assert!(f.ok(&["tasks"]).is_empty());
@@ -748,10 +751,13 @@ fn worktree_conflict_resolution_preserves_operations_and_finishes_group() {
     let log = a.ok(&["log", &id]);
     assert!(log.contains("InProgress → Completed"));
     assert!(log.contains("InProgress → NotStarted"));
-    assert!(log.contains("統合"));
+    assert!(log.contains("Integrated"));
     a.ok(&["start", &id]);
     a.ok(&["done", &id]);
-    assert!(a.ok(&["show", &group]).contains("最終確認待ち"));
+    assert!(
+        a.ok(&["show", &group])
+            .contains("Awaiting final confirmation")
+    );
     let notes = a.ok(&["note", "list", &id]);
     assert!(notes.contains("completed branch evidence"));
     assert!(notes.contains("remaining branch evidence"));

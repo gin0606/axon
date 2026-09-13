@@ -134,12 +134,12 @@ fn registration_to_group_completion_and_records() {
         .next()
         .unwrap()
         .to_string();
-    assert!(f.ok(&["show", &issue]).contains("未判断"));
+    assert!(f.ok(&["show", &issue]).contains("Undecided"));
     f.ok(&["accept", &issue]);
     let wait = f.ok(&["show", &issue]);
-    assert!(wait.contains("親の着手:"));
-    assert!(wait.contains("依存先の完了:"));
-    assert!(!wait.contains("所属:"));
+    assert!(wait.contains("Parent must start:"));
+    assert!(wait.contains("Dependency must complete:"));
+    assert!(!wait.contains("Parent:"));
     failure(f.run(&["start", &issue]));
     f.ok(&["start", &group]);
     f.ok(&["start", &dependency]);
@@ -160,13 +160,16 @@ fn registration_to_group_completion_and_records() {
     assert!(show.contains("1 notes"));
     assert!(show.contains("編集本文"));
     assert!(!show.contains("検証結果"));
-    assert!(!show.contains("依存先の完了:"));
+    assert!(!show.contains("Dependency must complete:"));
     f.ok(&["done", &issue, "--reason", "検証完了"]);
     assert!(
         f.ok(&["show", &group])
-            .contains("1/1件終了（完了1・取りやめ0）")
+            .contains("1/1 terminal (1 completed, 0 cancelled)")
     );
-    assert!(f.ok(&["show", &group]).contains("最終確認待ち"));
+    assert!(
+        f.ok(&["show", &group])
+            .contains("Awaiting final confirmation")
+    );
     f.ok(&["done", &group]);
     assert!(f.ok(&["note", "list", &issue]).contains("検証結果"));
     let log = f.ok(&["log", &issue]);
@@ -250,7 +253,7 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
     failure(f.run(&["note", "add", &id]));
     failure(f.run(&["write", &id, "-m", "x", "-F", "-"]));
     assert!(f.ok(&["--help"]).contains("done"));
-    assert!(f.ok(&["done", "--help"]).contains("最終確認"));
+    assert!(f.ok(&["done", "--help"]).contains("final review"));
 }
 #[test]
 fn concurrent_start_has_one_winner_and_other_writes_survive() {
@@ -347,10 +350,13 @@ fn sqlite_roundtrip_preserves_branches_integration_and_failed_changes() {
     let mut store = Store::open(&path).unwrap();
     assert_eq!(store.read().unwrap().1, merged);
     let log = f.ok(&["log", "item"]);
-    assert!(log.contains("並行する分岐"));
-    assert!(log.contains("統合: NotStarted を採用"));
+    assert!(log.contains("Concurrent branch"));
+    assert!(log.contains("Integrated: selected NotStarted"));
     assert!(!log.contains("record-"));
-    assert!(f.ok(&["note", "list", "item"]).contains("並行する分岐"));
+    assert!(
+        f.ok(&["note", "list", "item"])
+            .contains("Concurrent branch")
+    );
     let failed: axon::sqlite::Result<()> = store.update(|_, snapshot| {
         snapshot.add_note(&eid("item"), "rollback".into(), context())?;
         snapshot.perform(&eid("item"), Operation::Complete, None, context())?;
@@ -514,7 +520,7 @@ fn concurrent_initialization_never_replaces_a_store() {
     Store::open(&f.db()).unwrap();
 }
 #[test]
-fn output_failure_reports_applied_storage() {
+fn broken_pipe_is_success_after_storage_is_applied() {
     let f = Fixture::new();
     f.init();
     let mut child = f
@@ -526,8 +532,8 @@ fn output_failure_reports_applied_storage() {
         .unwrap();
     drop(child.stdout.take());
     let out = child.wait_with_output().unwrap();
-    assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("storage applied; output failed"));
+    assert!(out.status.success());
+    assert!(out.stderr.is_empty());
     assert!(f.ok(&["list"]).contains("retained"));
 }
 
@@ -735,7 +741,7 @@ fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation
         rows.lines()
             .find(|s| s.starts_with(&child))
             .unwrap()
-            .contains("依存待ち")
+            .contains("Blocked")
     );
     assert_eq!(
         fs::read_to_string(f.0.join("observations")).unwrap(),
@@ -926,7 +932,7 @@ fn condition_timeout_and_ctrl_c_terminate_shell_and_descendants() {
         cmd.args([
             "tasks",
             "--condition-timeout",
-            if interrupt { "10" } else { "0.5" },
+            if interrupt { "10s" } else { "500ms" },
         ]);
         let out = if interrupt {
             fs::remove_file(f.0.join("descendant-pid")).ok();
@@ -1240,3 +1246,6 @@ mod file_lifecycle;
 
 #[path = "lifecycle/workflow.rs"]
 mod workflow;
+
+#[path = "lifecycle/contracts.rs"]
+mod contracts;

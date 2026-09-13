@@ -63,8 +63,8 @@ fn both_backends_support_the_daily_workflow() {
         f.ok(&["note", "add", &second, "-m", "成果を統合・検証済み"]);
         f.ok(&["done", &second]);
         let review = f.ok(&["show", &group]);
-        assert!(review.contains("2/2件終了（完了2・取りやめ0）"));
-        assert!(review.contains("最終確認待ち"));
+        assert!(review.contains("2/2 terminal (2 completed, 0 cancelled)"));
+        assert!(review.contains("Awaiting final confirmation"));
         assert!(f.ok(&["tasks"]).contains(&group));
         assert!(
             f.ok(&["note", "list", &second])

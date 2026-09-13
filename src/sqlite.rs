@@ -11,6 +11,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("SQLite: {0}")]
     Sql(#[from] rusqlite::Error),
+    #[error("Result unknown: SQLite commit failed: {0}; inspect saved state before retrying")]
+    Commit(rusqlite::Error),
     #[error(transparent)]
     Core(#[from] lifecycle::Error),
 }
@@ -43,7 +45,7 @@ impl Store {
             "INSERT INTO lifecycle_store VALUES (1, ?1, ?2)",
             rusqlite::params![prefix, bytes],
         )?;
-        tx.commit()?;
+        tx.commit().map_err(Error::Commit)?;
         connection.busy_timeout(Duration::from_secs(30))?;
         Ok(Self { connection })
     }
@@ -66,17 +68,21 @@ impl Store {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let (prefix, mut snapshot) = read(&tx)?;
+        let original = snapshot.clone();
         let identity = snapshot.store().clone();
         let result = change(&prefix, &mut snapshot)?;
         if snapshot.store() != &identity {
             return Err(invalid("store identity cannot change"));
+        }
+        if snapshot == original {
+            return Ok(result);
         }
         let bytes = lifecycle::encode(&snapshot)?;
         tx.execute(
             "UPDATE lifecycle_store SET snapshot = ?1 WHERE singleton = 1",
             [bytes],
         )?;
-        tx.commit()?;
+        tx.commit().map_err(Error::Commit)?;
         Ok(result)
     }
 }
@@ -115,14 +121,8 @@ fn read(connection: &Connection) -> Result<(String, Snapshot)> {
     Ok((prefix, lifecycle::decode(&bytes)?))
 }
 pub fn validate_prefix(prefix: &str) -> Result<()> {
-    if prefix.is_empty()
-        || !prefix
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-    {
-        return Err(invalid(
-            "prefix must contain only ASCII letters, digits or hyphens",
-        ));
+    if prefix.is_empty() {
+        return Err(invalid("Entity prefix must not be empty"));
     }
     Ok(())
 }
@@ -143,7 +143,7 @@ mod tests {
         store.connection.commit_hook(Some(|| true)).unwrap();
         let result = store.update(|_, snapshot| {
             snapshot.create(
-                EntityId::generate(),
+                EntityId::generate("test"),
                 Kind::Issue,
                 Current {
                     title: "never committed".into(),
@@ -160,7 +160,7 @@ mod tests {
             )?;
             Ok(())
         });
-        assert!(matches!(result, Err(super::Error::Sql(_))));
+        assert!(matches!(result, Err(super::Error::Commit(_))));
         assert_eq!(store.read().unwrap().1, before);
         drop(store);
         assert_eq!(Store::open(&path).unwrap().read().unwrap().1, before);

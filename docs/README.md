@@ -1,6 +1,6 @@
 # ドキュメント
 
-単一 lifecycle の再構築の正本は [literate spec](../spec/lifecycle_proposal.md)、新しい実装の入口は [共通コア](development/lifecycle-core.md) です。利用ガイドは新lifecycleに対応しています。旧reference/design・既存の三軸モデルは過去資料として区別し、新ライブラリの仕様には使いません。新 binary と `tests/smoke.rs` は [SQLite CLI](development/lifecycle-sqlite.md) の新仕様を対象にします。`archive/three-axis/src` の旧 module と `archive/three-axis/tests` は過去の三軸実装・検証資料です。
+単一 lifecycle の再構築の正本は [literate spec](../spec/lifecycle_proposal.md)、新しい実装の入口は [共通コア](development/lifecycle-core.md) です。利用ガイドは新lifecycleに対応しています。旧三軸のreference/design・モデルは過去資料として区別します。継続する入出力契約は [現行CLI契約](reference/lifecycle-cli.md) に明示し、過去資料の一括廃止から契約の廃止を推論しません。新 binary と `tests/smoke.rs` は [SQLite CLI](development/lifecycle-sqlite.md) の新仕様を対象にします。`archive/three-axis/src` の旧 module と `archive/three-axis/tests` は過去の三軸実装・検証資料です。
 
 新binaryの利用は [使い始める](guide/getting-started.md) から確認してください。
 
@@ -14,6 +14,7 @@
 | [保存先とworktree](guide/storage.md) | SQLite共有、fileのworktree隔離、探索・初期化の境界 |
 | [Agentからのアクセス](guide/codex.md) | ホスト権限と保存先 |
 | [記録者連携](development/lifecycle-recorder.md) | 自動取得と詳細参照 |
+| [CLI入出力契約](reference/lifecycle-cli.md) | ID・引数・詳細参照・英語表示・装飾・保存結果 |
 
 ## 開発者向け
 
@@ -31,7 +32,7 @@
 
 ## 過去資料
 
-`reference/`、`design/`、`development/architecture.md`・`branch-history.md`・`audits/` は置換前の三軸CLIの契約・設計・時点付き調査です。現行操作の手順には使いません。旧コード・テストは [archive/three-axis](../archive/three-axis/README.md) に隔離し、Cargo・CIの対象から外しています。旧Quintモデル `axon.qnt`・`group_plan.qnt`・`information_model.qnt`・`branch_history.qnt` も過去資料です。新モデルは正本specから生成します。
+`reference/` のlifecycle-cli.md以外、`design/`、`development/architecture.md`・`branch-history.md` は置換前の三軸CLIの契約・設計です。`development/audits/` は各文書に記した対象・時点に限定した調査です。現行操作の手順には使いません。旧コード・テストは [archive/three-axis](../archive/three-axis/README.md) に隔離し、Cargo・CIの対象から外しています。旧Quintモデル `axon.qnt`・`group_plan.qnt`・`information_model.qnt`・`branch_history.qnt` も過去資料です。新モデルは正本specから生成します。
 
 ## 更新するとき
 

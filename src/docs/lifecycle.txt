@@ -1,0 +1,68 @@
+Axon concepts
+
+An Entity is an Issue or a Group. Both share one lifecycle and one ID namespace.
+Generated IDs have a management-root prefix and six random characters. A unique
+suffix works wherever a command takes an Entity ID. Note IDs are complete stable
+record IDs; they do not indicate priority or order.
+
+Lifecycle
+  capture -> Undecided -> accept -> NotStarted -> start -> InProgress -> done -> Completed
+  plan creates NotStarted work whose purpose and completion criteria are adopted.
+  withdraw returns NotStarted to Undecided; release returns InProgress to NotStarted.
+  cancel terminates unfinished work; reconsider returns Cancelled to Undecided.
+  Completed work cannot reopen. Notes can be appended even after work is terminal.
+
+A child starts only while its parent Group is InProgress. Explicit dependencies
+must be Completed before work starts or completes. Cancelled is terminal but does
+not satisfy a dependency. Group completion also requires all direct children to
+be terminal. Running done on a Group explicitly confirms final review of the
+entire plan, including the outcomes and Notes of its descendants.
+
+Daily workflow
+  axon capture --title 'Investigate a concern' -m 'Context and uncertainty'
+  axon plan --title 'Deliver an adopted outcome' -F plan.md
+  axon triage
+  axon tasks
+  axon show ID
+  axon start ID
+  axon note add ID -F result.md
+  axon done ID
+
+Reading and resurfacing
+  triage lists surfaced Undecided work. tasks lists surfaced NotStarted work and
+  all InProgress work, including blocked work. Candidate conditions include every
+  ancestor Group. Absence from these lists does not mean an Entity is missing.
+  list includes every saved Entity by default, in creation order. --kind,
+  --lifecycle, --terminal and --search narrow it without running conditions.
+  show reads the saved text, unmet prerequisites and direct Group children.
+  show --details includes saved conditions and all direct relationships once.
+  note list reads full Notes; note show ID NOTE_ID reads one stable Note. log reads state
+  changes and integrations, preserving concurrent branches. --recorder-details
+  includes optional stored recorder data; actor information is not ownership.
+
+  when set ID --command 'test -f ready.txt' stores a shell condition without running
+  it. when clear removes it. triage/tasks run /bin/sh -c: 0=satisfied, 1=unsatisfied,
+  other exits fail the list. The default timeout is 30s; --condition-timeout accepts
+  positive integers with ms, s, m or h. --trace-conditions writes captured output
+  to stderr. Conditions run at the current Git worktree root (management root
+  outside Git). Filtering selects candidates before evaluating their ancestors.
+
+Storage and recovery
+  init creates a new root; SQLite is the default, --backend file chooses JSONL.
+  SQLite is shared by linked Git worktrees at the common Git directory's parent
+  .axon/axon.db. File storage is local to each worktree at .axon/state.jsonl.
+  Outside Git, the nearest management root is used. Corrupt, mixed, unmerged or
+  incomplete artifacts are errors; no fallback or automatic legacy migration runs.
+  help, docs, actor, completion and version do not require a store.
+
+  Preserve retained artifacts on errors. Applied, Not applied and Result unknown
+  describe persistence boundaries. After an unknown result, wait for the original
+  writer to finish and inspect saved state/record IDs before retrying. Creation and
+  Note addition are not idempotent. Do not delete locks to bypass another writer.
+  merge prepare/check/apply uses retained inputs and explicit resolution choices;
+  Git driver configuration, staging and commits remain separate operations.
+
+Use axon help <COMMAND PATH> for exact arguments. Create with --title; descriptions
+accept -m/--description or -F/--description-file (- reads stdin). Notes use
+-m/--message or -F/--file. For option values beginning with a hyphen use the equals
+form, for example --description='--text'. No legacy option aliases are provided.

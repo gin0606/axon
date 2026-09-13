@@ -12,6 +12,16 @@ pub enum CandidateList {
 pub fn candidates<E: From<Error>>(
     snapshot: &Snapshot,
     kind: CandidateList,
+    evaluate: impl FnMut(&Entity, &str) -> std::result::Result<bool, E>,
+) -> std::result::Result<Vec<&Entity>, E> {
+    candidates_filtered(snapshot, kind, |_| true, evaluate)
+}
+
+/// Filters candidates before evaluation; retained candidates still check every ancestor.
+pub fn candidates_filtered<E: From<Error>>(
+    snapshot: &Snapshot,
+    kind: CandidateList,
+    mut include: impl FnMut(&Entity) -> bool,
     mut evaluate: impl FnMut(&Entity, &str) -> std::result::Result<bool, E>,
 ) -> std::result::Result<Vec<&Entity>, E> {
     let mut cache = BTreeMap::new();
@@ -19,6 +29,9 @@ pub fn candidates<E: From<Error>>(
     let mut entities: Vec<_> = snapshot.entities().collect();
     entities.sort_by(|a, b| (&a.created_at, &a.id).cmp(&(&b.created_at, &b.id)));
     for entity in entities {
+        if !include(entity) {
+            continue;
+        }
         if matches!(kind, CandidateList::Tasks) && entity.current.lifecycle == Lifecycle::InProgress
         {
             visible.push(entity);

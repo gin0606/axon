@@ -1,6 +1,6 @@
 # 単一 lifecycle の file 保存と Git 統合
 
-[正本spec](../../spec/lifecycle_proposal.md) の保存契約を `src/file.rs`、`src/location.rs`、`src/file_merge.rs` が実装する。通常操作は [SQLite CLI](lifecycle-sqlite.md) と共通で、同じ `Snapshot` の操作・記録・全体検査を通す。既存の管理データには新binaryを向けず、独立fixtureで試す。
+[正本spec](../../spec/lifecycle_proposal.md) の保存契約を `src/file.rs`、`src/location.rs`、`src/file_merge.rs` が実装する。通常操作は [SQLite CLI](lifecycle-sqlite.md) と共通で、同じ `Snapshot` の操作・記録・全体検査を通す。旧schemaは自動移行しない。試用・検証は独立fixtureで行う。
 
 ## 初期化と探索
 

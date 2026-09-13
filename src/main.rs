@@ -1,5 +1,7 @@
+mod cli_support;
 mod condition;
 mod display;
+use cli_support::*;
 
 use axon::{
     lifecycle::*,
@@ -7,7 +9,7 @@ use axon::{
     sqlite::{self, Result},
 };
 use chrono::Utc;
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use std::{
     collections::BTreeSet,
     io::{Read, Write},
@@ -17,9 +19,11 @@ use std::{
 
 #[derive(Parser)]
 #[command(
-    version,
-    about = "Issue と Group を単一 lifecycle で管理するローカル tracker",
-    after_help = "新しい保存先で axon init → axon plan --title '仕事' → axon start ID → axon done ID。\n導入: docs/guide/getting-started.md。記録者は環境から任意取得し、log / note list --recorder-details で詳細確認。\n旧 schema の自動移行は行いません。Group の done は計画全体の最終確認済みという明示入力です。"
+    version = env!("AXON_VERSION"),
+    styles = display::cli_styles(),
+    color = display::cli_color(),
+    about = "A local issue tracker for Issues and Groups",
+    after_help = "Use axon docs for the lifecycle and daily workflow. Group done explicitly confirms that the entire plan has passed final review."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -27,71 +31,82 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// snapshot を統合する（入力の保全・検査・適用）
+    /// Explain the lifecycle, daily workflow and storage boundaries
+    Docs,
+    /// Show the optional recorder actor detected in the current environment
+    Actor,
+    /// Write an unstyled shell completion script to stdout
+    Completion { shell: clap_complete::Shell },
+    /// Merge snapshots through a retained review workspace
     Merge {
         #[command(subcommand)]
         command: Merge,
     },
-    /// 保存形式と全snapshotを検査する（条件は実行しない）
+    /// Validate stored snapshots without running conditions
     Storage {
         #[command(subcommand)]
         command: Storage,
     },
-    /// 新しい保存先を初期化する（既定 SQLite）
+    /// Initialize a new management root (default: SQLite)
     Init {
         prefix: Option<String>,
         #[arg(long, value_enum, default_value = "sqlite")]
         backend: Backend,
     },
-    /// 未判断の Issue を登録する
+    /// Create an Undecided Issue
     Capture(Create),
-    /// 採用済みの Issue を登録する
+    /// Create a NotStarted Issue with an adopted plan
     Plan(Create),
-    /// Group の登録と所属変更
+    /// Create Groups or change their membership
     Group {
         #[command(subcommand)]
         command: Group,
     },
-    /// 保存済み Entity を作成日時順に表示する（外部条件は評価しない）
-    List,
-    /// 自身と祖先が浮上した未判断を表示する
+    /// List saved Entities in creation order without running conditions
+    List(ListOptions),
+    /// List surfaced Undecided Entities with surfaced ancestors
     Triage(CandidateOptions),
-    /// 浮上した未着手（依存・親の着手待ちを含む）と全着手中を表示する
+    /// List surfaced NotStarted Entities and all InProgress work, including blocked work
     Tasks(CandidateOptions),
-    /// 再浮上条件を設定・修復する（コマンドは実行しない）
+    /// Set or repair resurfacing conditions without running them
     When {
         #[command(subcommand)]
         command: When,
     },
-    /// 本文と直接の待ち理由、Group の直属の子を表示する
-    Show { id: String },
-    /// Note を追加または取得する
+    /// Show text, immediate unmet prerequisites and direct Group children
+    Show {
+        id: String,
+        /// Include saved lifecycle, condition and all direct relationships without duplicate wait sections
+        #[arg(long)]
+        details: bool,
+    },
+    /// Append or read immutable Notes
     Note {
         #[command(subcommand)]
         command: Notes,
     },
-    /// 状態変更と統合の経緯を表示する
+    /// Read state changes and integrations
     Log {
         id: String,
-        /// 保存済みの記録者 data を JSON で併記する
+        /// Include the stored recorder data as JSON
         #[arg(long)]
         recorder_details: bool,
     },
-    /// 未判断を採用する
+    /// Adopt an Undecided Entity
     Accept(Change),
-    /// 未着手の採用を撤回する
+    /// Withdraw adoption of a NotStarted Entity
     Withdraw(Change),
-    /// 着手する（親・依存の前提を検査する）
+    /// Start work after checking parent and dependency prerequisites
     Start(Change),
-    /// 着手を解放する
+    /// Release InProgress work back to NotStarted
     Release(Change),
-    /// 完了する。Group では計画全体を最終確認済みであることを表す
+    /// Complete work; for a Group, explicitly confirm final review of the entire plan
     Done(Change),
-    /// 取りやめる
+    /// Cancel work
     Cancel(Change),
-    /// 取りやめを未判断へ戻す
+    /// Return a Cancelled Entity to Undecided
     Reconsider(Change),
-    /// タイトル・本文を編集する（状態は変えない）
+    /// Edit title or description without changing lifecycle
     Write {
         id: String,
         #[arg(long)]
@@ -99,7 +114,7 @@ enum Command {
         #[command(flatten)]
         body: Body,
     },
-    /// 明示した依存先を追加・解除する
+    /// Add or remove explicit dependencies
     Dep {
         #[command(subcommand)]
         command: Dependency,
@@ -111,10 +126,10 @@ enum Storage {
 }
 #[derive(Subcommand)]
 #[command(
-    after_help = "例: axon merge prepare --base base.jsonl --ours ours.jsonl --theirs theirs.jsonl --output .axon/state.jsonl --workspace .axon/merge-review\nresolution.json の choices を編集し、axon merge check WORKSPACE → axon merge apply WORKSPACE。\nGit driver 設定・stage・commit は利用者が行います。詳細: docs/development/lifecycle-file.md"
+    after_help = "Example: axon merge prepare --base base.jsonl --ours ours.jsonl --theirs theirs.jsonl --output .axon/state.jsonl --workspace .axon/merge-review\nEdit choices in resolution.json, then run axon merge check WORKSPACE and axon merge apply WORKSPACE.\nGit driver configuration, staging and commits are separate user operations. Retain the workspace for recovery."
 )]
 enum Merge {
-    /// 入力を保存し、衝突と解決ファイルを用意する。正本は変更しない
+    /// Retain inputs and prepare conflicts and resolution choices without publishing
     Prepare {
         #[arg(long)]
         base: PathBuf,
@@ -127,11 +142,11 @@ enum Merge {
         #[arg(long)]
         workspace: PathBuf,
     },
-    /// 解決案と候補全体を検査する
+    /// Validate resolution choices and the complete candidate
     Check { workspace: PathBuf },
-    /// 検査済みの入力・出力を再照合して正本へ公開する
+    /// Recheck validated inputs and output before publishing
     Apply { workspace: PathBuf },
-    /// Git merge driver: %O %A %B。衝突時は非0で終了し、%Aを保持する
+    /// Git merge driver: %O %A %B; preserve %A and fail on conflicts
     Driver {
         base: PathBuf,
         ours: PathBuf,
@@ -140,39 +155,35 @@ enum Merge {
 }
 #[derive(Args)]
 #[command(
-    after_help = "例: axon tasks --condition-timeout 5 --trace-conditions\n条件は /bin/sh -c で実行し、0 は成立、1 は未成立、その他は一覧取得の失敗。\n作業場所は現在の Git worktree のルート（Git 外では管理ルート）。\nCtrl-C・timeout は子を含む process group へ TERM、1秒後も残れば KILL。\nstdout/stderr は各64 KiBまで保持し、超過時は先頭・末尾32 KiBを表示します。"
+    after_help = "Conditions run through /bin/sh -c: exit 0 is satisfied, 1 is unsatisfied, other exits fail the whole list.
+The working directory is the current Git worktree root, or the management root outside Git.
+Ctrl-C and timeout send TERM to the process group, then KILL after 1s.
+Each stdout/stderr stream retains up to 64 KiB (first and last 32 KiB on overflow).
+Examples: axon tasks --condition-timeout 500ms; axon triage --trace-conditions
+Absence from a candidate list does not mean an Entity is missing. Use list for the complete inventory."
 )]
 struct CandidateOptions {
-    /// 外部コマンド1件のタイムアウト秒数（正の有限値）
-    #[arg(long, default_value = "30", value_parser = parse_timeout)]
+    #[command(flatten)]
+    selection: Selection,
+    /// Per-command timeout: positive integer followed by ms, s, m or h
+    #[arg(long, default_value = "30s", value_parser = parse_timeout)]
     condition_timeout: Duration,
-    /// 実行した条件の結果・stdout/stderrをstderrへ表示する
+    /// Write evaluated condition results and captured output to stderr
     #[arg(long)]
     trace_conditions: bool,
 }
-fn parse_timeout(value: &str) -> std::result::Result<Duration, String> {
-    let seconds: f64 = value
-        .parse()
-        .map_err(|_| "expected positive finite seconds")?;
-    let duration =
-        Duration::try_from_secs_f64(seconds).map_err(|_| "expected positive finite seconds")?;
-    if duration.is_zero() {
-        return Err("expected positive finite seconds".into());
-    }
-    Ok(duration)
-}
 #[derive(Subcommand)]
 enum When {
-    /// シェル文字列を保存・置換する（保存時に評価しない）
+    /// Save or replace a shell condition without evaluating it
     #[command(
-        after_help = "例: axon when set ID --command 'test -f ready.txt'\n終了0=成立、1=未成立、その他=判定失敗。壊れた条件も set / clear で修復できます。"
+        after_help = "Example: axon when set ID --command 'test -f ready.txt'\nExit 0=satisfied, 1=unsatisfied, others=evaluation failed. Repair broken conditions with set or clear."
     )]
     Set {
         id: String,
         #[arg(long)]
         command: String,
     },
-    /// 条件を解除して常に浮上させる（lifecycleは変えない）
+    /// Clear the condition without changing lifecycle
     Clear { id: String },
 }
 #[derive(Clone, Copy, ValueEnum)]
@@ -184,7 +195,7 @@ enum Backend {
 struct Body {
     #[arg(short = 'm', long, conflicts_with = "description_file")]
     description: Option<String>,
-    /// UTF-8 本文ファイル。- は標準入力
+    /// Read UTF-8 text from a file; - reads standard input
     #[arg(short = 'F', long)]
     description_file: Option<PathBuf>,
 }
@@ -196,15 +207,21 @@ impl Body {
                 std::io::stdin().read_to_string(&mut text)?;
                 Ok(Some(text))
             }
-            Some(path) => Ok(Some(std::fs::read_to_string(path)?)),
+            Some(path) => Ok(Some(std::fs::read_to_string(&path).map_err(|e| {
+                sqlite::Error::Invalid(format!("cannot read text file {}: {e}", path.display()))
+            })?)),
             None => Ok(self.description),
         }
     }
 }
 #[derive(Args)]
 struct Create {
+    /// Title of the new Entity
     #[arg(long)]
     title: String,
+    /// Initial shell condition; stored without evaluation
+    #[arg(long)]
+    command: Option<String>,
     #[command(flatten)]
     body: Body,
     #[arg(long)]
@@ -246,9 +263,16 @@ enum Dependency {
 }
 #[derive(Subcommand)]
 enum Notes {
+    /// Read one Note by its complete stable ID
+    Show {
+        id: String,
+        note_id: String,
+        #[arg(long)]
+        recorder_details: bool,
+    },
     List {
         id: String,
-        /// 保存済みの記録者 data を JSON で併記する
+        /// Include the stored recorder data as JSON
         #[arg(long)]
         recorder_details: bool,
     },
@@ -265,9 +289,6 @@ enum Notes {
         file: Option<PathBuf>,
     },
 }
-fn id(value: String) -> Result<EntityId> {
-    Ok(value.try_into()?)
-}
 fn context() -> Context {
     Context {
         at: Utc::now(),
@@ -283,24 +304,24 @@ fn context() -> Context {
 }
 fn row(snapshot: &Snapshot, entity: &Entity) -> String {
     format!(
-        "{}  {:?}  {}  {}\n",
-        entity.id,
-        entity.kind,
-        status(snapshot, entity),
+        "{}  {}  {}  {}\n",
+        display::identity(&entity.id),
+        display::muted(format!("{:?}", entity.kind)),
+        display::situation(status(snapshot, entity)),
         display::human_text(&entity.current.title).replace('\n', "\\n")
     )
 }
 fn status(snapshot: &Snapshot, entity: &Entity) -> &'static str {
     match entity.current.lifecycle {
-        Lifecycle::Undecided => "未判断",
+        Lifecycle::Undecided => "Undecided",
         Lifecycle::NotStarted
             if snapshot
                 .check_operation(&entity.id, Operation::Start)
                 .is_ok() =>
         {
-            "着手可能"
+            "Ready"
         }
-        Lifecycle::NotStarted => "依存待ち",
+        Lifecycle::NotStarted => "Blocked",
         Lifecycle::InProgress
             if entity.current.dependencies.iter().any(|id| {
                 snapshot
@@ -308,18 +329,18 @@ fn status(snapshot: &Snapshot, entity: &Entity) -> &'static str {
                     .is_ok_and(|e| e.current.lifecycle != Lifecycle::Completed)
             }) =>
         {
-            "着手中・依存待ち"
+            "InProgress+Blocked"
         }
-        Lifecycle::InProgress => "着手中",
-        Lifecycle::Completed => "完了",
-        Lifecycle::Cancelled => "取りやめ",
+        Lifecycle::InProgress => "InProgress",
+        Lifecycle::Completed => "Completed",
+        Lifecycle::Cancelled => "Cancelled",
     }
 }
 fn sorted(mut entities: Vec<&Entity>) -> Vec<&Entity> {
     entities.sort_by(|a, b| (&a.created_at, &a.id).cmp(&(&b.created_at, &b.id)));
     entities
 }
-fn show(snapshot: &Snapshot, entity: &Entity) -> Result<String> {
+fn show(snapshot: &Snapshot, entity: &Entity, details: bool) -> Result<String> {
     let mut out = row(snapshot, entity);
     let notes = snapshot.notes(&entity.id)?.len();
     if notes > 0 {
@@ -331,12 +352,13 @@ fn show(snapshot: &Snapshot, entity: &Entity) -> Result<String> {
         .as_ref()
         .map(|id| snapshot.entity(id))
         .transpose()?;
-    let parent_wait = entity.current.lifecycle == Lifecycle::NotStarted
+    let parent_wait = !details
+        && entity.current.lifecycle == Lifecycle::NotStarted
         && parent.is_some_and(|e| e.current.lifecycle != Lifecycle::InProgress);
     if let Some(parent) = parent.filter(|_| !parent_wait) {
         out.push_str(&format!(
-            "所属: {}  {}\n",
-            parent.id,
+            "Parent: {}  {}\n",
+            display::identity(&parent.id),
             display::human_text(&parent.current.title)
         ));
     }
@@ -346,25 +368,85 @@ fn show(snapshot: &Snapshot, entity: &Entity) -> Result<String> {
         .iter()
         .map(|id| snapshot.entity(id))
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    if matches!(
-        entity.current.lifecycle,
-        Lifecycle::NotStarted | Lifecycle::InProgress
-    ) {
+    if !details
+        && matches!(
+            entity.current.lifecycle,
+            Lifecycle::NotStarted | Lifecycle::InProgress
+        )
+    {
         let unmet: Vec<_> = dependencies
             .into_iter()
             .filter(|e| e.current.lifecycle != Lifecycle::Completed)
             .collect();
         if parent_wait || !unmet.is_empty() {
-            out.push_str(if entity.current.lifecycle == Lifecycle::NotStarted {
-                "\n着手に必要\n"
-            } else {
-                "\n完了に必要\n"
-            });
+            out.push_str(&format!(
+                "\n{}\n",
+                display::heading(if entity.current.lifecycle == Lifecycle::NotStarted {
+                    "Required to start"
+                } else {
+                    "Required to complete"
+                })
+            ));
             if parent_wait {
-                out.push_str(&format!("親の着手: {}", row(snapshot, parent.unwrap())));
+                out.push_str(&format!(
+                    "Parent must start: {}",
+                    row(snapshot, parent.unwrap())
+                ));
             }
             for dependency in sorted(unmet) {
-                out.push_str(&format!("依存先の完了: {}", row(snapshot, dependency)));
+                out.push_str(&format!(
+                    "Dependency must complete: {}",
+                    row(snapshot, dependency)
+                ));
+            }
+        }
+    }
+    if details {
+        let lifecycle = format!("{:?}", entity.current.lifecycle);
+        if status(snapshot, entity) != lifecycle {
+            out.push_str(&format!("{} {lifecycle}\n", display::muted("Lifecycle:")));
+        }
+        if parent.is_none() {
+            out.push_str("Parent: (none)\n");
+        }
+        out.push_str(&format!(
+            "{} {}\n",
+            display::muted("Condition:"),
+            entity
+                .current
+                .condition
+                .as_ref()
+                .map(display::human_text)
+                .unwrap_or_else(|| "(none)".into())
+        ));
+        let dependencies = sorted(
+            entity
+                .current
+                .dependencies
+                .iter()
+                .map(|id| snapshot.entity(id))
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        );
+        let dependents = sorted(
+            snapshot
+                .entities()
+                .filter(|e| e.current.dependencies.contains(&entity.id))
+                .collect(),
+        );
+        for (label, related) in [
+            (
+                "Dependencies (must be Completed to start or complete):",
+                dependencies,
+            ),
+            ("Dependents:", dependents),
+        ] {
+            out.push_str(&format!(
+                "\n{}{}\n",
+                display::heading(label),
+                if related.is_empty() { " (none)" } else { "" }
+            ));
+            for other in related {
+                out.push_str(&row(snapshot, other));
             }
         }
     }
@@ -382,7 +464,7 @@ fn show(snapshot: &Snapshot, entity: &Entity) -> Result<String> {
             .filter(|e| e.current.lifecycle == Lifecycle::Cancelled)
             .count();
         out.push_str(&format!(
-            "\n直属の子 {}/{}件終了（完了{completed}・取りやめ{cancelled}）\n",
+            "\nDirect children: {}/{} terminal ({completed} completed, {cancelled} cancelled)\n",
             completed + cancelled,
             children.len()
         ));
@@ -393,7 +475,10 @@ fn show(snapshot: &Snapshot, entity: &Entity) -> Result<String> {
             .check_operation(&entity.id, Operation::Complete)
             .is_ok()
         {
-            out.push_str("最終確認待ち\n");
+            out.push_str(&format!(
+                "{}\n",
+                display::heading("Awaiting final confirmation")
+            ));
         }
     }
     Ok(out)
@@ -418,9 +503,14 @@ fn recorder_display(context: &Context, details: bool) -> String {
 struct Output {
     text: String,
     saved: bool,
+    diagnostic: String,
 }
 fn output(text: String, saved: bool) -> Output {
-    Output { text, saved }
+    Output {
+        text,
+        saved,
+        diagnostic: String::new(),
+    }
 }
 fn branch_boundary<'a>(
     snapshot: &Snapshot,
@@ -431,19 +521,44 @@ fn branch_boundary<'a>(
     if let Some(before) = previous
         && !snapshot.precedes(before, next)?
     {
-        text.push_str("並行する分岐（直前の記録との先後関係なし）\n");
+        text.push_str("Concurrent branch (not ordered after the preceding record)\n");
     }
     *previous = Some(next);
     Ok(())
 }
 fn run(command: Command) -> Result<Output> {
+    match command {
+        Command::Actor => return Ok(output(format!("{}\n", actor(&context())), false)),
+        Command::Docs => return Ok(output(include_str!("docs/lifecycle.txt").into(), false)),
+        Command::Completion { shell } => {
+            let mut bytes = Vec::new();
+            clap_complete::generate(shell, &mut Cli::command(), "axon", &mut bytes);
+            return Ok(output(
+                String::from_utf8(bytes).expect("UTF-8 completion"),
+                false,
+            ));
+        }
+        _ => {}
+    }
     let cwd = std::env::current_dir()?;
     if let Command::Init { prefix, backend } = command {
         let location = Location::discover(&cwd, true)?;
-        location.init_backend(
-            prefix.as_deref().unwrap_or("axon"),
-            matches!(backend, Backend::File),
-        )?;
+        let default_root = if matches!(backend, Backend::File) {
+            &location.root
+        } else {
+            location
+                .sqlite
+                .parent()
+                .and_then(|p| p.parent())
+                .expect("management root")
+        };
+        let prefix = prefix
+            .as_deref()
+            .or_else(|| default_root.file_name().and_then(|n| n.to_str()))
+            .ok_or_else(|| {
+                sqlite::Error::Invalid("cannot derive an ID prefix; pass axon init PREFIX".into())
+            })?;
+        location.init_backend(prefix, matches!(backend, Backend::File))?;
         return Ok(output(
             format!(
                 "Initialized {} at {}\n",
@@ -501,15 +616,26 @@ fn run(command: Command) -> Result<Output> {
     let location = Location::discover(&cwd, false)?;
     let mut store = location.open()?;
     match command {
-        Command::List
+        Command::List(_)
         | Command::Triage(_)
         | Command::Tasks(_)
         | Command::Show { .. }
         | Command::Log { .. }
         | Command::Note {
-            command: Notes::List { .. },
+            command: Notes::List { .. } | Notes::Show { .. },
         } => {
             let (_, snapshot) = store.read()?;
+            let empty_hint = match &command {
+                Command::List(_) => "No matching Entities.",
+                Command::Triage(_) => {
+                    "No triage candidates. Conditions and ancestor scope may hide saved Entities; use axon list for the inventory."
+                }
+                Command::Tasks(_) => {
+                    "No task candidates. Conditions and ancestor scope may hide saved Entities; use axon list for the inventory."
+                }
+                Command::Note { .. } => "No Notes.",
+                _ => "No records.",
+            };
             let text = match command {
                 Command::Triage(ref options) | Command::Tasks(ref options) => {
                     let kind = if matches!(command, Command::Triage(_)) {
@@ -525,30 +651,61 @@ fn run(command: Command) -> Result<Output> {
                             options.condition_timeout,
                         )
                     };
-                    candidates(&snapshot, kind, |entity, script| {
-                        evaluation
-                            .run_command(entity, script)
-                            .map_err(|e| sqlite::Error::Invalid(e.to_string()))
-                    })?
+                    candidates_filtered(
+                        &snapshot,
+                        kind,
+                        |e| options.selection.matches(&snapshot, e),
+                        |entity, script| {
+                            evaluation
+                                .run_command(entity, script)
+                                .map_err(|e| sqlite::Error::Invalid(e.to_string()))
+                        },
+                    )?
                     .into_iter()
-                    .map(|e| row(&snapshot, e))
+                    .map(|e| list_row(&snapshot, e, &options.selection))
                     .collect()
                 }
-                Command::List => sorted(snapshot.entities().collect())
-                    .into_iter()
-                    .map(|e| row(&snapshot, e))
-                    .collect(),
-                Command::Show { id: value } => show(&snapshot, snapshot.entity(&id(value)?)?)?,
+                Command::List(options) => sorted(
+                    snapshot
+                        .entities()
+                        .filter(|e| options.matches(&snapshot, e))
+                        .collect(),
+                )
+                .into_iter()
+                .map(|e| list_row(&snapshot, e, &options.selection))
+                .collect(),
+                Command::Show { id: value, details } => show(
+                    &snapshot,
+                    snapshot.entity(&resolve(&snapshot, &value)?)?,
+                    details,
+                )?,
+                Command::Note {
+                    command:
+                        Notes::Show {
+                            id,
+                            note_id,
+                            recorder_details,
+                        },
+                } => {
+                    let entity = resolve(&snapshot, &id)?;
+                    let note = snapshot.note(&note_id.try_into()?)?;
+                    if note.entity != entity {
+                        return Err(sqlite::Error::Invalid(
+                            "Note does not belong to the specified Entity".into(),
+                        ));
+                    }
+                    format_note(note, recorder_details)
+                }
                 Command::Log {
                     id: value,
                     recorder_details,
                 } => {
                     let mut text = String::new();
                     let mut previous = None;
-                    for record in snapshot.history(&id(value)?)? {
+                    for record in snapshot.history(&resolve(&snapshot, &value)?)? {
                         branch_boundary(&snapshot, &mut previous, &record.id, &mut text)?;
                         let description = match &record.event {
-                            StateEvent::Created { initial, .. } => format!("登録: {initial:?}"),
+                            StateEvent::Created { initial, .. } => format!("Created: {initial:?}"),
                             StateEvent::Transition {
                                 before,
                                 after,
@@ -558,7 +715,7 @@ fn run(command: Command) -> Result<Output> {
                                 "{before:?} → {after:?}{}",
                                 reason
                                     .as_ref()
-                                    .map(|r| format!("  理由: {}", display::human_text(r)))
+                                    .map(|r| format!("  Reason: {}", display::human_text(r)))
                                     .unwrap_or_default()
                             ),
                             StateEvent::Integration {
@@ -566,17 +723,17 @@ fn run(command: Command) -> Result<Output> {
                                 selected,
                                 reason,
                             } => format!(
-                                "統合: {:?} を採用{}",
+                                "Integrated: selected {:?}{}",
                                 inputs[*selected].current.lifecycle,
                                 reason
                                     .as_ref()
-                                    .map(|r| format!("  理由: {}", display::human_text(r)))
+                                    .map(|r| format!("  Reason: {}", display::human_text(r)))
                                     .unwrap_or_default()
                             ),
                         };
                         text.push_str(&format!(
                             "{}  {}  {description}\n",
-                            display::timestamp(&record.context.at),
+                            display::muted(display::timestamp(&record.context.at)),
                             recorder_display(&record.context, recorder_details)
                         ));
                     }
@@ -591,21 +748,24 @@ fn run(command: Command) -> Result<Output> {
                 } => {
                     let mut text = String::new();
                     let mut previous = None;
-                    for note in snapshot.notes(&id(value)?)? {
+                    for note in snapshot.notes(&resolve(&snapshot, &value)?)? {
                         branch_boundary(&snapshot, &mut previous, &note.id, &mut text)?;
-                        text.push_str(&format!(
-                            "{}  {}  {}\n{}\n\n",
-                            note.id,
-                            display::timestamp(&note.context.at),
-                            recorder_display(&note.context, recorder_details),
-                            display::human_text(&note.body)
-                        ));
+                        text.push_str(&format_note(note, recorder_details));
                     }
                     text
                 }
                 _ => unreachable!(),
             };
-            Ok(output(text, false))
+            let diagnostic = if text.is_empty() {
+                format!("{empty_hint}\n")
+            } else {
+                String::new()
+            };
+            Ok(Output {
+                text,
+                saved: false,
+                diagnostic,
+            })
         }
         Command::Capture(args) => create(&mut store, Kind::Issue, Lifecycle::Undecided, args),
         Command::Plan(args) => create(&mut store, Kind::Issue, Lifecycle::NotStarted, args),
@@ -620,18 +780,34 @@ fn run(command: Command) -> Result<Output> {
             title,
             body,
         } => {
-            let id = id(value)?;
             let body = body.read()?;
             if title.is_none() && body.is_none() {
                 return Err(sqlite::Error::Invalid(
                     "write requires --title, --description or --description-file".into(),
                 ));
             }
-            store.update(|_, snapshot| {
+            let text = store.update(|_, snapshot| {
+                let id = resolve(snapshot, &value)?;
+                let before = snapshot.entity(&id)?.current.clone();
                 snapshot.write(&id, title, body)?;
-                Ok(())
+                let after = &snapshot.entity(&id)?.current;
+                let mut changes = Vec::new();
+                if before.title != after.title {
+                    changes.push("Title updated");
+                }
+                if before.description != after.description {
+                    changes.push(if after.description.is_empty() {
+                        "Description removed"
+                    } else {
+                        "Description updated"
+                    });
+                }
+                if changes.is_empty() {
+                    changes.push("No changes");
+                }
+                Ok(confirmation(&id, &changes.join("  ")))
             })?;
-            Ok(output(format!("{id}  Updated\n"), true))
+            Ok(output(text, true))
         }
         Command::Note {
             command:
@@ -641,58 +817,89 @@ fn run(command: Command) -> Result<Output> {
                     file,
                 },
         } => {
-            let id = id(value)?;
             let body = Body {
                 description: message,
                 description_file: file,
             }
             .read()?
             .unwrap_or_default();
-            let note =
-                store.update(|_, snapshot| Ok(snapshot.add_note(&id, body, context())?))?;
-            Ok(output(format!("{id}  Note {note}\n"), true))
+            let text = store.update(|_, snapshot| {
+                let id = resolve(snapshot, &value)?;
+                let note = snapshot.add_note(&id, body, context())?;
+                Ok(confirmation(&id, &format!("Note {note} recorded")))
+            })?;
+            Ok(output(text, true))
         }
         Command::Group { command } => {
             let (value, parent) = match command {
-                Group::Set { id, parent } => (id, Some(crate::id(parent)?)),
+                Group::Set { id, parent } => (id, Some(parent)),
                 Group::Unset { id } => (id, None),
                 _ => unreachable!(),
             };
-            let id = id(value)?;
-            store.update(|_, snapshot| {
-                snapshot.set_parent(&id, parent)?;
-                Ok(())
+            let text = store.update(|_, snapshot| {
+                let id = resolve(snapshot, &value)?;
+                let parent = parent.map(|p| resolve(snapshot, &p)).transpose()?;
+                let unchanged = snapshot.entity(&id)?.current.parent == parent;
+                snapshot.set_parent(&id, parent.clone())?;
+                Ok(confirmation(
+                    &id,
+                    &format!(
+                        "{}Parent: {}",
+                        if unchanged { "No changes  " } else { "" },
+                        parent
+                            .map(|p| p.to_string())
+                            .unwrap_or_else(|| "(none)".into())
+                    ),
+                ))
             })?;
-            Ok(output(format!("{id}  Parent updated\n"), true))
+            Ok(output(text, true))
         }
         Command::When { command } => {
             let (value, command) = match command {
                 When::Set { id, command } => (id, Some(command)),
                 When::Clear { id } => (id, None),
             };
-            let id = id(value)?;
-            store.update(|_, snapshot| {
+            let text = store.update(|_, snapshot| {
+                let id = resolve(snapshot, &value)?;
+                let unchanged = snapshot.entity(&id)?.current.condition == command;
+                let cleared = command.is_none();
                 snapshot.set_condition(&id, command)?;
-                Ok(())
+                Ok(confirmation(
+                    &id,
+                    if unchanged {
+                        "No changes"
+                    } else if cleared {
+                        "Condition cleared"
+                    } else {
+                        "Condition updated"
+                    },
+                ))
             })?;
-            Ok(output(format!("{id}  Condition updated\n"), true))
+            Ok(output(text, true))
         }
         Command::Dep { command } => {
             let (value, needs, add) = match command {
                 Dependency::Add { id, needs } => (id, needs, true),
                 Dependency::Rm { id, needs } => (id, needs, false),
             };
-            let id = id(value)?;
-            let needs = crate::id(needs)?;
-            store.update(|_, snapshot| {
+            let text = store.update(|_, snapshot| {
+                let id = resolve(snapshot, &value)?;
+                let needs = resolve(snapshot, &needs)?;
+                let present = snapshot.entity(&id)?.current.dependencies.contains(&needs);
                 if add {
                     snapshot.add_dependency(&id, &needs)?;
                 } else {
                     snapshot.remove_dependency(&id, &needs)?;
                 }
-                Ok(())
+                let result = match (add, present) {
+                    (true, false) => "Dependency added:",
+                    (false, true) => "Dependency removed:",
+                    (true, true) => "No changes  Dependency already present:",
+                    (false, false) => "No changes  Dependency already absent:",
+                };
+                Ok(confirmation(&id, &format!("{result} {needs}")))
             })?;
-            Ok(output(format!("{id}  Dependency updated\n"), true))
+            Ok(output(text, true))
         }
         command => {
             let (args, operation) = match command {
@@ -705,12 +912,21 @@ fn run(command: Command) -> Result<Output> {
                 Command::Reconsider(args) => (args, Operation::Reconsider),
                 _ => unreachable!(),
             };
-            let id = id(args.id)?;
-            let state = store.update(|_, snapshot| {
+            let text = store.update(|_, snapshot| {
+                let id = resolve(snapshot, &args.id)?;
                 snapshot.perform(&id, operation, args.reason, context())?;
-                Ok(snapshot.entity(&id)?.current.lifecycle)
+                let effect = match operation {
+                    Operation::Accept => "Accepted  NotStarted",
+                    Operation::Withdraw => "Withdrawn  Undecided",
+                    Operation::Start => "Started  InProgress",
+                    Operation::Release => "Released  NotStarted",
+                    Operation::Complete => "Completed",
+                    Operation::Cancel => "Cancelled",
+                    Operation::Reconsider => "Reconsidered  Undecided",
+                };
+                Ok(confirmation(&id, effect))
             })?;
-            Ok(output(format!("{id}  {state:?}\n"), true))
+            Ok(output(text, true))
         }
     }
 }
@@ -721,49 +937,77 @@ fn create(
     args: Create,
 ) -> Result<Output> {
     let description = args.body.read()?.unwrap_or_default();
-    let parent = args.parent.map(id).transpose()?;
-    let dependencies = args
-        .needs
-        .into_iter()
-        .map(id)
-        .collect::<Result<BTreeSet<_>>>()?;
-    let id = store.update(|prefix, snapshot| {
-        let id = id(format!("{prefix}-{:032x}", rand::random::<u128>()))?;
+    let title = args.title;
+    let text = store.update(|prefix, snapshot| {
+        let parent = args.parent.map(|p| resolve(snapshot, &p)).transpose()?;
+        let dependencies = args
+            .needs
+            .into_iter()
+            .map(|p| resolve(snapshot, &p))
+            .collect::<Result<BTreeSet<_>>>()?;
+        let id = fresh_entity_id(prefix, snapshot)?;
         snapshot.create(
             id.clone(),
             kind,
             Current {
-                title: args.title,
+                title,
                 description,
                 lifecycle,
-                condition: None,
+                condition: args.command,
                 parent,
                 dependencies,
             },
             context(),
         )?;
-        Ok(id)
+        let title = display::human_text(&snapshot.entity(&id)?.current.title).replace('\n', "\\n");
+        Ok(format!(
+            "{}  {}  {}  {}  {title}\n",
+            display::identity(&id),
+            display::positive("Created"),
+            display::muted(format!("{kind:?}")),
+            display::situation(&format!("{lifecycle:?}"))
+        ))
     })?;
-    Ok(output(format!("{id}  {kind:?}  {lifecycle:?}\n"), true))
+    Ok(output(text, true))
 }
+
 fn main() -> std::process::ExitCode {
-    let result = run(Cli::parse().command);
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let root_help = args.is_empty()
+        || (args.len() == 1 && ["help", "-h", "--help"].iter().any(|v| args[0] == *v));
+    let result = if root_help {
+        Ok(output(render_root_help(), false))
+    } else {
+        let command = Cli::parse().command;
+        let label = operation_label(&command);
+        run(command).map_err(|error| sqlite::Error::Invalid(format!("{label}: {error}")))
+    };
     match result {
         Ok(output) => {
+            if !output.diagnostic.is_empty()
+                && std::io::stderr()
+                    .write_all(output.diagnostic.as_bytes())
+                    .is_err()
+            {
+                return std::process::ExitCode::from(1);
+            }
             let mut stdout = std::io::stdout().lock();
             match stdout
                 .write_all(output.text.as_bytes())
                 .and_then(|_| stdout.flush())
             {
                 Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
+                    std::process::ExitCode::SUCCESS
+                }
                 Err(error) => {
                     let _ = writeln!(
                         std::io::stderr(),
                         "{}: {error}",
                         if output.saved {
-                            "storage applied; output failed; inspect saved state before retrying"
+                            "Error: output failed\nApplied: storage applied; output failed; inspect saved state before retrying"
                         } else {
-                            "output failed"
+                            "Error: output failed"
                         }
                     );
                     std::process::ExitCode::from(1)
@@ -771,7 +1015,12 @@ fn main() -> std::process::ExitCode {
             }
         }
         Err(error) => {
-            let _ = writeln!(std::io::stderr(), "{}", display::human_text(error));
+            let _ = writeln!(
+                std::io::stderr(),
+                "{} {}",
+                display::error_label(),
+                display::human_text(error)
+            );
             std::process::ExitCode::from(1)
         }
     }

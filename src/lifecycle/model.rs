@@ -5,22 +5,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 macro_rules! identifier {
-    ($name:ident, $prefix:literal) => {
+    ($name:ident, $ascii:literal) => {
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(try_from = "String", into = "String")]
         pub struct $name(String);
-        impl $name {
-            pub fn generate() -> Self {
-                Self(format!("{}-{:032x}", $prefix, rand::random::<u128>()))
-            }
-        }
         impl TryFrom<String> for $name {
             type Error = super::Error;
             fn try_from(value: String) -> Result<Self> {
                 if value.is_empty()
-                    || !value
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                    || ($ascii
+                        && !value
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'-'))
                 {
                     return Err(invalid(concat!("invalid ", stringify!($name))));
                 }
@@ -39,9 +35,29 @@ macro_rules! identifier {
         }
     };
 }
-identifier!(EntityId, "entity");
-identifier!(RecordId, "record");
-identifier!(StoreId, "store");
+identifier!(EntityId, false);
+identifier!(RecordId, true);
+identifier!(StoreId, true);
+
+impl EntityId {
+    pub fn generate(prefix: &str) -> Self {
+        const ALPHABET: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
+        let suffix: String = (0..6)
+            .map(|_| ALPHABET[rand::random_range(0..ALPHABET.len())] as char)
+            .collect();
+        Self(format!("{prefix}-{suffix}"))
+    }
+}
+impl RecordId {
+    pub fn generate() -> Self {
+        Self(format!("record-{:032x}", rand::random::<u128>()))
+    }
+}
+impl StoreId {
+    pub fn generate() -> Self {
+        Self(format!("store-{:032x}", rand::random::<u128>()))
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Lifecycle {
