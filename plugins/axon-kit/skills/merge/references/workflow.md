@@ -12,7 +12,7 @@ choices.jsonで自動選択と衝突を読む。resolution.jsonだけを編集�
 
 両側のNoteと状態履歴は保持され、現在値の採用は通常遷移と異なる統合記録に残る。衝突Entityをすべて選び、候補全体の循環や固定構成を検査する。自動選択Entityも必要なら明示選択できる。構造的に不正な候補をrepairsで救済することはできない。
 
-repairsはvalidな選択結果への通常編集で、operationはwrite（id/title/description）、parent（id/parent）、dependency（id/needs/present）、condition（id/command）。与えられた効果の範囲に限る。旧workflowの状態遷移・start・Note追加repairは提供されない。固定構成、Completedの本文固定、記録追記専用性を迂回しない。条件は実行しない。
+repairsはvalidな選択結果への通常編集で、operationはwrite（id/title/description）、parent（id/parent）、dependency（id/needs/present）、condition（id/command）の4種類に限る。与えられた効果の範囲で使い、固定構成、Completedの本文固定、記録追記専用性を迂回しない。条件は実行しない。
 
 ## 検査して公開する
 

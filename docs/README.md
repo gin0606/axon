@@ -30,6 +30,10 @@
 
 保存schemaは [SQLite adapter](../src/sqlite.rs) と [file adapter](../src/file.rs)、Usageは [Clap定義](../src/main.rs) を確認します。
 
+### 設計検討資料
+
+[一括declarationの再設計資料](development/declaration-design-notes.md) は、一括編集を検討するときの目的・保存境界・協業方針をまとめた資料です。採用済みの公開契約や通常操作の手順には使いません。
+
 ## 過去資料
 
 `reference/` のlifecycle-cli.md以外、`design/`、`development/architecture.md`・`branch-history.md` は置換前の三軸CLIの契約・設計です。`development/audits/` は各文書に記した対象・時点に限定した調査です。現行操作の手順には使いません。旧コード・テストは [archive/three-axis](../archive/three-axis/README.md) に隔離し、Cargo・CIの対象から外しています。旧Quintモデル `axon.qnt`・`group_plan.qnt`・`information_model.qnt`・`branch_history.qnt` も過去資料です。新モデルは正本specから生成します。

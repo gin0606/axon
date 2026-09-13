@@ -1,6 +1,6 @@
 ---
 name: triage
-description: 既存Entityを調査し、確定した判断・計画・関係・条件を新lifecycle CLIで反映する。
+description: 既存Entityを調査し、確定した判断・計画・関係・条件をAxon CLIで反映する。
 ---
 
 # 調査と反映

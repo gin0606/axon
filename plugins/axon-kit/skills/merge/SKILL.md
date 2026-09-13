@@ -1,6 +1,6 @@
 ---
 name: merge
-description: 新lifecycleのfile snapshotをprepare/check/applyで統合する。通常Git操作の完遂やbackend切替には使わない。
+description: Axonのfile snapshotをprepare/check/applyで統合する。通常Git操作の完遂やbackend切替には使わない。
 ---
 
 # file snapshotの統合

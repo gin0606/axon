@@ -1,12 +1,10 @@
 ---
 name: declaration
-description: 新lifecycle版で未提供のdeclaration操作を依頼されたとき、利用可能な境界を説明する。
+description: Axonの専用export/importを依頼されたとき、非対応の境界とユーザーが求める成果物・変更範囲を整理する。
 ---
 
 # declarationの境界
 
-単一lifecycle版ではこの操作は未提供。まず共通conventionsに従って対象環境のbinaryを選ぶ。選択したbinaryのhelpを確認し、未提供ならその事実を返す。旧CLIの手順を新保存先へ実行したり、保存ファイルを直接編集して補ったりしない。
+`axon:conventions` と `axon-kit:declaration` を使い、選択したCLIで観測した専用export/importの対応状況・version・対象を返す。
 
-既存データやdeclaration artifactは保全し、元schema・backend・対象範囲と要求した変換を呼び出し側へ返す。新規登録だけで履歴・構造を含む移行完了を代用しない。新規運用の説明は選択したCLIの `docs`、初期化は `axon-kit:storage` を使う。変換器の実装、backend切替、旧dataの削除はこのskillから許可されない。
-
-将来の再検討では、旧workflowから保持する目的と安全性を [引継ぎ](references/workflow.md) で確認する。これは未提供のコマンドを実行する手順ではない。
+依頼された計画範囲、artifactの作成・レビュー・書戻し、保存済みEntityへの適用を区別して整理する。ユーザー所有のartifactと既存データを保持し、実行できていない変更や移行を完了と報告しない。保存・代替操作の境界はkitの契約に従う。

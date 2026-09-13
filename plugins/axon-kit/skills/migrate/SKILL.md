@@ -1,10 +1,10 @@
 ---
 name: migrate
-description: 新lifecycle版で未提供のmigrate操作を依頼されたとき、利用可能な境界を説明する。
+description: Axonのschema移行やbackend変換を依頼されたとき、非対応の境界と移行元・移行先を整理する。変換の実行には使わない。
 ---
 
 # migrateの境界
 
-単一lifecycle版ではこの操作は未提供。まず共通conventionsに従って対象環境のbinaryを選ぶ。選択したbinaryのhelpを確認し、未提供ならその事実を返す。旧CLIの手順を新保存先へ実行したり、保存ファイルを直接編集して補ったりしない。
+`axon-kit:conventions` に従って対象環境のbinaryとrootを固定する。専用migrate操作は未提供。選択したCLIのhelpで対応状況を確認し、非対応なら観測したversionと利用できない操作を返す。非対応操作を別のbinaryや保存ファイルの直接編集で代替しない。
 
-既存データやdeclaration artifactは保全し、元schema・backend・対象範囲と要求した変換を呼び出し側へ返す。新規登録だけで履歴・構造を含む移行完了を代用しない。新規運用の説明は選択したCLIの `docs`、初期化は `axon-kit:storage` を使う。変換器の実装、backend切替、旧dataの削除はこのskillから許可されない。
+移行元のデータと既存artifactを保全し、確認できたschema・backend・対象範囲、要求された移行先・変換内容・保持すべき情報を呼び出し側へ返す。新規登録だけで履歴・構造を含む移行完了とはしない。通常操作の説明には選択したCLIの `docs` を使い、空の保存先の初期化が依頼されていれば `axon-kit:storage` へ渡す。変換器の実装、backend切替、移行元の削除はこのskillの範囲外。

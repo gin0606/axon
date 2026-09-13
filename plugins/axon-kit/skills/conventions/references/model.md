@@ -25,7 +25,7 @@ EntityはIssueまたはGroup。同じID namespaceと操作を使う。lifecycle�
 
 ## 情報を混同しない
 
-title・本文は現在の定義で、未終了の間はwriteできる。Noteはimmutableな補足でterminal後も追記でき、同内容の別Noteも独立に保持する。logのreasonは状態変更の理由。記録者は環境から取得できた場合だけ付随し、欠如は保存失敗ではない。旧Revision・claim・Disposition別軸は使わない。
+title・本文は現在の定義で、未終了の間はwriteできる。Noteはimmutableな補足でterminal後も追記でき、同内容の別Noteも独立に保持する。logのreasonは状態変更の理由。記録者は環境から取得できた場合だけ付随し、欠如は保存失敗ではない。
 
 再浮上条件は未設定またはshell文字列。未設定は常に成立。when set/clearはterminalにも使え、状態・履歴を変えず条件を評価しない。条件未成立は明示状態操作のguardではない。壊れた条件も保存情報を読みset/clearで修復できる。
 

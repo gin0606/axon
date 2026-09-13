@@ -7,9 +7,9 @@ description: Axonの単一lifecycle・情報モデルとCLI保存操作の共通
 
 ## 対象環境を固定する
 
-呼び出し側が指定したrepositoryまたは管理rootで操作する。binaryが指定されていればそれを使い、指定がなければその環境の `axon` を発見し、`axon --version` と `axon --help` を確認する。`tasks / accept / cancel` を持つ単一lifecycle版であること、必要なleaf helpの構文を照合して、実行ファイルとworking directoryを以後の操作で固定する。別repositoryのソースcheckoutは不要。このplugin内のreferenceと選択したCLIの `docs`・helpで手順を完結させる。
+呼び出し側が指定したrepositoryまたは管理rootで操作する。binaryが指定されていればそれを使い、指定がなければその環境の `axon` を発見し、`axon --version` と `axon --help` を確認する。`tasks / accept / cancel` の有無と必要なleaf helpの構文をこのpluginの契約と照合して、実行ファイルとworking directoryを以後の操作で固定する。別repositoryのソースcheckoutは不要。このplugin内のreferenceと選択したCLIの `docs`・helpで手順を完結させる。
 
-コマンドやschemaが非対応なら観測したversion・構文・対象を返す。PATHを勝手に別版へ切り替えたり、旧CLI、SQL、JSONL直接編集で操作を代替したりしない。実保存先の境界は [保存操作](references/mutations.md) に従う。
+コマンドやschemaが非対応なら観測したversion・構文・対象を返す。別のbinaryへの切替や、SQL・JSONLの直接編集で操作を代替しない。実保存先の境界は [保存操作](references/mutations.md) に従う。
 
 ## 必要な契約を読む
 
