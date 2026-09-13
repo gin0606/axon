@@ -1,6 +1,6 @@
 ---
 name: triage
-description: 既存Axon Entityを調査し、ユーザーの判断と合意済み計画から変更内容を整理・反映する個人用ワークフロー。
+description: 既存Axon Entityを調査し、ユーザーの判断と合意済み計画から変更内容を整理・反映する協業ワークフロー。
 ---
 
 # 調査と反映

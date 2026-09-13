@@ -2,7 +2,7 @@
 
 軸を分けたローカル issue tracker。このリポジトリは axon 自体の開発で、タスク管理にも axon を使う。
 
-Axon 操作には、個人用協業方針として [`axon:conventions`](plugins/axon/skills/conventions/SKILL.md) を適用する。
+Axon 操作には、このリポジトリの協業方針として [`axon:conventions`](plugins/axon/skills/conventions/SKILL.md) を適用する。
 
 ## 作業時の参照先
 

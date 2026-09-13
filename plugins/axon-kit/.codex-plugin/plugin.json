@@ -1,7 +1,7 @@
 {
   "name": "axon-kit",
   "version": "0.1.0+codex.20260908040044",
-  "description": "単一lifecycle版Axonの操作契約とSQLite・file backendの運用",
+  "description": "Axonの情報モデルとCLI操作契約を提供する基本スキル集。Issue・Groupの登録、更新、状態変更、保存操作を実行・検証し、利用者のワークフローの基盤となる。",
   "author": {
     "name": "gin0606"
   },
@@ -9,8 +9,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Axon Skill Kit",
-    "shortDescription": "単一lifecycleで計画・記録・作業状態を扱います。",
-    "longDescription": "単一lifecycle版Axonの操作契約とSQLite・file backendの運用",
+    "shortDescription": "Axonを操作する基本スキルと共通契約",
+    "longDescription": "Axonの情報モデルとCLI操作契約を提供する基本スキル集。Issue・Groupの登録、更新、状態変更、保存操作を実行・検証し、利用者のワークフローの基盤となる。",
     "developerName": "gin0606",
     "category": "Productivity",
     "capabilities": [

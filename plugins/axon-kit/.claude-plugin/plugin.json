@@ -1,6 +1,6 @@
 {
   "name": "axon-kit",
-  "description": "単一lifecycle版Axonの操作契約とSQLite初回運用",
+  "description": "Axonの情報モデルとCLI操作契約を提供する基本スキル集。Issue・Groupの登録、更新、状態変更、保存操作を実行・検証し、利用者のワークフローの基盤となる。",
   "version": "0.1.0",
   "author": {
     "name": "gin0606"

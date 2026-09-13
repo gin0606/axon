@@ -1,16 +1,16 @@
 {
   "name": "axon",
   "version": "0.1.0+codex.20260907032457",
-  "description": "単一lifecycle版Axonに個人用の判断と協業方針を加えるworkflow",
+  "description": "Axonを使った人とエージェントの協業ワークフロー。依頼の調査・整理、重複確認、判断の確認、計画の登録・更新、作業状態と記録の同期を扱う。",
   "author": {
     "name": "gin0606"
   },
   "repository": "https://github.com/gin0606/axon",
   "skills": "./skills/",
   "interface": {
-    "displayName": "Axon個人ワークフロー",
-    "shortDescription": "単一lifecycleで計画・記録・作業状態を扱います。",
-    "longDescription": "単一lifecycle版Axonに個人用の判断と協業方針を加えるworkflow",
+    "displayName": "Axon Workflows",
+    "shortDescription": "Axonを使った人とエージェントの協業ワークフロー",
+    "longDescription": "Axonを使った人とエージェントの協業ワークフロー。依頼の調査・整理、重複確認、判断の確認、計画の登録・更新、作業状態と記録の同期を扱う。",
     "developerName": "gin0606",
     "category": "Productivity",
     "capabilities": [
