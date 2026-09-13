@@ -1,4475 +1,1027 @@
-mod actor;
-mod codec;
-mod core;
-mod db;
-mod declaration;
-mod derived;
+mod cli_support;
+mod condition;
 mod display;
-mod domain;
-mod file_upgrade;
-mod history;
-mod merge;
-mod merge_cli;
-mod record_id;
+use cli_support::*;
 
-use anstyle::{AnsiColor, Color, Style};
+use axon::{
+    lifecycle::*,
+    location::Location,
+    sqlite::{self, Result},
+};
 use chrono::Utc;
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
-use clap_complete::{Shell, generate};
-use core::ApplyOutcome;
-use db::{Change, Ctx};
-use storage::Store;
-mod storage;
-use derived::{TriageReason, View};
-use domain::*;
-
-struct HelpSection {
-    heading: &'static str,
-    commands: &'static [&'static str],
-}
-
-const HELP_SECTIONS: &[HelpSection] = &[
-    HelpSection {
-        heading: "Workflow",
-        commands: &[
-            "plan", "capture", "ready", "triage", "start", "done", "release",
-        ],
-    },
-    HelpSection {
-        heading: "Inspect",
-        commands: &["show", "list", "claims", "log", "note", "revision", "actor"],
-    },
-    HelpSection {
-        heading: "Plan management",
-        commands: &[
-            "write", "group", "dep", "decide", "when", "export", "import",
-        ],
-    },
-    HelpSection {
-        heading: "Setup & utilities",
-        commands: &[
-            "init",
-            "migrate",
-            "storage",
-            "merge",
-            "completion",
-            "docs",
-            "help",
-        ],
-    },
-];
-
-const OUTPUT_HEADING: Style = Style::new().bold();
-const OUTPUT_ID: Style = Style::new()
-    .bold()
-    .fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
-const OUTPUT_ACTIVE: Style = Style::new()
-    .bold()
-    .fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
-const OUTPUT_POSITIVE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
-const OUTPUT_WAITING: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
-const OUTPUT_DECISION: Style = Style::new()
-    .bold()
-    .fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
-const OUTPUT_FAILURE: Style = Style::new()
-    .bold()
-    .fg_color(Some(Color::Ansi(AnsiColor::Red)));
-const OUTPUT_INDEX: Style = Style::new().bold();
-const OUTPUT_MUTED: Style = Style::new().dimmed();
-
-#[derive(Clone, Copy)]
-enum OutputDecoration {
-    Plain,
-    Ansi,
-}
-
-impl OutputDecoration {
-    fn paint(self, style: Style, value: impl std::fmt::Display) -> String {
-        match self {
-            Self::Plain => value.to_string(),
-            Self::Ansi => format!("{style}{value}{style:#}"),
-        }
-    }
-}
-
-fn output_decoration(is_terminal: bool, no_color: bool) -> OutputDecoration {
-    if is_terminal && !no_color {
-        OutputDecoration::Ansi
-    } else {
-        OutputDecoration::Plain
-    }
-}
-
-fn current_output_decoration() -> OutputDecoration {
-    use std::io::IsTerminal;
-
-    output_decoration(
-        std::io::stdout().is_terminal(),
-        std::env::var_os("NO_COLOR").is_some(),
-    )
-}
-
-fn current_error_decoration() -> OutputDecoration {
-    use std::io::IsTerminal;
-
-    output_decoration(
-        std::io::stderr().is_terminal(),
-        std::env::var_os("NO_COLOR").is_some(),
-    )
-}
-
-fn write_output(output: &str, decoration: OutputDecoration) -> std::io::Result<()> {
-    match decoration {
-        OutputDecoration::Plain => write_output_to(std::io::stdout(), output),
-        OutputDecoration::Ansi => write_output_to(
-            anstream::AutoStream::new(std::io::stdout(), anstream::ColorChoice::Always),
-            output,
-        ),
-    }
-}
-
-fn write_plain_output(output: &str) -> std::io::Result<()> {
-    write_output_to(std::io::stdout(), output)
-}
-
-fn write_output_to(mut stream: impl std::io::Write, output: &str) -> std::io::Result<()> {
-    match stream.write_all(output.as_bytes()) {
-        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
-        result => result,
-    }
-}
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use std::{
+    collections::BTreeSet,
+    io::{Read, Write},
+    path::PathBuf,
+    time::Duration,
+};
 
 #[derive(Parser)]
 #[command(
-    name = "axon",
     version = env!("AXON_VERSION"),
-    about = "A local issue tracker with independent state axes"
+    styles = display::cli_styles(),
+    color = display::cli_color(),
+    about = "A local issue tracker for Issues and Groups",
+    after_help = "Use axon docs for the lifecycle and daily workflow. Group done explicitly confirms that the entire plan has passed final review."
 )]
 struct Cli {
     #[command(subcommand)]
     command: Command,
 }
-
-#[derive(clap::Args, Clone, Copy)]
-struct ConditionEvaluationArgs {
-    /// Trace evaluated Command conditions to stderr, including unredacted child output
-    #[arg(
-        long,
-        long_help = "Trace each Command condition actually evaluated by this invocation to stderr. Each block includes the Entity ID, working directory, exit result, and captured stdout/stderr. Each stream retains at most 64 KiB; larger output shows its first and last 32 KiB and the omitted byte count. Captured output is not redacted; non-UTF-8 bytes are rendered lossily and terminal controls use visible escapes, empty streams are marked (empty), and a trace write failure fails the Axon invocation. Memoized references and abnormal exits do not produce a trace block."
-    )]
-    trace_conditions: bool,
-    /// Maximum duration for each Command condition (default: 30s)
-    #[arg(
-        long,
-        value_name = "DURATION",
-        default_value = "30s",
-        value_parser = parse_condition_timeout,
-        long_help = "Maximum duration for each Command condition evaluated by this invocation (default: 30s). Accepts a positive integer followed by ms, s, m, or h, such as 500ms or 2m. There is no unlimited value. A timeout fails the Axon invocation before any requested mutation is applied."
-    )]
-    condition_timeout: std::time::Duration,
+#[derive(Subcommand)]
+enum Command {
+    /// Explain the lifecycle, daily workflow and storage boundaries
+    Docs,
+    /// Show the optional recorder actor detected in the current environment
+    Actor,
+    /// Write an unstyled shell completion script to stdout
+    Completion { shell: clap_complete::Shell },
+    /// Merge snapshots through a retained review workspace
+    Merge {
+        #[command(subcommand)]
+        command: Merge,
+    },
+    /// Validate stored snapshots without running conditions
+    Storage {
+        #[command(subcommand)]
+        command: Storage,
+    },
+    /// Initialize a new management root (default: SQLite)
+    Init {
+        prefix: Option<String>,
+        #[arg(long, value_enum, default_value = "sqlite")]
+        backend: Backend,
+    },
+    /// Create an Undecided Issue
+    Capture(Create),
+    /// Create a NotStarted Issue with an adopted plan
+    Plan(Create),
+    /// Create Groups or change their membership
+    Group {
+        #[command(subcommand)]
+        command: Group,
+    },
+    /// List saved Entities in creation order without running conditions
+    List(ListOptions),
+    /// List surfaced Undecided Entities with surfaced ancestors
+    Triage(CandidateOptions),
+    /// List surfaced NotStarted Entities and all InProgress work, including blocked work
+    Tasks(CandidateOptions),
+    /// Set or repair resurfacing conditions without running them
+    When {
+        #[command(subcommand)]
+        command: When,
+    },
+    /// Show text, immediate unmet prerequisites and direct Group children
+    Show {
+        id: String,
+        /// Include saved lifecycle, condition and all direct relationships without duplicate wait sections
+        #[arg(long)]
+        details: bool,
+    },
+    /// Append or read immutable Notes
+    Note {
+        #[command(subcommand)]
+        command: Notes,
+    },
+    /// Read state changes and integrations
+    Log {
+        id: String,
+        /// Include the stored recorder data as JSON
+        #[arg(long)]
+        recorder_details: bool,
+    },
+    /// Adopt an Undecided Entity
+    Accept(Change),
+    /// Withdraw adoption of a NotStarted Entity
+    Withdraw(Change),
+    /// Start work after checking parent and dependency prerequisites
+    Start(Change),
+    /// Release InProgress work back to NotStarted
+    Release(Change),
+    /// Complete work; for a Group, explicitly confirm final review of the entire plan
+    Done(Change),
+    /// Cancel work
+    Cancel(Change),
+    /// Return a Cancelled Entity to Undecided
+    Reconsider(Change),
+    /// Edit title or description without changing lifecycle
+    Write {
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[command(flatten)]
+        body: Body,
+    },
+    /// Add or remove explicit dependencies
+    Dep {
+        #[command(subcommand)]
+        command: Dependency,
+    },
 }
-
-impl Default for ConditionEvaluationArgs {
-    fn default() -> Self {
-        Self {
-            trace_conditions: false,
-            condition_timeout: derived::DEFAULT_CONDITION_TIMEOUT,
+#[derive(Subcommand)]
+enum Storage {
+    Check { snapshot: PathBuf },
+}
+#[derive(Subcommand)]
+#[command(
+    after_help = "Example: axon merge prepare --base base.jsonl --ours ours.jsonl --theirs theirs.jsonl --output .axon/state.jsonl --workspace .axon/merge-review\nEdit choices in resolution.json, then run axon merge check WORKSPACE and axon merge apply WORKSPACE.\nGit driver configuration, staging and commits are separate user operations. Retain the workspace for recovery."
+)]
+enum Merge {
+    /// Retain inputs and prepare conflicts and resolution choices without publishing
+    Prepare {
+        #[arg(long)]
+        base: PathBuf,
+        #[arg(long)]
+        ours: PathBuf,
+        #[arg(long)]
+        theirs: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        workspace: PathBuf,
+    },
+    /// Validate resolution choices and the complete candidate
+    Check { workspace: PathBuf },
+    /// Recheck validated inputs and output before publishing
+    Apply { workspace: PathBuf },
+    /// Git merge driver: %O %A %B; preserve %A and fail on conflicts
+    Driver {
+        base: PathBuf,
+        ours: PathBuf,
+        theirs: PathBuf,
+    },
+}
+#[derive(Args)]
+#[command(
+    after_help = "Conditions run through /bin/sh -c: exit 0 is satisfied, 1 is unsatisfied, other exits fail the whole list.
+The working directory is the current Git worktree root, or the management root outside Git.
+Ctrl-C and timeout send TERM to the process group, then KILL after 1s.
+Each stdout/stderr stream retains up to 64 KiB (first and last 32 KiB on overflow).
+Examples: axon tasks --condition-timeout 500ms; axon triage --trace-conditions
+Absence from a candidate list does not mean an Entity is missing. Use list for the complete inventory."
+)]
+struct CandidateOptions {
+    #[command(flatten)]
+    selection: Selection,
+    /// Per-command timeout: positive integer followed by ms, s, m or h
+    #[arg(long, default_value = "30s", value_parser = parse_timeout)]
+    condition_timeout: Duration,
+    /// Write evaluated condition results and captured output to stderr
+    #[arg(long)]
+    trace_conditions: bool,
+}
+#[derive(Subcommand)]
+enum When {
+    /// Save or replace a shell condition without evaluating it
+    #[command(
+        after_help = "Example: axon when set ID --command 'test -f ready.txt'\nExit 0=satisfied, 1=unsatisfied, others=evaluation failed. Repair broken conditions with set or clear."
+    )]
+    Set {
+        id: String,
+        #[arg(long)]
+        command: String,
+    },
+    /// Clear the condition without changing lifecycle
+    Clear { id: String },
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum Backend {
+    Sqlite,
+    File,
+}
+#[derive(Args)]
+struct Body {
+    #[arg(short = 'm', long, conflicts_with = "description_file")]
+    description: Option<String>,
+    /// Read UTF-8 text from a file; - reads standard input
+    #[arg(short = 'F', long)]
+    description_file: Option<PathBuf>,
+}
+impl Body {
+    fn read(self) -> Result<Option<String>> {
+        match self.description_file {
+            Some(path) if path.as_os_str() == "-" => {
+                let mut text = String::new();
+                std::io::stdin().read_to_string(&mut text)?;
+                Ok(Some(text))
+            }
+            Some(path) => Ok(Some(std::fs::read_to_string(&path).map_err(|e| {
+                sqlite::Error::Invalid(format!("cannot read text file {}: {e}", path.display()))
+            })?)),
+            None => Ok(self.description),
         }
     }
 }
-
-fn parse_condition_timeout(value: &str) -> Result<std::time::Duration, String> {
-    let (number, unit, multiplier) = if let Some(number) = value.strip_suffix("ms") {
-        (number, "ms", 1_u64)
-    } else if let Some(number) = value.strip_suffix('s') {
-        (number, "s", 1_000)
-    } else if let Some(number) = value.strip_suffix('m') {
-        (number, "m", 60_000)
-    } else if let Some(number) = value.strip_suffix('h') {
-        (number, "h", 3_600_000)
-    } else {
-        return Err(
-            "use a positive integer followed by ms, s, m, or h (for example 500ms or 2m)"
-                .to_string(),
-        );
-    };
-    let number = number
-        .parse::<u64>()
-        .map_err(|_| format!("invalid {unit} duration: {value}"))?;
-    let milliseconds = number
-        .checked_mul(multiplier)
-        .ok_or_else(|| format!("duration is too large: {value}"))?;
-    if milliseconds == 0 {
-        return Err("condition timeout must be greater than zero".to_string());
-    }
-    Ok(std::time::Duration::from_millis(milliseconds))
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum KindFilter {
-    Issue,
-    Group,
-}
-
-impl KindFilter {
-    fn matches(self, entity: &Entity) -> bool {
-        matches!(
-            (self, entity.kind),
-            (Self::Issue, EntityKind::Issue) | (Self::Group, EntityKind::Group)
-        )
-    }
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum ProgressFilter {
-    NotStarted,
-    InProgress,
-    Ended,
-}
-
-impl ProgressFilter {
-    fn matches(self, progress: &Progress) -> bool {
-        matches!(
-            (self, progress),
-            (Self::NotStarted, Progress::NotStarted)
-                | (Self::InProgress, Progress::InProgress(_))
-                | (Self::Ended, Progress::Ended)
-        )
-    }
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum DispositionFilter {
-    Undecided,
-    Accepted,
-    Rejected,
-}
-
-impl DispositionFilter {
-    fn matches(self, disposition: Disposition) -> bool {
-        matches!(
-            (self, disposition),
-            (Self::Undecided, Disposition::Undecided)
-                | (Self::Accepted, Disposition::Accepted)
-                | (Self::Rejected, Disposition::Rejected)
-        )
-    }
-}
-
-#[derive(clap::Args)]
-struct ListFilters {
-    /// Literal substring in current title, description, or any Note body
-    #[arg(long, value_name = "TEXT", value_parser = clap::builder::NonEmptyStringValueParser::new(),
-        long_help = "Search current title, description, and all Note bodies (including old Notes). Case-sensitive; no Unicode normalization or whitespace trimming. Empty text is invalid. %, _, and regex symbols are literal. Excludes actors, timestamps, Revisions, and decision/progress history. Adds Matched locations and stable Note IDs in ID order; use show or note show for full text. Combines with state/kind filters using AND before Command evaluation. For a leading hyphen use --search='--help'.")]
-    search: Option<String>,
-    /// Include only one Entity kind
-    #[arg(long, value_enum)]
-    kind: Option<KindFilter>,
-    /// Include only this saved Progress
-    #[arg(long, value_enum)]
-    progress: Option<ProgressFilter>,
-    /// Include only this saved Disposition
-    #[arg(long, value_enum)]
-    disposition: Option<DispositionFilter>,
-    /// Include terminal (Ended or Rejected) or non-terminal Entities; omit for both
-    #[arg(long, action = clap::ArgAction::Set, require_equals = true)]
-    terminal: Option<bool>,
-}
-
-impl ListFilters {
-    fn matches(&self, entity: &Entity) -> bool {
-        included(self.kind, entity)
-            && self
-                .progress
-                .is_none_or(|value| value.matches(&entity.progress))
-            && self
-                .disposition
-                .is_none_or(|value| value.matches(entity.disposition))
-            && self
-                .terminal
-                .is_none_or(|value| value == entity.is_terminal())
-    }
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// Print the current actor label without opening a database
-    #[command(
-        long_about = "Print the current actor label followed by a newline, without opening a database or evaluating external conditions. Uses the same detection as Notes, history and claims. Run in the same environment and working directory as the intended operation; later changes can change the label. This display label is not a unique session ID, authentication or a lock; multiple agents can share it."
-    )]
-    Actor,
-    /// Validate a complete file snapshot
-    Storage {
-        #[command(subcommand)]
-        command: merge_cli::StorageCmd,
-    },
-    /// Prepare, validate and publish a three-way snapshot merge
-    Merge {
-        #[command(subcommand)]
-        command: merge_cli::MergeCmd,
-    },
-    /// Convert a current-schema SQLite snapshot to SQLite or file without modifying the source
-    Migrate {
-        /// Existing current-schema database (stop its writers before the final conversion)
-        #[arg(long)]
-        source: std::path::PathBuf,
-        /// New directory for the backup, backend and verification manifest
-        #[arg(long)]
-        output: std::path::PathBuf,
-        /// Output backend (required; does not switch the active root)
-        #[arg(long, value_enum)]
-        backend: storage::Backend,
-    },
-    /// Initialize axon at the management root
-    Init {
-        /// Storage backend (default: sqlite)
-        #[arg(long, value_enum)]
-        backend: Option<storage::Backend>,
-        /// Prefix for generated Entity IDs; defaults to the management-root directory name
-        prefix: Option<String>,
-    },
-    /// Generate a shell completion script
-    Completion {
-        /// Shell whose completion script is written to standard output
-        #[arg(value_enum)]
-        shell: Shell,
-    },
-    /// Explain Axon's state model and basic workflow
-    Docs {
-        #[command(subcommand)]
-        topic: Option<DocsCmd>,
-    },
-    /// Create an Accepted issue
-    #[command(after_help = CREATION_HELP)]
-    Plan {
-        /// Parent group ID or unique ID suffix
-        #[arg(long)]
-        parent: Option<String>,
-        #[command(flatten)]
-        initial: InitialStateArgs,
-        /// Initial description; an empty value leaves it absent. For a leading hyphen, use --message='--help text' (or -m='--help text')
-        #[arg(short = 'm', long)]
-        message: Option<String>,
-        /// File containing the initial description, or - for standard input
-        #[arg(short = 'F', long)]
-        file: Option<String>,
-        /// One or more words joined with spaces to form the issue title. Put options before --, e.g. -m='body' -- '--color text'
-        #[arg(required = true, value_name = "TITLE")]
-        title: Vec<String>,
-    },
-    /// Create an Undecided issue
-    #[command(after_help = CREATION_HELP)]
-    Capture {
-        /// Parent group ID or unique ID suffix
-        #[arg(long)]
-        parent: Option<String>,
-        #[command(flatten)]
-        initial: InitialStateArgs,
-        /// Initial description; an empty value leaves it absent. For a leading hyphen, use --message='--help text' (or -m='--help text')
-        #[arg(short = 'm', long)]
-        message: Option<String>,
-        /// File containing the initial description, or - for standard input
-        #[arg(short = 'F', long)]
-        file: Option<String>,
-        /// One or more words joined with spaces to form the issue title. Put options before --, e.g. -m='body' -- '--color text'
-        #[arg(required = true, value_name = "TITLE")]
-        title: Vec<String>,
-    },
-    /// List Entities that can be started now
-    Ready {
-        /// Include only one Entity kind
-        #[arg(long, value_enum)]
-        kind: Option<KindFilter>,
-        #[command(flatten)]
-        evaluation: ConditionEvaluationArgs,
-    },
-    /// List the active decision frontier
-    #[command(
-        long_about = "List Entities that satisfy all four conditions: non-terminal, their own Resurface condition is satisfied (surfaced), in active scope (all ancestor Group gates open), and Undecided or orphaned. A root Entity with Manual is active but unsurfaced; a surfaced child below a closed ancestor gate is inactive. Absence does not mean creation/update failed or an Entity is missing; do not repeat creation on that evidence. Use axon list for the complete management-root inventory and axon show <ID> for saved state and unsurfaced/inactive reasons. ready and triage list their respective frontiers, not a complete inventory."
-    )]
-    Triage {
-        /// Include only one Entity kind
-        #[arg(long, value_enum)]
-        kind: Option<KindFilter>,
-        #[command(flatten)]
-        evaluation: ConditionEvaluationArgs,
-    },
-    /// List every active claim
-    Claims {
-        /// Include only one Entity kind
-        #[arg(long, value_enum)]
-        kind: Option<KindFilter>,
-    },
-    /// Claim one ready Entity
-    Start {
-        /// Entity ID or unique ID suffix
-        id: String,
-        #[command(flatten)]
-        evaluation: ConditionEvaluationArgs,
-    },
-    /// Mark one InProgress Entity as Ended
-    Done {
-        /// Entity ID or unique ID suffix
-        id: String,
-    },
-    /// Release one InProgress Entity
-    Release {
-        /// Entity ID or unique ID suffix
-        id: String,
-        /// Release reason or handoff recorded in progress history. For a leading hyphen, use --reason='--help text' (or -r='--help text')
-        #[arg(short, long)]
-        reason: Option<String>,
-    },
-    /// Update an Entity title or description
-    Write {
-        /// Entity ID or unique ID suffix
-        id: String,
-        /// Replacement title. For a leading hyphen, use --title='--color text'
-        #[arg(long)]
-        title: Option<String>,
-        /// Replacement description; an empty value removes it. For a leading hyphen, use --message='--help text' (or -m='--help text')
-        #[arg(short = 'm', long)]
-        message: Option<String>,
-        /// File containing the replacement description, or - for standard input
-        #[arg(short = 'F', long)]
-        file: Option<String>,
-    },
-    /// Show decision history for one Entity
-    Log {
-        /// Entity ID or unique ID suffix
-        id: String,
-    },
-    /// List all Entities, optionally filtered by saved state
-    #[command(
-        long_about = "List every Entity by default, including inactive, unsurfaced, ended, and rejected Entities. Explicit filters combine with AND before display/Command evaluation; each option may be supplied once. Non-terminal means neither Ended nor Rejected, not ready, triage, or active scope. Retained rows still evaluate required ancestors normally unless --skip-command-evaluation is set. Empty matches succeed without rows."
-    )]
-    List {
-        #[command(flatten)]
-        filters: ListFilters,
-        /// Read saved information without running any Command conditions; unknown values are unevaluated
-        #[arg(
-            long,
-            long_help = "Read saved information without executing Command conditions, including ancestors, descendants, and related Entities. Derived values needing Command results are marked unevaluated; other conditions are still evaluated. May be combined with --trace-conditions, which emits no Command trace in this mode."
-        )]
-        skip_command_evaluation: bool,
-        #[command(flatten)]
-        evaluation: ConditionEvaluationArgs,
-    },
-    /// Inspect one Entity from situation and waits to its full details
-    Show {
-        /// Entity ID or unique ID suffix
-        id: String,
-        /// Read saved information without running any Command conditions; unknown values are unevaluated
-        #[arg(
-            long,
-            long_help = "Read saved information without executing Command conditions, including ancestors, descendants, and related Entities. Derived values needing Command results are marked unevaluated; other conditions are still evaluated. May be combined with --trace-conditions, which emits no Command trace in this mode."
-        )]
-        skip_command_evaluation: bool,
-        #[command(flatten)]
-        evaluation: ConditionEvaluationArgs,
-    },
-    /// Add and inspect durable notes
-    #[command(subcommand)]
-    Note(NoteCmd),
-    /// Inspect immutable plan declaration revisions
-    #[command(subcommand)]
-    Revision(RevisionCmd),
-    /// Export an editable plan declaration as canonical YAML
-    #[command(
-        after_help = "Use axon docs declaration for external dependency/parent snapshots without expanding the edit set."
-    )]
-    Export {
-        /// Entity IDs or unique ID suffixes to edit
-        #[arg(value_name = "ID")]
-        ids: Vec<String>,
-        /// Group ID or unique suffix; includes the group and its direct children
-        #[arg(long = "group", value_name = "GROUP")]
-        groups: Vec<String>,
-        /// Include every descendant of each --group selector
-        #[arg(long, requires = "groups")]
-        recursive: bool,
-    },
-    /// Prepare, validate, or atomically apply a plan declaration
-    #[command(subcommand)]
-    #[command(
-        after_help = "Use axon docs declaration for the format, workflow, and external dependency/parent snapshots.
-Use axon docs declaration --example for a complete new-plan YAML example."
-    )]
-    Import(ImportCmd),
-    /// Change an Entity Disposition
-    #[command(subcommand)]
-    Decide(DecideCmd),
-    /// Change an Entity resurface condition
-    #[command(subcommand)]
-    When(WhenCmd),
-    /// Manage Entity dependencies
-    #[command(subcommand)]
-    Dep(DepCmd),
-    /// Create groups and manage containment
-    #[command(subcommand)]
-    Group(GroupCmd),
-}
-
-const CREATION_HELP: &str = "Repeat --needs for multiple dependencies; duplicate references are stored once. Choose at most one of --manual, --at, --after, or --command; omission means Always. Creation saves the complete initial declaration and condition atomically, without executing Command or recording fictional transitions. Every invocation creates a new Entity. Inspect saved state with axon show <id> --skip-command-evaluation.";
-
-#[derive(clap::Args)]
-#[group(multiple = true)]
-struct InitialStateArgs {
-    /// Required Entity ID or unique ID suffix; repeat for multiple dependencies
+#[derive(Args)]
+struct Create {
+    /// Title of the new Entity
+    #[arg(long)]
+    title: String,
+    /// Initial shell condition; stored without evaluation
+    #[arg(long)]
+    command: Option<String>,
+    #[command(flatten)]
+    body: Body,
+    #[arg(long)]
+    parent: Option<String>,
     #[arg(long)]
     needs: Vec<String>,
-    /// Initially remain unsurfaced until explicitly changed
-    #[arg(long, conflicts_with_all = ["at", "after", "command"])]
-    manual: bool,
-    /// Initial resurface instant as RFC 3339 with seconds and UTC offset
-    #[arg(long, value_name = "RFC3339", conflicts_with_all = ["after", "command"])]
-    at: Option<String>,
-    /// Initially wait for an Entity (ID or unique suffix) to become Ended or Rejected
-    #[arg(long, value_name = "ENTITY", conflicts_with = "command")]
-    after: Option<String>,
-    /// Initial shell string, stored without execution; see axon when command --help. Use --command='--help text' for a leading hyphen
-    #[arg(long, value_name = "SHELL_STRING")]
-    command: Option<String>,
 }
-
-impl InitialStateArgs {
-    fn resolve(
-        &self,
-        store: &Store,
-    ) -> Result<(Vec<EntityId>, ResurfaceCondition), Box<dyn std::error::Error>> {
-        let dependencies = self
-            .needs
-            .iter()
-            .map(|id| store.resolve_id(id))
-            .collect::<Result<Vec<_>, _>>()?;
-        let condition = if self.manual {
-            ResurfaceCondition::Manual
-        } else if let Some(at) = &self.at {
-            ResurfaceCondition::AtDate(parse_resurface_at(at)?)
-        } else if let Some(reference) = &self.after {
-            ResurfaceCondition::AfterEntity(store.resolve_id(reference)?)
-        } else if let Some(command) = &self.command {
-            ResurfaceCondition::Command(command.clone())
-        } else {
-            ResurfaceCondition::Always
-        };
-        Ok((dependencies, condition))
-    }
-}
-
-#[derive(Subcommand)]
-enum GroupCmd {
-    /// Create an Accepted group
-    #[command(after_help = CREATION_HELP)]
-    Plan {
-        /// Parent group ID or unique ID suffix
-        #[arg(long)]
-        parent: Option<String>,
-        #[command(flatten)]
-        initial: InitialStateArgs,
-        /// Initial description; an empty value leaves it absent. For a leading hyphen, use --message='--help text' (or -m='--help text')
-        #[arg(short = 'm', long)]
-        message: Option<String>,
-        /// File containing the initial description, or - for standard input
-        #[arg(short = 'F', long)]
-        file: Option<String>,
-        /// One or more words joined with spaces to form the group title. Put options before --, e.g. -m='body' -- '--color text'
-        #[arg(required = true, value_name = "TITLE")]
-        title: Vec<String>,
-    },
-    /// Create an Undecided group
-    #[command(after_help = CREATION_HELP)]
-    Capture {
-        /// Parent group ID or unique ID suffix
-        #[arg(long)]
-        parent: Option<String>,
-        #[command(flatten)]
-        initial: InitialStateArgs,
-        /// Initial description; an empty value leaves it absent. For a leading hyphen, use --message='--help text' (or -m='--help text')
-        #[arg(short = 'm', long)]
-        message: Option<String>,
-        /// File containing the initial description, or - for standard input
-        #[arg(short = 'F', long)]
-        file: Option<String>,
-        /// One or more words joined with spaces to form the group title. Put options before --, e.g. -m='body' -- '--color text'
-        #[arg(required = true, value_name = "TITLE")]
-        title: Vec<String>,
-    },
-    /// Set or move an Entity's parent group
-    Set {
-        /// Entity ID or unique ID suffix to contain
-        id: String,
-        /// Parent group ID or unique ID suffix
-        parent: String,
-    },
-    /// Remove an Entity from its parent group
-    Unset {
-        /// Entity ID or unique ID suffix
-        id: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum DocsCmd {
-    /// Explain declaration fields and the prepare/check/apply workflow
-    Declaration {
-        /// Write only a complete new-plan YAML example to stdout
-        #[arg(long)]
-        example: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum ImportCmd {
-    /// Assign final IDs and rewrite a declaration into canonical form without changing the DB
-    #[command(
-        after_help = "Use axon docs declaration for the format, workflow, and external dependency/parent snapshots.
-Save axon docs declaration --example output to a file, then pass it to prepare."
-    )]
-    Prepare {
-        /// YAML declaration file to rewrite
-        file: std::path::PathBuf,
-    },
-    /// Validate a canonical declaration and show structural and derived changes
-    Check {
-        /// Canonical YAML declaration file
-        file: std::path::PathBuf,
-        #[command(flatten)]
-        evaluation: ConditionEvaluationArgs,
-    },
-    /// Validate and atomically apply a canonical declaration
-    Apply {
-        /// Canonical YAML declaration file to apply and refresh
-        file: std::path::PathBuf,
-        #[command(flatten)]
-        evaluation: ConditionEvaluationArgs,
-    },
-}
-
-#[derive(Subcommand)]
-enum DecideCmd {
-    /// Set Disposition to Accepted
-    Accept(DecisionArgs),
-    /// Set Disposition to Rejected
-    Reject(DecisionArgs),
-    /// Set Disposition to Undecided
-    Undecide(DecisionArgs),
-}
-
-#[derive(clap::Args)]
-struct DecisionArgs {
-    /// Entity ID or unique ID suffix whose Disposition is changed
+#[derive(Args)]
+struct Change {
     id: String,
-    /// Reason recorded in decision history. For a leading hyphen, use --reason='--help text' (or -r='--help text')
     #[arg(short, long)]
     reason: Option<String>,
 }
-
 #[derive(Subcommand)]
-enum WhenCmd {
-    /// Keep an Entity unsurfaced until its condition is explicitly changed
-    Manual {
-        /// Entity ID or unique ID suffix
+enum Group {
+    Capture(Create),
+    Plan(Create),
+    Set {
         id: String,
-        /// Reason recorded in decision history. For a leading hyphen, use --reason='--help text' (or -r='--help text')
-        #[arg(short, long)]
-        reason: Option<String>,
+        #[arg(long)]
+        parent: String,
     },
-    /// Set an AtDate resurface condition
-    At {
-        /// Entity ID or unique ID suffix
+    Unset {
         id: String,
-        /// Resurface instant as RFC 3339 with seconds and UTC offset
-        #[arg(value_name = "RFC3339")]
-        date: String,
-        /// Reason recorded in decision history. For a leading hyphen, use --reason='--help text' (or -r='--help text')
-        #[arg(short, long)]
-        reason: Option<String>,
-    },
-    /// Set an AfterEntity resurface condition
-    After {
-        /// Entity ID or unique ID suffix
-        id: String,
-        /// Entity whose terminal state satisfies the condition
-        reference: String,
-        /// Reason recorded in decision history. For a leading hyphen, use --reason='--help text' (or -r='--help text')
-        #[arg(short, long)]
-        reason: Option<String>,
-    },
-    /// Evaluate a shell command when derived status is needed
-    #[command(
-        long_about = "Store a Command condition for an Issue or Group. Run /bin/sh -c in the current worktree root (Axon management root outside Git), inheriting the caller's environment without interactive or login startup. Exit 0 satisfies the condition, 1 does not; other exits, signals, spawn failures, and timeouts fail Axon. Adapt other tools' exit codes in your script. Each Entity is evaluated at most once per invocation; the next invocation reevaluates, and satisfaction can revert. Results are not stored. Evaluating leaf commands use a 30s timeout by default and accept a finite --condition-timeout override. On timeout or Ctrl-C, Axon terminates the condition's process group. Normal stdout/stderr is suppressed; failures include at most 64 KiB from each stream. Persistent caches, intervals, and replay remain the script's responsibility. Setting or clearing a condition does not evaluate it."
-    )]
-    Command {
-        /// Entity ID or unique ID suffix
-        id: String,
-        /// Shell string passed as one argument to /bin/sh -c
-        command: String,
-        /// Reason recorded in decision history. For a leading hyphen, use --reason='--help text' (or -r='--help text')
-        #[arg(short, long)]
-        reason: Option<String>,
-    },
-    /// Set the resurface condition to Always
-    Clear {
-        /// Entity ID or unique ID suffix
-        id: String,
-        /// Reason recorded in decision history. For a leading hyphen, use --reason='--help text' (or -r='--help text')
-        #[arg(short, long)]
-        reason: Option<String>,
     },
 }
-
 #[derive(Subcommand)]
-enum DepCmd {
-    /// Add a hard prerequisite
+enum Dependency {
     Add {
-        /// Dependent Entity ID or unique ID suffix
         id: String,
-        /// Required Entity ID or unique ID suffix
         #[arg(long)]
         needs: String,
     },
-    /// Remove a hard prerequisite
     Rm {
-        /// Dependent Entity ID or unique ID suffix
         id: String,
-        /// Entity ID or unique ID suffix no longer required
         #[arg(long)]
         needs: String,
     },
 }
-
 #[derive(Subcommand)]
-enum NoteCmd {
-    /// Append a note to an Entity
+enum Notes {
+    /// Read one Note by its complete stable ID
+    Show {
+        id: String,
+        note_id: String,
+        #[arg(long)]
+        recorder_details: bool,
+    },
+    List {
+        id: String,
+        /// Include the stored recorder data as JSON
+        #[arg(long)]
+        recorder_details: bool,
+    },
     Add {
-        /// Entity ID or unique ID suffix
         id: String,
-        /// Note body. For a leading hyphen, use --message='--help text' (or -m='--help text')
-        #[arg(short = 'm', long)]
+        #[arg(
+            short = 'm',
+            long,
+            required_unless_present = "file",
+            conflicts_with = "file"
+        )]
         message: Option<String>,
-        /// File containing the note body, or - for standard input
         #[arg(short = 'F', long)]
-        file: Option<String>,
-    },
-    /// List notes for an Entity
-    List {
-        /// Entity ID or unique ID suffix
-        id: String,
-    },
-    /// Show one note by its stable ID
-    Show {
-        /// Entity ID or unique ID suffix
-        id: String,
-        /// Note stable ID or unique prefix (at least 4 characters)
-        number: String,
+        file: Option<PathBuf>,
     },
 }
-
-#[derive(Subcommand)]
-enum RevisionCmd {
-    /// List plan declaration revisions for an Entity
-    List {
-        /// Entity ID or unique ID suffix
-        id: String,
-    },
-    /// Show one revision by its stable ID
-    Show {
-        /// Entity ID or unique ID suffix
-        id: String,
-        /// Revision stable ID or unique prefix (at least 4 characters)
-        number: String,
-    },
-    /// Compare two plan declaration revisions
-    Diff {
-        /// Entity ID or unique ID suffix
-        id: String,
-        /// Older Revision stable ID or unique prefix (at least 4 characters)
-        from: String,
-        /// Newer Revision stable ID or unique prefix (at least 4 characters)
-        to: String,
-    },
-}
-
-fn main() {
-    let args: Vec<_> = std::env::args_os().collect();
-    if args.len() == 1 {
-        if let Err(error) = cli_command().print_help() {
-            if error.kind() == std::io::ErrorKind::BrokenPipe {
-                return;
-            }
-            let decoration = current_error_decoration();
-            eprintln!(
-                "{} {}",
-                decoration.paint(OUTPUT_FAILURE, "Error:"),
-                display::human_text(error)
-            );
-            std::process::exit(1);
-        }
-        return;
-    }
-    if let Err(error) = run(args) {
-        let decoration = current_error_decoration();
-        eprintln!(
-            "{} {}",
-            decoration.paint(OUTPUT_FAILURE, "Error:"),
-            display::human_text(&error)
-        );
-        if let Some(guidance) = error_guidance(error.as_ref()) {
-            eprintln!(
-                "{} {}",
-                decoration.paint(OUTPUT_HEADING, "Help:"),
-                display::human_text(guidance)
-            );
-        }
-        std::process::exit(1);
-    }
-}
-
-fn open_store(trace_conditions: bool) -> db::Result<Store> {
-    open_store_with_evaluation(ConditionEvaluationArgs {
-        trace_conditions,
-        condition_timeout: derived::DEFAULT_CONDITION_TIMEOUT,
-    })
-}
-
-fn open_store_with_evaluation(evaluation: ConditionEvaluationArgs) -> db::Result<Store> {
-    Store::open(
-        evaluation.trace_conditions,
-        evaluation.condition_timeout,
-        |outcome| {
-            if let db::migration::Outcome::Migrated {
-                from, to, backup, ..
-            } = outcome
-            {
-                let decoration = current_error_decoration();
-                eprintln!(
-                    "{} database v{from} -> v{to}; backup: {}. Migration committed; continuing command.",
-                    decoration.paint(OUTPUT_POSITIVE, "Migrated"),
-                    display::human_text(backup.display())
-                );
-            }
-        },
-    )
-}
-
-fn migration_guidance(failure: &db::migration::Failure) -> String {
-    use db::migration::ApplicationState;
-    let state = if failure.kind == db::migration::Kind::SchemaUpdate {
-        match failure.applied {
-            ApplicationState::NotApplied => {
-                "The database schema update was not applied; the requested operation did not run. Preserve the database and any backup."
-            }
-            ApplicationState::Applied => {
-                "The database schema update was committed at the reported database path; the requested operation did not run. Preserve the database and backup; no separate conversion output was created."
-            }
-            ApplicationState::Unknown => {
-                "The database schema update result is unknown. Preserve and inspect the database at the reported path and its backup before any retry; the requested operation did not run."
-            }
-        }
-    } else {
-        match failure.applied {
-            ApplicationState::NotApplied => {
-                "The source was not modified. Migration output publication did not complete; incomplete output, including converted state or temporary files, may remain."
-            }
-            ApplicationState::Applied => {
-                "Migration was committed to the output; the source was not switched. Preserve both databases."
-            }
-            ApplicationState::Unknown => {
-                "Migration output durability is unknown; the source was not switched. Preserve and inspect the output and backup before any retry."
-            }
-        }
-    };
-    let cause = match failure.source.as_ref() {
-        db::DbError::UnsupportedSchema { found, expected } if found > expected =>
-            format!("Use a newer axon build that supports DB schema {found}; automatic downgrade is not supported."),
-        db::DbError::UnsupportedSchema { found, .. } =>
-            format!("No automatic update path is retained for schema {found}. Preserve it and use a build that supports DB schema {found} for inspection or a one-time data conversion. Backend conversion requires the current schema."),
-        db::DbError::InvalidSchema(_) => "Preserve the database; its schema or stored data did not pass validation. Inspect the reported structure/integrity error with SQLite tooling.".to_string(),
-        db::DbError::Sqlite(rusqlite::Error::SqliteFailure(error, _))
-            if matches!(error.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) =>
-            "Check for other writers, including linked worktrees, holding the database lock.".to_string(),
-        _ => "Check the reported cause and stage: file/directory write permissions, available disk space, and SQLite database integrity at the displayed paths.".to_string(),
-    };
-    format!(
-        "{state} {cause} Keep any backup (a failed backup may be incomplete). init cannot upgrade an existing DB; do not delete it or change user_version. See `axon docs` for storage recovery guidance."
-    )
-}
-
-fn error_guidance(error: &(dyn std::error::Error + 'static)) -> Option<String> {
-    use db::DbError;
-
-    if let Some(guidance) = merge_cli::error_guidance(error) {
-        return Some(guidance.to_string());
-    }
-    if let Some(declaration::DeclarationError::Reference { guidance, .. }) =
-        error.downcast_ref::<declaration::DeclarationError>()
-    {
-        return Some(guidance.clone());
-    }
-    if error
-        .downcast_ref::<declaration::DeclarationError>()
-        .is_some_and(|error| {
-            matches!(
-                error,
-                declaration::DeclarationError::UnsupportedSchema { .. }
-            )
-        })
-    {
-        return Some("Old declaration schemas are not converted in memory. Open the current store with this axon build so its supported storage migration completes, then run `axon export` again and use the fresh axon-plan/v3 declaration.".to_string());
-    }
-    if let Some(error) = error.downcast_ref::<DbError>() {
-        return Some(match error {
-            DbError::Migration(failure) => migration_guidance(failure),
-            DbError::Initialization(_) => "Preserve the state and init.pending at the reported paths, along with temporary and Git integration files. Stop writers and inspect the retained files; normal Axon reads reject incomplete initialization. Complete or move aside the incomplete box manually without overwriting saved state, then remove init.pending only after verification. See `axon docs` for storage recovery guidance.".to_string(),
-            DbError::Boundary { result: "Result unknown", .. } => "Confirm the writer has stopped, then inspect saved information with `axon list --skip-command-evaluation` / `axon show <id> --skip-command-evaluation` and Note IDs/bodies with `axon note list <id>` / `axon note show <id> <note-id>` before retrying. Creation and Note append are not idempotent.".to_string(),
-            DbError::UnsupportedSchema { found, .. } => format!(
-                "Use an axon build that supports DB schema {found}. Ordinary commands automatically apply supported schema updates; retired formats require a compatible build or a one-time conversion. axon migrate only converts current-schema data between backends. init cannot upgrade an existing DB. Preserve the database and do not change user_version to bypass this check. See `axon docs` for storage recovery guidance."
-            ),
-            DbError::CannotStart { id, .. } | DbError::CannotProgress { id, .. } => format!(
-                "Inspect `axon show {id}` for state, relationships, and Group completion constraints. `axon docs` explains the operation prerequisites."
-            ),
-            DbError::DeclarationFixed(id) => format!(
-                "Inspect `axon show {id}`. If changing the plan is intended, `axon decide undecide {id}` makes its declaration editable and withdraws its current disposition; edit, review the full declaration, then decide separately. Supplemental information can be appended with `axon note add {id}` without changing the plan."
-            ),
-            DbError::NoSuchEntity(_) => "Use `axon list` to inspect Entity IDs in this active root.".to_string(),
-            DbError::AmbiguousId { .. } => "Use one of the full candidate IDs to identify the intended Entity.".to_string(),
-            DbError::NotGroup(_) => "Use `axon list --kind group` to inspect Group IDs. A parent must be a Group.".to_string(),
-            DbError::NoSuchNote { id, .. } => format!("Use `axon note list {id}` to inspect this Entity's Note IDs."),
-            DbError::NoSuchRevision { id, .. } => format!("Use `axon revision list {id}` to inspect this Entity's Revision IDs."),
-            DbError::Unchanged { id, .. } => format!("No transition was applied. Use `axon show {id}` to inspect the current state; repeating the same transition is an error."),
-            DbError::Cycle { .. } | DbError::Containment(_) => "Inspect the involved Entities with `axon show <ID>` and use `axon docs` for relationship constraints. Changing a relationship changes the plan; select any revision according to the intended plan.".to_string(),
-            DbError::AlreadyInitialized(_) => "init creates a new database; it does not reset or upgrade an existing one. Use `axon list` to inspect it, or `axon docs` for storage recovery guidance.".to_string(),
-            DbError::Evaluation(_) => evaluation_guidance().to_string(),
-            _ => return std::error::Error::source(error).and_then(error_guidance),
-        });
-    }
-    if error.is::<derived::EvaluationError>() {
-        return Some(evaluation_guidance().to_string());
-    }
-    error.source().and_then(error_guidance)
-}
-
-fn evaluation_guidance() -> &'static str {
-    "Read saved information without executing conditions with `axon list --skip-command-evaluation` or `axon show <id> --skip-command-evaluation`. Use a finite `--condition-timeout` override when an evaluation legitimately needs longer than 30s. See `axon when command --help` for the execution contract. Correcting a Command condition, or explicitly replacing or clearing it, does not evaluate the failing condition; replacing or clearing it changes when the Entity surfaces."
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("{context}: {source}{details}")]
-struct OperationError {
-    context: String,
-    #[source]
-    source: Box<dyn std::error::Error>,
-    details: String,
-}
-
-fn operation_error(
-    context: impl Into<String>,
-    source: impl Into<Box<dyn std::error::Error>>,
-    details: impl Into<String>,
-) -> Box<dyn std::error::Error> {
-    Box::new(OperationError {
-        context: context.into(),
-        source: source.into(),
-        details: details.into(),
-    })
-}
-
-fn mutation_context(matches: &clap::ArgMatches) -> Option<String> {
-    let (root, mut args) = matches.subcommand()?;
-    let mut operation = root.to_string();
-    while let Some((name, child)) = args.subcommand() {
-        operation.push(' ');
-        operation.push_str(name);
-        args = child;
-    }
-    let mutates = matches!(
-        root,
-        "init"
-            | "migrate"
-            | "plan"
-            | "capture"
-            | "write"
-            | "start"
-            | "done"
-            | "release"
-            | "decide"
-            | "when"
-            | "dep"
-            | "merge"
-    ) || matches!(
-        operation.as_str(),
-        "note add"
-            | "group plan"
-            | "group capture"
-            | "group set"
-            | "group unset"
-            | "import prepare"
-            | "import apply"
-    );
-    if !mutates {
-        return None;
-    }
-    let target = args
-        .try_get_one::<String>("id")
-        .ok()
-        .flatten()
-        .cloned()
-        .or_else(|| {
-            ["file", "workspace", "output", "ours"]
-                .iter()
-                .find_map(|key| {
-                    args.try_get_one::<std::path::PathBuf>(key)
-                        .ok()
-                        .flatten()
-                        .map(|p| p.display().to_string())
-                })
-        });
-    Some(target.map_or_else(
-        || operation.clone(),
-        |target| format!("{target} {operation}"),
-    ))
-}
-
-fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut matches = cli_command()
-        .try_get_matches_from(&args)
-        .unwrap_or_else(|error| {
-            let safe_args = args
-                .iter()
-                .map(|argument| display::human_text(argument.to_string_lossy()).into())
-                .collect::<Vec<std::ffi::OsString>>();
-            match cli_command().try_get_matches_from(&safe_args) {
-                Err(mut safe_error) => {
-                    free_text_error_guidance(&safe_args, &mut safe_error);
-                    safe_error.exit()
-                }
-                Ok(_) => {
-                    eprint!("{}", display::human_text(&error));
-                    std::process::exit(error.exit_code())
-                }
-            }
-        });
-    let context = mutation_context(&matches);
-    let result = (|| match Cli::from_arg_matches_mut(&mut matches)?.command {
-        Command::Migrate {
-            source,
-            output,
-            backend,
-        } => {
-            if let db::migration::Outcome::Migrated {
-                database, backup, ..
-            } = db::migration::migrate(&source, &output, backend)?
-            {
-                write_plain_output(&format!(
-                    "Converted: {}\nSource backup: {}\nManifest: {}\nSource unchanged; verify the output before switching the live database.\n",
-                    display::human_text(database.display()),
-                    display::human_text(backup.display()),
-                    display::human_text(output.join("manifest.yaml").display())
-                )).map_err(|e| operation_error("confirmation output", e, format!("\nApplied: migration output at {}", output.display())))?;
-            }
-            Ok(())
-        }
-        Command::Actor => write_plain_output(&format!("{}\n", display::human_text(actor::actor())))
-            .map_err(Into::into),
-        Command::Init { prefix, backend } => cmd_init(prefix, backend),
-        Command::Storage { command } => merge_cli::storage(command),
-        Command::Merge { command } => merge_cli::run(command),
-        Command::Completion { shell } => write_completion(shell).map_err(Into::into),
-        Command::Docs { topic } => cmd_docs(topic),
-        Command::Plan {
-            title,
-            parent,
-            initial,
-            message,
-            file,
-        } => cmd_create(
-            EntityKind::Issue,
-            Disposition::Accepted,
-            title,
-            parent,
-            initial,
-            message,
-            file,
-        ),
-        Command::Capture {
-            title,
-            parent,
-            initial,
-            message,
-            file,
-        } => cmd_create(
-            EntityKind::Issue,
-            Disposition::Undecided,
-            title,
-            parent,
-            initial,
-            message,
-            file,
-        ),
-        Command::Ready { kind, evaluation } => cmd_ready(kind, evaluation),
-        Command::Triage { kind, evaluation } => cmd_triage(kind, evaluation),
-        Command::Claims { kind } => cmd_claims(kind),
-        Command::Start { id, evaluation } => cmd_start(&id, evaluation),
-        Command::Done { id } => cmd_done(&id),
-        Command::Release { id, reason } => cmd_release(&id, reason),
-        Command::Write {
-            id,
-            title,
-            message,
-            file,
-        } => cmd_write(&id, title, message, file),
-        Command::Log { id } => cmd_log(&id),
-        Command::List {
-            filters,
-            evaluation,
-            skip_command_evaluation,
-        } => cmd_list(filters, evaluation, skip_command_evaluation),
-        Command::Show {
-            id,
-            evaluation,
-            skip_command_evaluation,
-        } => cmd_show(&id, evaluation, skip_command_evaluation),
-        Command::Note(command) => cmd_note(command),
-        Command::Revision(command) => cmd_revision(command),
-        Command::Export {
-            ids,
-            groups,
-            recursive,
-        } => cmd_export(ids, groups, recursive),
-        Command::Import(command) => cmd_import(command),
-        Command::Decide(command) => cmd_decide(command),
-        Command::When(command) => cmd_when(command),
-        Command::Dep(command) => cmd_dep(command),
-        Command::Group(command) => cmd_group(command),
-    })();
-    result.map_err(|error| match context {
-        Some(context) => operation_error(context, error, ""),
-        None => error,
-    })
-}
-
-fn cmd_export(
-    ids: Vec<String>,
-    groups: Vec<String>,
-    recursive: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store(false)?;
-    write_plain_output(&declaration::export(&mut store, &ids, &groups, recursive)?)?;
-    Ok(())
-}
-
-fn cmd_import(command: ImportCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let decoration = current_output_decoration();
-    match command {
-        ImportCmd::Prepare { file } => {
-            let mut store = open_store(false)?;
-            declaration::prepare(&mut store, &file)?;
-            write_mutation_output(
-                &format!(
-                    "{}  {}\n",
-                    decoration.paint(OUTPUT_POSITIVE, "Prepared"),
-                    display::human_text(file.display())
-                ),
-                decoration,
-                &format!("declaration file prepared at {}", file.display()),
-            )?;
-        }
-        ImportCmd::Check { file, evaluation } => {
-            let mut store = open_store_with_evaluation(evaluation)?;
-            write_output(
-                &decorate_import_report(&declaration::check(&mut store, &file)?, decoration),
-                decoration,
-            )?;
-        }
-        ImportCmd::Apply { file, evaluation } => {
-            let mut store = open_store_with_evaluation(evaluation)?;
-            let mut output =
-                decorate_import_report(&declaration::apply(&mut store, &file)?, decoration);
-            output.push_str(&format!(
-                "{}  {}\n",
-                decoration.paint(OUTPUT_POSITIVE, "Applied"),
-                display::human_text(file.display())
-            ));
-            write_mutation_output(
-                &output,
-                decoration,
-                &format!("storage declaration and file refresh at {}", file.display()),
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn decorate_import_report(report: &str, decoration: OutputDecoration) -> String {
-    display::human_text(report)
-        .split_inclusive('\n')
-        .map(|line| {
-            let (body, newline) = line
-                .strip_suffix('\n')
-                .map_or((line, ""), |body| (body, "\n"));
-            let decorated = match body {
-                "Plan is valid." => decoration.paint(OUTPUT_POSITIVE, body),
-                "Changes:"
-                | "Derived changes (ready, blocked, orphaned, active_scope, group_completable):" => {
-                    decoration.paint(OUTPUT_HEADING, body)
-                }
-                _ if body.starts_with("Warning: ") => decoration.paint(OUTPUT_DECISION, body),
-                _ => body.to_string(),
-            };
-            format!("{decorated}{newline}")
-        })
-        .collect()
-}
-
-fn cmd_init(
-    prefix: Option<String>,
-    backend: Option<storage::Backend>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let (path, prefix) = Store::init(prefix.as_deref(), backend)?;
-    let decoration = current_output_decoration();
-    write_mutation_output(
-        &format!(
-            "{}  {}\n{}  {prefix}-xxxxxx\n",
-            decoration.paint(OUTPUT_POSITIVE, "Initialized"),
-            display::human_text(path.display()),
-            decoration.paint(OUTPUT_MUTED, "Entity ID format:"),
-        ),
-        decoration,
-        &format!("initialization at {}", path.display()),
-    )?;
-    Ok(())
-}
-
-fn cmd_create(
-    kind: EntityKind,
-    disposition: Disposition,
-    title: Vec<String>,
-    parent: Option<String>,
-    initial: InitialStateArgs,
-    message: Option<String>,
-    file: Option<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let title = normalize_title(&title.join(" "))?;
-    let description = read_description(message, file)?.and_then(normalize_description);
-    let mut store = open_store(false)?;
-    let parent = parent
-        .as_deref()
-        .map(|value| store.resolve_id(value))
-        .transpose()?;
-    let (dependencies, resurface_condition) = initial.resolve(&store)?;
-    let now = Utc::now();
-    let entity = Entity {
-        id: EntityId::generate(&store.prefix()?),
-        kind,
-        title,
-        description,
-        progress: Progress::NotStarted,
-        disposition,
-        current_revision: (disposition != Disposition::Undecided)
-            .then(|| RecordId::new(RecordKind::Revision)),
-        resurface_condition,
-        parent,
-        created_at: now,
-        updated_at: now,
-    };
-    store
-        .insert_with_dependencies(&entity, dependencies)
-        .map_err(|e| operation_error(entity.id.to_string(), e, ""))?;
-    let decoration = current_output_decoration();
-    write_mutation_output(
-        &format!(
-            "{}  {}  {}  [{}]  {}\n",
-            decoration.paint(OUTPUT_ID, &entity.id),
-            decoration.paint(OUTPUT_POSITIVE, "Created"),
-            decoration.paint(OUTPUT_MUTED, kind.label()),
-            decoration.paint(disposition_style(disposition), disposition.label()),
-            display::human_text(&entity.title),
-        ),
-        decoration,
-        &format!("{} Created", entity.id),
-    )?;
-    Ok(())
-}
-
-fn cmd_group(command: GroupCmd) -> Result<(), Box<dyn std::error::Error>> {
-    match command {
-        GroupCmd::Plan {
-            title,
-            parent,
-            initial,
-            message,
-            file,
-        } => cmd_create(
-            EntityKind::Group,
-            Disposition::Accepted,
-            title,
-            parent,
-            initial,
-            message,
-            file,
-        ),
-        GroupCmd::Capture {
-            title,
-            parent,
-            initial,
-            message,
-            file,
-        } => cmd_create(
-            EntityKind::Group,
-            Disposition::Undecided,
-            title,
-            parent,
-            initial,
-            message,
-            file,
-        ),
-        GroupCmd::Set { id, parent } => {
-            let mut store = open_store(false)?;
-            let id = store.resolve_id(&id)?;
-            let parent = store.resolve_id(&parent)?;
-            let outcome = store.apply(&id, Change::SetParent(Some(parent.clone())), &ctx(None))?;
-            write_confirmation(
-                &id,
-                |decoration| {
-                    setting_confirmation(
-                        outcome,
-                        render_inline_fields(decoration, vec![("Parent", parent.to_string())]),
-                    )
-                },
-                Style::new(),
-            )?;
-            Ok(())
-        }
-        GroupCmd::Unset { id } => {
-            let mut store = open_store(false)?;
-            let id = store.resolve_id(&id)?;
-            let outcome = store.apply(&id, Change::SetParent(None), &ctx(None))?;
-            write_confirmation(
-                &id,
-                |_| setting_confirmation(outcome, "Parent: (none)".to_string()),
-                Style::new(),
-            )?;
-            Ok(())
-        }
-    }
-}
-
-fn load(evaluation: ConditionEvaluationArgs) -> Result<(Store, View), Box<dyn std::error::Error>> {
-    let mut store = open_store_with_evaluation(evaluation)?;
-    let view = store.view()?;
-    Ok((store, view))
-}
-
-fn included(kind: Option<KindFilter>, entity: &Entity) -> bool {
-    kind.is_none_or(|filter| filter.matches(entity))
-}
-
-fn render_entity_identity(entity: &Entity, decoration: OutputDecoration) -> String {
-    format!(
-        "{}  {}  {}",
-        decoration.paint(OUTPUT_ID, &entity.id),
-        decoration.paint(OUTPUT_MUTED, entity.kind.label()),
-        display::human_text(&entity.title)
-    )
-}
-
-fn write_mutation_output(
-    output: &str,
-    decoration: OutputDecoration,
-    applied: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    write_output(output, decoration)
-        .map_err(|e| operation_error("confirmation output", e, format!("\nApplied: {applied}")))
-}
-
-fn write_confirmation(
-    id: &EntityId,
-    result: impl Fn(OutputDecoration) -> String,
-    style: Style,
-) -> Result<(), Box<dyn std::error::Error>> {
-    write_confirmation_with(id, result, style, current_output_decoration(), write_output)
-}
-
-fn write_confirmation_with(
-    id: &EntityId,
-    result: impl Fn(OutputDecoration) -> String,
-    style: Style,
-    decoration: OutputDecoration,
-    output: impl FnOnce(&str, OutputDecoration) -> std::io::Result<()>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    output(
-        &format!(
-            "{}  {}\n",
-            decoration.paint(OUTPUT_ID, id),
-            decoration.paint(style, result(decoration))
-        ),
-        decoration,
-    )
-    .map_err(|e| {
-        operation_error(
-            "confirmation output",
-            e,
-            format!("\nApplied: {id} {}", result(OutputDecoration::Plain)),
-        )
-    })
-}
-
-fn cmd_ready(
-    kind: Option<KindFilter>,
-    evaluation: ConditionEvaluationArgs,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let (_, view) = load(evaluation)?;
-    let decoration = current_output_decoration();
-    let rows = view
-        .ready(|entity| included(kind, entity))?
-        .into_iter()
-        .map(|entity| format!("{}\n", render_entity_identity(entity, decoration)))
-        .collect::<String>();
-    write_rows(
-        &rows,
-        "No ready entities match the current scope and filter. Use `axon list` to inspect stored Entities and `axon docs` for readiness conditions.",
-        decoration,
-    )?;
-    Ok(())
-}
-
-fn cmd_triage(
-    kind: Option<KindFilter>,
-    evaluation: ConditionEvaluationArgs,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let (_, view) = load(evaluation)?;
-    let decoration = current_output_decoration();
-    let mut rows = String::new();
-    for (entity, reason) in view.triage(|entity| included(kind, entity))? {
-        rows.push_str(&render_triage_row(&view, entity, reason, decoration));
-    }
-    write_rows(
-        &rows,
-        "No entities match the active decision frontier and filter. Use `axon list` to inspect Entities outside this frontier.",
-        decoration,
-    )?;
-    Ok(())
-}
-
-fn render_triage_row(
-    view: &View,
-    entity: &Entity,
-    reason: TriageReason,
-    decoration: OutputDecoration,
-) -> String {
-    let fields = match reason {
-        TriageReason::Undecided => {
-            vec![("Reason", decoration.paint(OUTPUT_DECISION, "Undecided"))]
-        }
-        TriageReason::Orphaned => {
-            let rejected = view
-                .dependency_targets(&entity.id)
-                .into_iter()
-                .filter(|target| target.disposition == Disposition::Rejected)
-                .map(|target| decoration.paint(OUTPUT_ID, &target.id))
-                .collect::<Vec<_>>()
-                .join(", ");
-            vec![
-                ("Reason", decoration.paint(OUTPUT_FAILURE, "Orphaned")),
-                ("Rejected dependencies", rejected),
-            ]
-        }
-    };
-    format!(
-        "{}  {}\n",
-        render_entity_identity(entity, decoration),
-        render_inline_fields(decoration, fields)
-    )
-}
-
-fn cmd_claims(kind: Option<KindFilter>) -> Result<(), Box<dyn std::error::Error>> {
-    let (_, view) = load(ConditionEvaluationArgs::default())?;
-    let decoration = current_output_decoration();
-    let rows = view
-        .claims()
-        .into_iter()
-        .filter(|(entity, _)| included(kind, entity))
-        .map(|(entity, claim)| render_claim_row(entity, claim, decoration))
-        .collect::<String>();
-    write_rows(&rows, "No active claims", decoration)?;
-    Ok(())
-}
-
-fn render_claim_row(entity: &Entity, claim: &Claim, decoration: OutputDecoration) -> String {
-    format!(
-        "{}  {}\n",
-        render_entity_identity(entity, decoration),
-        render_inline_fields(
-            decoration,
-            vec![
-                ("Claim", display::human_text(&claim.actor)),
-                ("Worktree", display::human_text(&claim.worktree)),
-                ("Started", display::timestamp(&claim.at)),
-            ]
-        )
-    )
-}
-
-fn claim_details(claim: &Claim, decoration: OutputDecoration) -> String {
-    format!(
-        "{}  {}",
-        display::human_text(&claim.actor),
-        render_inline_fields(
-            decoration,
-            vec![
-                ("Worktree", display::human_text(&claim.worktree)),
-                ("Started", display::timestamp(&claim.at)),
-            ],
-        )
-    )
-}
-
-fn cmd_start(
-    raw: &str,
-    evaluation: ConditionEvaluationArgs,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store_with_evaluation(evaluation)?;
-    let id = store.resolve_id(raw)?;
-    let claim = Claim {
-        actor: actor::actor(),
-        worktree: actor::worktree()?,
+fn context() -> Context {
+    Context {
         at: Utc::now(),
-    };
-    store.apply(&id, Change::Start(claim.clone()), &ctx(None))?;
-    write_confirmation(
-        &id,
-        |decoration| {
-            format!(
-                "{}  {} {}",
-                decoration.paint(OUTPUT_ACTIVE, "Started"),
-                decoration.paint(OUTPUT_MUTED, "Claim:"),
-                display::human_text(&claim.actor)
-            )
-        },
-        Style::new(),
-    )?;
-    Ok(())
-}
-
-fn cmd_done(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store(false)?;
-    let id = store.resolve_id(raw)?;
-    store.apply(&id, Change::Done, &ctx(None))?;
-    write_confirmation(&id, |_| "Ended".to_string(), OUTPUT_MUTED)?;
-    Ok(())
-}
-
-fn cmd_release(raw: &str, reason: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store(false)?;
-    let id = store.resolve_id(raw)?;
-    store.apply(&id, Change::Release, &ctx(reason))?;
-    write_confirmation(&id, |_| "Released".to_string(), Style::new())?;
-    Ok(())
-}
-
-fn cmd_list(
-    filters: ListFilters,
-    evaluation: ConditionEvaluationArgs,
-    skip_command_evaluation: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store_with_evaluation(evaluation)?;
-    let (view, note_matches) = if let Some(text) = &filters.search {
-        store.search_snapshot(text)?
-    } else {
-        (store.view()?, db::NoteMatches::new())
-    };
-    let view = if skip_command_evaluation {
-        view.without_command_evaluation()
-    } else {
-        view
-    };
-    let decoration = current_output_decoration();
-    let mut rows = String::new();
-    for entity in view.iter().filter(|entity| filters.matches(entity)) {
-        let mut locations = Vec::new();
-        if let Some(text) = &filters.search {
-            if entity.title.contains(text) {
-                locations.push("title".to_string());
-            }
-            if entity
-                .description
-                .as_ref()
-                .is_some_and(|body| body.contains(text))
-            {
-                locations.push("description".to_string());
-            }
-            if let Some(ids) = note_matches.get(&entity.id) {
-                locations.extend(ids.iter().map(ToString::to_string));
-            }
-            if locations.is_empty() {
-                continue;
-            }
-        }
-        if skip_command_evaluation {
-            rows.push_str(&render_skipped_row(&view, entity, decoration));
-        } else {
-            rows.push_str(&render_list_row(&view, entity, decoration)?);
-        }
-        if filters.search.is_some() {
-            rows.pop();
-            rows.push_str(&format!("  Matched: {}\n", locations.join(", ")));
-        }
-    }
-    write_rows(&rows, "No entities", decoration)?;
-    Ok(())
-}
-
-fn observed_label(value: Option<bool>) -> &'static str {
-    match value {
-        Some(true) => "yes",
-        Some(false) => "no",
-        None => "unevaluated (Command evaluation skipped)",
-    }
-}
-
-fn render_skipped_row(view: &View, entity: &Entity, decoration: OutputDecoration) -> String {
-    format!(
-        "{}  {}  [{}/{}]  {}  Surfaced: {}  Active scope: {}  Ready: {}  Blocked: {}  Orphaned: {}\n",
-        decoration.paint(OUTPUT_ID, &entity.id),
-        entity.kind.label(),
-        entity.progress.label(),
-        entity.disposition.label(),
-        display::human_text(&entity.title),
-        observed_label(view.observed_surfaced(entity)),
-        observed_label(view.observed_active_scope(&entity.id)),
-        observed_label(view.observed_ready(entity)),
-        yes_no(view.is_blocked(&entity.id)),
-        yes_no(view.is_orphaned(&entity.id))
-    )
-}
-
-fn render_skipped_show(
-    view: &View,
-    entity: &Entity,
-    progress_events: &[db::ProgressEvent],
-    notes: &[Note],
-    counts: RecordCounts,
-    decoration: OutputDecoration,
-) -> String {
-    let mut blocks = vec![vec![
-        format!(
-            "{}  {}  {}",
-            decoration.paint(OUTPUT_ID, &entity.id),
-            entity.kind.label(),
-            display::human_text(&entity.title)
-        ),
-        "Command evaluation skipped; unevaluated values are not false.".to_string(),
-    ]];
-    let mut details = vec![
-        format!(
-            "Progress: {}  Disposition: {}  Resurface condition: {}",
-            entity.progress.label(),
-            entity.disposition.label(),
-            display::human_text(entity.resurface_condition.label())
-        ),
-        format!(
-            "Active scope: {}  Surfaced: {}  Ready: {}  Blocked: {}  Orphaned: {}",
-            observed_label(view.observed_active_scope(&entity.id)),
-            observed_label(view.observed_surfaced(entity)),
-            observed_label(view.observed_ready(entity)),
-            yes_no(view.is_blocked(&entity.id)),
-            yes_no(view.is_orphaned(&entity.id))
-        ),
-    ];
-    if let Some(claim) = entity.progress.claim() {
-        details.push(format!("Claim: {}", claim_details(claim, decoration)));
-    }
-    details.push(format!(
-        "Plan declaration: {}{}",
-        entity
-            .current_revision
-            .map(|revision| format!("fixed at Revision {revision}"))
-            .unwrap_or_else(|| "draft".to_string()),
-        entity
-            .parent
-            .as_ref()
-            .map(|parent| format!("  Parent: {parent}"))
-            .unwrap_or_default()
-    ));
-    details.push(format!(
-        "Records: Notes: {}  Revisions: {}  Decision history: {}  Progress history: {}",
-        counts.notes, counts.revisions, counts.decisions, counts.progressions
-    ));
-    blocks.push(render_section(decoration, "Details", details));
-
-    let ancestors = view
-        .ancestors(&entity.id)
-        .into_iter()
-        .map(|ancestor| {
-            format!(
-                "{}  Resurface condition: {}  Surfaced: {}  Descendant gate open: {}",
-                render_related_entity(ancestor, decoration),
-                display::human_text(ancestor.resurface_condition.label()),
-                observed_label(view.observed_surfaced(ancestor)),
-                observed_label(view.observed_gate(ancestor))
-            )
-        })
-        .collect::<Vec<_>>();
-    if !ancestors.is_empty() {
-        blocks.push(render_section(decoration, "Ancestor scope", ancestors));
-    }
-    if entity.kind == EntityKind::Group {
-        let summary = view.group_summary(&entity.id);
-        let mut group = vec![
-            format!(
-                "Descendant gate open: {}",
-                observed_label(view.observed_gate(entity))
-            ),
-            format!(
-                "Can complete: {}",
-                yes_no(view.can_complete_group(&entity.id))
-            ),
-        ];
-        group.extend(render_entity_counts(
-            "Direct children",
-            &summary.direct,
-            decoration,
-        ));
-        group.extend(render_entity_counts(
-            "Descendants",
-            &summary.descendants,
-            decoration,
-        ));
-        blocks.push(render_section(decoration, "Group", group));
-        let subtree = ordered_subtree(view, &entity.id);
-        let rows = subtree
-            .iter()
-            .map(|(depth, child)| {
-                format!(
-                    "{}{}  Resurface condition: {}",
-                    "  ".repeat(*depth),
-                    render_skipped_row(view, child, decoration).trim_end(),
-                    display::human_text(child.resurface_condition.label())
-                )
-            })
-            .collect();
-        blocks.push(render_section(decoration, "Subtree", rows));
-        let dependencies = render_subtree_dependencies(view, entity, &subtree, decoration);
-        if !dependencies.is_empty() {
-            blocks.push(render_section(decoration, "Dependencies", dependencies));
-        }
-    }
-    let mut relations = Vec::new();
-    for target in view.dependency_targets(&entity.id) {
-        let label = if target.disposition == Disposition::Rejected {
-            "Orphaned"
-        } else if target.is_terminal() {
-            "Satisfied dependency"
-        } else {
-            "Dependency"
-        };
-        relations.push(format!(
-            "{label}: {}",
-            render_related_entity(target, decoration)
-        ));
-    }
-    for dependent in view.direct_dependents(&entity.id) {
-        relations.push(format!(
-            "Dependent: {}",
-            render_related_entity(dependent, decoration)
-        ));
-    }
-    for waiter in view.direct_after_entity_waiters(&entity.id) {
-        relations.push(format!(
-            "AfterEntity waiter: {}",
-            render_related_entity_with_state(waiter, decoration)
-        ));
-    }
-    match view.observed_blocking_causes(&entity.id) {
-        Some(causes) => {
-            for cause in causes {
-                relations.push(format!(
-                    "Root cause: {}",
-                    render_related_entity(cause, decoration)
-                ));
-            }
-        }
-        None => relations.push("Root causes: unevaluated (Command evaluation skipped)".to_string()),
-    }
-    if !relations.is_empty() {
-        blocks.push(render_section(decoration, "Relationships", relations));
-    }
-    append_saved_records(&mut blocks, entity, progress_events, notes, decoration);
-    render_blocks(blocks)
-}
-
-fn render_list_row(
-    view: &View,
-    entity: &Entity,
-    decoration: OutputDecoration,
-) -> derived::Result<String> {
-    let marks = render_entity_marks(view, entity, false, decoration)?;
-    Ok(format!(
-        "{}  {}  [{}/{}]  {}{}\n",
-        decoration.paint(OUTPUT_ID, &entity.id),
-        decoration.paint(OUTPUT_MUTED, entity.kind.label()),
-        decoration.paint(progress_style(&entity.progress), entity.progress.label()),
-        decoration.paint(
-            disposition_style(entity.disposition),
-            entity.disposition.label()
-        ),
-        display::human_text(&entity.title),
-        marks
-    ))
-}
-
-fn render_entity_marks(
-    view: &View,
-    entity: &Entity,
-    include_ready: bool,
-    decoration: OutputDecoration,
-) -> derived::Result<String> {
-    let mut marks = Vec::new();
-    if include_ready && view.is_ready(entity)? {
-        marks.push(decoration.paint(OUTPUT_POSITIVE, "Ready"));
-    }
-    if view.is_orphaned(&entity.id) {
-        marks.push(decoration.paint(OUTPUT_FAILURE, "Orphaned"));
-    } else if view.is_blocked(&entity.id) {
-        marks.push(decoration.paint(OUTPUT_WAITING, "Blocked"));
-    }
-    if !view.is_surfaced(entity)? {
-        marks.push(decoration.paint(
-            OUTPUT_MUTED,
-            format!(
-                "Not surfaced: {}",
-                display::human_text(entity.resurface_condition.label())
-            ),
-        ));
-    }
-    if let Some(reason) = inactive_scope_reason(view, &entity.id)? {
-        marks.push(decoration.paint(OUTPUT_MUTED, format!("Inactive: {reason}")));
-    }
-    Ok(if marks.is_empty() {
-        String::new()
-    } else {
-        format!("  {}", marks.join("  "))
-    })
-}
-
-fn cmd_show(
-    raw: &str,
-    evaluation: ConditionEvaluationArgs,
-    skip_command_evaluation: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store_with_evaluation(evaluation)?;
-    let db::ShowSnapshot {
-        id,
-        view,
-        decision_events,
-        progress_events,
-        revisions,
-        notes,
-        counts,
-        causal,
-    } = store.show_snapshot(raw)?;
-    debug_assert_eq!(counts.decisions, decision_events.len());
-    debug_assert_eq!(counts.progressions, progress_events.len());
-    debug_assert_eq!(counts.revisions, revisions.len());
-    debug_assert_eq!(counts.notes, notes.len());
-    let view = if skip_command_evaluation {
-        view.without_command_evaluation()
-    } else {
-        view
-    };
-    let entity = view.get(&id).ok_or("entity not found")?;
-    let decoration = current_output_decoration();
-    let mut output = if skip_command_evaluation {
-        render_skipped_show(&view, entity, &progress_events, &notes, counts, decoration)
-    } else {
-        render_show(&view, entity, &progress_events, &notes, counts, decoration)?
-    };
-    output.push_str(&causal.display(&id));
-    write_output(&output, decoration)?;
-    Ok(())
-}
-
-fn render_show(
-    view: &View,
-    entity: &Entity,
-    progress_events: &[db::ProgressEvent],
-    notes: &[Note],
-    counts: RecordCounts,
-    decoration: OutputDecoration,
-) -> derived::Result<String> {
-    let mut blocks = Vec::<Vec<String>>::new();
-    let mut overview = vec![format!(
-        "{}  {}  {}",
-        decoration.paint(OUTPUT_ID, &entity.id),
-        decoration.paint(OUTPUT_MUTED, entity.kind.label()),
-        display::human_text(&entity.title),
-    )];
-
-    overview.push(format!(
-        "{} {}",
-        decoration.paint(OUTPUT_MUTED, "Situation:"),
-        show_situation(view, entity, decoration)?,
-    ));
-    let rejected_group =
-        entity.kind == EntityKind::Group && entity.disposition == Disposition::Rejected;
-    if rejected_group {
-        overview.push(decoration.paint(
-            OUTPUT_MUTED,
-            "Rejected Group: already terminal; descendant scope is inactive. Unfinished descendants are saved states and do not require follow-up by themselves.",
-        ));
-        let saved_claims = std::iter::once(entity)
-            .chain(view.descendants(&entity.id))
-            .filter(|member| member.progress.claim().is_some())
-            .count();
-        if saved_claims > 0 {
-            overview.push(format!(
-                "{} Inspect each claimed Entity and decide separately whether its external work should end, be released, or continue outside this Group.",
-                decoration.paint(
-                    OUTPUT_WAITING,
-                    format!("Saved claims remain: {saved_claims}.")
-                )
-            ));
-        }
-    }
-    let mut structural_details = Vec::new();
-    if rejected_group {
-        overview.extend(show_waits(view, entity, "", decoration, false)?);
-    } else {
-        if matches!(entity.progress, Progress::Ended) {
-            structural_details.extend(show_waits(view, entity, "", decoration, true)?);
-            if entity.kind == EntityKind::Group {
-                structural_details
-                    .push(decoration.paint(OUTPUT_MUTED, "Can complete: no (Group has ended)."));
-            }
-        } else {
-            overview.extend(show_waits(view, entity, "", decoration, true)?);
-        }
-    }
-    for ancestor in view.ancestors(&entity.id) {
-        if ancestor.disposition == Disposition::Rejected
-            && !matches!(entity.progress, Progress::Ended)
-        {
-            overview.push(format!(
-                "{} {}; {}",
-                decoration.paint(OUTPUT_MUTED, "Rejected ancestor scope:"),
-                decoration.paint(OUTPUT_ID, &ancestor.id),
-                decoration.paint(
-                    OUTPUT_MUTED,
-                    "descendant scope is inactive; saved states and claims are unchanged."
-                )
-            ));
-            let saved_conditions = show_waits(view, ancestor, "  ", decoration, false)?;
-            if !saved_conditions.is_empty() {
-                overview.push(format!(
-                    "{} {}",
-                    decoration.paint(OUTPUT_MUTED, "Ancestor conditions:"),
-                    decoration.paint(OUTPUT_ID, &ancestor.id)
-                ));
-                overview.extend(saved_conditions);
-            }
-        }
-        if ancestor.disposition != Disposition::Rejected
-            && has_local_descendant_gate(view, ancestor)?
-        {
-            let target = if matches!(entity.progress, Progress::Ended)
-                || matches!(ancestor.progress, Progress::Ended)
-            {
-                &mut structural_details
-            } else {
-                &mut overview
-            };
-            target.push(format!(
-                "{} {}",
-                decoration.paint(OUTPUT_MUTED, "Ancestor scope:"),
-                decoration.paint(OUTPUT_ID, &ancestor.id)
-            ));
-            target.extend(show_waits(view, ancestor, "  ", decoration, true)?);
-        }
-    }
-    blocks.push(overview);
-    let mut overview = Vec::new();
-    let inactive_reason = inactive_scope_reason(view, &entity.id)?;
-    let active_scope = inactive_reason
-        .as_ref()
-        .map(|reason| format!("no ({reason})"))
-        .unwrap_or_else(|| "yes".to_string());
-    let blocked = view.is_blocked(&entity.id);
-    let orphaned = view.is_orphaned(&entity.id);
-    let surfaced = view.is_surfaced(entity)?;
-    overview.push(render_inline_fields(
-        decoration,
-        vec![
-            (
-                "Progress",
-                decoration.paint(progress_style(&entity.progress), entity.progress.label()),
-            ),
-            (
-                "Disposition",
-                decoration.paint(
-                    disposition_style(entity.disposition),
-                    entity.disposition.label(),
-                ),
-            ),
-            (
-                "Resurface condition",
-                display::human_text(entity.resurface_condition.label()),
-            ),
-        ],
-    ));
-    overview.push(render_inline_fields(
-        decoration,
-        vec![
-            (
-                "Active scope",
-                decoration.paint(
-                    if inactive_reason.is_some() {
-                        OUTPUT_MUTED
-                    } else {
-                        Style::new()
-                    },
-                    active_scope,
-                ),
-            ),
-            (
-                "Surfaced",
-                decoration.paint(
-                    if surfaced { Style::new() } else { OUTPUT_MUTED },
-                    yes_no(surfaced),
-                ),
-            ),
-            (
-                "Blocked",
-                decoration.paint(
-                    if blocked {
-                        OUTPUT_WAITING
-                    } else {
-                        OUTPUT_MUTED
-                    },
-                    yes_no(blocked),
-                ),
-            ),
-            (
-                "Orphaned",
-                decoration.paint(
-                    if orphaned {
-                        OUTPUT_FAILURE
-                    } else {
-                        OUTPUT_MUTED
-                    },
-                    yes_no(orphaned),
-                ),
-            ),
-        ],
-    ));
-    if let Some(claim) = entity.progress.claim() {
-        overview.push(render_inline_fields(
-            decoration,
-            vec![("Claim", claim_details(claim, decoration))],
-        ));
-    }
-
-    let (declaration, declaration_style) = match entity.current_revision {
-        Some(revision) => (format!("fixed at Revision {revision}"), Style::new()),
-        None => ("draft".to_string(), OUTPUT_DECISION),
-    };
-    let mut plan = vec![(
-        "Plan declaration",
-        decoration.paint(declaration_style, declaration),
-    )];
-    if let Some(parent) = &entity.parent {
-        plan.push(("Parent", decoration.paint(OUTPUT_ID, parent)));
-    }
-    overview.push(render_inline_fields(decoration, plan));
-    overview.push(render_inline_fields(
-        decoration,
-        vec![(
-            "Records",
-            format!(
-                "Notes: {}  Revisions: {}  Decision history: {}  Progress history: {}",
-                counts.notes, counts.revisions, counts.decisions, counts.progressions
-            ),
-        )],
-    ));
-    overview.extend(structural_details);
-    let details = render_section(decoration, "Details", overview);
-    let mut group_details = Vec::new();
-    let mut dependencies = Vec::new();
-
-    if entity.kind == EntityKind::Group {
-        let summary = view.group_summary(&entity.id);
-        let counts = &summary.descendants;
-        let overlap = counts.ended + counts.rejected - counts.terminal;
-        let unfinished = counts.total - counts.terminal;
-        let mut group = vec![
-            format!(
-                "  {} {}  {} {}  {} {}",
-                decoration.paint(OUTPUT_MUTED, "Descendants: Ended:"),
-                decoration.paint(OUTPUT_MUTED, counts.ended),
-                decoration.paint(OUTPUT_MUTED, "Rejected:"),
-                decoration.paint(OUTPUT_MUTED, counts.rejected),
-                decoration.paint(OUTPUT_MUTED, "Unfinished:"),
-                decoration.paint(
-                    if unfinished == 0 { OUTPUT_MUTED } else { OUTPUT_WAITING },
-                    unfinished
-                )
-            ),
-            decoration.paint(
-                OUTPUT_MUTED,
-                format!(
-                    "  Ended and Rejected overlap: {overlap}; Unfinished excludes both (not a commitment)."
-                ),
-            ),
-        ];
-        if !entity.is_terminal() {
-            let can_complete = view.can_complete_group(&entity.id);
-            group.push(format!(
-                "  {} {}",
-                decoration.paint(OUTPUT_MUTED, "Can complete:"),
-                decoration.paint(
-                    if can_complete {
-                        OUTPUT_POSITIVE
-                    } else {
-                        OUTPUT_WAITING
-                    },
-                    yes_no(can_complete)
-                )
-            ));
-            if !matches!(entity.progress, Progress::InProgress(_)) {
-                group.push(format!(
-                    "  {}",
-                    decoration.paint(
-                        OUTPUT_WAITING,
-                        "Completion requires Group Progress=InProgress."
-                    )
-                ));
-            }
-            if counts.total > counts.terminal {
-                group.push(format!(
-                    "  {}",
-                    decoration.paint(
-                        OUTPUT_WAITING,
-                        format!(
-                            "Completion requires {} unfinished descendants to become terminal.",
-                            counts.total - counts.terminal
-                        )
-                    )
-                ));
-            } else if can_complete {
-                group.push(format!(
-                    "  {}",
-                    decoration.paint(
-                        OUTPUT_POSITIVE,
-                        "All descendants are terminal; awaiting explicit done."
-                    )
-                ));
-            }
-        }
-        blocks.push(render_section(decoration, "Group", group));
-        let mut group = Vec::new();
-        group.extend(render_entity_counts(
-            "Direct children",
-            &summary.direct,
-            decoration,
-        ));
-        group.push(String::new());
-        group.extend(render_entity_counts(
-            "Descendants",
-            &summary.descendants,
-            decoration,
-        ));
-        group_details = group;
-
-        let subtree = ordered_subtree(view, &entity.id);
-        for (_, descendant) in &subtree {
-            if matches!(descendant.progress, Progress::Ended) {
-                let waits = show_waits(
-                    view,
-                    descendant,
-                    "    ",
-                    decoration,
-                    descendant.disposition != Disposition::Rejected,
-                )?;
-                if !waits.is_empty() {
-                    group_details.push(format!(
-                        "  {} {}",
-                        decoration.paint(OUTPUT_MUTED, "Ended descendant structure:"),
-                        decoration.paint(OUTPUT_ID, &descendant.id)
-                    ));
-                    group_details.extend(waits);
-                }
-            }
-        }
-        blocks.push(render_section(
-            decoration,
-            "Subtree",
-            render_subtree(view, &subtree, decoration)?,
-        ));
-        dependencies = render_subtree_dependencies(view, entity, &subtree, decoration);
-    }
-
-    blocks.push(details);
-    if !group_details.is_empty() {
-        blocks.push(render_section(decoration, "Group counts", group_details));
-    }
-
-    if !dependencies.is_empty() {
-        blocks.push(render_section(decoration, "Dependencies", dependencies));
-    }
-
-    let mut relations = Vec::<(&str, String, Style)>::new();
-    let direct_group_dependencies = if entity.kind == EntityKind::Group {
-        view.direct_dependencies(&entity.id)
-            .into_iter()
-            .map(|target| target.id.clone())
-            .collect::<std::collections::HashSet<_>>()
-    } else {
-        std::collections::HashSet::new()
-    };
-    for target in view.dependency_targets(&entity.id) {
-        if direct_group_dependencies.contains(&target.id) {
-            continue;
-        }
-        let (label, style) = if target.disposition == Disposition::Rejected {
-            ("Orphaned:", OUTPUT_FAILURE)
-        } else if target.is_terminal() {
-            ("Satisfied dependency:", OUTPUT_MUTED)
-        } else {
-            ("Dependency:", OUTPUT_WAITING)
-        };
-        relations.push((label, render_related_entity(target, decoration), style));
-    }
-    for dependent in view.direct_dependents(&entity.id) {
-        relations.push((
-            "Dependent:",
-            render_related_entity(dependent, decoration),
-            OUTPUT_MUTED,
-        ));
-    }
-    for waiter in view.direct_after_entity_waiters(&entity.id) {
-        relations.push((
-            "AfterEntity waiter:",
-            render_related_entity_with_state(waiter, decoration),
-            OUTPUT_MUTED,
-        ));
-    }
-    for cause in view.blocking_causes(&entity.id)? {
-        if direct_group_dependencies.contains(&cause.id) {
-            continue;
-        }
-        relations.push((
-            "Root cause:",
-            render_related_entity(cause, decoration),
-            OUTPUT_FAILURE,
-        ));
-    }
-    if !relations.is_empty() {
-        blocks.push(render_section(
-            decoration,
-            "Relationships",
-            render_fields(decoration, "  ", relations),
-        ));
-    }
-
-    append_saved_records(&mut blocks, entity, progress_events, notes, decoration);
-    Ok(render_blocks(blocks))
-}
-
-fn append_saved_records(
-    blocks: &mut Vec<Vec<String>>,
-    entity: &Entity,
-    progress_events: &[db::ProgressEvent],
-    notes: &[Note],
-    decoration: OutputDecoration,
-) {
-    if let Some(description) = &entity.description {
-        blocks.push(render_section(
-            decoration,
-            "Description",
-            vec![display::human_text(description)],
-        ));
-    }
-
-    if !notes.is_empty() {
-        let mut rendered_notes = Vec::new();
-        for note in notes {
-            if !rendered_notes.is_empty() {
-                rendered_notes.push(String::new());
-            }
-            rendered_notes.push(format!(
-                "{}  {}  {}",
-                decoration.paint(OUTPUT_HEADING, format!("Note {}", note.id)),
-                decoration.paint(OUTPUT_MUTED, display::timestamp(&note.created_at)),
-                display::human_text(&note.actor)
-            ));
-            rendered_notes.push(display::human_text(&note.body));
-        }
-        blocks.push(render_section(decoration, "Notes", rendered_notes));
-    }
-
-    if !progress_events.is_empty() {
-        let mut history = Vec::new();
-        for event in progress_events {
-            let (action, action_style) = match event.kind {
-                db::ProgressEventKind::Start => ("Started", OUTPUT_ACTIVE),
-                db::ProgressEventKind::Done => ("Ended", OUTPUT_MUTED),
-                db::ProgressEventKind::Release => ("Released", Style::new()),
-            };
-            let reason = event
-                .reason
-                .as_ref()
-                .map(|reason| format!("  ({})", display::human_text(reason)))
-                .unwrap_or_default();
-            history.push(format!(
-                "  {}  {}  {}{reason}  [{}]",
-                display::timestamp(&event.at),
-                display::human_text(&event.actor),
-                decoration.paint(action_style, action),
-                event.id,
-            ));
-        }
-        blocks.push(render_section(decoration, "Progress history", history));
-    }
-}
-
-fn render_blocks(blocks: Vec<Vec<String>>) -> String {
-    format!(
-        "{}\n",
-        blocks
-            .into_iter()
-            .filter(|block| !block.is_empty())
-            .map(|block| block.join("\n"))
-            .collect::<Vec<_>>()
-            .join("\n\n")
-    )
-}
-
-fn ordered_subtree<'a>(view: &'a View, root: &EntityId) -> Vec<(usize, &'a Entity)> {
-    fn append_children<'a>(
-        view: &'a View,
-        parent: &EntityId,
-        depth: usize,
-        result: &mut Vec<(usize, &'a Entity)>,
-    ) {
-        let mut children = view.direct_children(parent);
-        children.sort_by(|left, right| left.id.cmp(&right.id));
-        for child in children {
-            result.push((depth, child));
-            append_children(view, &child.id, depth + 1, result);
-        }
-    }
-
-    let mut result = Vec::new();
-    append_children(view, root, 1, &mut result);
-    result
-}
-
-fn show_situation(
-    view: &View,
-    entity: &Entity,
-    decoration: OutputDecoration,
-) -> derived::Result<String> {
-    let mut facts = Vec::new();
-    if matches!(entity.progress, Progress::Ended) {
-        facts.push(decoration.paint(OUTPUT_MUTED, "Ended"));
-    }
-    if entity.disposition == Disposition::Rejected {
-        facts.push(decoration.paint(OUTPUT_MUTED, "Rejected"));
-    }
-    if facts.is_empty() {
-        if matches!(entity.progress, Progress::InProgress(_)) {
-            facts.push(decoration.paint(OUTPUT_ACTIVE, "InProgress (saved claim)"));
-        } else if view.is_ready(entity)? {
-            facts.push(decoration.paint(OUTPUT_POSITIVE, "Ready to start"));
-        } else {
-            facts.push("Not started".to_string());
-        }
-        if entity.disposition == Disposition::Undecided {
-            facts.push(decoration.paint(OUTPUT_DECISION, "Undecided"));
-        }
-        if view.is_orphaned(&entity.id) {
-            facts.push(decoration.paint(OUTPUT_FAILURE, "Orphaned"));
-        } else if view.is_blocked(&entity.id) {
-            facts.push(decoration.paint(OUTPUT_WAITING, "Blocked"));
-        }
-        if !view.within_active_scope(&entity.id)? {
-            facts.push(decoration.paint(OUTPUT_MUTED, "outside active scope (see ancestor gates)"));
-        }
-    }
-    Ok(facts.join("; "))
-}
-
-fn has_local_descendant_gate(view: &View, entity: &Entity) -> derived::Result<bool> {
-    Ok(entity.kind == EntityKind::Group
-        && (!matches!(entity.progress, Progress::InProgress(_))
-            || entity.disposition != Disposition::Accepted
-            || !view.is_surfaced(entity)?
-            || view.direct_dependencies(&entity.id).iter().any(|target| {
-                target.disposition == Disposition::Rejected || !target.is_terminal()
-            })))
-}
-
-fn show_waits(
-    view: &View,
-    entity: &Entity,
-    indent: &str,
-    decoration: OutputDecoration,
-    show_descendant_gate: bool,
-) -> derived::Result<Vec<String>> {
-    let mut lines = Vec::new();
-    if show_descendant_gate && has_local_descendant_gate(view, entity)? {
-        lines.push(format!(
-            "{indent}{} {} (Progress={}, Disposition={})",
-            decoration.paint(OUTPUT_WAITING, "Descendant gate closed:"),
-            decoration.paint(OUTPUT_ID, &entity.id),
-            decoration.paint(progress_style(&entity.progress), entity.progress.label()),
-            decoration.paint(
-                disposition_style(entity.disposition),
-                entity.disposition.label()
-            )
-        ));
-        if entity.disposition == Disposition::Rejected {
-            lines.push(format!(
-                "{indent}{}",
-                decoration.paint(
-                    OUTPUT_MUTED,
-                    "Rejected Group leaves descendant saved states unchanged."
-                )
-            ));
-        }
-    }
-    if !view.is_surfaced(entity)? {
-        lines.push(format!(
-            "{indent}{}",
-            decoration.paint(
-                OUTPUT_MUTED,
-                format!(
-                    "Not surfaced: {}",
-                    display::human_text(entity.resurface_condition.label())
-                )
-            )
-        ));
-    }
-    if let ResurfaceCondition::AfterEntity(id) = &entity.resurface_condition {
-        lines.push(format!(
-            "{indent}{} {}; satisfied by Ended or Rejected ({}).",
-            decoration.paint(OUTPUT_MUTED, "AfterEntity:"),
-            decoration.paint(OUTPUT_ID, id),
-            yes_no(view.is_surfaced(entity)?)
-        ));
-    }
-    let mut targets = view.direct_dependencies(&entity.id);
-    targets.sort_by(|a, b| a.id.cmp(&b.id));
-    for target in targets {
-        let (label, style) = if target.disposition == Disposition::Rejected {
-            ("Rejected prerequisite (Orphaned)", OUTPUT_FAILURE)
-        } else if !target.is_terminal() {
-            ("Unresolved dependency (Blocked)", OUTPUT_WAITING)
-        } else {
-            continue;
-        };
-        lines.push(format!(
-            "{indent}{} {}",
-            decoration.paint(style, format!("{label}:")),
-            render_related_entity(target, decoration)
-        ));
-    }
-    Ok(lines)
-}
-
-fn render_subtree(
-    view: &View,
-    subtree: &[(usize, &Entity)],
-    decoration: OutputDecoration,
-) -> derived::Result<Vec<String>> {
-    if subtree.is_empty() {
-        return Ok(vec![format!(
-            "  {}",
-            decoration.paint(OUTPUT_MUTED, "No descendants")
-        )]);
-    }
-
-    let mut lines = Vec::new();
-    for (depth, entity) in subtree {
-        let indent = "  ".repeat(*depth);
-        let candidate = if view.is_ready(entity)? {
-            format!("  {}", decoration.paint(OUTPUT_POSITIVE, "Ready"))
-        } else {
-            String::new()
-        };
-        lines.push(format!(
-            "{indent}{}  {}  [{}/{}]  {}{candidate}",
-            decoration.paint(OUTPUT_ID, &entity.id),
-            decoration.paint(OUTPUT_MUTED, entity.kind.label()),
-            decoration.paint(progress_style(&entity.progress), entity.progress.label()),
-            decoration.paint(
-                disposition_style(entity.disposition),
-                entity.disposition.label()
-            ),
-            display::human_text(&entity.title),
-        ));
-        let rejected_group =
-            entity.kind == EntityKind::Group && entity.disposition == Disposition::Rejected;
-        if rejected_group {
-            lines.push(format!(
-                "{indent}  {}",
-                decoration.paint(
-                    OUTPUT_MUTED,
-                    "Rejected Group: already terminal; descendant scope is inactive. Unfinished descendants are saved states and do not require follow-up by themselves."
-                )
-            ));
-        }
-        if !matches!(entity.progress, Progress::Ended) || rejected_group {
-            lines.extend(show_waits(
-                view,
-                entity,
-                &format!("{indent}  "),
-                decoration,
-                !rejected_group,
-            )?);
-        }
-    }
-    Ok(lines)
-}
-
-fn render_subtree_dependencies(
-    view: &View,
-    group: &Entity,
-    subtree: &[(usize, &Entity)],
-    decoration: OutputDecoration,
-) -> Vec<String> {
-    let scope = std::iter::once(group)
-        .chain(subtree.iter().map(|(_, entity)| *entity))
-        .map(|entity| entity.id.clone())
-        .collect::<std::collections::HashSet<_>>();
-    let mut owners = std::iter::once(group)
-        .chain(subtree.iter().map(|(_, entity)| *entity))
-        .filter_map(|owner| {
-            let mut targets = view.direct_dependencies(&owner.id);
-            targets.sort_by(|left, right| left.id.cmp(&right.id));
-            (!targets.is_empty()).then_some((owner, targets))
-        })
-        .collect::<Vec<_>>();
-    owners.sort_by(|(left, _), (right, _)| left.id.cmp(&right.id));
-
-    let mut lines = Vec::new();
-    for (owner, targets) in owners {
-        lines.push(format!("  {}", decoration.paint(OUTPUT_ID, &owner.id)));
-        for target in targets {
-            let (state, style) = if target.disposition == Disposition::Rejected {
-                ("Rejected", OUTPUT_FAILURE)
-            } else if target.is_terminal() {
-                ("Satisfied", OUTPUT_MUTED)
-            } else {
-                ("Unresolved", OUTPUT_WAITING)
-            };
-            let external = if scope.contains(&target.id) {
-                String::new()
-            } else {
-                format!(
-                    "  {}",
-                    render_inline_fields(
-                        decoration,
-                        vec![("External", display::human_text(&target.title))],
-                    )
-                )
-            };
-            lines.push(format!(
-                "    {}  {}{external}",
-                render_inline_fields(
-                    decoration,
-                    vec![("Needs", decoration.paint(OUTPUT_ID, &target.id))],
-                ),
-                decoration.paint(style, state),
-            ));
-        }
-    }
-    lines
-}
-
-fn render_related_entity(entity: &Entity, decoration: OutputDecoration) -> String {
-    format!(
-        "{}  {}  {}",
-        decoration.paint(OUTPUT_ID, &entity.id),
-        decoration.paint(OUTPUT_MUTED, entity.kind.label()),
-        display::human_text(&entity.title)
-    )
-}
-
-fn render_related_entity_with_state(entity: &Entity, decoration: OutputDecoration) -> String {
-    format!(
-        "{}  {}  [{}/{}]  {}",
-        decoration.paint(OUTPUT_ID, &entity.id),
-        decoration.paint(OUTPUT_MUTED, entity.kind.label()),
-        decoration.paint(progress_style(&entity.progress), entity.progress.label()),
-        decoration.paint(
-            disposition_style(entity.disposition),
-            entity.disposition.label()
-        ),
-        display::human_text(&entity.title)
-    )
-}
-
-fn render_section(decoration: OutputDecoration, heading: &str, lines: Vec<String>) -> Vec<String> {
-    std::iter::once(decoration.paint(OUTPUT_HEADING, heading))
-        .chain(lines)
-        .collect()
-}
-
-fn render_inline_fields(decoration: OutputDecoration, fields: Vec<(&str, String)>) -> String {
-    fields
-        .into_iter()
-        .map(|(label, value)| {
-            format!(
-                "{} {value}",
-                decoration.paint(OUTPUT_MUTED, format!("{label}:"))
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("  ")
-}
-
-fn render_fields(
-    decoration: OutputDecoration,
-    indent: &str,
-    fields: Vec<(&str, String, Style)>,
-) -> Vec<String> {
-    let width = fields
-        .iter()
-        .map(|(label, _, _)| label.chars().count())
-        .max()
-        .unwrap_or_default();
-    fields
-        .into_iter()
-        .map(|(label, value, style)| {
-            let label = decoration.paint(style, format!("{label:<width$}"));
-            format!("{indent}{label}  {value}")
-        })
-        .collect()
-}
-
-fn progress_style(progress: &Progress) -> Style {
-    match progress {
-        Progress::NotStarted => Style::new(),
-        Progress::InProgress(_) => OUTPUT_ACTIVE,
-        Progress::Ended => OUTPUT_MUTED,
-    }
-}
-
-fn disposition_style(disposition: Disposition) -> Style {
-    match disposition {
-        Disposition::Undecided => OUTPUT_DECISION,
-        Disposition::Accepted => OUTPUT_POSITIVE,
-        Disposition::Rejected => OUTPUT_MUTED,
-    }
-}
-
-fn cmd_note(command: NoteCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store(false)?;
-    let decoration = current_output_decoration();
-    match command {
-        NoteCmd::Add { id, message, file } => {
-            let id = store.resolve_id(&id)?;
-            let body = read_description(message, file)?
-                .ok_or("a Note body is required; provide -m or -F")?;
-            let note = store.add_note(&id, &body, &actor::actor())?;
-            write_confirmation(
-                &id,
-                |_| format!("Note {} recorded", note.id),
-                OUTPUT_POSITIVE,
-            )?;
-        }
-        NoteCmd::List { id } => {
-            let id = store.resolve_id(&id)?;
-            let notes = store.notes(&id)?;
-            let rows = notes
+        recorder: axon_recorder::detect().map(|recorder| Recorder {
+            actor: recorder.actor,
+            data: recorder
+                .data
                 .into_iter()
-                .map(|note| {
-                    let first_line = note.body.split('\n').next().unwrap_or_default();
-                    format!(
-                        "{}  {}  {}  {}\n",
-                        decoration.paint(OUTPUT_INDEX, note.id),
-                        decoration.paint(OUTPUT_MUTED, display::timestamp(&note.created_at)),
-                        display::human_text(&note.actor),
-                        display::human_text(first_line)
-                    )
-                })
-                .collect::<String>();
-            write_rows(&rows, "No notes", decoration)?;
-        }
-        NoteCmd::Show { id, number } => {
-            let id = store.resolve_id(&id)?;
-            let note = store.note(&id, &number)?;
-            let mut output = format!(
-                "{}  {}\n{}\n\n{}\n{}",
-                decoration.paint(OUTPUT_ID, &id),
-                decoration.paint(OUTPUT_HEADING, format!("Note {}", note.id)),
-                render_inline_fields(
-                    decoration,
-                    vec![
-                        ("Recorded", display::timestamp(&note.created_at)),
-                        ("Actor", display::human_text(&note.actor)),
-                    ],
-                ),
-                decoration.paint(OUTPUT_HEADING, "Body"),
-                display::human_text(&note.body),
-            );
-            if !note.body.ends_with('\n') {
-                output.push('\n');
-            }
-            write_output(&output, decoration)?;
-        }
+                .map(|(key, value)| (key, value.into()))
+                .collect(),
+        }),
     }
-    Ok(())
 }
-
-fn cmd_revision(command: RevisionCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store(false)?;
-    let decoration = current_output_decoration();
-    match command {
-        RevisionCmd::List { id } => {
-            let id = store.resolve_id(&id)?;
-            let snapshot = store.revision_snapshot(&id)?;
-            let rows = snapshot
-                .revisions
-                .into_iter()
-                .map(|revision| {
-                    let marks = render_revision_marks(
-                        snapshot.entity.current_revision == Some(revision.id),
-                        revision.baseline,
-                        " ",
-                        decoration,
-                    );
-                    format!(
-                        "{}  {}{}  {}\n",
-                        decoration.paint(OUTPUT_INDEX, revision.id),
-                        decoration.paint(OUTPUT_MUTED, display::timestamp(&revision.created_at)),
-                        marks,
-                        display::human_text(&revision.title)
-                    )
-                })
-                .collect::<String>();
-            write_rows(&rows, "No declaration revisions", decoration)?;
+fn row(snapshot: &Snapshot, entity: &Entity) -> String {
+    format!(
+        "{}  {}  {}  {}\n",
+        display::identity(&entity.id),
+        display::muted(format!("{:?}", entity.kind)),
+        display::situation(status(snapshot, entity)),
+        display::human_text(&entity.current.title).replace('\n', "\\n")
+    )
+}
+fn status(snapshot: &Snapshot, entity: &Entity) -> &'static str {
+    match entity.current.lifecycle {
+        Lifecycle::Undecided => "Undecided",
+        Lifecycle::NotStarted
+            if snapshot
+                .check_operation(&entity.id, Operation::Start)
+                .is_ok() =>
+        {
+            "Ready"
         }
-        RevisionCmd::Show { id, number } => {
-            let id = store.resolve_id(&id)?;
-            let snapshot = store.revision_snapshot(&id)?;
-            let revision = snapshot.revision(&number)?;
-            write_output(
-                &render_revision(&id, &snapshot.entity, revision, decoration),
-                decoration,
-            )?;
+        Lifecycle::NotStarted => "Blocked",
+        Lifecycle::InProgress
+            if entity.current.dependencies.iter().any(|id| {
+                snapshot
+                    .entity(id)
+                    .is_ok_and(|e| e.current.lifecycle != Lifecycle::Completed)
+            }) =>
+        {
+            "InProgress+Blocked"
         }
-        RevisionCmd::Diff { id, from, to } => {
-            let id = store.resolve_id(&id)?;
-            let snapshot = store.revision_snapshot(&id)?;
-            let from_revision = snapshot.revision(&from)?;
-            let to_revision = snapshot.revision(&to)?;
-            write_output(
-                &render_revision_diff(&id, from_revision, to_revision, decoration),
-                decoration,
-            )?;
-        }
+        Lifecycle::InProgress => "InProgress",
+        Lifecycle::Completed => "Completed",
+        Lifecycle::Cancelled => "Cancelled",
     }
-    Ok(())
 }
-
-fn render_revision(
-    id: &EntityId,
-    entity: &Entity,
-    revision: &DeclarationRevision,
-    decoration: OutputDecoration,
-) -> String {
-    let marks = render_revision_marks(
-        entity.current_revision == Some(revision.id),
-        revision.baseline,
-        "  ",
-        decoration,
-    );
-    let description = match revision.description.as_deref() {
-        Some(description) => format!("present\n{}", display::human_text(description)),
-        None => "absent".to_string(),
-    };
-    let parent = revision
+fn sorted(mut entities: Vec<&Entity>) -> Vec<&Entity> {
+    entities.sort_by(|a, b| (&a.created_at, &a.id).cmp(&(&b.created_at, &b.id)));
+    entities
+}
+fn show(snapshot: &Snapshot, entity: &Entity, details: bool) -> Result<String> {
+    let mut out = row(snapshot, entity);
+    let notes = snapshot.notes(&entity.id)?.len();
+    if notes > 0 {
+        out.push_str(&format!("{notes} notes\n"));
+    }
+    let parent = entity
+        .current
         .parent
         .as_ref()
-        .map(ToString::to_string)
-        .unwrap_or_else(|| "(none)".to_string());
-    let dependencies = if revision.dependencies.is_empty() {
-        "  (none)".to_string()
-    } else {
-        revision
-            .dependencies
-            .iter()
-            .map(|dependency| format!("  {}", decoration.paint(OUTPUT_ID, dependency)))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let metadata = [
-        render_inline_fields(
-            decoration,
-            vec![("Created", display::timestamp(&revision.created_at))],
-        ),
-        render_inline_fields(
-            decoration,
-            vec![("Title", display::human_text(&revision.title))],
-        ),
-        render_inline_fields(decoration, vec![("Parent", parent)]),
-    ]
-    .join("\n");
-    format!(
-        "{}  {}{marks}\n{}\n\n{}\n{description}\n\n{}\n{dependencies}\n",
-        decoration.paint(OUTPUT_ID, id),
-        decoration.paint(
-            OUTPUT_HEADING,
-            format!("Declaration Revision {}", revision.id)
-        ),
-        metadata,
-        decoration.paint(OUTPUT_HEADING, "Description"),
-        decoration.paint(OUTPUT_HEADING, "Outgoing dependencies"),
-    )
-}
-
-fn render_revision_marks(
-    current: bool,
-    baseline: bool,
-    leading: &str,
-    decoration: OutputDecoration,
-) -> String {
-    let mut marks = Vec::new();
-    if current {
-        marks.push(decoration.paint(OUTPUT_INDEX, "current"));
+        .map(|id| snapshot.entity(id))
+        .transpose()?;
+    let parent_wait = !details
+        && entity.current.lifecycle == Lifecycle::NotStarted
+        && parent.is_some_and(|e| e.current.lifecycle != Lifecycle::InProgress);
+    if let Some(parent) = parent.filter(|_| !parent_wait) {
+        out.push_str(&format!(
+            "Parent: {}  {}\n",
+            display::identity(&parent.id),
+            display::human_text(&parent.current.title)
+        ));
     }
-    if baseline {
-        marks.push(decoration.paint(OUTPUT_MUTED, "baseline"));
-    }
-    if marks.is_empty() {
-        String::new()
-    } else {
-        format!("{leading}[{}]", marks.join(", "))
-    }
-}
-
-fn render_revision_diff(
-    id: &EntityId,
-    from: &DeclarationRevision,
-    to: &DeclarationRevision,
-    decoration: OutputDecoration,
-) -> String {
-    let mut output = format!(
-        "{}  {}\n\n",
-        decoration.paint(OUTPUT_ID, id),
-        decoration.paint(
-            OUTPUT_HEADING,
-            format!("Declaration Revision {} -> {}", from.id, to.id)
+    let dependencies = entity
+        .current
+        .dependencies
+        .iter()
+        .map(|id| snapshot.entity(id))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if !details
+        && matches!(
+            entity.current.lifecycle,
+            Lifecycle::NotStarted | Lifecycle::InProgress
         )
-    );
-    push_value_diff(&mut output, "Title", &from.title, &to.title, decoration);
-    push_optional_value_diff(
-        &mut output,
-        "Description",
-        from.description.as_deref(),
-        to.description.as_deref(),
-        decoration,
-    );
-    push_value_diff(
-        &mut output,
-        "Parent",
-        &from
-            .parent
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| "(none)".to_string()),
-        &to.parent
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| "(none)".to_string()),
-        decoration,
-    );
-
-    let mut removed = from
-        .dependencies
-        .iter()
-        .filter(|dependency| !to.dependencies.contains(dependency))
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    let mut added = to
-        .dependencies
-        .iter()
-        .filter(|dependency| !from.dependencies.contains(dependency))
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    removed.sort();
-    added.sort();
-    output.push_str(&format!(
-        "{}\n",
-        decoration.paint(OUTPUT_HEADING, "Outgoing dependencies")
-    ));
-    if removed.is_empty() && added.is_empty() {
-        output.push_str(&format!(
-            "  {}\n",
-            decoration.paint(OUTPUT_MUTED, "unchanged")
-        ));
-    } else {
-        for dependency in removed {
-            output.push_str(&format!(
-                "{} {dependency}\n",
-                decoration.paint(OUTPUT_FAILURE, "-")
+    {
+        let unmet: Vec<_> = dependencies
+            .into_iter()
+            .filter(|e| e.current.lifecycle != Lifecycle::Completed)
+            .collect();
+        if parent_wait || !unmet.is_empty() {
+            out.push_str(&format!(
+                "\n{}\n",
+                display::heading(if entity.current.lifecycle == Lifecycle::NotStarted {
+                    "Required to start"
+                } else {
+                    "Required to complete"
+                })
             ));
-        }
-        for dependency in added {
-            output.push_str(&format!(
-                "{} {dependency}\n",
-                decoration.paint(OUTPUT_POSITIVE, "+")
-            ));
-        }
-    }
-    output
-}
-
-fn push_value_diff(
-    output: &mut String,
-    label: &str,
-    from: &str,
-    to: &str,
-    decoration: OutputDecoration,
-) {
-    output.push_str(&format!("{}\n", decoration.paint(OUTPUT_HEADING, label)));
-    if from == to {
-        output.push_str(&format!(
-            "  {}\n",
-            decoration.paint(OUTPUT_MUTED, "unchanged")
-        ));
-    } else {
-        for line in from.split('\n') {
-            output.push_str(&format!(
-                "{} {}\n",
-                decoration.paint(OUTPUT_FAILURE, "-"),
-                display::human_text(line)
-            ));
-        }
-        for line in to.split('\n') {
-            output.push_str(&format!(
-                "{} {}\n",
-                decoration.paint(OUTPUT_POSITIVE, "+"),
-                display::human_text(line)
-            ));
-        }
-    }
-}
-
-fn push_optional_value_diff(
-    output: &mut String,
-    label: &str,
-    from: Option<&str>,
-    to: Option<&str>,
-    decoration: OutputDecoration,
-) {
-    output.push_str(&format!("{}\n", decoration.paint(OUTPUT_HEADING, label)));
-    if from == to {
-        output.push_str(&format!(
-            "  {}\n",
-            decoration.paint(OUTPUT_MUTED, "unchanged")
-        ));
-        return;
-    }
-    push_optional_diff_side(output, '-', from, decoration);
-    push_optional_diff_side(output, '+', to, decoration);
-}
-
-fn push_optional_diff_side(
-    output: &mut String,
-    prefix: char,
-    value: Option<&str>,
-    decoration: OutputDecoration,
-) {
-    let style = if prefix == '-' {
-        OUTPUT_FAILURE
-    } else {
-        OUTPUT_POSITIVE
-    };
-    let prefix = decoration.paint(style, prefix);
-    match value {
-        None => output.push_str(&format!("{prefix} absent\n")),
-        Some(value) => {
-            output.push_str(&format!("{prefix} present\n"));
-            for line in value.split('\n') {
-                output.push_str(&format!("{prefix} {}\n", display::human_text(line)));
+            if parent_wait {
+                out.push_str(&format!(
+                    "Parent must start: {}",
+                    row(snapshot, parent.unwrap())
+                ));
+            }
+            for dependency in sorted(unmet) {
+                out.push_str(&format!(
+                    "Dependency must complete: {}",
+                    row(snapshot, dependency)
+                ));
             }
         }
     }
-}
-
-fn render_entity_counts(
-    label: &str,
-    counts: &derived::EntityCounts,
-    decoration: OutputDecoration,
-) -> Vec<String> {
-    vec![
-        format!(
-            "  {}: {}  {}",
-            decoration.paint(OUTPUT_HEADING, label),
-            counts.total,
-            render_inline_fields(
-                decoration,
-                vec![
-                    ("Issue", counts.issues.to_string()),
-                    ("Group", counts.groups.to_string()),
-                    ("Terminal", counts.terminal.to_string()),
-                ],
-            )
-        ),
-        format!(
-            "    {}",
-            render_inline_fields(
-                decoration,
-                vec![
-                    ("Progress", format!("NotStarted: {}", counts.not_started)),
-                    (
-                        "InProgress",
-                        decoration.paint(OUTPUT_ACTIVE, counts.in_progress),
-                    ),
-                    ("Ended", decoration.paint(OUTPUT_MUTED, counts.ended)),
-                ],
-            )
-        ),
-        format!(
-            "    {}",
-            render_inline_fields(
-                decoration,
-                vec![
-                    (
-                        "Disposition",
-                        format!(
-                            "Undecided: {}",
-                            decoration.paint(OUTPUT_DECISION, counts.undecided)
-                        ),
-                    ),
-                    (
-                        "Accepted",
-                        decoration.paint(OUTPUT_POSITIVE, counts.accepted),
-                    ),
-                    ("Rejected", decoration.paint(OUTPUT_MUTED, counts.rejected)),
-                ],
-            )
-        ),
-    ]
-}
-
-fn inactive_scope_reason(view: &View, id: &EntityId) -> derived::Result<Option<String>> {
-    for group in view.ancestors(id) {
-        if view.opens_descendants(group)? {
-            continue;
+    if details {
+        let lifecycle = format!("{:?}", entity.current.lifecycle);
+        if status(snapshot, entity) != lifecycle {
+            out.push_str(&format!("{} {lifecycle}\n", display::muted("Lifecycle:")));
         }
-        let mut reasons = Vec::new();
-        if !matches!(group.progress, Progress::InProgress(_)) {
-            reasons.push(format!("Progress={}", group.progress.label()));
+        if parent.is_none() {
+            out.push_str("Parent: (none)\n");
         }
-        if group.disposition != Disposition::Accepted {
-            reasons.push(format!("Disposition={}", group.disposition.label()));
-        }
-        if !view.is_surfaced(group)? {
-            reasons.push(format!(
-                "not surfaced: {}",
-                display::human_text(group.resurface_condition.label())
-            ));
-        }
-        if view.is_orphaned(&group.id) {
-            reasons.push("orphaned".to_string());
-        } else if view.is_blocked(&group.id) {
-            reasons.push("blocked".to_string());
-        }
-        return Ok(Some(format!("{} ({})", group.id, reasons.join(", "))));
-    }
-    Ok(None)
-}
-
-fn yes_no(value: bool) -> &'static str {
-    if value { "yes" } else { "no" }
-}
-
-fn cmd_decide(command: DecideCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let (args, disposition) = match command {
-        DecideCmd::Accept(args) => (args, Disposition::Accepted),
-        DecideCmd::Reject(args) => (args, Disposition::Rejected),
-        DecideCmd::Undecide(args) => (args, Disposition::Undecided),
-    };
-    let mut store = open_store(false)?;
-    let id = store.resolve_id(&args.id)?;
-    store.apply(&id, Change::Decide(disposition), &ctx(args.reason))?;
-    write_confirmation(
-        &id,
-        |decoration| {
-            render_inline_fields(
-                decoration,
-                vec![(
-                    "Disposition",
-                    decoration.paint(disposition_style(disposition), disposition.label()),
-                )],
-            )
-        },
-        Style::new(),
-    )?;
-    Ok(())
-}
-
-fn cmd_when(command: WhenCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store(false)?;
-    match command {
-        WhenCmd::Command {
-            id,
-            command,
-            reason,
-        } => {
-            let id = store.resolve_id(&id)?;
-            let condition = ResurfaceCondition::Command(command);
-            store.apply(
-                &id,
-                Change::SetResurfaceCondition(condition.clone()),
-                &ctx(reason),
-            )?;
-            write_confirmation(
-                &id,
-                |_| {
-                    format!(
-                        "Resurface condition: {}",
-                        display::human_text(condition.label())
-                    )
-                },
-                Style::new(),
-            )?;
-        }
-        WhenCmd::At { id, date, reason } => {
-            let id = store.resolve_id(&id)?;
-            let date = parse_resurface_at(&date)?;
-            let condition = ResurfaceCondition::AtDate(date);
-            store.apply(
-                &id,
-                Change::SetResurfaceCondition(condition.clone()),
-                &ctx(reason),
-            )?;
-            write_confirmation(
-                &id,
-                |_| format!("Resurface condition: {}", condition.label()),
-                Style::new(),
-            )?;
-        }
-        WhenCmd::After {
-            id,
-            reference,
-            reason,
-        } => {
-            let id = store.resolve_id(&id)?;
-            let reference = store.resolve_id(&reference)?;
-            store.apply(
-                &id,
-                Change::SetResurfaceCondition(ResurfaceCondition::AfterEntity(reference.clone())),
-                &ctx(reason),
-            )?;
-            write_confirmation(
-                &id,
-                |_| format!("Resurface condition: AfterEntity({reference})"),
-                Style::new(),
-            )?;
-        }
-        WhenCmd::Manual { id, reason } => {
-            let id = store.resolve_id(&id)?;
-            store.apply(
-                &id,
-                Change::SetResurfaceCondition(ResurfaceCondition::Manual),
-                &ctx(reason),
-            )?;
-            write_confirmation(
-                &id,
-                |_| "Resurface condition: Manual".to_string(),
-                Style::new(),
-            )?;
-        }
-        WhenCmd::Clear { id, reason } => {
-            let id = store.resolve_id(&id)?;
-            store.apply(
-                &id,
-                Change::SetResurfaceCondition(ResurfaceCondition::Always),
-                &ctx(reason),
-            )?;
-            write_confirmation(
-                &id,
-                |_| "Resurface condition: Always".to_string(),
-                Style::new(),
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn parse_resurface_at(value: &str) -> Result<ResurfaceAt, String> {
-    value.parse().map_err(|_| {
-        format!(
-            "invalid resurface timestamp: {value} (expected e.g. 2026-12-01T00:00:00+09:00 or 2026-11-30T15:00:00Z)"
-        )
-    })
-}
-
-fn setting_confirmation(outcome: ApplyOutcome, detail: String) -> String {
-    match outcome {
-        ApplyOutcome::Changed => detail,
-        ApplyOutcome::Unchanged => format!("No changes  {detail}"),
-    }
-}
-
-fn cmd_dep(command: DepCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = open_store(false)?;
-    match command {
-        DepCmd::Add { id, needs } => {
-            let id = store.resolve_id(&id)?;
-            let needs = store.resolve_id(&needs)?;
-            let outcome = store.add_dep(&id, &needs)?;
-            write_confirmation(
-                &id,
-                |decoration| {
-                    setting_confirmation(
-                        outcome,
-                        render_inline_fields(
-                            decoration,
-                            vec![(
-                                if outcome == ApplyOutcome::Changed {
-                                    "Dependency added"
-                                } else {
-                                    "Dependency already present"
-                                },
-                                decoration.paint(OUTPUT_ID, &needs),
-                            )],
-                        ),
-                    )
-                },
-                Style::new(),
-            )?;
-        }
-        DepCmd::Rm { id, needs } => {
-            let id = store.resolve_id(&id)?;
-            let needs = store.resolve_id(&needs)?;
-            let outcome = store.remove_dep(&id, &needs)?;
-            write_confirmation(
-                &id,
-                |decoration| {
-                    setting_confirmation(
-                        outcome,
-                        render_inline_fields(
-                            decoration,
-                            vec![(
-                                if outcome == ApplyOutcome::Changed {
-                                    "Dependency removed"
-                                } else {
-                                    "Dependency already absent"
-                                },
-                                decoration.paint(OUTPUT_ID, &needs),
-                            )],
-                        ),
-                    )
-                },
-                Style::new(),
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn cmd_log(raw: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let store = open_store(false)?;
-    let id = store.resolve_id(raw)?;
-    let events = store.events(&id)?;
-    let decoration = current_output_decoration();
-    if events.is_empty() {
-        write_output("No decision history\n", decoration)?;
-        return Ok(());
-    }
-    let mut output = String::new();
-    for event in events {
-        output.push_str(&format!(
-            "{}  {}  {}",
-            decoration.paint(OUTPUT_MUTED, display::timestamp(&event.at)),
-            display::human_text(&event.actor),
-            format_decision(&event, decoration)
+        out.push_str(&format!(
+            "{} {}\n",
+            display::muted("Condition:"),
+            entity
+                .current
+                .condition
+                .as_ref()
+                .map(display::human_text)
+                .unwrap_or_else(|| "(none)".into())
         ));
-        if let Some(reason) = event.reason {
-            output.push_str(&format!(
-                "  {} {}",
-                decoration.paint(OUTPUT_MUTED, "Reason:"),
-                display::human_text(reason)
-            ));
-        }
-        if let Some(revision) = event.revision {
-            output.push_str(&format!(
-                "  {} {revision}",
-                decoration.paint(OUTPUT_MUTED, "Revision:")
-            ));
-        }
-        output.push_str(&format!("  [{}]\n", event.id));
-    }
-    write_output(&output, decoration)?;
-    Ok(())
-}
-
-fn format_decision(event: &db::Event, decoration: OutputDecoration) -> String {
-    let label = |value: &Option<String>| match value.as_deref() {
-        Some("undecided") => "Undecided".to_string(),
-        Some("accepted") => "Accepted".to_string(),
-        Some("rejected") => "Rejected".to_string(),
-        Some(other) if event.field == "resurface_condition" => other
-            .strip_prefix("AtDate(")
-            .and_then(|value| value.strip_suffix(')'))
-            .and_then(|value| value.parse::<ResurfaceAt>().ok())
-            .map(|at| format!("AtDate({})", at.local_string()))
-            .unwrap_or_else(|| display::human_text(other)),
-        Some(other) => display::human_text(other),
-        None => "Always".to_string(),
-    };
-    let field = match event.field.as_str() {
-        "disposition" => "Disposition".to_string(),
-        "resurface_condition" => "Resurface condition".to_string(),
-        field => display::human_text(field),
-    };
-    let old = label(&event.old_value);
-    let new = label(&event.new_value);
-    let old_style = if event.field == "disposition" {
-        disposition_label_style(&old)
-    } else {
-        OUTPUT_MUTED
-    };
-    let new_style = if event.field == "disposition" {
-        disposition_label_style(&new)
-    } else if new == "Always" {
-        Style::new()
-    } else {
-        OUTPUT_MUTED
-    };
-    format!(
-        "{} {} {} {}",
-        decoration.paint(OUTPUT_MUTED, format!("{field}:")),
-        decoration.paint(old_style, old),
-        decoration.paint(OUTPUT_MUTED, "->"),
-        decoration.paint(new_style, new)
-    )
-}
-
-fn disposition_label_style(value: &str) -> Style {
-    match value {
-        "Undecided" => OUTPUT_DECISION,
-        "Accepted" => OUTPUT_POSITIVE,
-        "Rejected" => OUTPUT_MUTED,
-        _ => Style::new(),
-    }
-}
-
-fn cmd_write(
-    raw: &str,
-    title: Option<String>,
-    message: Option<String>,
-    file: Option<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let body = read_description(message, file)?;
-    if title.is_none() && body.is_none() {
-        return Err("nothing to write; provide --title, -m, or -F".into());
-    }
-
-    let mut store = open_store(false)?;
-    let id = store.resolve_id(raw)?;
-    let changed = write_fields(&mut store, &id, title, body)?;
-    if changed.is_empty() {
-        write_confirmation(&id, |_| "No changes".to_string(), OUTPUT_MUTED)?;
-    } else {
-        write_confirmation(&id, |_| changed.join("  "), OUTPUT_POSITIVE)?;
-    }
-    Ok(())
-}
-
-fn write_fields(
-    store: &mut Store,
-    id: &EntityId,
-    title: Option<String>,
-    body: Option<String>,
-) -> Result<Vec<&'static str>, Box<dyn std::error::Error>> {
-    let mut changed = Vec::new();
-    if let Some(title) = title {
-        let title = normalize_title(&title)?;
-        if store.apply(id, Change::SetTitle(title), &ctx(None))? == ApplyOutcome::Changed {
-            changed.push("Title updated");
-        }
-    }
-    if let Some(body) = body {
-        let body = normalize_description(body);
-        let removed = body.is_none();
-        let outcome = store
-            .apply(id, Change::SetDescription(body), &ctx(None))
-            .map_err(|e| {
-                let applied = if changed.is_empty() {
-                    String::new()
-                } else {
-                    format!("\nApplied: {id} {}", changed.join("  "))
-                };
-                operation_error("description save", e, applied)
-            })?;
-        if outcome == ApplyOutcome::Changed {
-            changed.push(if removed {
-                "Description removed"
-            } else {
-                "Description updated"
-            });
-        }
-    }
-    Ok(changed)
-}
-
-fn read_description(
-    message: Option<String>,
-    file: Option<String>,
-) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    use std::io::Read;
-
-    match (message, file) {
-        (Some(message), None) => Ok(Some(message)),
-        (None, Some(file)) if file == "-" => {
-            let mut buffer = String::new();
-            std::io::stdin().read_to_string(&mut buffer)?;
-            Ok(Some(buffer))
-        }
-        (None, Some(file)) => {
-            Ok(Some(std::fs::read_to_string(&file).map_err(|e| {
-                operation_error(format!("{file} read input"), e, "")
-            })?))
-        }
-        (Some(_), Some(_)) => Err("-m and -F cannot be used together".into()),
-        (None, None) => Ok(None),
-    }
-}
-
-fn normalize_description(description: String) -> Option<String> {
-    (!description.trim().is_empty()).then(|| description.trim().to_string())
-}
-
-fn normalize_title(title: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let title = title.trim();
-    if title.is_empty() || title.contains(['\n', '\r']) {
-        return Err("title must be a non-empty single-line string".into());
-    }
-    Ok(title.to_string())
-}
-
-fn ctx(reason: Option<String>) -> Ctx {
-    Ctx {
-        actor: actor::actor(),
-        reason,
-    }
-}
-
-fn write_rows(rows: &str, empty_note: &str, decoration: OutputDecoration) -> std::io::Result<()> {
-    if rows.is_empty() {
-        eprintln!(
-            "{}",
-            current_error_decoration().paint(OUTPUT_MUTED, empty_note)
+        let dependencies = sorted(
+            entity
+                .current
+                .dependencies
+                .iter()
+                .map(|id| snapshot.entity(id))
+                .collect::<std::result::Result<Vec<_>, _>>()?,
         );
-        Ok(())
-    } else {
-        write_output(rows, decoration)
-    }
-}
-
-fn cli_command() -> clap::Command {
-    Cli::command()
-        .styles(cli_styles())
-        .override_help(render_root_help(OutputDecoration::Ansi))
-}
-
-fn free_text_error_guidance(args: &[std::ffi::OsString], error: &mut clap::Error) {
-    use clap::error::{ContextKind, ContextValue, ErrorKind};
-
-    if !matches!(
-        error.kind(),
-        ErrorKind::UnknownArgument | ErrorKind::InvalidValue
-    ) {
-        return;
-    }
-    for (index, token) in args.iter().enumerate().skip(1) {
-        let (option, label) = match token.to_str() {
-            Some("--title") => ("--title", "TITLE"),
-            Some("--message" | "-m") => ("--message", "MESSAGE"),
-            Some("--reason" | "-r") => ("--reason", "REASON"),
-            _ => continue,
-        };
-        if args.get(index + 1).is_some_and(|next| {
-            next.to_str()
-                .is_none_or(|value| !value.starts_with('-') || value == "-")
-        }) {
-            continue;
-        }
-        // Let Clap distinguish options from values and tokens after the positional separator.
-        let Err(prefix_error) = cli_command().try_get_matches_from(&args[..=index]) else {
-            continue;
-        };
-        if prefix_error.kind() != ErrorKind::InvalidValue
-            || prefix_error.get(ContextKind::InvalidArg)
-                != Some(&ContextValue::String(format!("{option} <{label}>")))
-            || prefix_error.get(ContextKind::InvalidValue)
-                != Some(&ContextValue::String(String::new()))
-        {
-            continue;
-        }
-        error.remove(ContextKind::SuggestedArg);
-        error.remove(ContextKind::Suggested);
-        error.remove(ContextKind::TrailingArg);
-        error.insert(ContextKind::Suggested, ContextValue::StyledStrs(vec![format!(
-            "if a value begins with '-', attach it with '=': {option}='--help text'. Quoting alone does not stop option parsing; '--' separates positional arguments and cannot supply this option's value"
-        ).into()]));
-        return;
-    }
-    if error.kind() == ErrorKind::UnknownArgument {
-        let creation = matches!(
-            args.get(1).and_then(|arg| arg.to_str()),
-            Some("plan" | "capture")
-        ) || (args.get(1).is_some_and(|arg| arg == "group")
-            && matches!(
-                args.get(2).and_then(|arg| arg.to_str()),
-                Some("plan" | "capture")
+        let dependents = sorted(
+            snapshot
+                .entities()
+                .filter(|e| e.current.dependencies.contains(&entity.id))
+                .collect(),
+        );
+        for (label, related) in [
+            (
+                "Dependencies (must be Completed to start or complete):",
+                dependencies,
+            ),
+            ("Dependents:", dependents),
+        ] {
+            out.push_str(&format!(
+                "\n{}{}\n",
+                display::heading(label),
+                if related.is_empty() { " (none)" } else { "" }
             ));
-        if creation {
-            error.remove(ContextKind::TrailingArg);
-            error.insert(ContextKind::Suggested, ContextValue::StyledStrs(vec![
-                "if the positional title begins with '-', put all options before '--', e.g. -m='body' -- '--color text'. Quoting alone does not stop option parsing".into(),
-            ]));
+            for other in related {
+                out.push_str(&row(snapshot, other));
+            }
         }
     }
-}
-
-fn cli_styles() -> clap::builder::Styles {
-    clap::builder::Styles::styled()
-        .header(OUTPUT_HEADING)
-        .error(OUTPUT_FAILURE)
-        .usage(OUTPUT_HEADING)
-        .literal(OUTPUT_INDEX)
-        .placeholder(Style::new())
-        .valid(OUTPUT_POSITIVE)
-        .invalid(OUTPUT_DECISION)
-        .context(OUTPUT_MUTED)
-        .context_value(Style::new())
-}
-
-fn render_root_help(decoration: OutputDecoration) -> String {
-    use std::fmt::Write;
-
-    let mut command = Cli::command().styles(cli_styles()).term_width(0);
-    command.build();
-    let standard = command.render_help().to_string();
-    let (preamble, remainder) = standard
-        .split_once("\n\nCommands:\n")
-        .expect("root help must contain a command section");
-    let (_, options) = remainder
-        .rsplit_once("\n\nOptions:\n")
-        .expect("root help must contain an option section");
-    let command_width = HELP_SECTIONS
-        .iter()
-        .flat_map(|section| section.commands)
-        .map(|name| name.len())
-        .max()
-        .unwrap_or_default();
-
-    let styles = command.get_styles();
-    let usage_heading = decoration.paint(*styles.get_usage(), "Usage:");
-    let mut output = preamble.replacen("Usage:", &usage_heading, 1);
-    for section in HELP_SECTIONS {
-        let heading = decoration.paint(*styles.get_header(), section.heading);
-        write!(output, "\n\n{heading}:\n").unwrap();
-        for name in section.commands {
-            let child = command
-                .get_subcommands()
-                .find(|child| child.get_name() == *name)
-                .expect("help section must reference an existing command");
-            let about = child
-                .get_about()
-                .or_else(|| child.get_long_about())
-                .unwrap_or_default();
-            let styled_name = decoration.paint(*styles.get_literal(), name);
-            let padding = command_width - name.len();
-            writeln!(output, "  {styled_name}{:padding$}  {about}", "").unwrap();
+    out.push('\n');
+    out.push_str(&display::human_text(&entity.current.description));
+    out.push('\n');
+    if entity.kind == Kind::Group {
+        let children = sorted(snapshot.children(&entity.id)?);
+        let completed = children
+            .iter()
+            .filter(|e| e.current.lifecycle == Lifecycle::Completed)
+            .count();
+        let cancelled = children
+            .iter()
+            .filter(|e| e.current.lifecycle == Lifecycle::Cancelled)
+            .count();
+        out.push_str(&format!(
+            "\nDirect children: {}/{} terminal ({completed} completed, {cancelled} cancelled)\n",
+            completed + cancelled,
+            children.len()
+        ));
+        for child in children {
+            out.push_str(&row(snapshot, child));
         }
-        output.pop();
+        if snapshot
+            .check_operation(&entity.id, Operation::Complete)
+            .is_ok()
+        {
+            out.push_str(&format!(
+                "{}\n",
+                display::heading("Awaiting final confirmation")
+            ));
+        }
     }
-    let more_help = decoration.paint(*styles.get_header(), "More help");
-    let help_path = decoration.paint(*styles.get_literal(), "axon help <COMMAND PATH>");
-    let docs = decoration.paint(*styles.get_literal(), "axon docs");
-    write!(
-        output,
-        "\n\n{more_help}:\n  {help_path}  Show detailed help for a command\n  {docs}                 Explain Axon's state model and basic workflow",
-    )
-    .unwrap();
-    let options_heading = decoration.paint(*styles.get_header(), "Options");
-    write!(output, "\n\n{options_heading}:\n").unwrap();
-    output.push_str(options);
-    output
+    Ok(out)
 }
-
-fn cmd_docs(topic: Option<DocsCmd>) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(DocsCmd::Declaration { example }) = topic {
-        let output = if example {
-            include_str!("docs/declaration-example.yaml")
-        } else {
-            include_str!("docs/declaration.txt")
-        };
-        write_plain_output(output)?;
-        return Ok(());
+fn actor(context: &Context) -> String {
+    context
+        .recorder
+        .as_ref()
+        .map(|r| display::human_text(&r.actor))
+        .unwrap_or_else(|| "—".into())
+}
+fn recorder_display(context: &Context, details: bool) -> String {
+    let mut text = actor(context);
+    if details && let Some(recorder) = &context.recorder {
+        text.push_str("  data: ");
+        text.push_str(&display::human_text(
+            serde_json::to_string(&recorder.data).expect("JSON object"),
+        ));
     }
-    let decoration = current_output_decoration();
-    write_output(&render_docs(decoration), decoration)?;
+    text
+}
+struct Output {
+    text: String,
+    saved: bool,
+    diagnostic: String,
+}
+fn output(text: String, saved: bool) -> Output {
+    Output {
+        text,
+        saved,
+        diagnostic: String::new(),
+    }
+}
+fn branch_boundary<'a>(
+    snapshot: &Snapshot,
+    previous: &mut Option<&'a RecordId>,
+    next: &'a RecordId,
+    text: &mut String,
+) -> Result<()> {
+    if let Some(before) = previous
+        && !snapshot.precedes(before, next)?
+    {
+        text.push_str("Concurrent branch (not ordered after the preceding record)\n");
+    }
+    *previous = Some(next);
     Ok(())
 }
-
-fn render_docs(decoration: OutputDecoration) -> String {
-    use std::fmt::Write;
-
-    let mut output = String::new();
-    writeln!(
-        output,
-        "{}\n",
-        decoration.paint(OUTPUT_HEADING, "Axon concepts")
-    )
-    .unwrap();
-    writeln!(
-        output,
-        "An Entity is either an Issue or a Group. Both kinds share the same state axes,\nrelationships, generated IDs, and commands.\n"
-    )
-    .unwrap();
-
-    writeln!(output, "{}", decoration.paint(OUTPUT_HEADING, "State axes")).unwrap();
-    writeln!(
-        output,
-        "  Progress             NotStarted, InProgress, or Ended. Ended means no more work."
-    )
-    .unwrap();
-    writeln!(
-        output,
-        "  Disposition          Undecided, Accepted, or Rejected. This records whether to pursue it."
-    )
-    .unwrap();
-    writeln!(
-        output,
-        "  Resurface condition  Always, AtDate, AfterEntity, Manual, or Command. This controls when it returns to attention.\n"
-    )
-    .unwrap();
-
-    writeln!(
-        output,
-        "{}",
-        decoration.paint(OUTPUT_HEADING, "Relationships and derived state")
-    )
-    .unwrap();
-    writeln!(
-        output,
-        "  A dependency requires another Entity's result. An Ended non-Rejected Entity satisfies\n  it; a Rejected dependency makes its dependent orphaned. AfterEntity instead finishes\n  waiting when its reference is Ended or Rejected.\n\n  Containment places an Issue or Group under one parent Group. ready, blocked, orphaned,\n  surfaced, terminal, and active scope are derived when data is read; they are not stored.\n  An Entity is terminal when it is Ended or Rejected.\n"
-    )
-    .unwrap();
-
-    writeln!(output, "  triage requires all four conditions: non-terminal, the Entity's own Resurface\n  condition satisfied (surfaced), active scope (all ancestor Group gates open),\n  and Undecided or orphaned. A root Entity with Manual is active but unsurfaced;\n  a surfaced child below a closed ancestor gate is inactive. Neither appears\n  until all four conditions hold. Absence does not mean creation/update failed\n  or an Entity is missing; do not repeat creation on that evidence.\n  Use axon list for the complete management-root inventory and axon show <ID>\n  for saved state and unsurfaced/inactive reasons. ready and triage list their\n  respective frontiers, not a complete inventory.\n").unwrap();
-
-    writeln!(output, "{}", decoration.paint(OUTPUT_HEADING, "Groups")).unwrap();
-    writeln!(
-        output,
-        "  An InProgress Group opens its descendants only while it is Accepted, surfaced, and\n  neither blocked nor orphaned. Starting a Group does not start its descendants. A Group\n  can end only after every descendant is terminal, and can be released only when no\n  descendant is InProgress. A Rejected Group is already terminal; unfinished descendants\n  remain inactive saved states and do not require follow-up by themselves.\n"
-    )
-    .unwrap();
-
-    writeln!(
-        output,
-        "{}",
-        decoration.paint(OUTPUT_HEADING, "Plan declarations and notes")
-    )
-    .unwrap();
-    writeln!(
-        output,
-        "  Title, description, parent, and outgoing dependencies form the plan declaration.\n  Accepted and Rejected declarations are fixed; return one to Undecided before editing it.\n  Notes append durable information without changing the declaration or state.\n"
-    )
-    .unwrap();
-
-    writeln!(
-        output,
-        "{}",
-        decoration.paint(OUTPUT_HEADING, "Basic workflow")
-    )
-    .unwrap();
-    for (command, description) in [
-        ("axon plan / axon capture", "Create an Issue"),
-        (
-            "axon ready / axon triage",
-            "Find the active work or decision frontier",
-        ),
-        ("axon start", "Claim one ready Entity"),
-        (
-            "axon done / axon release",
-            "End the work or release its claim",
-        ),
-        ("axon show", "Inspect one Entity and its current context"),
-    ] {
-        let styled_command = decoration.paint(OUTPUT_HEADING, command);
-        let padding = 28 - command.len();
-        writeln!(output, "  {styled_command}{:padding$}  {description}", "").unwrap();
+fn run(command: Command) -> Result<Output> {
+    match command {
+        Command::Actor => return Ok(output(format!("{}\n", actor(&context())), false)),
+        Command::Docs => return Ok(output(include_str!("docs/lifecycle.txt").into(), false)),
+        Command::Completion { shell } => {
+            let mut bytes = Vec::new();
+            clap_complete::generate(shell, &mut Cli::command(), "axon", &mut bytes);
+            return Ok(output(
+                String::from_utf8(bytes).expect("UTF-8 completion"),
+                false,
+            ));
+        }
+        _ => {}
     }
-    writeln!(
-        output,
-        "\nUse {} for command syntax and options.",
-        decoration.paint(OUTPUT_HEADING, "axon help <COMMAND PATH>")
-    )
-    .unwrap();
-    writeln!(output, "\nUse axon docs declaration for declaration fields and the import workflow.\nUse axon docs declaration --example for a complete new-plan YAML example.").unwrap();
-    writeln!(output, "\nStorage recovery\n  Ordinary commands apply supported schema updates with a backup before continuing.\n  Schema v13 is the current baseline; retired schema conversion paths are not retained.\n  Use axon migrate --source <current-schema-db> --output <new-directory> --backend <sqlite|file>\n  for backend conversion only. Schema mismatch is an error; the source is not updated or switched.\n  Keep an old binary, stop writers, verify copies, then switch all affected roots.\n  Failed outputs may be incomplete; preserve and inspect them before retry.\n  Unknown schemas are rejected. init only creates new DBs; init cannot upgrade.\n  --version identifies the executable release, not its DB schema.\n  Before recovery stop all writers and preserve .axon with SQLite journal/WAL files.\n  Do not delete the DB or edit user_version to bypass compatibility checks.\n  export also requires a compatible build and is not a complete database backup.\n  No backend config: discover axon.db or state.jsonl at the prescribed paths.\n  Both present is an error; neither is uninitialized. Invalid/partial state stops discovery.\n  Outside Git, use the nearest ancestor state or init.pending; Git is a boundary.\n  init --backend file creates .axon/state.jsonl; the default backend is sqlite.\n  SQLite uses .axon/axon.db at the parent of the Git common directory, shared by worktrees;\n  outside Git it uses the management root. One backend per repository is supported.\n  SQLite init does not change ignore files. File init adds .axon/.gitignore and\n  /.axon/state.jsonl merge=axon to root .gitattributes, also outside Git.\n  File writers lock, read, validate, sync a temporary, compare original bytes, replace,\n  and sync the directory before success. No-op preserves bytes.\n  Failure before replace is not applied; failure after replace is result unknown.\n  Inspect state before retrying an unknown result; do not repeat an append blindly.\n  init creates new state only; existing state or init.pending is never repaired or replaced.\n  Preserve incomplete files, complete the box manually, then remove init.pending after verification.\n  Linked worktrees use shared SQLite without registration. Legacy paths are not discovered.\n  Do not overlap Git checkout/merge or editor writes with Axon writes in one worktree.\n  OS locks are local; network filesystem/distributed guarantees are not provided.\n  Use storage check <snapshot> to validate a complete JSONL file.\n  merge prepare/check/apply use an explicit workspace; edit resolution.json then check.\n  After installation, register the Git driver with git config merge.axon.driver\n  'axon merge driver %O %A %B' and git config merge.axon.recursive binary.\n  Conflicts preserve raw inputs; Axon never stages or commits Git files.\n  help, docs, version and completion do not open the DB.\n").unwrap();
-    output.replace(
-        "Schema v13 is the current baseline; retired schema conversion paths are not retained.",
-        "Schema v14 is current; v13 AtDate values migrate to UTC midnight with a backup.\n  Historical v13 Git merge inputs and axon-plan/v2 declarations are rejected; use a compatible\n  old binary to recover the old snapshot, then migrate and re-export before retrying.",
-    )
-}
-
-fn write_completion(shell: Shell) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut command = Cli::command();
-    let mut completion = Vec::new();
-    generate(shell, &mut command, "axon", &mut completion);
-    let mut stdout = std::io::stdout().lock();
-    match stdout.write_all(&completion) {
-        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
-        result => result,
+    let cwd = std::env::current_dir()?;
+    if let Command::Init { prefix, backend } = command {
+        let location = Location::discover(&cwd, true)?;
+        let default_root = if matches!(backend, Backend::File) {
+            &location.root
+        } else {
+            location
+                .sqlite
+                .parent()
+                .and_then(|p| p.parent())
+                .expect("management root")
+        };
+        let prefix = prefix
+            .as_deref()
+            .or_else(|| default_root.file_name().and_then(|n| n.to_str()))
+            .ok_or_else(|| {
+                sqlite::Error::Invalid("cannot derive an ID prefix; pass axon init PREFIX".into())
+            })?;
+        location.init_backend(prefix, matches!(backend, Backend::File))?;
+        return Ok(output(
+            format!(
+                "Initialized {} at {}\n",
+                if matches!(backend, Backend::File) {
+                    "file"
+                } else {
+                    "SQLite"
+                },
+                display::human_text(
+                    if matches!(backend, Backend::File) {
+                        location.root.join(".axon/state.jsonl")
+                    } else {
+                        location.sqlite
+                    }
+                    .display()
+                )
+            ),
+            true,
+        ));
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn assert_decoration_pair(plain: String, styled: String) {
-        assert!(!plain.contains('\u{1b}'));
-        assert!(styled.contains("\u{1b}["));
-        assert_eq!(anstream::adapter::strip_str(&styled).to_string(), plain);
+    match command {
+        Command::Storage {
+            command: Storage::Check { snapshot },
+        } => {
+            axon::file::decode(&std::fs::read(snapshot)?)?;
+            return Ok(output("Valid snapshot\n".into(), false));
+        }
+        Command::Merge { command } => {
+            let saved = matches!(command, Merge::Apply { .. } | Merge::Driver { .. });
+            match command {
+                Merge::Prepare {
+                    base,
+                    ours,
+                    theirs,
+                    output,
+                    workspace,
+                } => axon::file_merge::prepare(
+                    &base,
+                    &ours,
+                    &theirs,
+                    &output,
+                    &workspace,
+                    context(),
+                )?,
+                Merge::Check { workspace } => axon::file_merge::check(&workspace)?,
+                Merge::Apply { workspace } => axon::file_merge::apply(&workspace)?,
+                Merge::Driver { base, ours, theirs } => {
+                    axon::file_merge::driver(&base, &ours, &theirs, context())?
+                }
+            }
+            return Ok(output("Merge operation succeeded\n".into(), saved));
+        }
+        _ => {}
     }
-
-    fn entity(id: &str, kind: EntityKind) -> Entity {
-        let now = Utc::now();
-        Entity {
-            id: EntityId::from_stored(id),
-            kind,
-            title: format!("{id} title"),
-            description: None,
-            progress: Progress::NotStarted,
-            disposition: Disposition::Accepted,
-            current_revision: Some(RecordId::new(RecordKind::Revision)),
-            resurface_condition: ResurfaceCondition::Always,
-            parent: None,
-            created_at: now,
-            updated_at: now,
+    let location = Location::discover(&cwd, false)?;
+    let mut store = location.open()?;
+    match command {
+        Command::List(_)
+        | Command::Triage(_)
+        | Command::Tasks(_)
+        | Command::Show { .. }
+        | Command::Log { .. }
+        | Command::Note {
+            command: Notes::List { .. } | Notes::Show { .. },
+        } => {
+            let (_, snapshot) = store.read()?;
+            let empty_hint = match &command {
+                Command::List(_) => "No matching Entities.",
+                Command::Triage(_) => {
+                    "No triage candidates. Conditions and ancestor scope may hide saved Entities; use axon list for the inventory."
+                }
+                Command::Tasks(_) => {
+                    "No task candidates. Conditions and ancestor scope may hide saved Entities; use axon list for the inventory."
+                }
+                Command::Note { .. } => "No Notes.",
+                _ => "No records.",
+            };
+            let text = match command {
+                Command::Triage(ref options) | Command::Tasks(ref options) => {
+                    let kind = if matches!(command, Command::Triage(_)) {
+                        CandidateList::Triage
+                    } else {
+                        CandidateList::Tasks
+                    };
+                    let evaluation = if options.trace_conditions {
+                        condition::Evaluation::tracing(location.root, options.condition_timeout)
+                    } else {
+                        condition::Evaluation::with_timeout(
+                            location.root,
+                            options.condition_timeout,
+                        )
+                    };
+                    candidates_filtered(
+                        &snapshot,
+                        kind,
+                        |e| options.selection.matches(&snapshot, e),
+                        |entity, script| {
+                            evaluation
+                                .run_command(entity, script)
+                                .map_err(|e| sqlite::Error::Invalid(e.to_string()))
+                        },
+                    )?
+                    .into_iter()
+                    .map(|e| list_row(&snapshot, e, &options.selection))
+                    .collect()
+                }
+                Command::List(options) => sorted(
+                    snapshot
+                        .entities()
+                        .filter(|e| options.matches(&snapshot, e))
+                        .collect(),
+                )
+                .into_iter()
+                .map(|e| list_row(&snapshot, e, &options.selection))
+                .collect(),
+                Command::Show { id: value, details } => show(
+                    &snapshot,
+                    snapshot.entity(&resolve(&snapshot, &value)?)?,
+                    details,
+                )?,
+                Command::Note {
+                    command:
+                        Notes::Show {
+                            id,
+                            note_id,
+                            recorder_details,
+                        },
+                } => {
+                    let entity = resolve(&snapshot, &id)?;
+                    let note = snapshot.note(&note_id.try_into()?)?;
+                    if note.entity != entity {
+                        return Err(sqlite::Error::Invalid(
+                            "Note does not belong to the specified Entity".into(),
+                        ));
+                    }
+                    format_note(note, recorder_details)
+                }
+                Command::Log {
+                    id: value,
+                    recorder_details,
+                } => {
+                    let mut text = String::new();
+                    let mut previous = None;
+                    for record in snapshot.history(&resolve(&snapshot, &value)?)? {
+                        branch_boundary(&snapshot, &mut previous, &record.id, &mut text)?;
+                        let description = match &record.event {
+                            StateEvent::Created { initial, .. } => format!("Created: {initial:?}"),
+                            StateEvent::Transition {
+                                before,
+                                after,
+                                reason,
+                                ..
+                            } => format!(
+                                "{before:?} → {after:?}{}",
+                                reason
+                                    .as_ref()
+                                    .map(|r| format!("  Reason: {}", display::human_text(r)))
+                                    .unwrap_or_default()
+                            ),
+                            StateEvent::Integration {
+                                inputs,
+                                selected,
+                                reason,
+                            } => format!(
+                                "Integrated: selected {:?}{}",
+                                inputs[*selected].current.lifecycle,
+                                reason
+                                    .as_ref()
+                                    .map(|r| format!("  Reason: {}", display::human_text(r)))
+                                    .unwrap_or_default()
+                            ),
+                        };
+                        text.push_str(&format!(
+                            "{}  {}  {description}\n",
+                            display::muted(display::timestamp(&record.context.at)),
+                            recorder_display(&record.context, recorder_details)
+                        ));
+                    }
+                    text
+                }
+                Command::Note {
+                    command:
+                        Notes::List {
+                            id: value,
+                            recorder_details,
+                        },
+                } => {
+                    let mut text = String::new();
+                    let mut previous = None;
+                    for note in snapshot.notes(&resolve(&snapshot, &value)?)? {
+                        branch_boundary(&snapshot, &mut previous, &note.id, &mut text)?;
+                        text.push_str(&format_note(note, recorder_details));
+                    }
+                    text
+                }
+                _ => unreachable!(),
+            };
+            let diagnostic = if text.is_empty() {
+                format!("{empty_hint}\n")
+            } else {
+                String::new()
+            };
+            Ok(Output {
+                text,
+                saved: false,
+                diagnostic,
+            })
+        }
+        Command::Capture(args) => create(&mut store, Kind::Issue, Lifecycle::Undecided, args),
+        Command::Plan(args) => create(&mut store, Kind::Issue, Lifecycle::NotStarted, args),
+        Command::Group {
+            command: Group::Capture(args),
+        } => create(&mut store, Kind::Group, Lifecycle::Undecided, args),
+        Command::Group {
+            command: Group::Plan(args),
+        } => create(&mut store, Kind::Group, Lifecycle::NotStarted, args),
+        Command::Write {
+            id: value,
+            title,
+            body,
+        } => {
+            let body = body.read()?;
+            if title.is_none() && body.is_none() {
+                return Err(sqlite::Error::Invalid(
+                    "write requires --title, --description or --description-file".into(),
+                ));
+            }
+            let text = store.update(|_, snapshot| {
+                let id = resolve(snapshot, &value)?;
+                let before = snapshot.entity(&id)?.current.clone();
+                snapshot.write(&id, title, body)?;
+                let after = &snapshot.entity(&id)?.current;
+                let mut changes = Vec::new();
+                if before.title != after.title {
+                    changes.push("Title updated");
+                }
+                if before.description != after.description {
+                    changes.push(if after.description.is_empty() {
+                        "Description removed"
+                    } else {
+                        "Description updated"
+                    });
+                }
+                if changes.is_empty() {
+                    changes.push("No changes");
+                }
+                Ok(confirmation(&id, &changes.join("  ")))
+            })?;
+            Ok(output(text, true))
+        }
+        Command::Note {
+            command:
+                Notes::Add {
+                    id: value,
+                    message,
+                    file,
+                },
+        } => {
+            let body = Body {
+                description: message,
+                description_file: file,
+            }
+            .read()?
+            .unwrap_or_default();
+            let text = store.update(|_, snapshot| {
+                let id = resolve(snapshot, &value)?;
+                let note = snapshot.add_note(&id, body, context())?;
+                Ok(confirmation(&id, &format!("Note {note} recorded")))
+            })?;
+            Ok(output(text, true))
+        }
+        Command::Group { command } => {
+            let (value, parent) = match command {
+                Group::Set { id, parent } => (id, Some(parent)),
+                Group::Unset { id } => (id, None),
+                _ => unreachable!(),
+            };
+            let text = store.update(|_, snapshot| {
+                let id = resolve(snapshot, &value)?;
+                let parent = parent.map(|p| resolve(snapshot, &p)).transpose()?;
+                let unchanged = snapshot.entity(&id)?.current.parent == parent;
+                snapshot.set_parent(&id, parent.clone())?;
+                Ok(confirmation(
+                    &id,
+                    &format!(
+                        "{}Parent: {}",
+                        if unchanged { "No changes  " } else { "" },
+                        parent
+                            .map(|p| p.to_string())
+                            .unwrap_or_else(|| "(none)".into())
+                    ),
+                ))
+            })?;
+            Ok(output(text, true))
+        }
+        Command::When { command } => {
+            let (value, command) = match command {
+                When::Set { id, command } => (id, Some(command)),
+                When::Clear { id } => (id, None),
+            };
+            let text = store.update(|_, snapshot| {
+                let id = resolve(snapshot, &value)?;
+                let unchanged = snapshot.entity(&id)?.current.condition == command;
+                let cleared = command.is_none();
+                snapshot.set_condition(&id, command)?;
+                Ok(confirmation(
+                    &id,
+                    if unchanged {
+                        "No changes"
+                    } else if cleared {
+                        "Condition cleared"
+                    } else {
+                        "Condition updated"
+                    },
+                ))
+            })?;
+            Ok(output(text, true))
+        }
+        Command::Dep { command } => {
+            let (value, needs, add) = match command {
+                Dependency::Add { id, needs } => (id, needs, true),
+                Dependency::Rm { id, needs } => (id, needs, false),
+            };
+            let text = store.update(|_, snapshot| {
+                let id = resolve(snapshot, &value)?;
+                let needs = resolve(snapshot, &needs)?;
+                let present = snapshot.entity(&id)?.current.dependencies.contains(&needs);
+                if add {
+                    snapshot.add_dependency(&id, &needs)?;
+                } else {
+                    snapshot.remove_dependency(&id, &needs)?;
+                }
+                let result = match (add, present) {
+                    (true, false) => "Dependency added:",
+                    (false, true) => "Dependency removed:",
+                    (true, true) => "No changes  Dependency already present:",
+                    (false, false) => "No changes  Dependency already absent:",
+                };
+                Ok(confirmation(&id, &format!("{result} {needs}")))
+            })?;
+            Ok(output(text, true))
+        }
+        command => {
+            let (args, operation) = match command {
+                Command::Accept(args) => (args, Operation::Accept),
+                Command::Withdraw(args) => (args, Operation::Withdraw),
+                Command::Start(args) => (args, Operation::Start),
+                Command::Release(args) => (args, Operation::Release),
+                Command::Done(args) => (args, Operation::Complete),
+                Command::Cancel(args) => (args, Operation::Cancel),
+                Command::Reconsider(args) => (args, Operation::Reconsider),
+                _ => unreachable!(),
+            };
+            let text = store.update(|_, snapshot| {
+                let id = resolve(snapshot, &args.id)?;
+                snapshot.perform(&id, operation, args.reason, context())?;
+                let effect = match operation {
+                    Operation::Accept => "Accepted  NotStarted",
+                    Operation::Withdraw => "Withdrawn  Undecided",
+                    Operation::Start => "Started  InProgress",
+                    Operation::Release => "Released  NotStarted",
+                    Operation::Complete => "Completed",
+                    Operation::Cancel => "Cancelled",
+                    Operation::Reconsider => "Reconsidered  Undecided",
+                };
+                Ok(confirmation(&id, effect))
+            })?;
+            Ok(output(text, true))
         }
     }
+}
+fn create(
+    store: &mut axon::location::Store,
+    kind: Kind,
+    lifecycle: Lifecycle,
+    args: Create,
+) -> Result<Output> {
+    let description = args.body.read()?.unwrap_or_default();
+    let title = args.title;
+    let text = store.update(|prefix, snapshot| {
+        let parent = args.parent.map(|p| resolve(snapshot, &p)).transpose()?;
+        let dependencies = args
+            .needs
+            .into_iter()
+            .map(|p| resolve(snapshot, &p))
+            .collect::<Result<BTreeSet<_>>>()?;
+        let id = fresh_entity_id(prefix, snapshot)?;
+        snapshot.create(
+            id.clone(),
+            kind,
+            Current {
+                title,
+                description,
+                lifecycle,
+                condition: args.command,
+                parent,
+                dependencies,
+            },
+            context(),
+        )?;
+        let title = display::human_text(&snapshot.entity(&id)?.current.title).replace('\n', "\\n");
+        Ok(format!(
+            "{}  {}  {}  {}  {title}\n",
+            display::identity(&id),
+            display::positive("Created"),
+            display::muted(format!("{kind:?}")),
+            display::situation(&format!("{lifecycle:?}"))
+        ))
+    })?;
+    Ok(output(text, true))
+}
 
-    #[test]
-    fn list_filter_predicate_covers_every_saved_state_combination() {
-        let now = Utc::now();
-        let claim = Claim {
-            actor: "test".into(),
-            worktree: "/test".into(),
-            at: now,
-        };
-        let kinds = [
-            (None, None),
-            (Some(KindFilter::Issue), Some(EntityKind::Issue)),
-            (Some(KindFilter::Group), Some(EntityKind::Group)),
-        ];
-        let progresses = [
-            (None, None),
-            (Some(ProgressFilter::NotStarted), Some("not-started")),
-            (Some(ProgressFilter::InProgress), Some("in-progress")),
-            (Some(ProgressFilter::Ended), Some("ended")),
-        ];
-        let dispositions = [
-            (None, None),
-            (
-                Some(DispositionFilter::Undecided),
-                Some(Disposition::Undecided),
-            ),
-            (
-                Some(DispositionFilter::Accepted),
-                Some(Disposition::Accepted),
-            ),
-            (
-                Some(DispositionFilter::Rejected),
-                Some(Disposition::Rejected),
-            ),
-        ];
-
-        for entity_kind in [EntityKind::Issue, EntityKind::Group] {
-            for progress in [
-                Progress::NotStarted,
-                Progress::InProgress(claim.clone()),
-                Progress::Ended,
-            ] {
-                for disposition in [
-                    Disposition::Undecided,
-                    Disposition::Accepted,
-                    Disposition::Rejected,
-                ] {
-                    let mut candidate = entity("candidate", entity_kind);
-                    candidate.progress = progress.clone();
-                    candidate.disposition = disposition;
-                    for (kind, expected_kind) in kinds {
-                        for (progress, expected_progress) in progresses {
-                            for (disposition, expected_disposition) in dispositions {
-                                for terminal in [None, Some(false), Some(true)] {
-                                    let filters = ListFilters {
-                                        search: None,
-                                        kind,
-                                        progress,
-                                        disposition,
-                                        terminal,
-                                    };
-                                    let expected = expected_kind.is_none_or(|v| v == entity_kind)
-                                        && expected_progress.is_none_or(|v| {
-                                            v == candidate
-                                                .progress
-                                                .label()
-                                                .to_ascii_lowercase()
-                                                .replace("notstarted", "not-started")
-                                                .replace("inprogress", "in-progress")
-                                        })
-                                        && expected_disposition
-                                            .is_none_or(|v| v == candidate.disposition)
-                                        && terminal.is_none_or(|v| v == candidate.is_terminal());
-                                    assert_eq!(filters.matches(&candidate), expected);
-                                }
-                            }
+fn main() -> std::process::ExitCode {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let root_help = args.is_empty()
+        || (args.len() == 1 && ["help", "-h", "--help"].iter().any(|v| args[0] == *v));
+    let result = if root_help {
+        Ok(output(render_root_help(), false))
+    } else {
+        let command = Cli::parse().command;
+        let label = operation_label(&command);
+        run(command).map_err(|error| sqlite::Error::Invalid(format!("{label}: {error}")))
+    };
+    match result {
+        Ok(output) => {
+            if !output.diagnostic.is_empty()
+                && std::io::stderr()
+                    .write_all(output.diagnostic.as_bytes())
+                    .is_err()
+            {
+                return std::process::ExitCode::from(1);
+            }
+            let mut stdout = std::io::stdout().lock();
+            match stdout
+                .write_all(output.text.as_bytes())
+                .and_then(|_| stdout.flush())
+            {
+                Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
+                    std::process::ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "{}: {error}",
+                        if output.saved {
+                            "Error: output failed\nApplied: storage applied; output failed; inspect saved state before retrying"
+                        } else {
+                            "Error: output failed"
                         }
-                    }
+                    );
+                    std::process::ExitCode::from(1)
                 }
             }
         }
-    }
-
-    #[test]
-    fn confirmation_failure_keeps_stdout_decoration_out_of_applied_result() {
-        let id = EntityId::from_stored("t-task");
-        for raw in ["actor", "raw \u{1b}[31mactor\u{1b}[0m"] {
-            let error = write_confirmation_with(
-                &id,
-                |decoration| {
-                    format!(
-                        "{}  Claim: {raw}",
-                        decoration.paint(OUTPUT_ACTIVE, "Started")
-                    )
-                },
-                Style::new(),
-                OutputDecoration::Ansi,
-                |output, _| {
-                    assert!(output.contains("\u{1b}["));
-                    Err(std::io::Error::other("injected output failure"))
-                },
-            )
-            .unwrap_err();
-            assert_eq!(
-                error.to_string(),
-                format!(
-                    "confirmation output: injected output failure\nApplied: t-task Started  Claim: {raw}"
-                )
+        Err(error) => {
+            let _ = writeln!(
+                std::io::stderr(),
+                "{} {}",
+                display::error_label(),
+                display::human_text(error)
             );
+            std::process::ExitCode::from(1)
         }
-    }
-
-    #[test]
-    fn write_uses_description_save_outcome_after_title_changes_storage() {
-        let path = std::env::temp_dir().join(format!(
-            "axon-write-outcome-{}.db",
-            RecordId::new(RecordKind::Store)
-        ));
-        db::Store::init_at(&path, "t").unwrap();
-        let evaluation = std::rc::Rc::new(derived::Evaluation::new(std::env::temp_dir()));
-        let mut store = Store::Sqlite(db::Store::open_at(&path, evaluation, |_| {}).unwrap());
-        let mut task = entity("t-task", EntityKind::Issue);
-        task.disposition = Disposition::Undecided;
-        task.current_revision = None;
-        store.insert(&task).unwrap();
-        let connection = rusqlite::Connection::open(&path).unwrap();
-        // Model another writer completing the later field before its save.
-        connection.execute_batch("CREATE TRIGGER concurrent_description AFTER UPDATE OF title ON entities BEGIN UPDATE entities SET description = 'already saved' WHERE id = NEW.id; END;").unwrap();
-        assert_eq!(
-            write_fields(
-                &mut store,
-                &task.id,
-                Some("new title".into()),
-                Some("already saved".into())
-            )
-            .unwrap(),
-            vec!["Title updated"]
-        );
-        let before = std::fs::read(&path).unwrap();
-        assert!(
-            write_fields(
-                &mut store,
-                &task.id,
-                Some("new title".into()),
-                Some("already saved".into())
-            )
-            .unwrap()
-            .is_empty()
-        );
-        assert_eq!(std::fs::read(&path).unwrap(), before);
-        drop(store);
-        drop(connection);
-        std::fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn write_reports_saved_title_when_description_transaction_rolls_back() {
-        let path = std::env::temp_dir().join(format!(
-            "axon-write-fault-{}.db",
-            RecordId::new(RecordKind::Store)
-        ));
-        db::Store::init_at(&path, "t").unwrap();
-        let evaluation = std::rc::Rc::new(derived::Evaluation::new(std::env::temp_dir()));
-        let mut store = Store::Sqlite(db::Store::open_at(&path, evaluation, |_| {}).unwrap());
-        let mut task = entity("t-task", EntityKind::Issue);
-        task.disposition = Disposition::Undecided;
-        task.current_revision = None;
-        store.insert(&task).unwrap();
-        let connection = rusqlite::Connection::open(&path).unwrap();
-        connection.execute_batch("CREATE TRIGGER fail_description BEFORE UPDATE OF description ON entities WHEN NEW.description IS NOT NULL BEGIN SELECT RAISE(ABORT, 'injected description failure'); END;").unwrap();
-        let error = write_fields(
-            &mut store,
-            &task.id,
-            Some("saved title".into()),
-            Some("unsaved description".into()),
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("description save:"));
-        assert!(error.to_string().contains("Not applied: storage update"));
-        assert!(error.to_string().contains("Applied: t-task Title updated"));
-        let saved = store.get(&task.id).unwrap();
-        assert_eq!(saved.title, "saved title");
-        assert_eq!(saved.description, None);
-        assert_eq!(saved.disposition, task.disposition);
-        assert!(store.events(&task.id).unwrap().is_empty());
-        assert!(store.notes(&task.id).unwrap().is_empty());
-        drop(store);
-        drop(connection);
-        std::fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn unknown_result_guidance_uses_valid_note_commands_and_initialization_files() {
-        let failure = || db::DbError::Boundary {
-            path: "/fixture/.axon/init.pending".into(),
-            phase: "sync published file",
-            result: "Result unknown",
-            source: Box::new(db::DbError::Io(std::io::Error::other(
-                "injected sync failure",
-            ))),
-        };
-        let guidance = error_guidance(&failure()).unwrap();
-        assert!(guidance.contains("`axon note list <id>`"));
-        assert!(guidance.contains("`axon note show <id> <note-id>`"));
-        assert!(Cli::try_parse_from(["axon", "note", "list", "t-task"]).is_ok());
-        assert!(Cli::try_parse_from(["axon", "note", "show", "t-task", "note-0123"]).is_ok());
-        let guidance = error_guidance(&db::DbError::Initialization(Box::new(failure()))).unwrap();
-        assert!(guidance.contains("state and init.pending"));
-        assert!(!guidance.contains("`axon list"));
-        assert!(!guidance.contains("`axon note"));
-    }
-
-    #[test]
-    fn migration_failure_guidance_preserves_application_uncertainty() {
-        use db::migration::{ApplicationState, Failure};
-        for (applied, expected) in [
-            (
-                ApplicationState::NotApplied,
-                "output publication did not complete",
-            ),
-            (ApplicationState::Applied, "Migration was committed"),
-            (ApplicationState::Unknown, "before any retry"),
-        ] {
-            let failure = Failure {
-                kind: db::migration::Kind::BackendConversion,
-                database: "/fixture/.axon/axon.db".into(),
-                stage: "committing migration",
-                from: Some(9),
-                to: 11,
-                backup: Some("/fixture/.axon/migration-backups/backup.db".into()),
-                applied,
-                source: Box::new(db::DbError::Io(std::io::Error::other("injected I/O error"))),
-            };
-            let guidance = error_guidance(&db::DbError::Migration(failure)).unwrap();
-            assert!(guidance.contains(expected));
-            assert!(guidance.contains("source"));
-            assert!(!guidance.contains("operation did not run"));
-            if applied != ApplicationState::NotApplied {
-                assert!(!guidance.contains("Migration was not applied"));
-            }
-        }
-    }
-
-    #[test]
-    fn schema_update_failure_guidance_identifies_live_database() {
-        use db::migration::{ApplicationState, Failure, Kind};
-        for applied in [
-            ApplicationState::NotApplied,
-            ApplicationState::Applied,
-            ApplicationState::Unknown,
-        ] {
-            let failure = Failure {
-                kind: Kind::SchemaUpdate,
-                database: "/fixture/.axon/axon.db".into(),
-                stage: "committing schema update",
-                from: Some(13),
-                to: 14,
-                backup: Some("/fixture/.axon/migration-backups/backup.db".into()),
-                applied,
-                source: Box::new(db::DbError::Io(std::io::Error::other("fault"))),
-            };
-            let guidance = migration_guidance(&failure);
-            assert!(guidance.contains("database schema update"));
-            assert!(guidance.contains("requested operation did not run"));
-            assert!(!guidance.contains("source was not switched"));
-            assert!(!guidance.contains("committed to the output"));
-        }
-    }
-
-    #[test]
-    fn show_identifies_kind_and_group_summary() {
-        let group = entity("g", EntityKind::Group);
-        let mut issue = entity("i", EntityKind::Issue);
-        issue.parent = Some(group.id.clone());
-        let view = View::new(vec![group.clone(), issue], vec![]);
-        let output = render_show(
-            &view,
-            &group,
-            &[],
-            &[],
-            RecordCounts::default(),
-            OutputDecoration::Plain,
-        )
-        .unwrap();
-        assert!(output.starts_with("g  Group  g title\n"));
-        assert!(output.contains("  Can complete: no\n"));
-        assert!(output.contains("  Descendants: 1  Issue: 1  Group: 0  Terminal: 0"));
-        assert!(output.contains("    Progress: NotStarted: 1  InProgress: 0  Ended: 0"));
-        assert!(output.contains("    Disposition: Undecided: 0  Accepted: 1  Rejected: 0"));
-    }
-
-    #[test]
-    fn show_can_render_ansi_styles_without_changing_its_text() {
-        let issue = entity("i", EntityKind::Issue);
-        let view = View::new(vec![issue.clone()], vec![]);
-        let plain = render_show(
-            &view,
-            &issue,
-            &[],
-            &[],
-            RecordCounts::default(),
-            OutputDecoration::Plain,
-        )
-        .unwrap();
-        let styled = render_show(
-            &view,
-            &issue,
-            &[],
-            &[],
-            RecordCounts::default(),
-            OutputDecoration::Ansi,
-        )
-        .unwrap();
-
-        assert!(!plain.contains('\u{1b}'));
-        assert!(plain.find("Situation:").unwrap() < plain.find("Details\n").unwrap());
-        assert!(!plain.contains("Status\n"));
-        assert!(!plain.contains("Plan\n"));
-        assert!(styled.contains("\u{1b}["));
-        assert!(styled.contains("\u{1b}[32mAccepted\u{1b}[0m"));
-        assert!(styled.contains("\u{1b}[0m  i title\n"));
-        assert_eq!(anstream::adapter::strip_str(&styled).to_string(), plain);
-    }
-
-    #[test]
-    fn output_only_decorates_attended_terminals() {
-        assert!(matches!(
-            output_decoration(true, false),
-            OutputDecoration::Ansi
-        ));
-        assert!(matches!(
-            output_decoration(false, false),
-            OutputDecoration::Plain
-        ));
-        assert!(matches!(
-            output_decoration(true, true),
-            OutputDecoration::Plain
-        ));
-    }
-
-    #[test]
-    fn show_reports_surfaced_state_in_plain_text() {
-        let mut issue = entity("i", EntityKind::Issue);
-        issue.resurface_condition =
-            ResurfaceCondition::AfterEntity(EntityId::from_stored("target"));
-        let target = entity("target", EntityKind::Issue);
-        let view = View::new(vec![issue.clone(), target.clone()], vec![]);
-        let waiting = render_show(
-            &view,
-            &issue,
-            &[],
-            &[],
-            RecordCounts::default(),
-            OutputDecoration::Plain,
-        )
-        .unwrap();
-
-        assert!(waiting.contains("Resurface condition: AfterEntity(target)"));
-        assert!(waiting.contains("Surfaced: no"));
-
-        let mut ended_target = target;
-        ended_target.progress = Progress::Ended;
-        let view = View::new(vec![issue.clone(), ended_target], vec![]);
-        let surfaced = render_show(
-            &view,
-            &issue,
-            &[],
-            &[],
-            RecordCounts::default(),
-            OutputDecoration::Plain,
-        )
-        .unwrap();
-
-        assert!(surfaced.contains("Surfaced: yes"));
-    }
-
-    #[test]
-    fn show_orders_current_graph_and_long_form_information() {
-        let mut issue = entity("i", EntityKind::Issue);
-        issue.description = Some("description body\nwith two lines".to_string());
-        let dependency = entity("d", EntityKind::Issue);
-        let view = View::new(
-            vec![issue.clone(), dependency.clone()],
-            vec![(issue.id.clone(), dependency.id.clone())],
-        );
-        let at = Utc::now();
-        let notes = vec![Note {
-            id: RecordId::new(RecordKind::Note),
-            body: "note body\nwith two lines".to_string(),
-            actor: "tester".to_string(),
-            created_at: at,
-        }];
-        let progress_events = vec![db::ProgressEvent {
-            id: RecordId::new(RecordKind::Progress),
-            kind: db::ProgressEventKind::Release,
-            actor: "tester".to_string(),
-            reason: Some("handoff".to_string()),
-            at,
-        }];
-        let output = render_show(
-            &view,
-            &issue,
-            &progress_events,
-            &notes,
-            RecordCounts {
-                notes: 1,
-                revisions: 1,
-                decisions: 0,
-                progressions: 1,
-            },
-            OutputDecoration::Plain,
-        )
-        .unwrap();
-
-        let relationships = output.find("\n\nRelationships\n").unwrap();
-        let description = output.find("\n\nDescription\n").unwrap();
-        let notes_section = output.find("\n\nNotes\n").unwrap();
-        let progress = output.find("\n\nProgress history\n").unwrap();
-        assert!(relationships < description);
-        assert!(description < notes_section);
-        assert!(notes_section < progress);
-        assert!(output.contains("Description\ndescription body\nwith two lines"));
-        assert!(output.contains(&format!("Notes\nNote {}", notes[0].id)));
-        assert!(output.contains("note body\nwith two lines"));
-
-        let styled = render_show(
-            &view,
-            &issue,
-            &progress_events,
-            &notes,
-            RecordCounts {
-                notes: 1,
-                revisions: 1,
-                decisions: 0,
-                progressions: 1,
-            },
-            OutputDecoration::Ansi,
-        )
-        .unwrap();
-        assert!(styled.contains("\u{1b}[0m  tester\nnote body\nwith two lines"));
-        assert_eq!(anstream::adapter::strip_str(&styled).to_string(), output);
-    }
-
-    #[test]
-    fn human_output_renderers_share_plain_and_ansi_text() {
-        let mut issue = entity("i", EntityKind::Issue);
-        issue.title = "title \u{1b}[2J\tspoof\u{7f}".to_string();
-        issue.description = Some("line one\nline two \u{1b}]0;spoof\u{7}".to_string());
-        let mut rejected = entity("rejected", EntityKind::Issue);
-        rejected.disposition = Disposition::Rejected;
-        let view = View::new(
-            vec![issue.clone(), rejected],
-            vec![(issue.id.clone(), EntityId::from_stored("rejected"))],
-        );
-        let claim = Claim {
-            actor: "raw \u{1b}[31mactor".to_string(),
-            worktree: "/raw/\tworktree".to_string(),
-            at: Utc::now(),
-        };
-        let event = db::Event {
-            id: RecordId::new(RecordKind::Decision),
-            field: "resurface_condition".to_string(),
-            old_value: Some("Command(echo \u{1b}[2J)".to_string()),
-            new_value: Some("Command(echo \u{1b}]0;spoof\u{7})".to_string()),
-            revision: Some(RecordId::new(RecordKind::Revision)),
-            actor: "raw \u{1b}[31mactor".to_string(),
-            reason: Some("raw\treason".to_string()),
-            at: Utc::now(),
-        };
-
-        for (plain, styled) in [
-            (
-                render_entity_identity(&issue, OutputDecoration::Plain),
-                render_entity_identity(&issue, OutputDecoration::Ansi),
-            ),
-            (
-                render_triage_row(
-                    &view,
-                    &issue,
-                    TriageReason::Orphaned,
-                    OutputDecoration::Plain,
-                ),
-                render_triage_row(
-                    &view,
-                    &issue,
-                    TriageReason::Orphaned,
-                    OutputDecoration::Ansi,
-                ),
-            ),
-            (
-                render_claim_row(&issue, &claim, OutputDecoration::Plain),
-                render_claim_row(&issue, &claim, OutputDecoration::Ansi),
-            ),
-            (
-                render_list_row(&view, &issue, OutputDecoration::Plain).unwrap(),
-                render_list_row(&view, &issue, OutputDecoration::Ansi).unwrap(),
-            ),
-            (
-                format_decision(&event, OutputDecoration::Plain),
-                format_decision(&event, OutputDecoration::Ansi),
-            ),
-            (
-                decorate_import_report(
-                    "Plan is valid.\nChanges:\n  none\n",
-                    OutputDecoration::Plain,
-                ),
-                decorate_import_report(
-                    "Plan is valid.\nChanges:\n  none\n",
-                    OutputDecoration::Ansi,
-                ),
-            ),
-        ] {
-            assert!(!plain.contains('\u{1b}'));
-            assert!(!plain.contains('\t'));
-            assert!(plain.contains("\\x1b") || !plain.contains("title"));
-            assert_decoration_pair(plain, styled);
-        }
-    }
-
-    #[test]
-    fn show_escapes_saved_controls_equally_with_and_without_terminal_decoration() {
-        let at = Utc::now();
-        let mut issue = entity("i", EntityKind::Issue);
-        issue.title = "title \u{1b}[2J\t".to_string();
-        issue.description = Some("description\n\u{1b}]0;spoof\u{7}\r".to_string());
-        issue.progress = Progress::InProgress(Claim {
-            actor: "actor \u{1b}[31m".to_string(),
-            worktree: "/worktree/\u{85}".to_string(),
-            at,
-        });
-        issue.resurface_condition =
-            ResurfaceCondition::Command("exit 0 # script \u{1b}[2J".to_string());
-        let view = View::new(vec![issue.clone()], vec![]);
-        let notes = [Note {
-            id: RecordId::new(RecordKind::Note),
-            body: "note\n\u{1b}]8;;spoof\u{7}".to_string(),
-            actor: "note actor\t".to_string(),
-            created_at: at,
-        }];
-        let progress = [db::ProgressEvent {
-            id: RecordId::new(RecordKind::Progress),
-            kind: db::ProgressEventKind::Release,
-            actor: "history actor\u{7f}".to_string(),
-            reason: Some("reason\r\0".to_string()),
-            at,
-        }];
-
-        let plain = render_show(
-            &view,
-            &issue,
-            &progress,
-            &notes,
-            RecordCounts {
-                notes: 1,
-                progressions: 1,
-                ..RecordCounts::default()
-            },
-            OutputDecoration::Plain,
-        )
-        .unwrap();
-        let styled = render_show(
-            &view,
-            &issue,
-            &progress,
-            &notes,
-            RecordCounts {
-                notes: 1,
-                progressions: 1,
-                ..RecordCounts::default()
-            },
-            OutputDecoration::Ansi,
-        )
-        .unwrap();
-
-        assert!(plain.chars().all(|character| {
-            character == '\n' || !matches!(character, '\u{00}'..='\u{1f}' | '\u{7f}'..='\u{9f}')
-        }));
-        for escaped in ["\\x1b", "\\t", "\\r", "\\x00", "\\x07", "\\x7f", "\\x85"] {
-            assert!(plain.contains(escaped), "missing {escaped:?} in {plain:?}");
-        }
-        assert_decoration_pair(plain, styled);
-    }
-
-    #[test]
-    fn revision_renderers_style_structure_without_styling_stored_text() {
-        let issue = entity("i", EntityKind::Issue);
-        let at = Utc::now();
-        let from = DeclarationRevision {
-            id: RecordId::new(RecordKind::Revision),
-            title: "raw old title".to_string(),
-            description: Some("raw old description".to_string()),
-            parent: None,
-            dependencies: vec![],
-            created_at: at,
-            baseline: true,
-        };
-        let to = DeclarationRevision {
-            id: RecordId::new(RecordKind::Revision),
-            title: "raw new title".to_string(),
-            description: Some("raw new description".to_string()),
-            parent: Some(EntityId::from_stored("parent")),
-            dependencies: vec![EntityId::from_stored("dependency")],
-            created_at: at,
-            baseline: false,
-        };
-        let plain = render_revision(&issue.id, &issue, &from, OutputDecoration::Plain);
-        let styled = render_revision(&issue.id, &issue, &from, OutputDecoration::Ansi);
-        assert!(styled.contains("present\nraw old description\n\n"));
-        assert_decoration_pair(plain, styled);
-
-        let plain = render_revision_diff(&issue.id, &from, &to, OutputDecoration::Plain);
-        let styled = render_revision_diff(&issue.id, &from, &to, OutputDecoration::Ansi);
-        assert!(styled.contains("\u{1b}[0m raw old title\n"));
-        assert!(styled.contains("\u{1b}[0m raw new description\n"));
-        assert_decoration_pair(plain, styled);
-    }
-
-    #[test]
-    fn revision_diff_compares_raw_values_before_escaping_them() {
-        let issue = entity("i", EntityKind::Issue);
-        let at = Utc::now();
-        let from = DeclarationRevision {
-            id: RecordId::new(RecordKind::Revision),
-            title: "same\tvalue".to_string(),
-            description: Some("same \u{1b}".to_string()),
-            parent: None,
-            dependencies: vec![],
-            created_at: at,
-            baseline: false,
-        };
-        let to = DeclarationRevision {
-            id: RecordId::new(RecordKind::Revision),
-            title: "same\\tvalue".to_string(),
-            description: Some("same \\x1b".to_string()),
-            parent: None,
-            dependencies: vec![],
-            created_at: at,
-            baseline: false,
-        };
-
-        let output = render_revision_diff(&issue.id, &from, &to, OutputDecoration::Plain);
-        assert!(output.contains("Title\n- same\\tvalue\n+ same\\tvalue\n"));
-        assert!(output.contains("Description\n- present\n- same \\x1b\n+ present\n+ same \\x1b\n"));
-
-        let mut with_crlf = from;
-        with_crlf.title = "first\r\nsecond".to_string();
-        let output = render_revision_diff(&issue.id, &with_crlf, &to, OutputDecoration::Plain);
-        assert!(output.contains("- first\\r\n- second\n"));
-    }
-
-    #[test]
-    fn output_writer_ignores_only_broken_pipes() {
-        struct ErrorWriter(std::io::ErrorKind);
-
-        impl std::io::Write for ErrorWriter {
-            fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::from(self.0))
-            }
-
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-
-        assert!(write_output_to(ErrorWriter(std::io::ErrorKind::BrokenPipe), "output").is_ok());
-        assert_eq!(
-            write_output_to(ErrorWriter(std::io::ErrorKind::PermissionDenied), "output")
-                .unwrap_err()
-                .kind(),
-            std::io::ErrorKind::PermissionDenied
-        );
-    }
-
-    #[test]
-    fn root_help_and_docs_can_render_clap_style_without_changing_text() {
-        for render in [render_root_help, render_docs] {
-            let plain = render(OutputDecoration::Plain);
-            let styled = render(OutputDecoration::Ansi);
-            assert!(styled.contains("\u{1b}["));
-            assert!(!styled.contains("\u{1b}[4m"));
-            assert_eq!(anstream::adapter::strip_str(&styled).to_string(), plain);
-        }
-    }
-
-    #[test]
-    fn help_sections_cover_every_top_level_command_once() {
-        let mut command = Cli::command();
-        command.build();
-        let actual = command
-            .get_subcommands()
-            .filter(|command| !command.is_hide_set())
-            .map(|command| command.get_name())
-            .collect::<std::collections::BTreeSet<_>>();
-        let classified = HELP_SECTIONS
-            .iter()
-            .flat_map(|section| section.commands.iter().copied())
-            .collect::<Vec<_>>();
-        let unique = classified
-            .iter()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>();
-
-        assert_eq!(
-            classified.len(),
-            unique.len(),
-            "duplicate help classification"
-        );
-        assert_eq!(actual, unique);
     }
 }

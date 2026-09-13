@@ -31,6 +31,78 @@ fn timestamp_at_offset(timestamp: &DateTime<Utc>, offset: FixedOffset) -> String
         .to_string()
 }
 
+use clap::builder::styling::{AnsiColor, Color, Style, Styles};
+use std::io::IsTerminal;
+
+const HEADING: Style = Style::new().bold();
+const ID: Style = Style::new()
+    .bold()
+    .fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
+const POSITIVE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
+const WAITING: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
+const DECISION: Style = WAITING.bold();
+const FAILURE: Style = Style::new()
+    .bold()
+    .fg_color(Some(Color::Ansi(AnsiColor::Red)));
+const MUTED: Style = Style::new().dimmed();
+
+fn paint(style: Style, text: impl std::fmt::Display, terminal: bool) -> String {
+    if terminal && std::env::var_os("NO_COLOR").is_none() {
+        format!("{style}{text}{style:#}")
+    } else {
+        text.to_string()
+    }
+}
+pub fn identity(text: impl std::fmt::Display) -> String {
+    paint(
+        ID,
+        human_text(text).replace('\n', "\\n"),
+        std::io::stdout().is_terminal(),
+    )
+}
+pub fn muted(text: impl std::fmt::Display) -> String {
+    paint(MUTED, text, std::io::stdout().is_terminal())
+}
+pub fn heading(text: impl std::fmt::Display) -> String {
+    paint(HEADING, text, std::io::stdout().is_terminal())
+}
+pub fn positive(text: impl std::fmt::Display) -> String {
+    paint(POSITIVE, text, std::io::stdout().is_terminal())
+}
+pub fn error_label() -> String {
+    paint(FAILURE, "Error:", std::io::stderr().is_terminal())
+}
+pub fn situation(text: &str) -> String {
+    let style = match text {
+        "Undecided" => DECISION,
+        "Ready" => POSITIVE,
+        "Blocked" | "InProgress+Blocked" => WAITING,
+        "InProgress" | "Started  InProgress" => ID,
+        _ => MUTED,
+    };
+    paint(style, text, std::io::stdout().is_terminal())
+}
+pub fn cli_styles() -> Styles {
+    Styles::styled()
+        .header(HEADING)
+        .error(FAILURE)
+        .usage(HEADING)
+        .literal(HEADING)
+        .placeholder(Style::new())
+        .valid(POSITIVE)
+        .invalid(DECISION)
+        .context(MUTED)
+        .context_value(Style::new())
+}
+
+pub fn cli_color() -> clap::ColorChoice {
+    if std::env::var_os("NO_COLOR").is_some() {
+        clap::ColorChoice::Never
+    } else {
+        clap::ColorChoice::Auto
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

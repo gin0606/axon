@@ -1,3 +1,4 @@
+// Archived three-axis CLI test entry; not a Cargo test target.
 #[path = "../common/mod.rs"]
 mod common;
 

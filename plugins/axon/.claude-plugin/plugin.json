@@ -1,6 +1,6 @@
 {
   "name": "axon",
-  "description": "Axon Skill Kitへ個人用の判断と協業方針を加えるワークフロー",
+  "description": "Axonを使った人とエージェントの協業ワークフロー。依頼の調査・整理、重複確認、判断の確認、計画の登録・更新、作業状態と記録の同期を扱う。",
   "version": "0.1.0",
   "author": {
     "name": "gin0606"

@@ -1,37 +1,31 @@
-# Axon snapshot merge workflow
+# file snapshotの統合手順
 
-Axon file-backend merge の prepare、resolve、check、apply、recover を行う前に、この reference を読む。
+## 入力を固定する
 
-## 完全な入力を固定する
+完全なbase/ours/theirs、現在のfile正本output、未使用workspaceを確定する。workspaceの親directoryを先に用意する。`merge prepare --base B --ours O --theirs T --output OUTPUT --workspace WORKSPACE` を単独で実行する。
 
-base、ours、theirs の明示的で完全な 3 snapshot を使う。未使用の workspace directory と、その workspace 外の output path を選ぶ。正確な入力 byte 列を保存し、workspace copy、manifest、fixed context、output preimage を編集しない。
+非0でも保全入力やreportが残りうるためworkspaceを調べる。同じworkspace名で盲目的に再prepareしない。保全されたbase.jsonl・ours.jsonl・theirs.jsonl、output元bytesのpreimage、絶対path・digest・固定recorder contextを持つmanifest.jsonは編集しない。
 
-`axon merge prepare --base <base> --ours <ours> --theirs <theirs> --output <output> --workspace <unused-workspace>` を単独の artifact mutation として実行する。nonzero result でも workspace が作られ、有用な original と diagnostic が保存される場合がある。prepare が未適用、未解決、不明のどれかを判断する前に workspace を調査する。同じ workspace 名で再実行しない。
+## 選択と修正
 
-manifest は入力の absolute path と digest、output と preimage、該当する場合は active file-store binding、evaluation context を固定する。`choices.json` は自動選択を含む stable conflict ID と input-choice ID を保持する。`report.json` は valid、unresolved、input drift、invalid の結果を区別する。`candidate.jsonl` と check 済み metadata が完全に valid な結果を示す場合だけ candidate を公開できる。
+choices.jsonで自動選択と衝突を読む。resolution.jsonだけを編集し、choicesをEntity IDからLeft（ours）またはRight（theirs）へのmapにする。選択対象はEntityの現在値全体で、baseは比較材料。最新timestampやtitleだけで採用側を選ばない。呼び出し側の明示判断または合意済み効果から選択が一意に決まる場合だけ反映する。意味上の採否・scope・完了の選択が未確定なら、その衝突と具体案を返す。
 
-## original を書き換えず解決する
+両側のNoteと状態履歴は保持され、現在値の採用は通常遷移と異なる統合記録に残る。衝突Entityをすべて選び、候補全体の循環や固定構成を検査する。自動選択Entityも必要なら明示選択できる。構造的に不正な候補をrepairsで救済することはできない。
 
-`resolution.json` だけを編集する。選択には manifest の input digest を使う。`ours` と `theirs` は会話上の label であり、選択値として指定できる識別子ではない。Base は比較証拠であり、current result として選択できない。title や最新 timestamp で選ばず、完全な Entity bundle と関係する record ID を review する。
+repairsはvalidな選択結果への通常編集で、operationはwrite（id/title/description）、parent（id/parent）、dependency（id/needs/present）、condition（id/command）の4種類に限る。与えられた効果の範囲で使い、固定構成、Completedの本文固定、記録追記専用性を迂回しない。条件は実行しない。
 
-呼び出し側の依頼または与えられた判断によって正確な作用が確定している場合だけ repair を使う。support される repair は、dependency 変更、Note 追加、状態変更、start など Axon の通常の guarded operation を workspace の fixed context で使う。historical record の編集、claim の捏造、固定 declaration の transition rule の迂回を行わない。merge conflict は Disposition、declaration、dependency、work-state の判断を許可しない。
+## 検査して公開する
 
-resolution を編集するたびに `axon merge check <workspace>` を実行する。candidate 全体を再計算し、input、resolution、context に drift があれば以前の approval を無効にする。残るすべての conflict と、結果の Entity state、関係、history、claim、store identity を調査する。新たに与えられた判断または検証済み訂正で進展がある間だけ繰り返す。
+resolution変更のたびに `merge check WORKSPACE` を単独実行する。成功したcandidate.jsonl、report.json、checked.jsonを確認する。これらは編集しない。失敗したcheckは以前のcheckedを無効化する。check再実行は統合記録IDを再生成しうるため、レビューした候補を不用意に再生成しない。
 
-## check 済み candidate だけを公開する
+公開直前に固定入力、解決案、候補、backend、store identity、保存先がその検査と一致することを確かめ、許可された `merge apply WORKSPACE` を実行する。apply自体もworkspaceと正本をlockしてdriftを拒否する。正本がvalidならours/theirsいずれかに一致する必要がある。conflict markerがある場合もprepare時の元bytesから変わっていてはいけない。driftを手動上書きで回避せず、新入力と判断で別workspaceを用意する。
 
-公開の直前に、input、resolution、check 済み candidate、destination preimage、backend、store identity、output path が引き続き workspace と一致することを検証する。`axon merge apply <workspace>` を単独の storage mutation として実行する。
+apply後は `storage check OUTPUT` で完全性を検証し、index解決後に影響Entityと記録を照合する。applyの再実行は保存先変更として拒否され、一般的なno-op再送ではない。結果不明時はwriter終了後にoutput・保全candidate・digestと記録を照合する。入力やdestinationを変更して再送可能に見せかけない。
 
-Apply は最後に check した valid candidate だけを公開する。結果の stage や Git の続行は行わない。output byte 列と store identity を検証し、`axon storage check <output>` を実行して、影響を受ける Entity を調査する。同じ candidate がすでに output にある場合、検証済みの再実行は no-op になりうるが、保存済み candidate と destination の一致なしにその場合だと推測しない。
+## Git conflict
 
-公開が destination に到達した可能性はあるが完了が不明な場合、workspace と output の全体を保存する。再試行前に process の終了を確認し、candidate、destination、backend、記録済み digest を比較する。destination を手動で置き換えたり、drift を隠すため workspace を再生成したりしない。
+driverは `%O %A %B` を読み、成功時だけGitのours temporaryへ公開する。失敗時はoursを保持する。Git stage 1/2/3の完全なsnapshotを保全し、実際の `.axon/state.jsonl` をoutputとする明示workspaceで解決する。Git temporaryを正本と取り違えない。
 
-## Git driver conflict を復旧する
+検査済み正本をstageする権限は呼び出し側が与える。このkitはgit config、stage、commit、merge/rebase続行、abortを許可しない。indexがunmergedの間は通常Axon操作が引き続き拒否されることを報告する。
 
-low-level driver は raw input を `.axon/merge/<id>` 配下に保存できる一方、その `%A` output は Git temporary path である。その driver workspace を `.axon/state.jsonl` に直接 apply しない。保存済みの完全な input または検証済み Git stage 1/2/3 snapshot から新しい明示的な workspace を作り、実際の state file を output に設定する。
-
-検証済みの明示的 apply 後、state file に対して `axon storage check` を実行する。`git add`、commit、merge/rebase の続行、abort を判断・実行するのはこの capability ではなく呼び出し側である。index entry が unmerged の間、通常の Axon 操作は引き続き blocked となる。
-
-## 停止条件
-
-意味上の選択が不足、repair が権限を拡張、必要な入力が不完全、drift を照合不能、公開結果が不明、または check の反復に進展がない場合は停止して workspace を保持する。どの入力が authoritative か、どの phase が完了したか、次に必要な判断または観測を報告する。
+不足した入力・意味上の選択、照合不能なdrift、不明な公開結果、進展のないcheckでは、保全artifactと適用済み範囲、次に必要な観測または判断を返す。

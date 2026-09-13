@@ -1,5 +1,7 @@
 # 分岐履歴の保存境界
 
+この文書は置換前の三軸 CLI の資料です。単一 lifecycle の再構築は [正本 spec](../../spec/lifecycle_proposal.md) と [新しい共通コア](../development/lifecycle-core.md) を参照してください。
+
 Entityの現在値と記録の集合を分ける。履歴のIDは維持し、各記録に所有者、先行ID、originを付ける。
 NoteとRevisionはそれぞれのstream、判断・進行・統合・baselineは状態streamを持つ。
 Noteと状態記録は同じstreamの先端全体へ追記し、Revisionは採用系統のlast Revisionだけを親にする。

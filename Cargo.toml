@@ -3,25 +3,27 @@ name = "axon"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
-description = "A local issue tracker with independent state axes"
+description = "A local issue tracker with a single lifecycle"
 license = "MIT"
 repository = "https://github.com/gin0606/axon"
 readme = "README.md"
 publish = false
 
+[workspace]
+members = ["crates/axon-recorder"]
+default-members = [".", "crates/axon-recorder"]
+
 [dependencies]
-anstream = "1.0.0"
-anstyle = "1.0.14"
+axon-recorder = { path = "crates/axon-recorder" }
 blake3 = "1.8.2"
 chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.6", features = ["derive"] }
 clap_complete = "4.6.8"
 libc = "0.2.189"
 rand = "0.10.2"
-rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "backup"] }
+rusqlite = { version = "0.40.2", features = ["bundled", "hooks"] }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0"
-serde-saphyr = "1.2.0"
+serde_json = { version = "1.0", features = ["arbitrary_precision", "float_roundtrip", "raw_value"] }
 thiserror = "2.0.20"
 
 [dev-dependencies]

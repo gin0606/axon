@@ -1,31 +1,25 @@
 ---
 name: conventions
-description: Axon の共通の状態・情報モデルと CLI 操作の安全性 contract を提供する。他の axon-kit skill と利用側 workflow の基盤として使い、協業方針、作業選択、実装、commit は規定しない。
+description: Axonの単一lifecycle・情報モデルとCLI保存操作の共通契約。他のkitと利用側workflowの基盤に使い、対象選択、採用判断、実装、commitは規定しない。
 ---
 
-# Axon 操作 contract
+# Axonの共通操作契約
 
-この skill をすべての Axon capability の共通基盤として使う。Axon データの意味と、履歴を失わず、非 idempotent な作用を重複させず、不確かな storage 結果を成功と誤認せずに、許可された操作を実行する方法を定める。
+## 対象環境を固定する
 
-## 層を分離する
+呼び出し側が指定したrepositoryまたは管理rootで操作する。binaryが指定されていればそれを使い、指定がなければその環境の `axon` を発見し、`axon --version` と `axon --help` を確認する。`tasks / accept / cancel` の有無と必要なleaf helpの構文をこのpluginの契約と照合して、実行ファイルとworking directoryを以後の操作で固定する。別repositoryのソースcheckoutは不要。このplugin内のreferenceと選択したCLIの `docs`・helpで手順を完結させる。
 
-- Axon は Entity の状態、関係、導出事実、情報の所有範囲を定める。人と agent のどちらが作業を選ぶか、Disposition を判断するか、結果を review するかは決めない。
-- 呼び出し側の依頼または workflow が、対象、意図する作用、その作用への権限を与える。`axon-kit` capability はその作用だけを実行して制御を返し、後続 phase への許可を推測しない。
-- repository の規則と host の権限は引き続き有効である。workflow はこの kit を使って外部への権限を拡張できない。
-- Axon の状態同期は、実装、test、review、commit のふるまいを規定しない。
+コマンドやschemaが非対応なら観測したversion・構文・対象を返す。別のbinaryへの切替や、SQL・JSONLの直接編集で操作を代替しない。実保存先の境界は [保存操作](references/mutations.md) に従う。
 
-## 該当する contract を読む
+## 必要な契約を読む
 
-Entity を解釈する前、declaration または Control state を変更する前、関係や導出事実について判断する前に、[モデル contract](references/model.md)を読む。
+- Entity・候補・情報を解釈する前に [モデルと参照](references/model.md)。
+- mutation前に [保存操作と再試行](references/mutations.md)。
+- 新規登録前に [作成と照合](references/creation.md)。
+- 初期化またはfile障害では [保存先と復旧](references/storage.md)。
 
-Axon storage または storage 関連 artifact を変更する command の前に、[mutation contract](references/mutations.md)を読む。過去の mutation の結果が不確かでない限り、read-only な調査ではこの参照は不要である。
+対象、採用判断、作業選択、実装・review・commitの権限は呼び出し側workflowが与える。kitはそれらを選ばない。CLIが操作を受け付けることも権限の根拠ではない。与えられた効果は重ねて確認せず実行できるが、意味を変える未確定な判断は呼び出し側へ返す。
 
-新しい Issue または Group を作成するときは、[作成 contract](references/creation.md)も読む。
+構文の不確実さは保存先不要のhelpで解決する。保存情報は `list`・`show --details`・`log`・`note` で調べ、外部条件の評価が必要なときだけ `triage / tasks` を使う。任意recorderは認証・lock・生存確認ではない。
 
-## インストール済み CLI の contract を優先する
-
-command 構文または入力 contract が不確かなときは、`axon help` または該当する `axon <command> --help` を使う。インストール済み CLI、その documentation、この指示の間に不一致がある場合、別の書き込み経路を考案して埋め合わせない。呼び出し側がどの version または artifact を正とするか決められるよう、不一致を報告する。
-
-## capability の結果を返す
-
-対象 ID または storage artifact、要求された作用、観測した最終状態、関係する frontier または関係への影響を報告する。mutation では、storage 結果を適用済み、未適用、部分適用、不明のいずれかに分類する。未完了の phase を一般的な成功報告で隠さない。
+要求した作用、完全ID、保存結果（適用済み・未適用・部分適用・不明）、最終状態と関係への影響を返す。保存結果を確認するためだけの追加mutationはしない。

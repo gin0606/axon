@@ -1,201 +1,42 @@
 # 日常の操作
 
-よくある場面に沿って、axonの使い方を紹介します。以下の`<id>`などは、作成時や一覧に表示されたIDに山括弧ごと置き換えます。
+以下の `axon` は [初回手順](getting-started.md) で選んだ新binaryを指します。構文は `axon <command> --help` で確認できます。
 
 ## 状況や記録を確認する
 
-agentに任せた仕事の状況や、以前に残した情報を自分で確認するときは、知りたいことからコマンドを選べます。
-
-| 知りたいこと | コマンド |
+| 目的 | 操作 |
 | --- | --- |
-| 今から着手できるもの | `axon ready` |
-| 採否や前提を判断する必要があるもの | `axon triage` |
-| 誰がどこで着手したままか | `axon claims` |
-| 一件の説明、状態、待つ理由、Note。Groupなら配下の構造も | `axon show <id>` |
-| 終了・不採用・後回しを含む全件 | `axon list` |
-| タイトル・説明・Note本文から探す | `axon list --search '設定'` |
-| 採否・再浮上条件の変更履歴 | `axon log <id>` |
+| 保存状態・条件・全直接関係 | `axon show ID --details` |
+| 未判断の候補 | `axon triage` |
+| 浮上した未着手と全着手中 | `axon tasks` |
+| 保存済み全件（条件を実行しない） | `axon list` |
+| 本文と直接の待ち理由 | `axon show ID` |
+| Noteの本文 | `axon note list ID` |
+| 状態変更の経緯 | `axon log ID` |
+| 記録者の詳細 | `axon log ID --recorder-details` / `axon note list ID --recorder-details` |
 
-`ready`と`triage`は条件に合う候補だけを表示します。そこに見つからない記録も、`list`で探せます。例えば、終了した仕事だけなら`axon list --progress ended`、採用済みで未着手の仕事なら`axon list --disposition accepted --progress not-started`です。後者には、待ち条件などでまだ着手できないものも含まれます。特定の計画はGroupのIDを`show`へ渡すと、配下の構造と待ちを確認できます。
+`tasks` には依存や親の着手待ちも含まれます。表示の状況を読み、着手できると決めつけないでください。候補に出ないことは操作禁止やEntityの不存在を意味しません。
 
-端末上で表示を消したり偽装したりしないよう、保存した文章や外部コマンド出力に含まれる制御文字は`\x1b`、`\t`、`\r`などの見える形で表示されます。通常の改行とUnicode文字はそのままで、保存内容や`export`の生成データは変更されません。
+## 登録と状態変更
 
-### 過去の結果や計画の変更を読む
+`capture --title '懸念' -m '内容'` は未判断、`plan --title '仕事' -m '目的と完了条件'` は未着手の採用済みIssueを登録します。`group capture` / `group plan` はGroupを作ります。作成時の `--parent G` と繰り返せる `--needs B` で関係を付けられます。
 
-`show`には全Noteと進行履歴が出ます。Noteが多ければ`axon note list <id>`で一覧を見て、`axon note show <id> <note-id>`で一件を読めます。
+未判断を採用するには `accept ID`、未着手の採用を撤回するには `withdraw ID`。作業は `start ID`、中断は `release ID -r '理由'`、完了は `done ID`、取りやめは `cancel ID -r '理由'`、取りやめの再検討は `reconsider ID`。完了したEntityは再開しません。結果は `note add ID -m '結果'` へ残し、本文変更は `write ID --title '題名' -m '本文'` で行います。
 
-採否を決めた時点の計画はRevisionに残ります。`axon revision list <id>`でIDを確認し、`axon revision show <id> <revision-id>`で当時の全文、`axon revision diff <id> <古いrevision-id> <新しいrevision-id>`で変更点を確認できます。未判断の間の編集過程はRevisionには残りません。
+## Groupと関係
 
-再浮上条件に設定されたコマンドを実行せずに確認したいときは、`axon list --skip-command-evaluation`や`axon show <id> --skip-command-evaluation`を使います。外部評価が必要な状態は`unevaluated`と表示されます。
+`group set A --parent G` / `group unset A` で所属を変更し、`dep add A --needs B` / `dep rm A --needs B` で依存を変更します。親や依存先の状態、循環、終了した構成の制約はCLIが検査します。Groupをstartしても子はstartされません。
 
-## 今は扱わないことを残す
+Groupのdone前には目的・完了条件、全子孫の終了、成果の統合と必要な検証を確認します。showの直属の子を辿り、必要な本文・Note・logを読んで不足を確認します。全子孫Noteの一括取得は必須ではありません。子の終了だけで親を自動完了せず、Groupに対するdone自体を計画全体の最終確認済みという入力にします。
 
-作業中に「設定項目を減らせそう」と気づいたけれど、今の仕事は中断したくない。まずは気づきだけ残します。
+## 並行作業と引継ぎ
 
-```sh
-axon capture '設定項目を減らせないか考える'
-```
+SQLiteを共有するworktreeでは、同じ未着手Entityへの並行startは一つだけ成功します。失敗側はshow・logで現在値を読み、実行中のworkerと調整してください。記録者情報を所有権として扱わず、作業終了を確認してから継続・releaseを判断します。
 
-これで未判断のIssueができます。登録しただけでは、やると決めたことにはなりません。後で`axon triage`を開くと判断対象として確認できます。
+fileの別worktreeでは同じEntityをそれぞれstartできます。Gitで取り込むまで互いの作業は見えません。異なる現在値の衝突はEntity全体で選び、両側のNoteと実操作の履歴を保持します。同じworktreeでGit更新とAxon書込みを並行しないでください。統合後は [明示的な統合](../development/lifecycle-file.md#明示的な統合) に従って検査・stageし、show・Note・logで成果を確認して通常操作へ戻ります。
 
-### 判断する時期も後にする
+## 再浮上
 
-「記録だけしておく」ことと、「その時期まで判断対象にも出さない」ことは別です。今作ったIssueを指定した時刻まで見送るなら、再浮上条件を設定します。時刻は自分が見直したい時点に置き換えてください。
+`when set ID --command 'test -f ready.txt'` は条件を保存し、`when clear ID` は解除します。保存時には実行しません。triage/tasksだけが必要な条件を `/bin/sh -c` で評価し、終了0は成立、1は未成立、その他は一覧の失敗です。`--condition-timeout` と `--trace-conditions` の契約は [外部条件](../development/lifecycle-candidates.md) を参照してください。
 
-```sh
-axon when at <id> 2026-12-01T09:00:00+09:00
-```
-
-その時刻までは`triage`に出ず、時刻を迎えると未判断のまま再び判断対象になります。offset を持つため、この例は日本時間の2026年12月1日午前9時と一意に決まります。時刻は締切でも、着手の予約でもありません。
-
-### やると決めているが、今はやらない
-
-採用済みの仕事として登録するなら`plan`を使います。例えば、互換性対応を終えた後に旧設定を削除すると決めている場合です。
-
-```sh
-axon plan '旧設定の互換コードを削除する' -m '移行が済んだ旧形式の読み込み処理を削除する' --manual
-```
-
-この例は、採用済みで、明示的に解除するまで浮上しない状態で作ります。取りかかる時期になったら、作成されたIDに対して次を実行します。
-
-```sh
-axon when clear <id>
-axon ready
-```
-
-再浮上条件を取り除くと、このIssueは着手候補になります。既存のIssueを後回しにする場合も`when`を使えます。作業中でも、進行や採否はそのまま保ちます。
-
-### ライブラリのリリースを待つ
-
-必要な修正版が出たら対応したい場合は、リリースを確認するコマンドを条件にできます。
-
-まず、利用するパッケージレジストリのAPIなどを確認するスクリプトを自分やagentで用意します。以下の`./scripts/check-library-release.sh`はその例で、axonに付属するものではありません。期待するリリースが見つかれば終了コード`0`、まだなら`1`、通信や解析の失敗ならそれ以外を返すようにします。個々の通信にも適切なタイムアウトを設定します。Axon側ではCommand 1件に既定30秒を適用し、評価がそれより長くかかる場合は`axon ready --condition-timeout 2m`のように呼び出し単位で有限値を指定できます。
-
-```sh
-axon plan 'ライブラリの修正版を取り込む' -m '更新後に回避コードを外し、不具合が再現しないことを確認する' --command './scripts/check-library-release.sh'
-axon ready
-```
-
-`ready`などで条件の評価が必要になったときにスクリプトが動き、成立していれば着手候補に出ます。バックグラウンドで監視するわけではありません。相対パスはGit内では現在のworktree root、Git外ではaxonの管理rootを基準にします。
-
-問い合わせ頻度を抑えるなら、[cacheexec](https://github.com/gin0606/cacheexec)を入れ、作成したIssueの条件を次のように変更できます。
-
-```sh
-axon when command <id> 'cacheexec --ttl 5m --include-codes 0,1 -- ./scripts/check-library-release.sh'
-```
-
-成立・未成立の結果を5分間再利用し、判定失敗はキャッシュ対象から外します。その間のリリースは再評価まで反映されません。同じ仕組みで外部ITSのタスク状態なども待てます。実行環境や診断の詳細は[外部条件の評価](../reference/cli.md#外部条件の評価)を参照してください。
-
-## 次に扱うものを決めて進める
-
-作業を始める前に、残しておいた気づきからやるものを選びます。
-
-```sh
-axon triage
-axon show <id>
-```
-
-`triage`には、未判断や依存の前提を失ったものなど、現在の範囲で判断が必要な対象が出ます。`show`で内容を読み、ここでは未判断のIssueを採用することにします。
-
-```sh
-axon decide accept <id> -r '設定変更の負担を減らすため採用する'
-```
-
-やらないと決めた場合は`axon decide reject <id>`です。記録を消さずに不採用として残せます。
-
-次に、今から着手できるものを見ます。判断待ちを整理せず、ここから始めても構いません。
-
-```sh
-axon ready
-axon show <着手するid>
-axon start <着手するid>
-```
-
-`start`で着手中になり、誰がどこで着手したかがclaimとして記録されます。実際の仕事は自分やagentが進め、終えたら結果を残します。
-
-```sh
-axon note add <着手するid> -m '設定項目を整理し、既存の設定ファイルでも起動できることを確認した'
-axon done <着手するid>
-```
-
-Noteに作業結果が残り、`done`で進行が終了してclaimが解放されます。後から`show`で内容を読み返せます。
-
-## 途中の仕事に戻る
-
-セッションが切れたり、別の仕事に移ったりして、どこまで進めたか分からなくなったときは、全体の状況と着手記録から辿ります。
-
-```sh
-axon claims
-axon show <気になるid>
-```
-
-`claims`で着手したままの対象を見つけ、`show`で説明やNote、Group配下の構造を読みます。claimは着手時の記録なので、そのagentが今も動いていることまでは分かりません。着手中でない対象を探す場合は`list`または`list --search <text>`を使います。
-
-着手中の仕事をそのまま続けるなら、再び`start`する必要はありません。状態を確認して作業を続けます。
-
-いったん着手を取り消し、別の機会やagentに渡すなら、分かったことをNoteに残して解放します。
-
-```sh
-axon note add <id> -m '原因は旧設定の読み込み順序にありそう。修正は未着手'
-axon release <id> -r '別の作業を優先するため解放する'
-```
-
-未着手に戻り、claimが解放されます。進行状態を保ったまま見送りたい場合は、代わりに`when`で再浮上条件を設定します。
-
-気になるIssueが候補やclaimに見つからない場合は、`axon list --search '設定'`のように本文から探せます。全件を見るなら`axon list`です。後回し・終了・不採用の記録も確認できます。
-
-## まとまった仕事を計画する
-
-「設定の仕組みを整理する」という仕事を、既存設定の調査と、その結果を使った整理に分けるとします。自分やagentとの相談で内容が決まったら、Groupと子Issueとして登録します。
-
-まず計画全体を作ります。
-
-```sh
-axon group plan '設定の仕組みを整理する' -m '既存設定を調べ、必要な項目と移行方法を決めて整理する'
-```
-
-作成されたIDを`<group-id>`に置き換え、調査Issueを作ります。
-
-```sh
-axon plan '既存設定を調べる' -m '設定の利用箇所を調べ、残す項目と移行が必要な項目を整理する' --parent <group-id>
-```
-
-次のIssueには、その調査結果が必要だと記録します。`<調査issue-id>`は直前に作成されたIDです。
-
-```sh
-axon plan '設定を整理する' -m '調査結果に沿って設定と読み込み処理を変更し、移行を確認する' --parent <group-id> --needs <調査issue-id>
-axon show <group-id>
-```
-
-`show`で計画の構造と依存を確認します。`--needs`は「相手の成果が必要」という関係です。相手の決着まで見送るだけなら再浮上条件を使います。違いは[状態と用語](concepts.md#成果が必要なのか決着を待ちたいのか)を参照してください。
-
-計画を進めるときはGroupを開始します。
-
-```sh
-axon start <group-id>
-axon ready
-```
-
-まず調査Issueが着手候補になります。調査を開始・終了すると、整理Issueも着手候補になります。子Issueはそれぞれ`start`し、作業結果を残して`done`します。
-
-すべての子孫が終了または不採用になったら、計画全体を確認してGroupも終了します。
-
-```sh
-axon show <group-id>
-axon done <group-id>
-```
-
-### 途中で計画を見直す
-
-調査で想定が変わり、採用済みのIssueの説明を変えたくなったら、未判断に戻して編集・再判断します。
-
-```sh
-axon decide undecide <id> -r '調査結果を受けて範囲を見直す'
-axon write <id> -m '設定項目を整理し、旧形式からの移行処理も用意する'
-axon show <id>
-axon decide accept <id>
-```
-
-この操作で計画の変更を記録します。結果や申し送りの追記だけなら、未判断に戻さずNoteを使います。複数のIssueや関係をまとめて見直したい場合は、[宣言ファイル](../reference/declaration-file.md)で一括編集もできます。
-
-各コマンドの構文と全optionは`axon <command path> --help`、保存先やGitでの管理は[backendとworktree](storage.md)を参照してください。
+IDはprefix＋ランダム6文字で、完全IDまたは一意なsuffixを指定できます。CLI生成文は英語、TTYでは意味に応じて装飾し、NO_COLORまたは非TTYでは装飾しません。一覧の絞り込み・検索、Note個別参照と保存結果は [CLI契約](../reference/lifecycle-cli.md) を参照してください。

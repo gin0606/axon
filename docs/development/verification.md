@@ -14,8 +14,8 @@ pull requestとmainへのpushでは、GitHub Actionsがrepositoryの
 
 ```sh
 cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace
 ```
 
 CIのcacheはCargo dependencyとbuild artifactだけに使い、成功済みのtest結果を
@@ -27,13 +27,13 @@ Rust fileがstagedされているcommitでは、Lefthookがrustfmt、全target�
 Clippyと、次の高速test集合を並列に実行する。
 
 ```sh
-cargo test --bin axon --test smoke
+cargo test --lib --bin axon --test smoke
 ```
 
-`--bin axon`はdomain、状態導出、storage、履歴、mergeなどbinary内のunit/core
-testを実行する。`--test smoke`は実binaryを使ってinit、Issue作成、show、start、
-doneと失敗時のexit codeを確認する。pre-commitは短い編集feedbackのため、この集合に
-integration targetのprovenance、migration、crash・durability、backend行列を含めない。
+`--lib` は単一 lifecycle の共通コア・分岐・codec のテストを実行する。
+`--bin axon` は端末表示と条件プロセスの起動・trace flush失敗、`--test smoke` はSQLite/file binary の登録から Group 完了、Note・log、並行操作、schema 拒否、保存先探索・init、入出力失敗を独立 fixture で検証する。
+
+旧 `archive/three-axis/tests` は新 binary から参照しない過去の検証資料である。process監督と記録者の検証は新smokeへ移植済み。`cargo test` はworkspaceの記録者crate単体テストも実行する。file保存・mergeは `tests/lifecycle/file.rs` をsmokeから実行し、実worktree、driver、index、並行writer、drift拒否を検証する。旧 schema migration の互換検証は新仕様の要件にしない。以降の旧モデル・coverage の個別名も過去の三軸実装に属する。
 
 オプションなしの`cargo test`は引き続きsmokeを含む全test targetの標準入口であり、
 上記を含まない契約はfull verificationで検査する。Lefthookの各jobは失敗時にcommitを
@@ -45,7 +45,17 @@ integration targetのprovenance、migration、crash・durability、backend行列
 cargo +1.89.0 check --locked --all-targets --all-features
 ```
 
-## Rust coverage
+## 現行モデルと運用検証
+
+状態・関係・候補・情報の正本は [lifecycle spec](../../spec/lifecycle_proposal.md)。意味を変える場合は該当モデルを更新し、spec内の生成・型検査・invariant/witness検査を行ってから実装へ反映します。モデルの対象外であるfilesystem、SQLite、実process、Git統合、記録者はRustで検査します。モデルの意味を変えない文書・テスト整理にモデルの再実行は必須にしません。
+
+`tests/lifecycle/workflow.rs` は両backendの独立fixtureで登録、候補選択、並行着手・Note、Group最終確認を一巡します。`tests/lifecycle/file.rs` は実Git worktreeで分岐し、自動統合と衝突、prepare/check/apply、stage後の通常操作まで検証します。SQLiteの共有worktreeでの並行着手もworkflow fixtureに含みます。テストはこのcheckoutのbinaryを絶対パスで実行し、Git環境を隔離します。実データやPATH上のbinaryを切り替えません。
+
+## 過去の三軸実装の検証資料
+
+以下は置換前のコード・モデルに対する検証方針と結果を保存した過去資料です。現在のCIや変更判断へ適用しません。
+
+### Rust coverage
 
 `mise.toml` で固定した `cargo-llvm-cov` を使い、全target・全featureを次の一つのcommandで計測する。数値thresholdは設けず、未到達箇所を次の改善判断へ使う。
 

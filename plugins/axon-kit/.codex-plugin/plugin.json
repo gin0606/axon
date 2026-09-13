@@ -1,7 +1,7 @@
 {
   "name": "axon-kit",
   "version": "0.1.0+codex.20260908040044",
-  "description": "再利用可能な Axon モデルと、安全に tracker を操作するための capability 集",
+  "description": "Axonの情報モデルとCLI操作契約を提供する基本スキル集。Issue・Groupの登録、更新、状態変更、保存操作を実行・検証し、利用者のワークフローの基盤となる。",
   "author": {
     "name": "gin0606"
   },
@@ -9,8 +9,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Axon Skill Kit",
-    "shortDescription": "安全な Axon tracker 操作を組み立てます。",
-    "longDescription": "実装 workflow を規定せず、Axon の状態・情報 contract と、Entity 操作、backend 初期化、migration、file snapshot merge に特化した capability を提供します。",
+    "shortDescription": "Axonを操作する基本スキルと共通契約",
+    "longDescription": "Axonの情報モデルとCLI操作契約を提供する基本スキル集。Issue・Groupの登録、更新、状態変更、保存操作を実行・検証し、利用者のワークフローの基盤となる。",
     "developerName": "gin0606",
     "category": "Productivity",
     "capabilities": [
@@ -18,9 +18,9 @@
       "Write"
     ],
     "defaultPrompt": [
-      "この懸念を判断せず Axon に記録してください。",
-      "この採用済み計画を Axon に登録してください。",
-      "この Axon storage を安全に初期化、移行、または merge してください。"
+      "この懸念をAxonに未判断として記録してください。",
+      "この採用済み計画をAxonに登録してください。",
+      "このAxon Entityの状態と記録を確認してください。"
     ]
   }
 }

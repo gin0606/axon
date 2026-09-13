@@ -1,12 +1,10 @@
 ---
 name: declaration
-description: Axon declaration artifactを、依頼されたfileまたはactive storageへの反映範囲、ユーザー所有fileの保護、Control stateとの段階操作、競合時の再調整まで含めて扱う個人用ワークフロー。単純なread-only checkには公式kitだけを使う。
+description: Axonの専用export/importを依頼されたとき、非対応の境界とユーザーが求める成果物・変更範囲を整理する。
 ---
 
-# Axon declarationを個人用方針で扱う
+# declarationの境界
 
-`axon:conventions`、`axon-kit:declaration`、必要な内容判断に応じて`axon:register`または`axon:triage`を使う。
+`axon:conventions` と `axon-kit:declaration` を使い、選択したCLIで観測した専用export/importの対応状況・version・対象を返す。
 
-[詳細手順](references/workflow.md)を最後まで読み、review、export、canonicalize、check、apply、Control state変更、競合または部分完了を扱う。
-
-このskillはユーザー所有artifactの保護と、複数phaseにまたがる自律実行の境界を定める。Axonの保存モデル、strict YAML、`axon export`と`axon import`の契約は`axon-kit:declaration`を正とする。
+依頼された計画範囲、artifactの作成・レビュー・書戻し、保存済みEntityへの適用を区別して整理する。ユーザー所有のartifactと既存データを保持し、実行できていない変更や移行を完了と報告しない。保存・代替操作の境界はkitの契約に従う。

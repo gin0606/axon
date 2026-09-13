@@ -1,37 +1,29 @@
-# Axon mutation contract
+# 保存操作と再試行
 
-Axon storage または storage 関連 artifact を変更する前、または結果が不確かな mutation を照合するとき、この reference を読む。
+## 初回実行前
 
-## active backend を尊重する
+対象root・binary・引数・payloadを固定し、保存情報を読む。Entityは `show ID --details`、判断理由はlog・必要なNote、構造変更やterminal化は親・子孫・直接dependentまで調べる。別writerやGit/editor操作との未調整競合があれば先に直列化または分離する。
 
-Axon は設定 file を使わず、規定の canonical state path から backend を発見する。File state は worktree-local、SQLite は Git worktree 間で共有される。両方の path がある場合は error で、invalid または pending な state は discovery を停止する。他の worktree を scan せず、repository ごとに 1 backend を support する。mutation の前に意図する root と canonical path を調査し、legacy backup を authoritative として扱わない。
+各mutationは単独のshell呼出しにし、その終了コードを個別確認する。後続commandの成功で失敗を隠さない。複数段階の状態・本文・関係変更は一つのtransactionではない。順序、各段階のpostconditionと適用済み範囲を保持する。
 
-file backend では、通常の mutation は active worktree の `.axon/state.jsonl` を変更する。これは Git tracking を意図し、すでに tracked の場合がある。`.gitattributes` と `.axon/.gitignore` は同じ worktree-local artifact set に属する。mutation はそれらの file の staging、commit、merge、破棄を許可しない。無関係な working tree 変更を保持し、操作で変更された storage artifact を報告する。1 worktree での read は現在の snapshot だけを観測し、別 worktree に divergent state や claim がないことは証明しない。
+本文の `-m/--description` と `-F/--description-file`、Noteの `-m/--message` と `-F/--file` はそれぞれ排他で、`-F -` はstdin。file/stdinは初回mutation前に正確なUTF-8 bytesを独立snapshotへ保存しdigestを記録する。結果不明の間は保持し、元fileの後の編集を再試行へ混入させない。コマンドに先頭hyphenを含むoption値は `--message='--text'` のように渡す。shellの補間で内容を変えない。
 
-Git 内の SQLite では、authoritative な `.axon/axon.db` は common Git directory の parent 配下にあり、current sandbox または worktree 外の場合がある。host permission が必要なら、access 要件を確認済みの許可された Axon command だけに escalation を限定する。lock または support された自動 storage update のため write access が必要な read command も含む。1 command への permission は他の command や無関係な program へ拡張されない。必要な操作ごとに host の permission process に従う。
+## 保存先と権限
 
-file backend の Git index が unmerged の場合、通常の操作は意図的に拒否される。入力を保存し、storage または merge workflow により検証済み snapshot を解決して stage する。state file を直接書いて guard を迂回しない。
+Git内のSQLiteはcommon Git directoryの親の `.axon/axon.db` をworktree間で共有する。fileは現在worktreeの `.axon/state.jsonl` で、他worktreeの未統合データは観測できない。Git外は最寄りの管理root。別worktreeはSQLiteの独立fixtureではない。混在・破損・unknown schema・init途中から別保存先へfallbackしない。
 
-## 作用を 1 つずつ実行する
+意図した保存先への当該mutationだけがsandboxに拒否された場合は、そのcommandだけをホストの許可機構へ渡す。無関係な読み取りやprogram、別binary、backend切替まで許可範囲を広げない。変更fileをstage/commitする権限は呼び出し側が別に与える。
 
-- 状態を変える各 Axon command は単独の shell call として実行し、別 command が終了 status を隠さないようにする。
-- read-only discovery と無関係な program を同じ shell call に含めない。
-- 呼び出し側が許可した正確な対象と payload を使う。selector の拡大、関係の追加、別 Entity の選択、後続 phase への暗黙の進行を行わない。
+## 成功とno-op
 
-## 観測した状態を検証する
+終了0と完全IDの確認文を読み、show/details・log・個別Noteで要求した作用を検証する。writeの同値や同じparent/dependency/conditionは `No changes` の成功で履歴を増やさない。同値lifecycleは拒否で、開始済みを新たなstart成功と扱わない。作成とNote追記は非冪等で、再実行すると別IDになる。
 
-mutation の成功後、対象または artifact の完全な状態を読み、操作の postcondition を検証する。capability の作用で変わりうる Revision、Note、関係、claim、frontier、storage artifact は再読する。command output は証拠として扱い、関係する postcondition の代用にはしない。
+## 失敗・部分適用・結果不明
 
-multi-phase workflow が一部の mutation だけを完了した場合、以下の retry rule に従って失敗 phase を照合する。結果と安全な次操作を立証できたら、復旧可能な実行 error を訂正し、許可済み phase を続ける。結果が不明なまま、重要な判断が不足、または復旧に未許可の作用が必要なら停止する。適用済み state と recovery artifact を保存し、完了済み・残りの phase を別々に報告し、compensating mutation による自動 rollback は行わない。
+`Applied:` または `storage applied; output failed` は保存済み。出力失敗を未適用と解釈して作成・Noteを繰り返さない。`Not applied:` は示された保存段階の未適用で、前段の成功まで否定しない。SQLite commit失敗、file置換後の同期失敗など `Result unknown:` は成功でも未適用でもない。
 
-## 照合後にだけ再試行する
+元processの終了を確認し、同じbackend/rootで現在値・記録を再読する。fileは正本の完全な検査も行う。現在値を同じ効果へ収束させる操作は、現在状態と反復契約が合う場合に限り原因を修正して再試行できる。lifecycleは対象状態とlogを照合し、別状態へ進んでいれば再送しない。追加操作の照合は [作成](creation.md) または `axon-kit:add-note` の事前集合・固定payloadの手順に従う。
 
-明確な失敗は、原因を変えず同じ command を繰り返す許可ではない。command の完了または storage 適用が不明なら、まず process の終了を確認し、stable ID、record 件数、actor label、payload、操作固有の postcondition で現在の状態を調査する。
+競合・一致候補複数・欠損した事前証拠などで結論できなければ不明として返し、payloadと観測を保持する。補償遷移、取消、Note削除、rollback、別保存先へ作成で「修復」しない。既に保存確認したNoteは後続状態操作の失敗後も再追加しない。
 
-失敗原因を解消した後、capability の recovery rule または CLI の repetition contract と、観測した現在値・関係する history によって繰り返しが安全だと立証できる場合に mutation を再試行する。たとえば `write`、`group set|unset`、`dep add|rm` は同じ保存値を成功した no-op として受け入れる。再試行前に、対象、意図する作用、該当する precondition が許可された依頼と引き続き一致することを検証する。Entity 作成と Note 追加は非 idempotent のままであり、capability 固有の重複 check が必要である。証拠から適用済みと未適用を区別できない場合、storage 結果を不明と報告して停止する。
-
-## 入力 snapshot を保存する
-
-file または stdin を source とする mutation で、後からの再読により payload が変わりうる場合は、最初の試行前に正確な byte 列を保存する。操作の retry contract が必要とする場合は digest を記録し、許可された再試行にはその検証済み byte 列だけを再利用する。mutable source を暗黙に再読しない。
-
-temporary snapshot は、操作が適用済みまたは未適用だと検証できた後にだけ削除する。不明または部分的な結果の照合に必要なら、正確な path と digest を保存する。
+fileのlockはOSがwriter終了時に解放する。lock fileの削除は別writerとの相互排他を壊すため行わない。同一worktreeでGit/editor書込とAxon書込を並行しない。詳細は [保存先と復旧](storage.md)。

@@ -1,6 +1,6 @@
 ---
 name: register
-description: 新しいIssueまたはGroupの重複と計画の完成度を確認し、依頼から確定できるDisposition、declaration、構造、Resurface conditionで登録する個人用ワークフロー。既存Entityの変更や実装には使わない。
+description: 新しいIssueまたはGroupの重複と計画の完成度を確認し、依頼から確定できる採否、本文、構造、再浮上条件で登録する協業ワークフロー。既存Entityの変更や実装には使わない。
 ---
 
 # 新しいAxon Entityを登録する
@@ -9,11 +9,11 @@ description: 新しいIssueまたはGroupの重複と計画の完成度を確認
 
 ## 登録内容を確定する
 
-関連するコード、文書、Entityを必要な範囲で調べ、目的、scope、完了条件、kind、親Group、outgoing dependency、`Always`、`AtDate`、`AfterEntity`、`Manual`、`Command`のいずれかのResurface conditionを確定する。
+関連するコード、文書、Entityを必要な範囲で調べ、目的、scope、完了条件、kind、親Group、outgoing dependency、未設定またはshell文字列の再浮上条件を確定する。
 
-- ユーザーが実行または採用を明示していればAccepted、懸念や未解決事項の記録ならUndecidedとする。採否を読み取れない単独の「登録して」では確認する。
+- ユーザーが実行または採用を明示していれば採用済みのNotStarted、懸念や未解決事項の記録ならUndecidedとする。採否を読み取れない単独の「登録して」では確認する。
 - 一つの懸念または作業はIssue、複数Entityを含む明示的な計画範囲はGroupとする。合意済みscopeからkindを一意に決められない場合は確認する。
-- Resurface conditionは既定でAlwaysとする。明示された日付、待機先Entity、明示解除まで非浮上にするManual、または保存するshell commandをそのまま反映する。Commandは条件評価時に`/bin/sh -c`で実行されるため、文字列と実行影響が依頼から確定しない場合は作らない。単に「後で」のように条件を選べない場合は確認する。
+- 再浮上条件の既定は未設定とする。shell文字列と実行影響が依頼から確定している場合だけ条件を保存する。「後で」だけでは条件を発明しない。自然言語の条件をshellへ具体化するとき、意味や実行影響が未確定なら、必要な時刻基準・実行場所・参照先を含む具体案を示して判断を得る。
 
 `axon:conventions`に従い、合意済みの目的、scope、完了条件から親、dependency、分解を自律して導く。計画の意味、採用、公開仕様、独立した完了単位を新たに決める必要がある場合だけユーザーへ返す。
 
@@ -25,8 +25,8 @@ description: 新しいIssueまたはGroupの重複と計画の完成度を確認
 
 ## 重複を解決して登録する
 
-`axon:conventions`の重複確認を行う。完全に一致する未終端Entityを再利用できる場合は、そのIDと現在状態を結果とする。Dispositionの不一致、Ended、cross-kind、scopeの差、複数候補がある場合はユーザーの選択を得る。新しいIDの作成が明示されていれば新規登録する。
+`axon:conventions`の重複確認を行う。完全に一致する未終端Entityを再利用できる場合は、そのIDと現在状態を結果とする。採否の不一致、CompletedまたはCancelled、cross-kind、scopeの差、複数候補がある場合はユーザーの選択を得る。新しいIDの作成が明示されていれば新規登録する。
 
 採否未判断なら`axon-kit:capture`、採用済みなら`axon-kit:plan`を使い、作成結果と関係を確認する。このskillは登録と検証で終了し、同じ依頼が明示的に実装workflowまで含み、そのworkflowへ引き渡す場合を除いてstartや実装へ進まない。
 
-作成または再利用したID、kind、declaration、Control state、重複判断、readinessへの影響、未解決事項を報告する。
+作成または再利用したID、kind、declaration、lifecycleと条件、重複判断、候補と着手前提への影響、未解決事項を報告する。

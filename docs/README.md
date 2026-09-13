@@ -1,58 +1,43 @@
 # ドキュメント
 
-初めて使う場合は[使い始める](guide/getting-started.md)から読んでください。CLIと公式kitの導入、backendの選択、agentへの相談例をまとめています。axonを作った動機や設計のこだわりは[README](../README.md)にあります。
+単一 lifecycle の再構築の正本は [literate spec](../spec/lifecycle_proposal.md)、新しい実装の入口は [共通コア](development/lifecycle-core.md) です。利用ガイドは新lifecycleに対応しています。旧三軸のreference/design・モデルは過去資料として区別します。継続する入出力契約は [現行CLI契約](reference/lifecycle-cli.md) に明示し、過去資料の一括廃止から契約の廃止を推論しません。新 binary と `tests/smoke.rs` は [SQLite CLI](development/lifecycle-sqlite.md) の新仕様を対象にします。`archive/three-axis/src` の旧 module と `archive/three-axis/tests` は過去の三軸実装・検証資料です。
+
+新binaryの利用は [使い始める](guide/getting-started.md) から確認してください。
 
 ## 利用者向け
 
 | 文書 | 読む目的 |
 | --- | --- |
-| [使い始める](guide/getting-started.md) | 導入、backendの選択、agentと使い始める入口 |
-| [日常の操作](guide/usage.md) | 状況・記録の確認、後で扱うことの記録、次の仕事の選択、途中の仕事への復帰、計画の分解 |
-| [状態と用語](guide/concepts.md) | CLIに出る状態名、候補に出る条件、計画とNoteの区別 |
-| [backendとworktree](guide/storage.md) | SQLiteとfile、Gitでの管理、backendの切替 |
-
-まず「使い始める」を試し、その後は目的に合うページを参照できます。すべてを順番に読む必要はありません。CodexでSQLiteの共有DBへの書き込みがsandboxに阻まれる場合は、補足の[Codexでのアクセス設定に必要な情報](guide/codex.md)を参照してください。
-
-コマンドの構文と全optionは`axon help <command path>`または`axon <command path> --help`で確認できます。`axon docs`は端末で読む状態モデルと基本操作の説明です（英語）。
-
-状況や過去の記録を自分で見たいときは、[参照コマンドの使い分け](guide/usage.md#状況や記録を確認する)から選べます。
+| [使い始める](guide/getting-started.md) | 新binary選択、独立SQLite試用、手動持込み、同梱skill |
+| [日常の操作](guide/usage.md) | 候補、状態変更、Group最終確認、記録参照 |
+| [状態と用語](guide/concepts.md) | 単一lifecycleと関係 |
+| [保存先とworktree](guide/storage.md) | SQLite共有、fileのworktree隔離、探索・初期化の境界 |
+| [Agentからのアクセス](guide/codex.md) | ホスト権限と保存先 |
+| [記録者連携](development/lifecycle-recorder.md) | 自動取得と詳細参照 |
+| [CLI入出力契約](reference/lifecycle-cli.md) | ID・引数・詳細参照・英語表示・装飾・保存結果 |
 
 ## 開発者向け
 
-以下は仕様の正確な確認、axon本体の変更、設計経緯の調査のための資料です。利用者向けガイドはこれらの要約であり、独立した仕様としては扱いません。
-
-### 仕様を確かめる
-
 | 文書 | 定義する範囲 |
 | --- | --- |
-| [状態モデル](reference/state-model.md) | Entity、各軸、claim、包含、依存、Group の進行、導出値 |
-| [情報モデル](reference/information-model.md) | 情報分類、declaration の所有と固定、Revision、Note、履歴、観測 |
-| [手動移行](reference/migration.md) | 通常操作のschema更新と現行SQLiteのbackend変換・検証・切替 |
-| [Backend と file 保存](reference/file-storage.md) | 設定なしの探索、init、Git integration、保存と merge の失敗境界 |
-| [CLI 契約](reference/cli.md) | コマンド境界、反復実行、原子性、入出力、管理 root と ID の解決 |
-| [宣言ファイル](reference/declaration-file.md) | strict YAML、所有範囲、競合検査、export / prepare / check / apply |
+| [正本spec](../spec/lifecycle_proposal.md) | lifecycle・構造・候補・情報・表示・保存・統合の契約とモデル |
+| [共通コア](development/lifecycle-core.md) | 通常操作、記録、codec、三者比較 |
+| [SQLite CLI](development/lifecycle-sqlite.md) | 公開操作とSQLite adapter |
+| [file保存とGit統合](development/lifecycle-file.md) | writer、worktree、merge CLI・driver |
+| [専用移行ツール](../tools/lifecycle-migration/README.md) | 旧file/SQLiteから単一lifecycleへのbackup・変換・検証・明示適用 |
+| [候補と外部条件](development/lifecycle-candidates.md) | triage/tasksとprocess評価 |
+| [記録者連携](development/lifecycle-recorder.md) | 自動取得と保存済み詳細 |
+| [検証方針](development/verification.md) | CI、独立fixture、モデル検証の分担 |
 
-状態モデルと情報モデルが意味を定義し、CLI と宣言ファイルはその意味を操作へ対応させる。利用ガイドの要約や設計経緯を、追加の規範として扱わない。
+保存schemaは [SQLite adapter](../src/sqlite.rs) と [file adapter](../src/file.rs)、Usageは [Clap定義](../src/main.rs) を確認します。
 
-### 開発する
+### 設計検討資料
 
-| 文書 | 読む目的 |
-| --- | --- |
-| [アーキテクチャ](development/architecture.md) | 型境界、SQLite、管理 root、状態更新と履歴、actor |
-| [分岐履歴](development/branch-history.md) | 因果参照、current/last Revision、codecと移行の境界 |
-| [検証方針](development/verification.md) | 設計変更時の手順、モデルの担当範囲、検査コマンド、過去の検査条件と結果 |
+[一括declarationの再設計資料](development/declaration-design-notes.md) は、一括編集を検討するときの目的・保存境界・協業方針をまとめた資料です。採用済みの公開契約や通常操作の手順には使いません。
 
-形式モデルは [core](../spec/axon.qnt)、[Group](../spec/group_plan.qnt)、[情報モデル](../spec/information_model.qnt)。対象範囲と更新条件は検証方針に従う。DB schema の正は [src/db.rs](../src/db.rs)、CLI の Usage は Clap の定義に置く。
+## 過去資料
 
-### 設計理由を調べる
-
-| 文書 | 読む目的 |
-| --- | --- |
-| [設計判断](design/decisions.md) | 軸を分けた理由、代替案、Group・情報モデル・永続化の導入経緯 |
-| [file backend の設計](design/file-backend.md) | worktree ごとの保存、履歴の分岐、三方向 merge、手動移行の新仕様案 |
-| [保存先と初期化の簡素化](design/storage-discovery.md) | config 廃止、元の SQLite 配置、一 repository 一 backend と保証の範囲 |
-| [CLI 操作案内の棚卸し](design/cli-guidance-audit.md) | 2026-09-05 時点の全コマンドの案内評価 |
-| [初期設計のドライラン](design/initial-dry-run.md) | 初期モデルを運用シナリオに当てはめた検討記録 |
+`reference/` のlifecycle-cli.md以外、`design/`、`development/architecture.md`・`branch-history.md` は置換前の三軸CLIの契約・設計です。`development/audits/` は各文書に記した対象・時点に限定した調査です。現行操作の手順には使いません。旧コード・テストは [archive/three-axis](../archive/three-axis/README.md) に隔離し、Cargo・CIの対象から外しています。旧Quintモデル `axon.qnt`・`group_plan.qnt`・`information_model.qnt`・`branch_history.qnt` も過去資料です。新モデルは正本specから生成します。
 
 ## 更新するとき
 
@@ -62,3 +47,7 @@
 - 未決事項の採否や作業状況は Axon で管理し、docs に現況一覧を複製しない。
 - 文書を移動・分割したら、README、AGENTS.md、モデル冒頭などの参照元も更新する。
 - 利用者向け文書は日本語で書き、CLIの識別子は実際の表記を併記する。段落内には手動改行を入れず、表示幅による折り返しに任せる。
+
+候補の `triage/tasks` と外部コマンドの実行契約は [候補一覧と外部条件](development/lifecycle-candidates.md) を参照する。
+
+[file保存とGit統合](development/lifecycle-file.md) は新lifecycleのwriter・merge CLI・Git driverの入口です。

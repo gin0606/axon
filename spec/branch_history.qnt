@@ -1,3 +1,4 @@
+// 過去資料: 置換前の三軸モデル。現行仕様は lifecycle_proposal.md を参照。
 // Two local snapshots, atomic ordinary operations and explicit integration. No message protocol.
 // Payloads are opaque integers. Unique descending IDs abstract collision-free allocation;
 // their numerical order is only a ghost proof of acyclicity, never a storage/display policy.

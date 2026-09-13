@@ -1,20 +1,16 @@
 ---
 name: merge
-description: Axon file-backend snapshot の three-way merge を準備、解決、検証、公開する。axon merge workspace と file-backend conflict に使い、declaration YAML の merge や通常の Git merge/rebase 完了には使わない。
+description: Axonのfile snapshotをprepare/check/applyで統合する。通常Git操作の完遂やbackend切替には使わない。
 ---
 
-# Axon file snapshot を安全に merge する
+# file snapshotの統合
 
-`axon-kit:conventions` を使い、mutation contract を読む。この capability は Axon の merge workspace と candidate 公開を所有する。周辺の Git merge、staging、commit、rebase、conflict policy は所有しない。
+`axon-kit:conventions` を使い、指定されたbinaryとfile保存先を固定する。実行前に [統合手順](references/workflow.md) と [保存境界](../conventions/references/storage.md)を読む。入力base/ours/theirsとoutput、workspaceを呼出し側の要求から確定し、保存先や選択を勝手に広げない。
 
-prepare、resolution、check、apply、Git driver の復旧、不確かな結果を扱う場合は、[merge workflow](references/workflow.md)を最後まで読む。
+`merge prepare --base … --ours … --theirs … --output .axon/state.jsonl --workspace …` は正本を変えず入力を保全する。非0でもworkspaceの保全入力とreportを確認し、準備を成功と誤認しない。保全入力、manifest、preimageは編集せず、同じ未使用workspaceへの盲目的な再試行をしない。
 
-## Git integration を分離する
+choices/reportを読み、呼出し側の解決判断をresolution.jsonへ反映する。Leftはours、RightはtheirsのEntity全体値。意味上の選択が未確定なら呼出し側へ返す。通常修正の制約、全記録保持、終了Groupの構成を免除しない。
 
-Driver 登録には install 後の通常の Git config を使い、`axon merge setup` は提供されない。File init が attribute と ignore rule を用意する。merge の依頼だけでは Git 設定の変更を許可しない。別途許可された場合、repository に `merge.axon.driver` を `axon merge driver %O %A %B`、`merge.axon.recursive` を `binary` として登録する。Axon は PATH 上に必要で、clone ごとに登録が必要である。Global 設定は任意であり必須ではない。
+`merge check WORKSPACE` の成功後に候補とreportを確認し、許可された `merge apply WORKSPACE` を単独で実行する。applyは入力と保存先の再照合を行う。driftを強制上書きで回避せず、新しい入力を保全して判断をやり直す。適用後はstorage checkと記録を照合し、Git indexがunmergedなら通常操作前に検証済み正本のstageが必要と報告する。stage・commit・Git設定はこのskillから許可されない。
 
-`axon merge driver` を手動 merge command として呼び出さない。その `%O`、`%A`、`%B` argument と driver の temporary output path は Git が所有する。
-
-## 結果を返す
-
-operation mode、workspace と output path、input と candidate の digest、未解決 conflict または適用済み repair、検証と storage 結果の分類、変更した artifact、この capability 外に残る正確な Git 作業を返す。
+結果不明時はwriter終了と保存済み記録を照合し、applyやNoteを推測で繰り返さない。対象、workspace、保存結果、未解決の選択とindex状態を返す。親GroupやEntityのlifecycleを統合の副作用として操作しない。

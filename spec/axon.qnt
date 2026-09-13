@@ -1,3 +1,4 @@
+// 過去資料: 置換前の三軸モデル。現行仕様は lifecycle_proposal.md を参照。
 // docs/reference/state-model.md で整理した、axon の思想的なコアとなる状態モデル。
 // CLI・永続化・再試行などの実装契約は Rust のテストか一時的なモデルで扱う。
 module axon {
