@@ -11,7 +11,7 @@ use axon::{
 use chrono::Utc;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     io::{Read, Write},
     path::PathBuf,
     time::Duration,
@@ -73,7 +73,7 @@ enum Command {
         #[command(subcommand)]
         command: When,
     },
-    /// Show text, immediate unmet prerequisites and direct Group children
+    /// Show text, immediate unmet prerequisites and all Group descendants
     Show {
         id: String,
         /// Include saved lifecycle, condition and all direct relationships without duplicate wait sections
@@ -454,23 +454,49 @@ fn show(snapshot: &Snapshot, entity: &Entity, details: bool) -> Result<String> {
     out.push_str(&display::human_text(&entity.current.description));
     out.push('\n');
     if entity.kind == Kind::Group {
-        let children = sorted(snapshot.children(&entity.id)?);
-        let completed = children
-            .iter()
-            .filter(|e| e.current.lifecycle == Lifecycle::Completed)
-            .count();
-        let cancelled = children
-            .iter()
-            .filter(|e| e.current.lifecycle == Lifecycle::Cancelled)
-            .count();
-        out.push_str(&format!(
-            "\nDirect children: {}/{} terminal ({completed} completed, {cancelled} cancelled)\n",
-            completed + cancelled,
-            children.len()
-        ));
-        for child in children {
-            out.push_str(&row(snapshot, child));
+        let mut children_by_parent: BTreeMap<&EntityId, Vec<&Entity>> = BTreeMap::new();
+        for child in snapshot.entities() {
+            if let Some(parent) = &child.current.parent {
+                children_by_parent.entry(parent).or_default().push(child);
+            }
         }
+        let children = sorted(children_by_parent.remove(&entity.id).unwrap_or_default());
+        let count = children.len();
+        let mut pending = children
+            .into_iter()
+            .enumerate()
+            .rev()
+            .map(|(i, child)| (child, String::new(), i + 1 == count))
+            .collect::<Vec<_>>();
+        let mut tree = String::new();
+        let mut total = 0;
+        let mut completed = 0;
+        let mut cancelled = 0;
+        while let Some((child, prefix, last)) = pending.pop() {
+            total += 1;
+            completed += usize::from(child.current.lifecycle == Lifecycle::Completed);
+            cancelled += usize::from(child.current.lifecycle == Lifecycle::Cancelled);
+            tree.push_str(&prefix);
+            tree.push_str(if last { "└── " } else { "├── " });
+            tree.push_str(&row(snapshot, child));
+            if child.kind == Kind::Group {
+                let prefix = format!("{prefix}{}", if last { "    " } else { "│   " });
+                let children = sorted(children_by_parent.remove(&child.id).unwrap_or_default());
+                let count = children.len();
+                pending.extend(
+                    children
+                        .into_iter()
+                        .enumerate()
+                        .rev()
+                        .map(|(i, child)| (child, prefix.clone(), i + 1 == count)),
+                );
+            }
+        }
+        out.push_str(&format!(
+            "\nDescendants: {}/{total} terminal ({completed} completed, {cancelled} cancelled)\n",
+            completed + cancelled,
+        ));
+        out.push_str(&tree);
         if snapshot
             .check_operation(&entity.id, Operation::Complete)
             .is_ok()
