@@ -29,7 +29,7 @@ description: Axonの操作契約の上に、自律実行とユーザー判断の
 
 既存Entityを変更するときは `axon show ID --details` で保存状態・条件・全直接関係を読み、判断や現在の計画に関係するlogとNoteを確認する。古いNoteを年齢だけで無関係とみなさない。導出される候補への影響が必要な場合だけtasks/triageを評価する。
 
-終了状態・構造に影響する操作やdoneでは、detailsの直接dependent、親を辿った祖先、直属の子Groupを辿った子孫への波及を調べる。Cancelledはdependencyを満たさず、子の終了は親のdoneを代行しない。関係先のために新しい採否や目的を決める必要があれば、その判断だけを返す。
+終了状態・構造に影響する操作やdoneでは、detailsの直接dependent、親を辿った祖先、全子孫ツリーで確認した子孫への波及を調べる。Cancelledはdependencyを満たさず、子の終了は親のdoneを代行しない。関係先のために新しい採否や目的を決める必要があれば、その判断だけを返す。
 
 ## 新規Entityの重複を扱う
 

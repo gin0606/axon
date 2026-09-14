@@ -19,7 +19,7 @@ EntityはIssueまたはGroup。同じID namespaceと操作を使う。lifecycle�
 
 `triage` は自身と全祖先が浮上したUndecided、`tasks` は同条件のNotStartedと浮上を問わない全InProgressを示す。親や依存待ちもtasksに入る。候補一覧はinventoryではなく、不在は削除・登録失敗・未着手を立証しない。`--kind`・`--search` は対象候補を先に絞り、残る候補の祖先は通常どおり評価する。
 
-`show ID` は保存本文、Note件数、所属、直接の未充足前提、Groupの直属の子を読む。`show ID --details` は保存lifecycle・条件、親・全直接dependency・直接dependentも取得できる。充足済みの依存を待ち理由の欠如から消えたと判断しない。祖先は親IDを、子孫は直属の子Groupを順に辿り、必要な範囲を取得する。通常showもdetailsも条件を実行しない。
+`show ID` は保存本文、Note件数、所属、直接の未充足前提、Groupの全子孫ツリーと終了件数を読む。`show ID --details` は保存lifecycle・条件、親・全直接dependency・直接dependentも取得できる。充足済みの依存を待ち理由の欠如から消えたと判断しない。祖先は親IDを辿り、子孫はツリーから対象IDを選んで必要な本文・Note・logを取得する。通常showもdetailsも条件を実行しない。
 
 `note list ID` は全Noteの本文・安定ID・日時・actor、`note show ID NOTE_ID` は個別Noteを読む。`log ID` は状態変更・統合の経緯。分岐の記録を時刻で一本の操作列へ並べ直さない。`--recorder-details` で保存済みdataを取得する。`actor` は現在環境の任意actorを表示するだけで、過去の記録者・所有者・今のwriterの終了を立証しない。
 
