@@ -2228,6 +2228,10 @@ Group の場合は、この共通表示の末尾へ全子孫のツリーと短�
 
 ### Note と履歴
 
+`list`・`tasks`・`triage` の `--search` は現在のtitle・descriptionだけを検索する。Noteの内容を探す入口は `axon note search <語句>` とし、終了Entityを含む管理root内の全Note本文にcase-sensitiveなliteral部分一致を適用する。trim・Unicode正規化・条件実行・追加filterは行わない。空文字は構文エラー、非一致は空stdoutとstderrの案内で正常終了する。
+
+Note検索は所属Entityの完全ID・完全な安定Note ID・日時・最初の一致と前後の抜粋を1 Noteにつき1行で表示する。Entityはlist順、Entity内はnote listの因果順（並行記録はID順）とし、見出しや分岐説明行は加えない。検索語は省略せず、文字境界を守り、`Excerpt:` と省略した側の `…` を示す。原文で検索と範囲決定をした後、改行・元のバックスラッシュ・端末制御文字を区別できる形で可視化する。保存本文は変えず、原文取得は `note show ID NOTE_ID` を使う。固定列や専用の機械向け形式は保証しない。具体的な抜粋文字数・escape・入力境界は [CLI契約](../docs/reference/lifecycle-cli.md) に従う。
+
 `axon note list <id>` は指定 Entity の Note 本文を日時・記録者とともに表示し、`axon note add <id> …` は追記する。編集・削除は設けない。通常の逐次記録は保存順に古いものから読み、分岐した記録は因果関係を保持して表示する。分岐間の先後を時刻から捏造しない。記録者の詳細情報を取得できることは維持するが、通常は actor を中心に表示する。
 
 `axon log <id>` は状態変更・統合の経緯を読む入口とする。変更前後の状態、日時、記録者、任意の理由を人が読める形で示す。統合では実際の操作と採用結果を区別し、内部の因果辺や記録 ID の羅列を通常表示へ出さない。

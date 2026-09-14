@@ -14,7 +14,7 @@ option値の先頭hyphenは `--description='--text'` のように渡す。構文
 
 ## 一覧と詳細
 
-listは保存済み全件を作成日時の昇順、同時刻はID順で表示する。`--kind issue|group`、`--lifecycle undecided|not-started|in-progress|completed|cancelled`、`--terminal=true|false` はANDで組み合わせる。terminalはCompletedまたはCancelledで、着手可能・浮上とは別。`--search` は現在title・本文・全Noteのcase-sensitiveなliteral一致。Unicode正規化やtrimをせず、空文字は構文エラー。%、_、正規表現記号に特殊な意味はない。検索時だけMatchedに該当fieldと安定Note ID（ID順）を付記する。
+listは保存済み全件を作成日時の昇順、同時刻はID順で表示する。`--kind issue|group`、`--lifecycle undecided|not-started|in-progress|completed|cancelled`、`--terminal=true|false` はANDで組み合わせる。terminalはCompletedまたはCancelledで、着手可能・浮上とは別。`--search` は現在title・本文だけのcase-sensitiveなliteral一致。Unicode正規化やtrimをせず、空文字は構文エラー。%、_、正規表現記号に特殊な意味はない。検索時だけMatchedに該当field（Title、Description）を付記する。
 
 triage/tasksはkind/searchで候補を絞ってから、必要な祖先を含め条件を評価する。一回の呼出しで同じ条件を重複評価しない。除外候補の条件は評価しないが、残った候補の祖先ならkindが異なっても評価する。評価失敗時に部分一覧をstdoutへ出さない。時間制限は正整数とms/s/m/hで、既定30s。詳細は [条件契約](../development/lifecycle-candidates.md)。
 
@@ -43,3 +43,13 @@ bare `axon`、help、-h、--helpは同じ用途別root helpをstdoutへ出して
 成功はstdout/終了0、アプリケーションの拒否・失敗はError:を含むstderr/終了1。Clapの構文エラーは既定のerror:/Usage構造と終了2。原因、判明している対象・操作を示し、曖昧なFailedだけで済ませない。
 
 保存境界に誤解の余地がある場合はApplied、Not applied、Result unknownを区別する。SQLite commit失敗とfile置換後の同期失敗は再読まで結果不明。保存成功後の出力障害は適用済みを明示し、作成・Noteを盲目的に再送させない。stdoutのBrokenPipeは成功として扱うが、条件traceのstderr障害は一覧失敗。部分適用された複数command列の前段成功を後段失敗で未適用と説明しない。
+
+## Note本文の横断検索
+
+`axon note search <語句>` は管理root内の全Entity（Issue・Group、Completed・Cancelledを含む）のNote本文を検索し、条件を実行しない。追加filterは設けない。元の保存文字列にcase-sensitiveなliteral部分一致を適用し、trim・Unicode正規化をしない。空白・改行・%・_・正規表現記号は通常の文字として扱う。空文字は構文エラー（終了2）、該当なしはstdout空・stderrに案内を出して終了0。先頭hyphenの語句は `axon note search -- '--text'` と渡す。
+
+同じNote内の複数一致も1 Note＝1行とし、所属Entityの完全ID、完全な安定Note ID、既存のlocal日時と数値UTC offset、`Excerpt:` 付き抜粋を示す。Entityはlistと同じ作成日時昇順・同時刻ID順、Entity内はnote listと同じ因果順・並行記録のID順で並べる。見出し・空行・分岐説明行は加えない。
+
+抜粋は最初の一致と前後24文字で、検索語そのものを省略せず、日本語を壊さない文字単位で切り出す。原文を省略した側に `…` を示す。原文で一致位置と範囲を決めた後、改行を可視の `\n`、元のバックスラッシュを `\\` にし、他の端末制御文字も可視化する。保存本文は変えない。長い検索語でも一行の固定上限で切り捨てない。行単位での絞り込み向けで、固定列・区切りや機械向け出力形式は保証しない。
+
+list・tasks・triageの `--search` はNoteだけの一致ではEntityを返さなくなった。現在の主題は `list --search`、Noteに残る情報は `note search`、原文は `note show ID NOTE_ID` で読む。`note list ID` のEntity IDは引き続き必須。

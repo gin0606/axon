@@ -33,7 +33,7 @@ description: Axonの操作契約の上に、自律実行とユーザー判断の
 
 ## 新規Entityの重複を扱う
 
-新規登録前に`axon list --terminal=false`と必要なfrontierを確認する。`--search`はtitle、description、Note本文のリテラル一致で候補を絞る用途に限り、一つの検索で該当しないことを意味的な重複なしの根拠にしない。同じ目的、scope、完了条件、kind、構造的役割、採否と作業状態が合う未終端Entityが一つだけあり、依頼が新しいIDではなく成果の記録を求めている場合は、そのEntityを再利用する。
+新規登録前に`axon list --terminal=false`と必要なfrontierを確認する。`--search`は現在のtitle、descriptionのリテラル一致で候補を絞る用途に限り、一つの検索で該当しないことを意味的な重複なしの根拠にしない。Noteに残る情報を探す場合は`axon note search 語句`を使い、抜粋から対象を選んで`note show ID NOTE_ID`で原文を読む。Noteだけの一致はlist/tasks/triageの検索に含まれない。同じ目的、scope、完了条件、kind、構造的役割、採否と作業状態が合う未終端Entityが一つだけあり、依頼が新しいIDではなく成果の記録を求めている場合は、そのEntityを再利用する。
 
 採否の不一致、CompletedまたはCancelled、cross-kind、scopeや構造的役割の差、複数候補がある場合は、再利用、再判断、新規作成をユーザーへ返す。部分的に重なるだけのEntityは登録を妨げない。ユーザーが新しいIDの作成を明示した場合は、その選択に従う。
 

@@ -124,7 +124,7 @@ fn short_ids_and_suffixes_work_across_mutations_and_preserve_long_ids() {
 }
 
 #[test]
-fn filters_search_all_notes_and_do_not_evaluate_excluded_candidates() {
+fn filters_search_current_text_and_do_not_evaluate_excluded_candidates() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "q", "--backend", backend]);
@@ -148,8 +148,8 @@ fn filters_search_all_notes_and_do_not_evaluate_excluded_candidates() {
         ]);
         let a = created(&a);
         let b = f.plan("Other");
-        let n = f.ok(&["note", "add", &b, "-m", "Needle %_ historical"]);
-        let note = n.split_whitespace().nth(2).unwrap();
+        f.ok(&["note", "add", &b, "-m", "Needle %_ historical"]);
+        f.ok(&["when", "set", &b, "--command", "exit 19"]);
         f.ok(&["write", &b, "-m", "current text without query"]);
         let unrelated = f.ok(&[
             "group",
@@ -170,14 +170,12 @@ fn filters_search_all_notes_and_do_not_evaluate_excluded_candidates() {
             "--search",
             "Needle %_",
         ]);
-        assert!(rows.contains(a) && rows.contains(&b));
+        assert!(rows.contains(a) && !rows.contains(&b));
         assert!(!rows.contains(parent) && !rows.contains(unrelated));
-        assert!(
-            rows.contains("Matched: Title, Description") && rows.contains(&format!("Note {note}"))
-        );
+        assert!(rows.contains("Matched: Title, Description") && !rows.contains("Matched: Note"));
         assert!(!f.0.join("observed").exists());
         let candidates = f.ok(&["tasks", "--kind", "issue", "--search", "Needle %_"]);
-        assert!(candidates.contains(a) && candidates.contains(&b));
+        assert!(candidates.contains(a) && !candidates.contains(&b));
         assert_eq!(
             fs::read_to_string(f.0.join("observed")).unwrap(),
             "parent\n"
@@ -537,5 +535,178 @@ fn show_group_displays_all_descendants_in_tree_order_and_counts_terminal_entitie
         let output = f.ok(&["show", root]);
         assert!(output.contains("Descendants: 5/5 terminal (3 completed, 2 cancelled)"));
         assert!(output.contains("Awaiting final confirmation"));
+    }
+}
+
+#[test]
+fn note_search_literal_excerpts_and_scope_match_on_both_backends() {
+    for backend in ["sqlite", "file"] {
+        let f = Fixture::new();
+        f.ok(&["init", "q", "--backend", backend]);
+        let a = f.plan("TitleOnly");
+        f.ok(&["start", &a]);
+        f.ok(&["done", &a]);
+        let group = f.ok(&["group", "capture", "--title", "Group"]);
+        let b = created(&group);
+        f.ok(&["cancel", b]);
+        f.ok(&["when", "set", &a, "--command", "echo wrong > observed"]);
+        f.ok(&["when", "set", b, "--command", "exit 19"]);
+        let cases = [
+            (
+                "日本語".to_owned(),
+                "日本語".to_owned(),
+                "日本語".to_owned(),
+            ),
+            (
+                format!("語{}", "後".repeat(30)),
+                "語".into(),
+                format!("語{}…", "後".repeat(24)),
+            ),
+            (
+                format!("{}語", "前".repeat(30)),
+                "語".into(),
+                format!("…{}語", "前".repeat(24)),
+            ),
+            (
+                format!("{}語{}語", "前".repeat(30), "後".repeat(30)),
+                "語".into(),
+                format!("…{}語{}…", "前".repeat(24), "後".repeat(24)),
+            ),
+            ("長".repeat(200), "長".repeat(200), "長".repeat(200)),
+            (
+                "a\nb\\n\t\r\u{1b}\u{85}\u{2028}".into(),
+                "a\nb".into(),
+                "a\\nb\\\\n\\t\\r\\x1b\\x85\\u{2028}".into(),
+            ),
+            (" %_.* ".into(), " %_.* ".into(), " %_.* ".into()),
+        ];
+        let mut ids = Vec::new();
+        for (body, query, excerpt) in &cases {
+            let added = f.ok(&["note", "add", &a, "-m", body]);
+            let id = added.split_whitespace().nth(2).unwrap().to_owned();
+            let rows = f.ok(&["note", "search", query]);
+            let row = rows.lines().find(|line| line.contains(&id)).unwrap();
+            assert!(row.starts_with(&a), "{row}");
+            assert!(row.ends_with(&format!("Excerpt: {excerpt}")), "{row}");
+            assert_eq!(rows.matches(&id).count(), 1);
+            assert!(f.ok(&["note", "show", &a, &id]).contains(&id));
+            ids.push(id);
+        }
+        let added = f.ok(&["note", "add", b, "-m", "語 group"]);
+        let last = added.split_whitespace().nth(2).unwrap();
+        let rows = f.ok(&["note", "search", "語"]);
+        let expected = [ids[0].as_str(), &ids[1], &ids[2], &ids[3], last];
+        assert_eq!(rows.lines().count(), expected.len());
+        for (row, id) in rows.lines().zip(expected) {
+            assert!(row.contains(id), "{rows}");
+        }
+        f.ok(&["note", "add", b, "-m", "e\u{301} --text literal\\n"]);
+        assert!(f.ok(&["note", "search", "--", "--text"]).contains("--text"));
+        assert!(f.ok(&["note", "search", "e\u{301}"]).contains("e\u{301}"));
+        assert!(
+            f.ok(&["note", "search", "literal\\n"])
+                .contains("literal\\\\n")
+        );
+        for query in ["TitleOnly", "日本語 ", "GROUP", "é", "\\x1b"] {
+            let empty = f.run(&["note", "search", query]);
+            assert!(empty.status.success() && empty.stdout.is_empty());
+            assert!(String::from_utf8_lossy(&empty.stderr).contains("No matching Notes"));
+        }
+        for args in [
+            vec!["note", "search", ""],
+            vec!["note", "search"],
+            vec!["note", "list"],
+            vec!["note", "search", "語", "--kind", "issue"],
+        ] {
+            assert_eq!(f.run(&args).status.code(), Some(2));
+        }
+        assert!(!f.0.join("observed").exists());
+        assert_eq!(snapshot(&f).notes(&eid(&a)).unwrap()[5].body, cases[5].0);
+    }
+}
+
+#[test]
+fn note_search_preserves_entity_ties_and_concurrent_causal_order() {
+    for backend in ["sqlite", "file"] {
+        let f = Fixture::new();
+        f.ok(&["init", "q", "--backend", backend]);
+        let mut store = axon::location::Location::discover(&f.0, false)
+            .unwrap()
+            .open()
+            .unwrap();
+        let mut expected = Vec::new();
+        store
+            .update(|_, s| {
+                let at = context();
+                for id in ["q-zzzzzz", "q-aaaaaa"] {
+                    s.create(eid(id), Kind::Issue, current(id), at.clone())?;
+                }
+                let id = eid("q-aaaaaa");
+                let first = s.add_note(&id, "find first".into(), at.clone())?;
+                let mut right = s.clone();
+                let mut older = at.clone();
+                older.at -= chrono::Duration::days(1);
+                let left_id = s.add_note(&id, "find left".into(), older.clone())?;
+                let right_id = right.add_note(&id, "find right".into(), older.clone())?;
+                let choices = s.entities().map(|e| (e.id.clone(), Side::Left)).collect();
+                *s = s.integrate(&right, &choices, None, at.clone())?;
+                let last = s.add_note(&id, "find last".into(), older)?;
+                let other = s.add_note(&eid("q-zzzzzz"), "find other".into(), at)?;
+                let mut concurrent = [left_id, right_id];
+                concurrent.sort();
+                expected = vec![
+                    first,
+                    concurrent[0].clone(),
+                    concurrent[1].clone(),
+                    last,
+                    other,
+                ];
+                Ok(())
+            })
+            .unwrap();
+        let output = f
+            .command()
+            .env("TZ", "UTC")
+            .args(["note", "search", "find"])
+            .output()
+            .unwrap();
+        let rows = success(output);
+        assert_eq!(rows.lines().count(), expected.len());
+        for (row, id) in rows.lines().zip(expected) {
+            assert!(
+                row.contains(&id.to_string()) && row.contains("+00:00"),
+                "{row}"
+            );
+        }
+    }
+}
+
+#[test]
+fn triage_search_excludes_note_only_candidates_before_conditions() {
+    for backend in ["sqlite", "file"] {
+        let f = Fixture::new();
+        f.ok(&["init", "q", "--backend", backend]);
+        let parent = f.ok(&[
+            "group",
+            "plan",
+            "--title",
+            "Parent",
+            "--command",
+            "echo parent >> observed",
+        ]);
+        let parent = created(&parent);
+        let child = f.ok(&["capture", "--title", "needle", "--parent", parent]);
+        let child = created(&child);
+        let other = f.ok(&["capture", "--title", "other", "--command", "exit 19"]);
+        let other = created(&other);
+        f.ok(&["note", "add", other, "-m", "needle"]);
+        let rows = f.ok(&["triage", "--kind", "issue", "--search", "needle"]);
+        assert!(rows.contains(child) && !rows.contains(other));
+        assert_eq!(
+            fs::read_to_string(f.0.join("observed")).unwrap(),
+            "parent\n"
+        );
+        assert_eq!(f.run(&["triage", "--search="]).status.code(), Some(2));
+        assert_eq!(f.run(&["tasks", "--search="]).status.code(), Some(2));
     }
 }

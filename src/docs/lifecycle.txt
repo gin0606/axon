@@ -34,9 +34,19 @@ Reading and resurfacing
   ancestor Group. Absence from these lists does not mean an Entity is missing.
   list includes every saved Entity by default, in creation order. --kind,
   --lifecycle, --terminal and --search narrow it without running conditions.
+  list/tasks/triage --search now match only current title and description, not Notes.
+  Use note search 'text' for information in Notes across all Entities, including
+  Completed and Cancelled work, without running conditions. Matching is literal,
+  case-sensitive, with no trimming or Unicode normalization. Empty queries are
+  syntax errors; no matches produces empty stdout and a stderr hint with exit 0.
+  Each Note occupies one line with complete Entity/Note IDs, local time and offset,
+  and Excerpt: around the first match (24 characters before/after, full query).
+  An ellipsis marks omitted text; newlines, backslashes and controls are escaped.
+  Entity creation order and Note causal order are preserved. No extra filters or
+  fixed-column format are provided. Read the original with note show ID NOTE_ID.
   show reads the saved text, unmet prerequisites and all Group descendants as a tree.
   show --details includes saved conditions and all direct relationships once.
-  note list reads full Notes; note show ID NOTE_ID reads one stable Note. log reads state
+  note list ID requires an Entity ID and reads full Notes; note show ID NOTE_ID reads one stable Note. log reads state
   changes and integrations, preserving concurrent branches. --recorder-details
   includes optional stored recorder data; actor information is not ownership.
 

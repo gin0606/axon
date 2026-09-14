@@ -195,6 +195,10 @@ impl Snapshot {
             .filter(|r| &r.entity == entity)
             .collect())
     }
+    /// All Notes in causal order, with IDs breaking ties between concurrent records.
+    pub fn all_notes(&self) -> Result<Vec<&Note>> {
+        self.note_order()
+    }
     pub fn notes(&self, entity: &EntityId) -> Result<Vec<&Note>> {
         self.entity(entity)?;
         Ok(self
