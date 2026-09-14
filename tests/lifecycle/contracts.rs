@@ -574,9 +574,9 @@ fn note_search_literal_excerpts_and_scope_match_on_both_backends() {
             ),
             ("長".repeat(200), "長".repeat(200), "長".repeat(200)),
             (
-                "a\nb\\n\t\r\u{1b}\u{85}\u{2028}".into(),
+                "a\nb\\n\t\r\u{1b}\u{85}\u{2028}\u{61c}\u{200e}\u{200f}\u{202a}\u{202b}\u{202c}\u{202d}\u{202e}\u{2066}\u{2067}\u{2068}\u{2069}".into(),
                 "a\nb".into(),
-                "a\\nb\\\\n\\t\\r\\x1b\\x85\\u{2028}".into(),
+                "a\\nb\\\\n\\t\\r\\x1b\\x85\\u{2028}\\u{61c}\\u{200e}\\u{200f}\\u{202a}\\u{202b}\\u{202c}\\u{202d}\\u{202e}\\u{2066}\\u{2067}\\u{2068}\\u{2069}".into(),
             ),
             (" %_.* ".into(), " %_.* ".into(), " %_.* ".into()),
         ];

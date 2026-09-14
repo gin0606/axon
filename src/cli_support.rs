@@ -338,7 +338,12 @@ fn note_excerpt(body: &str, position: usize, query_len: usize) -> String {
         match character {
             '\\' => text.push_str("\\\\"),
             '\n' => text.push_str("\\n"),
-            '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => {
+            '\u{061c}'
+            | '\u{200e}'..='\u{200f}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}' => {
                 text.extend(character.escape_unicode());
             }
             _ => text.push_str(&display::human_text(character)),
