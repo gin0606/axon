@@ -11,6 +11,9 @@
 | 浮上した未着手と全着手中 | `axon tasks` |
 | 保存済み全件（条件を実行しない） | `axon list` |
 | 本文と直接の待ち理由 | `axon show ID` |
+| Entityの現在の主題 | `axon list --search 語句` |
+| 所属不明のNoteの内容 | `axon note search 語句` |
+| Noteの原文を個別に読む | `axon note show ID NOTE_ID` |
 | Noteの本文 | `axon note list ID` |
 | 状態変更の経緯 | `axon log ID` |
 | 記録者の詳細 | `axon log ID --recorder-details` / `axon note list ID --recorder-details` |
@@ -40,3 +43,5 @@ fileの別worktreeでは同じEntityをそれぞれstartできます。Gitで取
 `when set ID --command 'test -f ready.txt'` は条件を保存し、`when clear ID` は解除します。保存時には実行しません。triage/tasksだけが必要な条件を `/bin/sh -c` で評価し、終了0は成立、1は未成立、その他は一覧の失敗です。`--condition-timeout` と `--trace-conditions` の契約は [外部条件](../development/lifecycle-candidates.md) を参照してください。
 
 IDはprefix＋ランダム6文字で、完全IDまたは一意なsuffixを指定できます。CLI生成文は英語、TTYでは意味に応じて装飾し、NO_COLORまたは非TTYでは装飾しません。一覧の絞り込み・検索、Note個別参照と保存結果は [CLI契約](../reference/lifecycle-cli.md) を参照してください。
+
+list・tasks・triageの `--search` は現在のtitle・descriptionだけを検索し、Noteだけの一致は返しません。Noteの情報は `note search` へ移行してください。終了Entityを含む全Noteから、完全ID・日時と最初の一致の前後24文字を1 Noteにつき1行で表示します。`Excerpt:` と `…` は抜粋・省略を示し、改行や制御文字は可視化します。原文は `note show ID NOTE_ID` で取得できます。検索は大小文字を区別するliteral部分一致で、空白の除去やUnicode正規化はしません。

@@ -37,17 +37,17 @@ pub struct Selection {
     /// Restrict the Entity kind before evaluating any conditions
     #[arg(long)]
     kind: Option<KindFilter>,
-    /// Literal, case-sensitive text in title, description or any Note; combines with other filters using AND
+    /// Literal, case-sensitive text in current title or description; AND with other filters. Search Note bodies with axon note search
     #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
     search: Option<String>,
 }
 impl Selection {
-    pub fn matches(&self, snapshot: &Snapshot, entity: &Entity) -> bool {
+    pub fn matches(&self, entity: &Entity) -> bool {
         self.kind.is_none_or(|k| k.matches(entity))
             && self
                 .search
                 .as_ref()
-                .is_none_or(|query| !matches_in(snapshot, entity, query).is_empty())
+                .is_none_or(|query| !matches_in(entity, query).is_empty())
     }
 }
 #[derive(Args)]
@@ -62,8 +62,8 @@ pub struct ListOptions {
     terminal: Option<bool>,
 }
 impl ListOptions {
-    pub fn matches(&self, snapshot: &Snapshot, entity: &Entity) -> bool {
-        self.selection.matches(snapshot, entity)
+    pub fn matches(&self, entity: &Entity) -> bool {
+        self.selection.matches(entity)
             && self
                 .lifecycle
                 .is_none_or(|l| l.state() == entity.current.lifecycle)
@@ -72,7 +72,7 @@ impl ListOptions {
                 .is_none_or(|terminal| terminal != entity.current.lifecycle.editable())
     }
 }
-fn matches_in(snapshot: &Snapshot, entity: &Entity, query: &str) -> Vec<String> {
+fn matches_in(entity: &Entity, query: &str) -> Vec<String> {
     let mut locations = Vec::new();
     if entity.current.title.contains(query) {
         locations.push("Title".into());
@@ -80,15 +80,6 @@ fn matches_in(snapshot: &Snapshot, entity: &Entity, query: &str) -> Vec<String> 
     if entity.current.description.contains(query) {
         locations.push("Description".into());
     }
-    let mut notes: Vec<_> = snapshot
-        .notes(&entity.id)
-        .expect("validated Entity")
-        .into_iter()
-        .filter(|n| n.body.contains(query))
-        .map(|n| n.id.to_string())
-        .collect();
-    notes.sort();
-    locations.extend(notes.into_iter().map(|id| format!("Note {id}")));
     locations
 }
 pub fn list_row(snapshot: &Snapshot, entity: &Entity, selection: &Selection) -> String {
@@ -97,7 +88,7 @@ pub fn list_row(snapshot: &Snapshot, entity: &Entity, selection: &Selection) -> 
         text.push_str(&format!(
             "  {} {}\n",
             display::muted("Matched:"),
-            matches_in(snapshot, entity, query).join(", ")
+            matches_in(entity, query).join(", ")
         ));
     }
     text
@@ -240,6 +231,9 @@ pub fn operation_label(command: &Command) -> String {
         Command::Storage { .. } => ("storage check", None),
         Command::Docs => ("docs", None),
         Command::Actor => ("actor", None),
+        Command::Note {
+            command: Notes::Search { .. },
+        } => ("note search", None),
         Command::Completion { .. } => ("completion", None),
     };
     target
@@ -295,6 +289,69 @@ pub fn render_root_help() -> String {
         }
     }
     text.push_str(&format!("\n{}\n  axon help <COMMAND PATH>  Show detailed command help\n  axon docs                 Explain the lifecycle and daily workflow\n\n{}\n  -h, --help     Print help\n  -V, --version  Print version\n", display::heading("More help:"), display::heading("Options:")));
+    text
+}
+
+pub fn search_notes(snapshot: &Snapshot, query: &str) -> Result<String> {
+    let mut grouped = BTreeMap::<_, Vec<_>>::new();
+    for note in snapshot.all_notes()? {
+        if let Some(position) = note.body.find(query) {
+            grouped
+                .entry(&note.entity)
+                .or_default()
+                .push((note, position));
+        }
+    }
+    let mut text = String::new();
+    for entity in sorted(snapshot.entities().collect()) {
+        for (note, position) in grouped.remove(&entity.id).unwrap_or_default() {
+            text.push_str(&format!(
+                "{}  {}  {}  {} {}\n",
+                display::identity(&entity.id),
+                display::identity(&note.id),
+                display::muted(display::timestamp(&note.context.at)),
+                display::muted("Excerpt:"),
+                note_excerpt(&note.body, position, query.len()),
+            ));
+        }
+    }
+    Ok(text)
+}
+
+fn note_excerpt(body: &str, position: usize, query_len: usize) -> String {
+    const CONTEXT: usize = 24;
+    let start = body[..position]
+        .char_indices()
+        .rev()
+        .nth(CONTEXT - 1)
+        .map_or(0, |(index, _)| index);
+    let end_match = position + query_len;
+    let end = body[end_match..]
+        .char_indices()
+        .nth(CONTEXT)
+        .map_or(body.len(), |(index, _)| end_match + index);
+    let mut text = String::new();
+    if start > 0 {
+        text.push('…');
+    }
+    for character in body[start..end].chars() {
+        match character {
+            '\\' => text.push_str("\\\\"),
+            '\n' => text.push_str("\\n"),
+            '\u{061c}'
+            | '\u{200e}'..='\u{200f}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}' => {
+                text.extend(character.escape_unicode());
+            }
+            _ => text.push_str(&display::human_text(character)),
+        }
+    }
+    if end < body.len() {
+        text.push('…');
+    }
     text
 }
 

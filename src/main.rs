@@ -263,6 +263,14 @@ enum Dependency {
 }
 #[derive(Subcommand)]
 enum Notes {
+    /// Search all Note bodies, including terminal Entities, without running conditions
+    #[command(
+        after_help = "Matches case-sensitive literal text without trimming or Unicode normalization. Prints one line per Note: complete Entity and Note IDs, local timestamp and an escaped excerpt around the first match. Entity creation order and Note causal order are preserved. Read the original with axon note show ID NOTE_ID. No matches succeeds with empty stdout. For a query beginning with a hyphen use: axon note search -- '--text'."
+    )]
+    Search {
+        #[arg(value_parser = clap::builder::NonEmptyStringValueParser::new())]
+        query: String,
+    },
     /// Read one Note by its complete stable ID
     Show {
         id: String,
@@ -648,7 +656,7 @@ fn run(command: Command) -> Result<Output> {
         | Command::Show { .. }
         | Command::Log { .. }
         | Command::Note {
-            command: Notes::List { .. } | Notes::Show { .. },
+            command: Notes::List { .. } | Notes::Show { .. } | Notes::Search { .. },
         } => {
             let (_, snapshot) = store.read()?;
             let empty_hint = match &command {
@@ -659,10 +667,16 @@ fn run(command: Command) -> Result<Output> {
                 Command::Tasks(_) => {
                     "No task candidates. Conditions and ancestor scope may hide saved Entities; use axon list for the inventory."
                 }
+                Command::Note {
+                    command: Notes::Search { .. },
+                } => "No matching Notes.",
                 Command::Note { .. } => "No Notes.",
                 _ => "No records.",
             };
             let text = match command {
+                Command::Note {
+                    command: Notes::Search { query },
+                } => search_notes(&snapshot, &query)?,
                 Command::Triage(ref options) | Command::Tasks(ref options) => {
                     let kind = if matches!(command, Command::Triage(_)) {
                         CandidateList::Triage
@@ -680,7 +694,7 @@ fn run(command: Command) -> Result<Output> {
                     candidates_filtered(
                         &snapshot,
                         kind,
-                        |e| options.selection.matches(&snapshot, e),
+                        |e| options.selection.matches(e),
                         |entity, script| {
                             evaluation
                                 .run_command(entity, script)
@@ -691,15 +705,12 @@ fn run(command: Command) -> Result<Output> {
                     .map(|e| list_row(&snapshot, e, &options.selection))
                     .collect()
                 }
-                Command::List(options) => sorted(
-                    snapshot
-                        .entities()
-                        .filter(|e| options.matches(&snapshot, e))
-                        .collect(),
-                )
-                .into_iter()
-                .map(|e| list_row(&snapshot, e, &options.selection))
-                .collect(),
+                Command::List(options) => {
+                    sorted(snapshot.entities().filter(|e| options.matches(e)).collect())
+                        .into_iter()
+                        .map(|e| list_row(&snapshot, e, &options.selection))
+                        .collect()
+                }
                 Command::Show { id: value, details } => show(
                     &snapshot,
                     snapshot.entity(&resolve(&snapshot, &value)?)?,
