@@ -11,7 +11,7 @@ use axon::{
 use chrono::Utc;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     io::{Read, Write},
     path::PathBuf,
     time::Duration,
@@ -454,7 +454,13 @@ fn show(snapshot: &Snapshot, entity: &Entity, details: bool) -> Result<String> {
     out.push_str(&display::human_text(&entity.current.description));
     out.push('\n');
     if entity.kind == Kind::Group {
-        let children = sorted(snapshot.children(&entity.id)?);
+        let mut children_by_parent: BTreeMap<&EntityId, Vec<&Entity>> = BTreeMap::new();
+        for child in snapshot.entities() {
+            if let Some(parent) = &child.current.parent {
+                children_by_parent.entry(parent).or_default().push(child);
+            }
+        }
+        let children = sorted(children_by_parent.remove(&entity.id).unwrap_or_default());
         let count = children.len();
         let mut pending = children
             .into_iter()
@@ -475,7 +481,7 @@ fn show(snapshot: &Snapshot, entity: &Entity, details: bool) -> Result<String> {
             tree.push_str(&row(snapshot, child));
             if child.kind == Kind::Group {
                 let prefix = format!("{prefix}{}", if last { "    " } else { "│   " });
-                let children = sorted(snapshot.children(&child.id)?);
+                let children = sorted(children_by_parent.remove(&child.id).unwrap_or_default());
                 let count = children.len();
                 pending.extend(
                     children
