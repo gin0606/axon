@@ -484,3 +484,58 @@ fn tty_decoration_preserves_text_and_does_not_style_user_content() {
         }
     }
 }
+
+#[test]
+fn show_group_displays_all_descendants_in_tree_order_and_counts_terminal_entities() {
+    for backend in ["sqlite", "file"] {
+        let f = Fixture::new();
+        f.ok(&["init", "t", "--backend", backend]);
+        let root = f.ok(&["group", "plan", "--title", "Root"]);
+        let root = created(&root);
+        assert!(
+            f.ok(&["show", root])
+                .contains("Descendants: 0/0 terminal (0 completed, 0 cancelled)")
+        );
+        let group = f.ok(&["group", "plan", "--title", "Branch", "--parent", root]);
+        let group = created(&group);
+        let sibling = f.ok(&["plan", "--title", "Sibling", "--parent", root]);
+        let sibling = created(&sibling);
+        let nested = f.ok(&["group", "plan", "--title", "Nested", "--parent", group]);
+        let nested = created(&nested);
+        let leaf = f.ok(&["plan", "--title", "Leaf", "--parent", nested]);
+        let leaf = created(&leaf);
+        let cancelled = f.ok(&["plan", "--title", "Cancelled leaf", "--parent", group]);
+        let cancelled = created(&cancelled);
+        let unrelated = f.plan("Unrelated");
+        f.ok(&["cancel", cancelled]);
+        for id in [root, group, nested, leaf] {
+            f.ok(&["start", id]);
+        }
+        f.ok(&["done", leaf]);
+        f.ok(&["done", nested]);
+        for args in [vec!["show", root], vec!["show", root, "--details"]] {
+            let output = f.ok(&args);
+            let tree = output.split("Descendants: ").nth(1).unwrap();
+            assert!(tree.starts_with("3/5 terminal (2 completed, 1 cancelled)\n"));
+            let rows: Vec<_> = tree.lines().skip(1).collect();
+            assert_eq!(rows.len(), 5, "{output}");
+            for (line, prefix, id) in [
+                (rows[0], "├── ", group),
+                (rows[1], "│   ├── ", nested),
+                (rows[2], "│   │   └── ", leaf),
+                (rows[3], "│   └── ", cancelled),
+                (rows[4], "└── ", sibling),
+            ] {
+                assert!(line.starts_with(&format!("{prefix}{id}  ")), "{line}");
+            }
+            assert!(!output.contains(&unrelated));
+            assert!(!output.contains("Awaiting final confirmation"));
+        }
+        assert!(!f.ok(&["show", leaf]).contains("Descendants:"));
+        f.ok(&["done", group]);
+        f.ok(&["cancel", sibling]);
+        let output = f.ok(&["show", root]);
+        assert!(output.contains("Descendants: 5/5 terminal (3 completed, 2 cancelled)"));
+        assert!(output.contains("Awaiting final confirmation"));
+    }
+}

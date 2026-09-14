@@ -73,7 +73,7 @@ enum Command {
         #[command(subcommand)]
         command: When,
     },
-    /// Show text, immediate unmet prerequisites and direct Group children
+    /// Show text, immediate unmet prerequisites and all Group descendants
     Show {
         id: String,
         /// Include saved lifecycle, condition and all direct relationships without duplicate wait sections
@@ -455,22 +455,42 @@ fn show(snapshot: &Snapshot, entity: &Entity, details: bool) -> Result<String> {
     out.push('\n');
     if entity.kind == Kind::Group {
         let children = sorted(snapshot.children(&entity.id)?);
-        let completed = children
-            .iter()
-            .filter(|e| e.current.lifecycle == Lifecycle::Completed)
-            .count();
-        let cancelled = children
-            .iter()
-            .filter(|e| e.current.lifecycle == Lifecycle::Cancelled)
-            .count();
-        out.push_str(&format!(
-            "\nDirect children: {}/{} terminal ({completed} completed, {cancelled} cancelled)\n",
-            completed + cancelled,
-            children.len()
-        ));
-        for child in children {
-            out.push_str(&row(snapshot, child));
+        let count = children.len();
+        let mut pending = children
+            .into_iter()
+            .enumerate()
+            .rev()
+            .map(|(i, child)| (child, String::new(), i + 1 == count))
+            .collect::<Vec<_>>();
+        let mut tree = String::new();
+        let mut total = 0;
+        let mut completed = 0;
+        let mut cancelled = 0;
+        while let Some((child, prefix, last)) = pending.pop() {
+            total += 1;
+            completed += usize::from(child.current.lifecycle == Lifecycle::Completed);
+            cancelled += usize::from(child.current.lifecycle == Lifecycle::Cancelled);
+            tree.push_str(&prefix);
+            tree.push_str(if last { "└── " } else { "├── " });
+            tree.push_str(&row(snapshot, child));
+            if child.kind == Kind::Group {
+                let prefix = format!("{prefix}{}", if last { "    " } else { "│   " });
+                let children = sorted(snapshot.children(&child.id)?);
+                let count = children.len();
+                pending.extend(
+                    children
+                        .into_iter()
+                        .enumerate()
+                        .rev()
+                        .map(|(i, child)| (child, prefix.clone(), i + 1 == count)),
+                );
+            }
         }
+        out.push_str(&format!(
+            "\nDescendants: {}/{total} terminal ({completed} completed, {cancelled} cancelled)\n",
+            completed + cancelled,
+        ));
+        out.push_str(&tree);
         if snapshot
             .check_operation(&entity.id, Operation::Complete)
             .is_ok()

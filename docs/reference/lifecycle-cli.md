@@ -20,9 +20,9 @@ triage/tasksはkind/searchで候補を絞ってから、必要な祖先を含め
 
 通常行は `ID  Kind  Situation  Title`。状況はUndecided、Ready、Blocked、InProgress、InProgress+Blocked、Completed、Cancelled。Ready/Blockedは保存されたNotStartedの親・依存前提から導出し、浮上条件は使わない。保存したタイトルに改行があれば一覧の中では `\n` として一行に保つ。
 
-showは本文、Note件数、親、直接の未充足前提、Groupの直属の子とterminal数を表示する。親の着手待ちは所属欄と重複しない。満たされた依存や孫以下は常時展開しない。
+showは本文、Note件数、親、直接の未充足前提、Groupの全子孫ツリーとterminal数（Group・Issueを含み、対象自身を除く）を表示する。親の着手待ちは所属欄と重複しない。満たされた依存は常時展開しない。子孫はCompleted・Cancelledも含め、兄弟を作成日時順（同時刻はID順）で表示する。
 
-`show ID --details` は保存情報の明示的な詳細入口。通常の待ち理由節を置き換え、親・条件・全直接dependency・直接dependentを取得する。同じ関係を待ち理由と再列挙しない。状況と異なる場合だけ保存lifecycleを別記する。条件未設定、親なし、空の依存集合も明示する。祖先と子孫は関係先を辿って取得できる。通常show/details/listは条件を実行しない。
+`show ID --details` は保存情報の明示的な詳細入口。通常の待ち理由節を置き換え、親・条件・全直接dependency・直接dependentを取得する。同じ関係を待ち理由と再列挙しない。状況と異なる場合だけ保存lifecycleを別記する。条件未設定、親なし、空の依存集合も明示する。Groupの全子孫ツリーは通常表示と同様に表示する。通常show/details/listは条件を実行しない。
 
 `note list ID` は全文、日時、actor、安定Note IDを因果順に表示する。`note show ID NOTE_ID` は同じEntityの個別Noteを取得する。logは状態変化と統合を表示し、並行する分岐を時刻で逐次操作へ並べ替えない。Note/logの `--recorder-details` は保存済みdataを併記する。`actor` は現在環境で検出できたactor、未取得なら `—` を表示し、保存を行わない。
 
