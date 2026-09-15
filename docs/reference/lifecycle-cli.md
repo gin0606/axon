@@ -44,6 +44,10 @@ bare `axon`、help、-h、--helpは同じ用途別root helpをstdoutへ出して
 
 保存境界に誤解の余地がある場合はApplied、Not applied、Result unknownを区別する。SQLite commit失敗とfile置換後の同期失敗は再読まで結果不明。保存成功後の出力障害は適用済みを明示し、作成・Noteを盲目的に再送させない。stdoutのBrokenPipeは成功として扱うが、条件traceのstderr障害は一覧失敗。部分適用された複数command列の前段成功を後段失敗で未適用と説明しない。
 
+## 計画全体の取得と一括編集
+
+`export` と `import prepare|check|apply`、`docs declaration` の識別子、declaration の形式、保存結果と診断の区別は [正本spec](../../spec/lifecycle_proposal.md#計画全体の取得と一括編集) の「計画全体の取得と一括編集」に従う。declaration内のIDは完全IDだけを使い、exportの引数は他のcommandと同じくsuffixも受け付ける。保存境界の表示はこの文書の「mutationの結果」と同じApplied、Not applied、Result unknownを使う。
+
 ## Note本文の横断検索
 
 `axon note search <語句>` は管理root内の全Entity（Issue・Group、Completed・Cancelledを含む）のNote本文を検索し、条件を実行しない。追加filterは設けない。元の保存文字列にcase-sensitiveなliteral部分一致を適用し、trim・Unicode正規化をしない。空白・改行・%・_・正規表現記号は通常の文字として扱う。空文字は構文エラー（終了2）、該当なしはstdout空・stderrに案内を出して終了0。先頭hyphenの語句は `axon note search -- '--text'` と渡す。

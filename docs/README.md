@@ -20,7 +20,7 @@
 
 | 文書 | 定義する範囲 |
 | --- | --- |
-| [正本spec](../spec/lifecycle_proposal.md) | lifecycle・構造・候補・情報・表示・保存・統合の契約とモデル |
+| [正本spec](../spec/lifecycle_proposal.md) | lifecycle・構造・候補・情報・表示・保存・統合・一括declarationの契約とモデル |
 | [共通コア](development/lifecycle-core.md) | 通常操作、記録、codec、三者比較 |
 | [SQLite CLI](development/lifecycle-sqlite.md) | 公開操作とSQLite adapter |
 | [file保存とGit統合](development/lifecycle-file.md) | writer、worktree、merge CLI・driver |
@@ -33,7 +33,7 @@
 
 ### 設計検討資料
 
-[一括declarationの再設計資料](development/declaration-design-notes.md) は、一括編集を検討するときの目的・保存境界・協業方針をまとめた資料です。採用済みの公開契約や通常操作の手順には使いません。
+[一括declarationの再設計資料](development/declaration-design-notes.md) は、[正本spec](../spec/lifecycle_proposal.md#計画全体の取得と一括編集) の「計画全体の取得と一括編集」を設計したときの目的・保存境界・協業方針と、旧契約との対応・採らなかった案を残した資料です。契約の定義や通常操作の手順には使いません。
 
 ## 過去資料
 
