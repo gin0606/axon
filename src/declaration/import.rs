@@ -117,6 +117,16 @@ impl Declaration {
             .collect::<Result<_>>()?;
         Ok(())
     }
+    pub fn refresh_applied(&mut self, snapshot: &Snapshot) -> Result<()> {
+        for r in self.groups.iter_mut().chain(&mut self.issues) {
+            let e = snapshot
+                .entity(&record_id(r)?)
+                .map_err(|e| invalid(e.to_string()))?;
+            r.base = Some(fingerprint(e));
+            r.lifecycle = lifecycle(e.current.lifecycle).into();
+        }
+        self.refresh_references(snapshot)
+    }
     pub fn prepare(&mut self, snapshot: &Snapshot, prefix: &str) -> Result<()> {
         self.validate()?;
         self.existing_identities(snapshot)?;

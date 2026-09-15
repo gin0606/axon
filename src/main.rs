@@ -41,7 +41,7 @@ enum Command {
         #[arg(required = true, num_args = 1.., value_name = "ID")]
         ids: Vec<String>,
     },
-    /// Prepare and check declaration changes before applying them
+    /// Prepare, check and atomically apply declaration changes
     Import {
         #[command(subcommand)]
         command: Import,
@@ -139,6 +139,8 @@ enum Import {
     Prepare { file: PathBuf },
     /// Validate canonical FILE and display changes without writing or running conditions
     Check { file: PathBuf },
+    /// Apply all changes atomically and refresh FILE; safe to retry the same declaration
+    Apply { file: PathBuf },
 }
 #[derive(Subcommand)]
 enum Docs {
@@ -567,6 +569,7 @@ enum Publication {
     None,
     Storage,
     Declaration,
+    StorageAndDeclaration,
 }
 struct Output {
     text: String,
@@ -699,10 +702,29 @@ fn run(command: Command) -> Result<Output> {
     let location = Location::discover(&cwd, false)?;
     let mut store = location.open()?;
     match command {
+        Command::Import {
+            command: Import::Apply { file },
+        } => {
+            let changed = axon::declaration_file::apply(&mut store, &file, context())?;
+            Ok(Output {
+                text: display::human_text(format!(
+                    "Applied: {}; declaration updated: {}\n",
+                    if changed {
+                        "storage applied"
+                    } else {
+                        "storage unchanged (no-op)"
+                    },
+                    file.display()
+                )),
+                publication: Publication::StorageAndDeclaration,
+                diagnostic: String::new(),
+            })
+        }
         Command::Import { command } => {
             let (prefix, snapshot) = store.read()?;
             let file = match &command {
                 Import::Prepare { file } | Import::Check { file } => file,
+                Import::Apply { .. } => unreachable!(),
             };
             let bytes = std::fs::read(file)?;
             let input = std::str::from_utf8(&bytes)
@@ -715,6 +737,7 @@ fn run(command: Command) -> Result<Output> {
                 Publication::None
             };
             let text = match command {
+                Import::Apply { .. } => unreachable!(),
                 Import::Prepare { ref file } => {
                     declaration
                         .prepare(&snapshot, &prefix)
@@ -1156,6 +1179,8 @@ fn main() -> std::process::ExitCode {
                                 "Error: output failed\nApplied: storage applied; output failed; inspect saved state before retrying",
                             Publication::Declaration =>
                                 "Error: output failed\nApplied: declaration updated; storage unchanged; output failed; inspect declaration before retrying",
+                            Publication::StorageAndDeclaration =>
+                                "Error: output failed\nApplied: storage applied; declaration updated; output failed; inspect saved state before retrying",
                             Publication::None => "Error: output failed",
                         }
                     );

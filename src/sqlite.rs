@@ -135,6 +135,38 @@ mod tests {
     use super::*;
     use crate::lifecycle::*;
     #[test]
+    fn declaration_commit_failure_does_not_rewrite_input() {
+        let root =
+            std::env::temp_dir().join(format!("axon-import-{:032x}", rand::random::<u128>()));
+        std::fs::create_dir(&root).unwrap();
+        let db = root.join("store.db");
+        let before = empty();
+        let store = Store::create(&db, "demo", &before).unwrap();
+        store.connection.commit_hook(Some(|| true)).unwrap();
+        let mut store = crate::location::Store::Sqlite(store);
+        let mut declaration = crate::declaration::example();
+        declaration.prepare(&before, "demo").unwrap();
+        let input = declaration.serialize(&before).unwrap();
+        let path = root.join("plan.yaml");
+        std::fs::write(&path, &input).unwrap();
+        let error = crate::declaration_file::apply(
+            &mut store,
+            &path,
+            Context {
+                at: chrono::Utc::now(),
+                recorder: None,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("Result unknown: storage save"), "{error}");
+        assert_eq!(store.read().unwrap().1, before);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), input);
+        drop(store);
+        assert_eq!(Store::open(&db).unwrap().read().unwrap().1, before);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn failed_commit_keeps_the_previous_snapshot() {
         let path =
             std::env::temp_dir().join(format!("axon-sqlite-{:032x}.db", rand::random::<u128>()));
