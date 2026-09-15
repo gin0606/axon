@@ -32,6 +32,51 @@
 
 Groupのdone前には目的・完了条件、全子孫の終了、成果の統合と必要な検証を確認します。showの全子孫ツリーを確認し、必要な本文・Note・logを読んで不足を確認します。全子孫Noteの一括取得は必須ではありません。子の終了だけで親を自動完了せず、Groupに対するdone自体を計画全体の最終確認済みという入力にします。
 
+## 計画をまとめて登録・編集する
+
+一括操作には `axon-declaration/v1` の YAML を使います。SQLite・file の両方式で手順は同じです。形式の詳細は `axon docs declaration` と [CLI契約](../reference/lifecycle-cli.md#計画全体の取得と一括編集) を参照してください。
+
+### 新規計画を登録する
+
+未使用の出力先に雛形を作り、目的・完了条件・包含・依存を編集します。
+
+```sh
+axon docs declaration --example > new-plan.yaml
+```
+
+新規recordは `id: null`、`base: null`、file内で一意の `key` を持ちます。初期状態は未判断なら `lifecycle: undecided`、採用済みなら `lifecycle: not-started` です。雛形は採用済みなので、未判断の提案を登録する場合は変更してください。参照は `{ key: 名前 }` または完全IDの `{ id: ID }` で書きます。
+
+編集後は次を一つずつ実行し、各結果を確認します。
+
+```sh
+axon import prepare new-plan.yaml
+axon import check new-plan.yaml
+axon import apply new-plan.yaml
+axon import check new-plan.yaml
+```
+
+`prepare` は保存先を変えず、最終IDを割り当て、外部参照を再生成して同じfileをcanonical形式に置き換えます。コメントは保持しません。`check` はfileも保存先も変えず、作成・文面変更の有無・親の前後・依存の増減を表示します。本文の全文はfile自体の差分で確認してください。`apply` は最新の保存状態で再検証して全件を原子的に反映し、成功後に同じfileの `base` などを更新します。最後の `check` で差分がないことを確認します。
+
+### 登録後の計画を修正する
+
+`GROUP_ID` を対象のIDへ置き換え、未使用のfileへ取得します。既存の編集fileへリダイレクトして上書きしないでください。
+
+```sh
+axon export GROUP_ID > plan-edit.yaml
+```
+
+Groupは自身と終了済みを含む全子孫、Issueは単体を取得します。複数IDを渡すと和集合になります。編集前のfileを別に保全してから `title`、`description`、`parent`、`needs` を修正し、必要な新規recordを足します。既存の `id`・`base`・`lifecycle`・kindは変更しません。編集後は同じ `prepare` → `check` → `apply` → 再 `check` を `plan-edit.yaml` に対して実行します。
+
+`groups`・`issues` に載っていないEntityは触りません。fileからrecordを消しても、削除・取消・所属解除・依存解除にはなりません。Groupから外すにはそのEntityのrecordに `parent: null`、依存をすべて外すには `needs: []` を書きます。作業の取消や既存のlifecycle遷移には通常コマンドを使います。
+
+編集集合のrecordは文面・親・outgoing dependencyの完全な宣言です。外部Entityの `references` は読み取り専用のcontextで、外から入る所属・依存は含みません。必要なら `show ID --details` で調べます。既存Entityを編集集合へ加える場合は対象IDを追加して別fileへ再exportし、保全した編集意図を移してください。既存recordの `base` を手作りしません。再浮上条件・Noteは取り込まず、既存値を保持します。
+
+### 競合と保存失敗を確認する
+
+競合では元fileを保全して現在値と編集意図を比較します。`base` の改変やIDの振り直しで検査を通さず、必要な再exportは別fileで行います。
+
+保存先とdeclaration fileの結果は別です。保存先が `Applied` でもfile更新だけが `Not applied` または `Result unknown` になることがあります。元processの終了後、同じ保存先と入力fileを照合し、確定したIDと内容を保持して `check` します。編集集合の全Entityが最終値に一致する場合は、同じfileの再 `apply` が保存先をno-opにしてfile更新を完了します。一部だけ一致する場合は競合です。結果不明のまま `prepare` でIDを再割当てしたり、雛形から登録し直したりしません。詳細は [保存結果](../reference/lifecycle-cli.md#mutationの結果) を参照してください。
+
 ## 並行作業と引継ぎ
 
 SQLiteを共有するworktreeでは、同じ未着手Entityへの並行startは一つだけ成功します。失敗側はshow・logで現在値を読み、実行中のworkerと調整してください。記録者情報を所有権として扱わず、作業終了を確認してから継続・releaseを判断します。

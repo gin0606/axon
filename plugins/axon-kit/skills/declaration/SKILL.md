@@ -1,10 +1,37 @@
 ---
 name: declaration
-description: Axonの専用export/importを依頼されたとき、非対応の境界と依頼された対象範囲を整理する。実際の一括適用には使わない。
+description: Axonのdeclarationをexportし、prepare・check・applyで計画を一括登録・編集する操作契約。対象選択や適用判断は呼び出し側が与える。
 ---
 
-# declarationの境界
+# Declarationを取得・検査・反映する
 
-`axon-kit:conventions` に従って対象環境のbinaryとrootを固定する。専用export/importは未提供。選択したCLIのhelpで対応状況を確認し、非対応なら観測したversionと利用できない操作を返す。非対応操作を別のbinaryや保存ファイルの直接編集で代替しない。
+`axon-kit:conventions` に従い、呼び出し側が指定したbinaryと管理rootを固定する。`export --help`、`import prepare|check|apply --help`、`docs declaration` で構文と形式を確認する。非対応ならversionと不足する操作を返し、別binaryへの切替、保存file・SQLの直接編集、逐次の通常CLIによる代用をしない。
 
-既存データとdeclaration artifactを保全し、確認できたschema・backend・対象範囲、要求された読出しや変更を呼び出し側へ返す。artifactへの書戻しと保存済みEntityへの適用を区別し、一括操作を無断の逐次CLI操作で代用しない。新規登録だけで履歴・構造を含む移行完了とはしない。通常操作の説明には選択したCLIの `docs` を使う。変換器の実装、backend切替、既存データの削除はこのskillの範囲外。
+## 対象と入力を固定する
+
+呼び出し側から計画の対象、declaration fileの作成・編集・書戻し、active storageへの適用の範囲を受け取る。CLIが受理することを権限の根拠にしない。既存fileは内容と出典を読み、元bytesとdigestを独立snapshotへ保存する。適用前には対象root、backend、完全ID、prepare後の入力bytesとdigest、確認した差分を保持し、結果不明の照合が終わるまで破棄しない。同じfileや保存先への未調整のwriter・editor・Git操作を直列化する。
+
+- 既存計画は `export ID...` のstdoutを未使用のfileへ保存する。Groupは自身と終了済みを含む全子孫、Issueは単体、複数selectorは和集合。exportは保存先を変更せず条件を実行しない。既存の編集fileへリダイレクトして上書きしない。
+- 新規計画は `docs declaration --example` から作る。これは保存先を開かない。`id: null`、`base: null`、一意の `key` を持つrecordに、呼び出し側が決めた初期状態 `undecided` または `not-started` を書く。雛形の初期状態だけから採用判断を推測しない。
+- schemaは `axon-declaration/v1`。fieldはすべて必須。編集集合は `groups` と `issues` のrecordだけで、載っていないEntityは触らない。recordを消しても削除・cancel・所属解除・依存解除にならない。各recordはtitle、description、親、outgoing dependencyの完全な宣言で、親解除は `parent: null`、依存なしは `needs: []` と書く。
+- 既存のid、base、lifecycle、kindは変えない。新規はprepare後もkeyを保持する。参照は `{ id: 完全ID }` または `{ key: 別名 }`。`references` は編集集合外への参照の読み取り専用contextで、incoming edgeは含まない。必要なら `show ID --details` で確認する。既存Entityを追加するにはselectorを広げて別fileへ再exportし、保全した編集意図を移す。baseを手作りしない。
+- 再浮上条件・Note・履歴の取り込み、既存lifecycleの遷移、旧形式の変換には使わない。既存の条件とNoteは保持される。
+
+## Prepare、check、apply
+
+各mutationを単独で実行し、終了コードと保存結果を個別に確認する。
+
+1. `import prepare FILE` は保存先を変えず、局所規則とID・kind・外部参照の存在を検査し、新規IDを確定して同じfileをcanonical rewriteする。keyと新規baseのnullを保持し、referencesを再生成する。コメントは保持しない。fileを読み直してIDと内容を確認し、適用入力のbytesとdigestを固定する。prepare成功は競合や共通コアの制約を通過したことを意味しない。
+2. `import check FILE` は全IDが確定したcanonical入力を検証し、Entityごとの作成、文面変更の有無、親の前後、needsの増減と適用後の状況を示す。fileと保存先を変更せず、条件も実行しない。本文全文は保全した元fileとのdiffで確認する。拒否があれば原因を解決して再検査し、差分が依頼の対象・内容と一致することを呼び出し側で確認する。
+3. 呼び出し側から適用権限がある場合に `import apply FILE` を実行する。CLIはlock取得後の入力とsnapshotで再検証し、全件を一つの保存境界で反映する。成功後、保存したsnapshotからbase・lifecycle・referencesと並びを更新し、keyを保持して同じfileを書き戻す。check後の編集は再checkし、古い結果で変更後のfileを承認済み扱いにしない。
+4. 再 `import check FILE` で差分なしを確認し、必要な `show --details`・logで完全ID、文面、関係、初期状態を照合する。差分があれば別writerによる変更も含めて調べ、完了と報告しない。保存先とfileそれぞれの結果、適用した対象と未解決事項を返す。
+
+## 失敗・競合・結果不明
+
+保存先とdeclarationは別の保存境界である。`Applied`、`Not applied`、`Result unknown` をそれぞれ読む。保存先成功後のfile更新失敗を全件未適用と扱わない。stdout失敗も未適用の根拠にしない。prepareでは保存先は未変更でもfileが適用済み・結果不明になり得る。
+
+元processが終了してから、固定したroot/backendで入力file、対象の現在値、記録を照合する。file backendでは正本の検査も行う。prepareの結果不明ではfileの実際のID割当てと内容を調べ、確認できた割当てを保持してから続ける。applyの結果不明または保存成功後の書戻し失敗では、適用時の確定IDと入力を保持したまま同じfileをcheckする。fileが別途編集されていたら、その差分を保全し、固定した適用入力と混ぜずに照合する。
+
+編集集合の全Entityが最終値（title、description、parent、needs、kind、lifecycle。新規は割当て済みIDで存在し宣言した初期状態）に一致する場合、再applyは保存先をno-opにしてrewriteだけを完了する。未適用を確認でき、同じ効果へ収束する場合も固定入力で再試行できる。一部一致や後続の別変更は競合として返す。照合不能なら結果不明を維持し、観測と入力を返す。
+
+結果不明の解消前にprepareを再実行して新規IDを振り直さない。baseの更新・null化や再exportによる上書きで競合を隠さず、元artifactを保持して最新状態と意図の比較を呼び出し側へ渡す。rollback、取消、別保存先への再作成で補償しない。エラーの後にfileだけを再生成して適用済みとみなさない。
