@@ -4,6 +4,9 @@ use serde::{Deserialize, Deserializer};
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
+mod import;
+pub use import::Checked;
+
 pub const SCHEMA: &str = "axon-declaration/v1";
 #[derive(Debug, thiserror::Error)]
 #[error("Declaration: {0}")]
@@ -127,12 +130,16 @@ fn valid_lifecycle(value: &str) -> bool {
 pub fn parse(input: &str) -> Result<Declaration> {
     use granit_parser::{BufferedInput, Scanner, TokenType};
     for token in Scanner::new(BufferedInput::new(input.chars())) {
-        match token.map_err(|e| invalid(e.to_string()))?.into_parts().1 {
+        match token
+            .map_err(|e| invalid(format!("schema: {e}")))?
+            .into_parts()
+            .1
+        {
             TokenType::Anchor(_)
             | TokenType::Alias(_)
             | TokenType::Tag(..)
             | TokenType::TagDirective(..) => {
-                return Err(invalid("anchors, aliases and tags are not allowed"));
+                return Err(invalid("schema: anchors, aliases and tags are not allowed"));
             }
             _ => {}
         }
@@ -148,15 +155,15 @@ pub fn parse(input: &str) -> Result<Declaration> {
         schema: String,
     }
     let probe: SchemaProbe = serde_saphyr::from_str_with_options(input, options.clone())
-        .map_err(|e| invalid(e.to_string()))?;
+        .map_err(|e| invalid(format!("schema: {e}")))?;
     if probe.schema != SCHEMA {
         return Err(invalid(format!(
-            "unsupported schema {}; expected {SCHEMA}; legacy axon-plan/v3 is an old-model format and is not converted",
+            "schema: unsupported schema {}; expected {SCHEMA}; legacy axon-plan/v3 is an old-model format and is not converted",
             probe.schema
         )));
     }
-    let value: Declaration =
-        serde_saphyr::from_str_with_options(input, options).map_err(|e| invalid(e.to_string()))?;
+    let value: Declaration = serde_saphyr::from_str_with_options(input, options)
+        .map_err(|e| invalid(format!("schema: {e}")))?;
     value.validate()?;
     Ok(value)
 }
@@ -165,33 +172,44 @@ impl Declaration {
         self.groups.iter().chain(&self.issues)
     }
     pub fn validate(&self) -> Result<()> {
+        self.validate_local()
+            .map_err(|e| invalid(format!("identity/reference: {}", e.0)))
+    }
+    fn validate_local(&self) -> Result<()> {
         if self.schema != SCHEMA {
             return Err(invalid(format!(
-                "unsupported schema {}; expected {SCHEMA}; legacy axon-plan/v3 is an old-model format and is not converted",
+                "schema: unsupported schema {}; expected {SCHEMA}; legacy axon-plan/v3 is an old-model format and is not converted",
                 self.schema
             )));
         }
         let mut ids = BTreeSet::new();
         let mut keys = BTreeSet::new();
         for record in self.records() {
+            let label = record
+                .id
+                .as_deref()
+                .or(record.key.as_deref())
+                .unwrap_or("unassigned");
             if !valid_lifecycle(&record.lifecycle) || record.title.trim().is_empty() {
-                return Err(invalid("invalid lifecycle or empty title"));
+                return Err(invalid(format!(
+                    "{label}: invalid lifecycle or empty title"
+                )));
             }
             if let Some(id) = &record.id
                 && (id.is_empty() || !ids.insert(id))
             {
-                return Err(invalid("empty or duplicate Entity ID"));
+                return Err(invalid(format!("{label}: empty or duplicate Entity ID")));
             }
             if let Some(key) = &record.key
                 && (!valid_key(key) || !keys.insert(key))
             {
-                return Err(invalid("invalid or duplicate key"));
+                return Err(invalid(format!("{label}: invalid or duplicate key")));
             }
             if let Some(base) = &record.base {
                 if record.id.is_none() || !valid_base(base) {
-                    return Err(invalid(
-                        "existing records require an ID and a blake3 fingerprint",
-                    ));
+                    return Err(invalid(format!(
+                        "{label}: existing records require an ID and a blake3 fingerprint"
+                    )));
                 }
             } else if record.key.is_none()
                 || !matches!(record.lifecycle.as_str(), "undecided" | "not-started")
@@ -214,6 +232,11 @@ impl Declaration {
             }
         }
         for record in self.records() {
+            let label = record
+                .id
+                .as_deref()
+                .or(record.key.as_deref())
+                .unwrap_or("unassigned");
             let own = record
                 .id
                 .as_ref()
@@ -223,7 +246,9 @@ impl Declaration {
             for reference in &record.needs {
                 let target = self.target(reference)?;
                 if target == own || !needs.insert(target) {
-                    return Err(invalid("self dependency or duplicate resolved dependency"));
+                    return Err(invalid(format!(
+                        "{label}: self dependency or duplicate resolved dependency"
+                    )));
                 }
             }
             if let Some(parent) = &record.parent {
@@ -234,7 +259,7 @@ impl Declaration {
                         .iter()
                         .any(|r| r.kind == "issue" && target == (0, r.id.clone()))
                 {
-                    return Err(invalid("parent must be a Group"));
+                    return Err(invalid(format!("{label}: parent must be a Group")));
                 }
             }
         }

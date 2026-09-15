@@ -147,9 +147,289 @@ fn declaration_docs_and_template_work_with_broken_management_root() {
         .next()
         .unwrap();
     assert!(section.contains("export"));
+    assert!(section.contains("import"));
+    assert!(f.ok(&["import", "--help"]).contains("prepare"));
+    assert!(f.ok(&["import", "check", "--help"]).contains("<FILE>"));
     assert!(f.ok(&["export", "--help"]).contains("<ID>..."));
     assert!(
         f.ok(&["docs", "declaration", "--help"])
             .contains("--example")
     );
+}
+
+#[test]
+fn declaration_prepare_check_new_plan_and_existing_changes_on_both_backends() {
+    for backend in ["sqlite", "file"] {
+        let f = Fixture::new();
+        f.ok(&["init", "demo", "--backend", backend]);
+        let before = snapshot(&f);
+        let path = f.0.join("plan.yaml");
+        fs::write(&path, f.ok(&["docs", "declaration", "--example"])).unwrap();
+        let args = ["import", "prepare", path.to_str().unwrap()];
+        f.ok(&args);
+        let bytes = fs::read(&path).unwrap();
+        let d = declaration::parse(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        assert!(
+            d.records()
+                .all(|r| r.id.is_some() && r.base.is_none() && r.key.is_some())
+        );
+        f.ok(&args);
+        assert_eq!(bytes, fs::read(&path).unwrap());
+        let text = f.ok(&["import", "check", path.to_str().unwrap()]);
+        assert_eq!(text.matches("Create ").count(), 3);
+        assert!(text.contains("needs: +"));
+        assert!(text.contains("Situation after: Blocked"));
+        assert_eq!(before, snapshot(&f));
+        assert_eq!(bytes, fs::read(&path).unwrap());
+        let existing =
+            created(&f.ok(&["plan", "--title", "Original", "--command", "touch executed"]));
+        let original = f.ok(&["export", &existing]);
+        fs::write(&path, &original).unwrap();
+        assert!(
+            f.ok(&["import", "check", path.to_str().unwrap()])
+                .contains("No changes")
+        );
+        fs::write(&path, original.replace("title: Original", "title: Updated")).unwrap();
+        assert!(
+            f.ok(&["import", "check", path.to_str().unwrap()])
+                .contains("title: changed")
+        );
+        assert!(!f.0.join("executed").exists());
+        f.ok(&["write", &existing, "--title", "Concurrent"]);
+        let before = snapshot(&f);
+        let bytes = fs::read(&path).unwrap();
+        assert!(failure(f.run(&["import", "check", path.to_str().unwrap()])).contains("conflict:"));
+        assert_eq!(before, snapshot(&f));
+        assert_eq!(bytes, fs::read(&path).unwrap());
+    }
+}
+
+#[test]
+fn declaration_check_rejections_preserve_both_backends_and_input() {
+    for backend in ["sqlite", "file"] {
+        let f = Fixture::new();
+        f.ok(&["init", "demo", "--backend", backend]);
+        let item = f.plan("Original");
+        let external = f.plan("External");
+        let exported = f.ok(&["export", &item]);
+        let path = f.0.join("plan.yaml");
+        let before = snapshot(&f);
+        let mutations = [
+            (
+                exported.replace("axon-declaration/v1", "wrong/v1"),
+                "schema:",
+            ),
+            (
+                exported.replace("title: Original", "title: Original\n    unknown: x"),
+                "schema:",
+            ),
+            (
+                exported.replace("lifecycle: not-started", "lifecycle: in-progress"),
+                "read-only:",
+            ),
+            (
+                exported.replace("needs: []", "needs:\n      - { key: missing }"),
+                "identity/reference:",
+            ),
+            (
+                exported.replace("needs: []", &format!("needs:\n      - {{ id: {item} }}")),
+                "identity/reference:",
+            ),
+            (
+                exported.replace("needs: []", "needs:\n      - { id: demo-absent }"),
+                "identity/reference:",
+            ),
+            (
+                exported.replace(
+                    "needs: []",
+                    &format!("needs:\n      - {{ id: {external} }}"),
+                ),
+                "references",
+            ),
+            (format!("# noncanonical\n{exported}"), "prepare"),
+        ];
+        for (input, diagnostic) in mutations {
+            fs::write(&path, &input).unwrap();
+            let message = failure(f.run(&["import", "check", path.to_str().unwrap()]));
+            assert!(message.contains(diagnostic), "{diagnostic}: {message}");
+            assert_eq!(fs::read_to_string(&path).unwrap(), input);
+            assert_eq!(snapshot(&f), before);
+        }
+    }
+}
+
+#[test]
+fn declaration_check_rejects_local_and_core_guards_on_both_backends() {
+    for backend in ["sqlite", "file"] {
+        let f = Fixture::new();
+        f.ok(&["init", "demo", "--backend", backend]);
+        let group = created(&f.ok(&["group", "plan", "--title", "Group"]));
+        let other = created(&f.ok(&["group", "plan", "--title", "Other"]));
+        let a = f.plan("A");
+        let b = f.plan("B");
+        let exported = f.ok(&["export", &a]);
+        let path = f.0.join("plan.yaml");
+        let reject = |input: String, category: &str| {
+            let before = snapshot(&f);
+            fs::write(&path, &input).unwrap();
+            let message = failure(f.run(&["import", "check", path.to_str().unwrap()]));
+            assert!(message.contains(category), "{category}: {message}");
+            assert_eq!(snapshot(&f), before);
+            assert_eq!(fs::read_to_string(&path).unwrap(), input);
+        };
+        for input in [
+            exported.replace("title: A", "title: A\n    title: duplicate"),
+            exported.replace("title: A", "title: &anchor A"),
+            exported.replace("title: A", "title: *alias"),
+            exported.replace("title: A", "title: !!str A"),
+            exported.replace("title: A", "title: A\n    <<: {}"),
+            exported.replace(
+                "parent: null",
+                &format!("parent: {{ id: {group}, key: alias }}"),
+            ),
+        ] {
+            reject(input, "schema:");
+        }
+        reject(
+            exported.replace(&format!("id: {a}"), "id: null"),
+            "identity/reference:",
+        );
+        let mut fresh = declaration::example();
+        fresh.prepare(&snapshot(&f), "demo").unwrap();
+        let fresh_yaml = fresh.serialize(&snapshot(&f)).unwrap();
+        reject(
+            fresh_yaml.replace("    key: first\n", "    key: null\n"),
+            "identity/reference:",
+        );
+        reject(
+            fresh_yaml.replace("lifecycle: not-started", "lifecycle: completed"),
+            "identity/reference:",
+        );
+        let mut d = declaration::parse(&exported).unwrap();
+        d.issues.push(d.issues[0].clone());
+        let duplicated = exported.replace(
+            "references: []",
+            &format!(
+                "{}references: []",
+                exported
+                    .split("issues:\n")
+                    .nth(1)
+                    .unwrap()
+                    .split("references:")
+                    .next()
+                    .unwrap()
+            ),
+        );
+        reject(duplicated, "identity/reference:");
+        reject(
+            exported.replace(
+                "needs: []",
+                &format!("needs:\n      - {{ id: {b} }}\n      - {{ id: {b} }}"),
+            ),
+            "identity/reference:",
+        );
+        let mut d = declaration::parse(&exported).unwrap();
+        d.groups = std::mem::take(&mut d.issues);
+        reject(d.serialize(&snapshot(&f)).unwrap(), "read-only:");
+        let mut d = declaration::parse(&exported).unwrap();
+        d.issues[0].base = Some(format!("blake3:{}", "0".repeat(64)));
+        d.issues[0].title = "Edit".into();
+        reject(d.serialize(&snapshot(&f)).unwrap(), "conflict:");
+        let mut d = declaration::parse(&exported).unwrap();
+        d.issues[0].parent = Some(Reference::id(&b));
+        // Leave references empty to test the storage-side parent guard after regeneration.
+        assert!(
+            d.prepare(&snapshot(&f), "demo")
+                .unwrap_err()
+                .to_string()
+                .contains("Group")
+        );
+        let mut d = declaration::parse(&f.ok(&["export", &a, &b])).unwrap();
+        d.issues[0].needs.push(Reference::id(&b));
+        d.issues[1].needs.push(Reference::id(&a));
+        reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
+        let mut d = declaration::parse(&f.ok(&["export", &group, &other])).unwrap();
+        d.groups[0].parent = Some(Reference::id(&other));
+        d.groups[1].parent = Some(Reference::id(&group));
+        reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
+        f.ok(&["start", &a]);
+        let mut d = declaration::parse(&f.ok(&["export", &a])).unwrap();
+        d.issues[0].parent = Some(Reference::id(&group));
+        d.refresh_references(&snapshot(&f)).unwrap();
+        reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
+        f.ok(&["done", &a]);
+        f.ok(&["cancel", &b]);
+        for item in [&a, &b] {
+            for field in ["title", "description"] {
+                let mut d = declaration::parse(&f.ok(&["export", item])).unwrap();
+                if field == "title" {
+                    d.issues[0].title = "Edit".into();
+                } else {
+                    d.issues[0].description = "Edit".into();
+                }
+                reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
+            }
+        }
+        let mut d = declaration::parse(&f.ok(&["export", &a])).unwrap();
+        d.issues[0].needs.push(Reference::id(&b));
+        d.refresh_references(&snapshot(&f)).unwrap();
+        reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
+        f.ok(&["group", "set", &a, "--parent", &group]);
+        f.ok(&["start", &group]);
+        f.ok(&["done", &group]);
+        let mut d = declaration::parse(&f.ok(&["export", &a])).unwrap();
+        d.issues[0].parent = None;
+        d.refresh_references(&snapshot(&f)).unwrap();
+        reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
+        let mut d = declaration::parse(&f.ok(&["export", &b])).unwrap();
+        d.issues[0].parent = Some(Reference::id(&group));
+        d.refresh_references(&snapshot(&f)).unwrap();
+        reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
+    }
+}
+
+#[test]
+fn declaration_prepare_escapes_control_characters_in_output_paths() {
+    let f = Fixture::new();
+    f.ok(&["init", "demo"]);
+    let path = f.0.join("plan\u{1b}.yaml");
+    fs::write(&path, f.ok(&["docs", "declaration", "--example"])).unwrap();
+    let text = f.ok(&["import", "prepare", path.to_str().unwrap()]);
+    assert!(!text.contains('\u{1b}'));
+    assert!(text.contains("\\x1b"));
+}
+
+#[cfg(unix)]
+#[test]
+fn declaration_prepare_reports_applied_file_when_output_fails() {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    for backend in ["sqlite", "file"] {
+        let f = Fixture::new();
+        f.ok(&["init", "demo", "--backend", backend]);
+        let path = f.0.join("plan.yaml");
+        fs::write(&path, f.ok(&["docs", "declaration", "--example"])).unwrap();
+        let before = snapshot(&f);
+        let mut sockets = [0; 2];
+        assert_eq!(
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_DGRAM, 0, sockets.as_mut_ptr()) },
+            0
+        );
+        assert_eq!(unsafe { libc::close(sockets[0]) }, 0);
+        let writer = unsafe { OwnedFd::from_raw_fd(sockets[1]) };
+        let out = f
+            .command()
+            .args(["import", "prepare", path.to_str().unwrap()])
+            .stdout(Stdio::from(writer))
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1));
+        let error = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            error.contains("Applied: declaration updated; storage unchanged; output failed"),
+            "{error}"
+        );
+        let d = declaration::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(d.records().all(|r| r.id.is_some()));
+        assert_eq!(snapshot(&f), before);
+    }
 }

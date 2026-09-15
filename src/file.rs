@@ -80,8 +80,14 @@ pub(crate) fn temporary(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
         .write(true)
         .create_new(true)
         .open(&temp)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|e| {
+            invalid(format!(
+                "temporary write failed: {e}; retained {}",
+                temp.display()
+            ))
+        })?;
     Ok(temp)
 }
 pub(crate) fn publish(
@@ -96,7 +102,7 @@ pub(crate) fn publish(
             .map_err(Into::into)
     })
 }
-fn publish_with(
+pub(crate) fn publish_with(
     path: &Path,
     before: Option<&[u8]>,
     bytes: &[u8],

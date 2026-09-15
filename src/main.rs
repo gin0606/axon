@@ -41,6 +41,11 @@ enum Command {
         #[arg(required = true, num_args = 1.., value_name = "ID")]
         ids: Vec<String>,
     },
+    /// Prepare and check declaration changes before applying them
+    Import {
+        #[command(subcommand)]
+        command: Import,
+    },
     /// Show the optional recorder actor detected in the current environment
     Actor,
     /// Write an unstyled shell completion script to stdout
@@ -127,6 +132,13 @@ enum Command {
         #[command(subcommand)]
         command: Dependency,
     },
+}
+#[derive(Subcommand)]
+enum Import {
+    /// Assign new IDs and atomically rewrite FILE as canonical YAML; storage is unchanged
+    Prepare { file: PathBuf },
+    /// Validate canonical FILE and display changes without writing or running conditions
+    Check { file: PathBuf },
 }
 #[derive(Subcommand)]
 enum Docs {
@@ -551,15 +563,24 @@ fn recorder_display(context: &Context, details: bool) -> String {
     }
     text
 }
+enum Publication {
+    None,
+    Storage,
+    Declaration,
+}
 struct Output {
     text: String,
-    saved: bool,
+    publication: Publication,
     diagnostic: String,
 }
 fn output(text: String, saved: bool) -> Output {
     Output {
         text,
-        saved,
+        publication: if saved {
+            Publication::Storage
+        } else {
+            Publication::None
+        },
         diagnostic: String::new(),
     }
 }
@@ -678,6 +699,57 @@ fn run(command: Command) -> Result<Output> {
     let location = Location::discover(&cwd, false)?;
     let mut store = location.open()?;
     match command {
+        Command::Import { command } => {
+            let (prefix, snapshot) = store.read()?;
+            let file = match &command {
+                Import::Prepare { file } | Import::Check { file } => file,
+            };
+            let bytes = std::fs::read(file)?;
+            let input = std::str::from_utf8(&bytes)
+                .map_err(|e| sqlite::Error::Invalid(format!("Declaration schema: {e}")))?;
+            let mut declaration = axon::declaration::parse(input)
+                .map_err(|e| sqlite::Error::Invalid(e.to_string()))?;
+            let publication = if matches!(&command, Import::Prepare { .. }) {
+                Publication::Declaration
+            } else {
+                Publication::None
+            };
+            let text = match command {
+                Import::Prepare { ref file } => {
+                    declaration
+                        .prepare(&snapshot, &prefix)
+                        .map_err(|e| sqlite::Error::Invalid(e.to_string()))?;
+                    let text = declaration
+                        .serialize(&snapshot)
+                        .map_err(|e| sqlite::Error::Invalid(e.to_string()))?;
+                    axon::declaration_file::rewrite(file, &bytes, text.as_bytes())?;
+                    format!("Prepared {}. Storage unchanged.\n", file.display())
+                }
+                Import::Check { .. } => {
+                    let checked = declaration
+                        .check(
+                            input,
+                            &snapshot,
+                            Context {
+                                at: Utc::now(),
+                                recorder: None,
+                            },
+                        )
+                        .map_err(|e| sqlite::Error::Invalid(e.to_string()))?;
+                    declaration_changes(
+                        &declaration,
+                        &snapshot,
+                        &checked.snapshot,
+                        checked.already_applied,
+                    )?
+                }
+            };
+            Ok(Output {
+                text: display::human_text(text),
+                publication,
+                diagnostic: String::new(),
+            })
+        }
         Command::Export { .. }
         | Command::List(_)
         | Command::Triage(_)
@@ -838,7 +910,7 @@ fn run(command: Command) -> Result<Output> {
             };
             Ok(Output {
                 text,
-                saved: false,
+                publication: Publication::None,
                 diagnostic,
             })
         }
@@ -1079,10 +1151,12 @@ fn main() -> std::process::ExitCode {
                     let _ = writeln!(
                         std::io::stderr(),
                         "{}: {error}",
-                        if output.saved {
-                            "Error: output failed\nApplied: storage applied; output failed; inspect saved state before retrying"
-                        } else {
-                            "Error: output failed"
+                        match output.publication {
+                            Publication::Storage =>
+                                "Error: output failed\nApplied: storage applied; output failed; inspect saved state before retrying",
+                            Publication::Declaration =>
+                                "Error: output failed\nApplied: declaration updated; storage unchanged; output failed; inspect declaration before retrying",
+                            Publication::None => "Error: output failed",
                         }
                     );
                     std::process::ExitCode::from(1)
@@ -1099,4 +1173,82 @@ fn main() -> std::process::ExitCode {
             std::process::ExitCode::from(1)
         }
     }
+}
+
+fn declaration_changes(
+    declaration: &axon::declaration::Declaration,
+    before: &Snapshot,
+    after: &Snapshot,
+    applied: bool,
+) -> Result<String> {
+    let mut out = String::new();
+    if applied {
+        out.push_str("Already applied.\n");
+    }
+    for r in declaration.records() {
+        let id: EntityId = r.id.clone().expect("checked ID").try_into()?;
+        let entity = after.entity(&id)?;
+        out.push_str(&format!("{id}:\n"));
+        if let Ok(old) = before.entity(&id) {
+            let a = &old.current;
+            let b = &entity.current;
+            if a == b {
+                out.push_str("  No changes.\n");
+            } else {
+                out.push_str(&format!(
+                    "  title: {}\n  description: {}\n",
+                    if a.title == b.title {
+                        "unchanged"
+                    } else {
+                        "changed"
+                    },
+                    if a.description == b.description {
+                        "unchanged"
+                    } else {
+                        "changed"
+                    }
+                ));
+                out.push_str(&format!(
+                    "  parent: {} -> {}\n",
+                    a.parent
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "null".into()),
+                    b.parent
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "null".into())
+                ));
+                for id in a.dependencies.difference(&b.dependencies) {
+                    out.push_str(&format!("  needs: - {id}\n"));
+                }
+                for id in b.dependencies.difference(&a.dependencies) {
+                    out.push_str(&format!("  needs: + {id}\n"));
+                }
+            }
+        } else {
+            out.push_str(&format!(
+                "  Create {}\n  title: new\n  description: new\n  parent: null -> {}\n",
+                axon::declaration::kind(entity.kind),
+                entity
+                    .current
+                    .parent
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "null".into())
+            ));
+            for id in &entity.current.dependencies {
+                out.push_str(&format!("  needs: + {id}\n"));
+            }
+        }
+        out.push_str(&format!(
+            "  Situation after: {} (conditions not evaluated)\n",
+            status(after, entity)
+        ));
+    }
+    if declaration.records().next().is_none() {
+        out.push_str("No changes.\n");
+    }
+    out.push_str("Check passed. Storage and declaration unchanged.\n");
+    Ok(out)
 }

@@ -7,3 +7,5 @@
 `Declaration::serialize` は既存 record の作成日時を同じ snapshot から読み、canonical 順序と scalar 表記で出力します。`fingerprint` は見える値だけを spec の token encoding で BLAKE3 に渡します。再浮上条件・Note・履歴は declaration に取り込みません。`example` は保存先に依存しない新規 Group と子 Issue 二件の雛形です。
 
 単体テストは spec の canonical example、文字列の完全な往復、拒否入力、並び順、fingerprint の境界を検査します。`tests/lifecycle/declaration.rs` は両 backend の独立 fixture で subtree・Issue・和集合、外部参照、保存先非変更と条件未実行を確認し、壊れた管理 root でも docs と雛形が取得できることを検査します。
+
+`src/declaration/import.rs` は保存snapshotとのidentity・base照合、適用済み判定、外部参照の再生成、共通コアの通常操作による仮snapshot構築を共有する。親解除・dependency削除、新規作成、文面変更、親設定、dependency追加の順で差分を検査する。`Checked` のsnapshotは保存前の候補であり、SQLやfileを変更しない。`src/declaration_file.rs` は別のI/O境界としてfile backendのpublish手順を再利用し、temporary書込・sync、入力bytes再照合、rename、directory syncを行う。

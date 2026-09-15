@@ -357,3 +357,139 @@ fn spec_example_has_identical_canonical_bytes() {
     }
     assert_eq!(d.serialize(&s).unwrap(), text);
 }
+
+#[test]
+fn prepared_plan_checks_retries_and_collisions_without_partial_matches() {
+    let original = snapshot();
+    let mut d = example();
+    d.prepare(&original, "demo").unwrap();
+    let yaml = d.serialize(&original).unwrap();
+    let checked = d.check(&yaml, &original, context()).unwrap();
+    assert_eq!(checked.snapshot.entities().count(), 3);
+    assert!(d.already_applied(&checked.snapshot).unwrap());
+    assert!(
+        d.check(&yaml, &checked.snapshot, context())
+            .unwrap()
+            .already_applied
+    );
+    let mut retry = d.clone();
+    retry.prepare(&checked.snapshot, "demo").unwrap();
+    assert_eq!(retry, d);
+    let mut changed = checked.snapshot.clone();
+    let first = id(d.issues[0].id.as_ref().unwrap());
+    changed
+        .write(&first, Some("Concurrent".into()), None)
+        .unwrap();
+    assert!(
+        d.check(&yaml, &changed, context())
+            .unwrap_err()
+            .to_string()
+            .contains("conflict:")
+    );
+    retry.prepare(&changed, "demo").unwrap();
+    assert!(retry.records().zip(d.records()).all(|(a, b)| a.id != b.id));
+    retry
+        .check(&retry.serialize(&changed).unwrap(), &changed, context())
+        .unwrap();
+}
+
+#[test]
+fn check_core_constraints_and_references() {
+    use crate::lifecycle::Operation;
+    let mut s = snapshot();
+    for (name, kind) in [
+        ("g", Kind::Group),
+        ("h", Kind::Group),
+        ("a", Kind::Issue),
+        ("b", Kind::Issue),
+    ] {
+        s.create(id(name), kind, current(name), context()).unwrap();
+    }
+    let reject = |d: &Declaration, snapshot: &Snapshot, field: &str| {
+        let bytes = d.serialize(snapshot).unwrap();
+        let error = d
+            .check(&bytes, snapshot, context())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(field), "{field}: {error}");
+    };
+    let mut d = export(&s, &[id("a"), id("b")]).unwrap();
+    d.issues[0].needs.push(Reference::id("b"));
+    d.issues[1].needs.push(Reference::id("a"));
+    reject(&d, &s, "core rejection: b: needs");
+    let mut d = export(&s, &[id("g"), id("h")]).unwrap();
+    d.groups[0].parent = Some(Reference::id("h"));
+    d.groups[1].parent = Some(Reference::id("g"));
+    reject(&d, &s, "parent");
+    s.perform(&id("a"), Operation::Start, None, context())
+        .unwrap();
+    let mut d = export(&s, &[id("a")]).unwrap();
+    d.issues[0].parent = Some(Reference::id("g"));
+    d.refresh_references(&s).unwrap();
+    reject(&d, &s, "parent");
+    s.perform(&id("a"), Operation::Complete, None, context())
+        .unwrap();
+    for field in ["title", "description", "needs"] {
+        let mut d = export(&s, &[id("a")]).unwrap();
+        match field {
+            "title" => d.issues[0].title = "Changed".into(),
+            "description" => d.issues[0].description = "Changed".into(),
+            _ => d.issues[0].needs.push(Reference::id("b")),
+        }
+        d.refresh_references(&s).unwrap();
+        reject(&d, &s, field);
+    }
+    s.set_parent(&id("a"), Some(id("g"))).unwrap();
+    s.perform(&id("g"), Operation::Start, None, context())
+        .unwrap();
+    s.perform(&id("g"), Operation::Complete, None, context())
+        .unwrap();
+    let mut d = export(&s, &[id("a")]).unwrap();
+    d.issues[0].parent = None;
+    d.refresh_references(&s).unwrap();
+    reject(&d, &s, "parent");
+    let mut d = export(&s, &[id("b")]).unwrap();
+    d.issues[0].parent = Some(Reference::id("g"));
+    d.refresh_references(&s).unwrap();
+    reject(&d, &s, "parent");
+    let mut d = export(&s, &[id("b")]).unwrap();
+    d.issues[0].needs.push(Reference::id("a"));
+    d.refresh_references(&s).unwrap();
+    d.references[0].title = "Stale title".into();
+    d.references[0].lifecycle = "undecided".into();
+    d.check(&d.serialize(&s).unwrap(), &s, context()).unwrap();
+}
+
+#[test]
+fn prepare_mixed_records_and_check_replace_edges_before_adding() {
+    let mut s = snapshot();
+    for name in ["a", "b"] {
+        s.create(id(name), Kind::Issue, current(name), context())
+            .unwrap();
+    }
+    s.add_dependency(&id("a"), &id("b")).unwrap();
+    let mut d = export(&s, &[id("a"), id("b")]).unwrap();
+    d.issues[0].needs.clear();
+    d.issues[1].needs.push(Reference::id("a"));
+    let checked = d.check(&d.serialize(&s).unwrap(), &s, context()).unwrap();
+    assert!(
+        checked
+            .snapshot
+            .entity(&id("b"))
+            .unwrap()
+            .current
+            .dependencies
+            .contains(&id("a"))
+    );
+    let new = example().issues.remove(0);
+    let mut new = Record {
+        parent: None,
+        ..new
+    };
+    new.needs.clear();
+    d.issues.push(new);
+    d.issues[0].needs.push(Reference::key("first"));
+    d.prepare(&s, "demo").unwrap();
+    assert!(d.issues[2].id.is_some());
+    d.check(&d.serialize(&s).unwrap(), &s, context()).unwrap();
+}
