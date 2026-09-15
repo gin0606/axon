@@ -21,6 +21,7 @@
 | 文書 | 定義する範囲 |
 | --- | --- |
 | [正本spec](../spec/lifecycle_proposal.md) | lifecycle・構造・候補・情報・表示・保存・統合・一括declarationの契約とモデル |
+| [Declaration](development/lifecycle-declaration.md) | strict YAML、canonical export、共通コアとの境界 |
 | [共通コア](development/lifecycle-core.md) | 通常操作、記録、codec、三者比較 |
 | [SQLite CLI](development/lifecycle-sqlite.md) | 公開操作とSQLite adapter |
 | [file保存とGit統合](development/lifecycle-file.md) | writer、worktree、merge CLI・driver |

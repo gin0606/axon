@@ -144,10 +144,11 @@ fn help_exposes_single_lifecycle_commands() {
         "reconsider",
         "merge",
         "storage",
+        "export",
     ] {
         assert!(help.contains(name));
     }
-    for old in ["ready", "claims", "decide", "export", "import", "migrate"] {
+    for old in ["ready", "claims", "decide", "import", "migrate"] {
         assert!(
             !help
                 .lines()

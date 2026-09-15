@@ -46,6 +46,9 @@ bare `axon`、help、-h、--helpは同じ用途別root helpをstdoutへ出して
 
 ## 計画全体の取得と一括編集
 
+- `axon export ID...` は完全 ID または一意な suffix を一つ以上受け取り、Issue 単体または Group 全子孫の和集合を canonical YAML として stdout に出す。保存先を変更せず、条件を実行しない。
+- `axon docs declaration` は field と新規・既存の違い、prepare → check → apply → 再 check の手順を stdout に説明する。`--example` は新規計画の canonical YAML だけを stdout に出す。どちらも保存先を開かない。引数なしの `axon docs` は従来の説明と declaration への案内を返す。
+
 `export` と `import prepare|check|apply`、`docs declaration` の識別子、declaration の形式、保存結果と診断の区別は [正本spec](../../spec/lifecycle_proposal.md#計画全体の取得と一括編集) の「計画全体の取得と一括編集」に従う。declaration内のIDは完全IDだけを使い、exportの引数は他のcommandと同じくsuffixも受け付ける。保存境界の表示はこの文書の「mutationの結果」と同じApplied、Not applied、Result unknownを使う。
 
 ## Note本文の横断検索

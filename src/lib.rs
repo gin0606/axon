@@ -1,4 +1,5 @@
 //! Single-lifecycle core and adapters for `spec/lifecycle_proposal.md`.
+pub mod declaration;
 pub mod file;
 pub mod file_merge;
 pub mod lifecycle;

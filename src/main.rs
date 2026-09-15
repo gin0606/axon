@@ -32,7 +32,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Explain the lifecycle, daily workflow and storage boundaries
-    Docs,
+    Docs {
+        #[command(subcommand)]
+        command: Option<Docs>,
+    },
+    /// Export Issues and complete Group subtrees as canonical declaration YAML
+    Export {
+        #[arg(required = true, num_args = 1.., value_name = "ID")]
+        ids: Vec<String>,
+    },
     /// Show the optional recorder actor detected in the current environment
     Actor,
     /// Write an unstyled shell completion script to stdout
@@ -118,6 +126,15 @@ enum Command {
     Dep {
         #[command(subcommand)]
         command: Dependency,
+    },
+}
+#[derive(Subcommand)]
+enum Docs {
+    /// Explain declaration fields and the prepare/check/apply workflow
+    Declaration {
+        /// Print only a canonical YAML template for a new plan
+        #[arg(long)]
+        example: bool,
     },
 }
 #[derive(Subcommand)]
@@ -563,7 +580,18 @@ fn branch_boundary<'a>(
 fn run(command: Command) -> Result<Output> {
     match command {
         Command::Actor => return Ok(output(format!("{}\n", actor(&context())), false)),
-        Command::Docs => return Ok(output(include_str!("docs/lifecycle.txt").into(), false)),
+        Command::Docs { command } => {
+            let text = match command {
+                None => include_str!("docs/lifecycle.txt").into(),
+                Some(Docs::Declaration { example: false }) => {
+                    include_str!("docs/declaration.txt").into()
+                }
+                Some(Docs::Declaration { example: true }) => axon::declaration::example()
+                    .serialize(&sqlite::empty())
+                    .map_err(|e| sqlite::Error::Invalid(e.to_string()))?,
+            };
+            return Ok(output(text, false));
+        }
         Command::Completion { shell } => {
             let mut bytes = Vec::new();
             clap_complete::generate(shell, &mut Cli::command(), "axon", &mut bytes);
@@ -650,7 +678,8 @@ fn run(command: Command) -> Result<Output> {
     let location = Location::discover(&cwd, false)?;
     let mut store = location.open()?;
     match command {
-        Command::List(_)
+        Command::Export { .. }
+        | Command::List(_)
         | Command::Triage(_)
         | Command::Tasks(_)
         | Command::Show { .. }
@@ -674,6 +703,15 @@ fn run(command: Command) -> Result<Output> {
                 _ => "No records.",
             };
             let text = match command {
+                Command::Export { ids } => {
+                    let selectors = ids
+                        .iter()
+                        .map(|id| resolve(&snapshot, id))
+                        .collect::<Result<Vec<_>>>()?;
+                    axon::declaration::export(&snapshot, &selectors)
+                        .and_then(|d| d.serialize(&snapshot))
+                        .map_err(|e| sqlite::Error::Invalid(e.to_string()))?
+                }
                 Command::Note {
                     command: Notes::Search { query },
                 } => search_notes(&snapshot, &query)?,
