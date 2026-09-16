@@ -22,4 +22,4 @@ Git/editorはOS lockに従わないため、同じworktreeでcheckout/merge/edit
 
 ## 統合と結果不明
 
-file統合は `axon-kit:merge` とその配布内referenceを使う。通常操作からmergeの選択、backend切替、全data移行へ権限を広げない。公開結果が不明ならwriter終了後に正本、候補、記録を照合する。結果不明のままNote追加や状態変更を繰り返さない。
+file統合は `axon-kit:merge-snapshot` とその配布内referenceを使う。通常操作からmergeの選択、backend切替、全data移行へ権限を広げない。公開結果が不明ならwriter終了後に正本、候補、記録を照合する。結果不明のままNote追加や状態変更を繰り返さない。

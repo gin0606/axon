@@ -1,5 +1,5 @@
 ---
-name: merge
+name: merge-snapshot
 description: Axonのfile snapshotをprepare/check/applyで統合する。通常Git操作の完遂やbackend切替には使わない。
 ---
 
