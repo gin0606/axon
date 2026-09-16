@@ -500,7 +500,7 @@ module group_lifecycle_proposal {
 
 計画の移動は、その計画の親だけを付け替える。配下の所属・lifecycle・dependency は保持され、部分木全体が移る。完了・取りやめた計画でも、自身の親が終了していなければ、その内部構成を変えずに移せる。これは終了済み Issue の移動と同じ制約である。
 
-未登録の枠は、計画内または計画外へ登録する。提案の記録（capture 相当）は `Undecided`、採用済みの仕事の登録（plan 相当）は `NotStarted` とする。登録操作は与えられた採否を反映し、採用判断そのものは代行しない。判断の主体や CLI 名はここでは定めない。
+未登録の枠は、計画内または計画外へ登録する。提案の記録は `Undecided`、採用済みの仕事の登録は `NotStarted` とする。登録操作は与えられた採否を反映し、採用判断そのものは代行しない。判断の主体や CLI 名はここでは定めない。
 
 どちらも登録だけでは進行中にならない。採用済みの登録後も、明示的な着手には親計画と dependency の条件を要求する。最終確認待ちの計画に不足 Issue を追加した場合、どちらの経路でも未終了の子が増えるため、計画は再び完了できなくなる。実際に最終確認が不合格となった理由はモデル外である。
 
@@ -2244,8 +2244,8 @@ Note検索は所属Entityの完全ID・完全な安定Note ID・日時・最初�
 
 | 操作 | コマンド |
 | --- | --- |
-| 未判断の Issue / Group を登録 | `axon capture …` / `axon group capture …` |
-| 採用済みの Issue / Group を登録 | `axon plan …` / `axon group plan …` |
+| 未判断の Issue / Group を登録 | `axon capture …` / `axon capture --kind group …` |
+| 採用済みの Issue / Group を登録 | `axon capture --accept …` / `axon capture --kind group --accept …` |
 | 採用 | `axon accept A` |
 | 採用撤回 | `axon withdraw A` |
 | 着手 | `axon start A` |
@@ -2254,11 +2254,11 @@ Note検索は所属Entityの完全ID・完全な安定Note ID・日時・最初�
 | 取りやめ | `axon cancel A` |
 | 再検討 | `axon reconsider A` |
 | タイトル・本文を編集 | `axon write A …` |
-| 親 Group を設定・変更 / 解除 | `axon group set A --parent G` / `axon group unset A` |
+| 親 Group を設定・変更 / 解除 | `axon parent set A --parent G` / `axon parent unset A` |
 | 依存先を追加 / 解除 | `axon dep add A --needs B` / `axon dep rm A --needs B` |
 | 再浮上条件を設定 / 解除 | `axon when set A --command '条件コマンド'` / `axon when clear A` |
 
-作成時だけ Issue・Group を呼び分け、作成後は同じ ID ベースの操作を使う。操作対象の ID は位置引数、関係先の ID は役割を明示する option とし、登録時の親・依存指定も `--parent`・`--needs` に揃える。`decide` の中間階層は設けない。
+登録は一つのコマンドで行い、種別は `--kind issue|group`、採否は `--accept` の有無で指定する。登録と採否は直交し、作成後は同じ ID ベースの操作を使う。操作対象の ID は位置引数、関係先の ID は役割を明示する option とし、登録時の親・依存指定も `--parent`・`--needs` に揃える。`decide` の中間階層は設けない。
 
 `write` はタイトル・本文を編集し、lifecycle を変えない。長い本文はファイルから渡せる入口を用意し、登録時と揃える。`--title`、`--description-file` は説明に用いた案であり、本文・Note の標準入力やファイル入力を含む細かな option 契約は実装設計で揃える。
 

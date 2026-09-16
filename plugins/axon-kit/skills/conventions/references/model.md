@@ -4,8 +4,8 @@ EntityはIssueまたはGroup。同じID namespaceと操作を使う。lifecycle�
 
 | 入力 | 遷移 |
 | --- | --- |
-| capture / group capture | Undecidedを新規作成 |
-| plan / group plan | 採用済みのNotStartedを新規作成 |
+| capture | Undecidedを新規作成。種別は `--kind` で選び、省略時はIssue |
+| capture --accept | 採用済みのNotStartedを新規作成 |
 | accept / withdraw | Undecided→NotStarted / NotStarted→Undecided |
 | start / release | NotStarted→InProgress / InProgress→NotStarted |
 | complete | InProgress→Completed |

@@ -1,8 +1,8 @@
 # 作成と照合
 
-呼び出し側から採否、目的、範囲、完了条件、kindと必要な関係を受け取る。未判断の懸念はcapture、採用済み計画はplanでNotStartedを作る。Groupはgroup capture / group plan。kit自身は重複候補から再利用や採用判断を選ばない。
+呼び出し側から採否、目的、範囲、完了条件、kindと必要な関係を受け取る。登録はcaptureの一つで、採否は `--accept` の有無、kindは `--kind issue|group` で指定する。未判断の懸念は `--accept` なしでUndecided、採用済み計画は `--accept` 付きでNotStartedを作る。`--kind` は省略するとissueになり、kind変更の操作はないため、供給されたkindを毎回明示する。kindが供給されていなければ既定に頼らず呼び出し側へ返す。kit自身は重複候補から再利用や採用判断を選ばない。
 
-一つのEntityを作る入力を先に揃える。titleは `--title`、本文は `-m/--description` または `-F/--description-file`。必要な `--parent G`、繰り返せる `--needs B`、供給された初期shell条件 `--command` を同じ作成へ含める。初期条件は未設定またはshell文字列として扱い、未指定なら未設定にする。条件の意味や実行影響が未確定なshellへの変換は、呼び出し側へ返す。
+一つのEntityを作る入力を先に揃える。titleは `--title`、供給されたkindは `--kind`、本文は `-m/--description` または `-F/--description-file`。採否に応じた `--accept`、必要な `--parent G`、繰り返せる `--needs B`、供給された初期shell条件 `--command` を同じ作成へ含める。初期条件は未設定またはshell文字列として扱い、未指定なら未設定にする。条件の意味や実行影響が未確定なshellへの変換は、呼び出し側へ返す。
 
 最初の作成前にlistの完全ID集合と固定payloadを保持する。作成は非冪等で、タイトル一致による自動upsertではない。成功後は返された完全IDを保存し、show --detailsとlogでkind・本文・lifecycle・親・dependency・条件を照合する。全入力を保存する一回の作成が成功したことを確認してから後続操作へ進む。
 

@@ -7,7 +7,8 @@ record IDs; they do not indicate priority or order.
 
 Lifecycle
   capture -> Undecided -> accept -> NotStarted -> start -> InProgress -> complete -> Completed
-  plan creates NotStarted work whose purpose and completion criteria are adopted.
+  capture registers work: --kind issue|group chooses the kind, and --accept
+  registers it as already adopted, in NotStarted instead of Undecided.
   withdraw returns NotStarted to Undecided; release returns InProgress to NotStarted.
   cancel terminates unfinished work; reconsider returns Cancelled to Undecided.
   Completed work cannot reopen. Notes can be appended even after work is terminal.
@@ -17,10 +18,13 @@ must be Completed before work starts or completes. Cancelled is terminal but doe
 not satisfy a dependency. Group completion also requires all direct children to
 be terminal. Running complete on a Group explicitly confirms final review of
 the entire plan, including the outcomes and Notes of its descendants.
+parent set ID --parent G sets or moves the parent Group and parent unset ID
+removes it; neither changes lifecycle.
 
 Daily workflow
   axon capture --title 'Investigate a concern' -m 'Context and uncertainty'
-  axon plan --title 'Deliver an adopted outcome' -F plan.md
+  axon capture --accept --title 'Deliver an adopted outcome' -F plan.md
+  axon capture --kind group --accept --title 'Deliver a plan' -F plan.md
   axon triage
   axon tasks
   axon show ID

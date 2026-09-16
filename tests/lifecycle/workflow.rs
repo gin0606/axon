@@ -9,10 +9,19 @@ fn both_backends_support_the_daily_workflow() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "trial", "--backend", backend]);
-        let group = created(f.ok(&["group", "plan", "--title", "納品", "-m", "全成果を検証"]));
+        let group = created(f.ok(&[
+            "capture",
+            "--kind",
+            "group",
+            "--accept",
+            "--title",
+            "納品",
+            "-m",
+            "全成果を検証",
+        ]));
         let first = created(f.ok(&["capture", "--title", "調査", "--parent", &group]));
         let second = created(f.ok(&[
-            "plan", "--title", "実装", "--parent", &group, "--needs", &first,
+            "capture", "--accept", "--title", "実装", "--parent", &group, "--needs", &first,
         ]));
         assert!(f.ok(&["triage"]).contains(&first));
         f.ok(&["accept", &first]);
@@ -94,7 +103,7 @@ fn sqlite_worktrees_share_parallel_work_and_notes() {
         ],
     );
     f.init();
-    let issue = f.plan("共有する仕事");
+    let issue = f.accepted("共有する仕事");
     let linked = Fixture::new();
     git(
         &f.0,

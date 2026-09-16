@@ -69,15 +69,8 @@ enum Command {
         #[arg(long, value_enum, default_value = "sqlite")]
         backend: Backend,
     },
-    /// Create an Undecided Issue
+    /// Register an Issue or Group; --accept registers it as adopted work
     Capture(Create),
-    /// Create a NotStarted Issue with an adopted plan
-    Plan(Create),
-    /// Create Groups or change their membership
-    Group {
-        #[command(subcommand)]
-        command: Group,
-    },
     /// List saved Entities in creation order without running conditions
     List(ListOptions),
     /// List surfaced Undecided Entities with surfaced ancestors
@@ -134,6 +127,11 @@ enum Command {
     Dep {
         #[command(subcommand)]
         command: Dependency,
+    },
+    /// Set or clear the parent Group without changing lifecycle
+    Parent {
+        #[command(subcommand)]
+        command: Parent,
     },
 }
 #[derive(Subcommand)]
@@ -262,13 +260,21 @@ struct Create {
     /// Title of the new Entity
     #[arg(long)]
     title: String,
+    /// Entity kind to create
+    #[arg(long, value_enum, default_value = "issue")]
+    kind: EntityKind,
+    /// Register as adopted work in NotStarted instead of Undecided
+    #[arg(long)]
+    accept: bool,
     /// Initial shell condition; stored without evaluation
     #[arg(long)]
     command: Option<String>,
     #[command(flatten)]
     body: Body,
+    /// Containing Group; the new Entity starts only while that Group is InProgress
     #[arg(long)]
     parent: Option<String>,
+    /// Dependency that must be Completed first; repeat for several
     #[arg(long)]
     needs: Vec<String>,
 }
@@ -279,17 +285,15 @@ struct Change {
     reason: Option<String>,
 }
 #[derive(Subcommand)]
-enum Group {
-    Capture(Create),
-    Plan(Create),
+enum Parent {
+    /// Set or move the parent Group
     Set {
         id: String,
         #[arg(long)]
         parent: String,
     },
-    Unset {
-        id: String,
-    },
+    /// Remove the parent Group
+    Unset { id: String },
 }
 #[derive(Subcommand)]
 enum Dependency {
@@ -954,14 +958,7 @@ fn run(command: Command) -> Result<Output> {
                 diagnostic,
             })
         }
-        Command::Capture(args) => create(&mut store, Kind::Issue, Lifecycle::Undecided, args),
-        Command::Plan(args) => create(&mut store, Kind::Issue, Lifecycle::NotStarted, args),
-        Command::Group {
-            command: Group::Capture(args),
-        } => create(&mut store, Kind::Group, Lifecycle::Undecided, args),
-        Command::Group {
-            command: Group::Plan(args),
-        } => create(&mut store, Kind::Group, Lifecycle::NotStarted, args),
+        Command::Capture(args) => create(&mut store, args),
         Command::Write {
             id: value,
             title,
@@ -1017,11 +1014,10 @@ fn run(command: Command) -> Result<Output> {
             })?;
             Ok(output(text, true))
         }
-        Command::Group { command } => {
+        Command::Parent { command } => {
             let (value, parent) = match command {
-                Group::Set { id, parent } => (id, Some(parent)),
-                Group::Unset { id } => (id, None),
-                _ => unreachable!(),
+                Parent::Set { id, parent } => (id, Some(parent)),
+                Parent::Unset { id } => (id, None),
             };
             let text = store.update(|_, snapshot| {
                 let id = resolve(snapshot, &value)?;
@@ -1117,12 +1113,13 @@ fn run(command: Command) -> Result<Output> {
         }
     }
 }
-fn create(
-    store: &mut axon::location::Store,
-    kind: Kind,
-    lifecycle: Lifecycle,
-    args: Create,
-) -> Result<Output> {
+fn create(store: &mut axon::location::Store, args: Create) -> Result<Output> {
+    let kind = args.kind.kind();
+    let lifecycle = if args.accept {
+        Lifecycle::NotStarted
+    } else {
+        Lifecycle::Undecided
+    };
     let description = args.body.read()?.unwrap_or_default();
     let title = args.title;
     let text = store.update(|prefix, snapshot| {

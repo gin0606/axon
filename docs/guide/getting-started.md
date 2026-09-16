@@ -15,7 +15,7 @@ AXON_BIN="$(pwd)/target/debug/axon"
 AXON_TRIAL_DIR="$(mktemp -d)"
 cd "$AXON_TRIAL_DIR"
 "$AXON_BIN" init trial
-"$AXON_BIN" plan --title '最初の仕事' -m '目的と完了条件'
+"$AXON_BIN" capture --accept --title '最初の仕事' -m '目的と完了条件'
 ```
 
 以降の `ID` は直前の登録出力で返ったIDへ置き換えます。試用先はGit repository外で、既存の `.axon` を持つディレクトリの配下も避けてください。
@@ -46,7 +46,7 @@ AXON_FILE_TRIAL_DIR="$(mktemp -d)"
 cd "$AXON_FILE_TRIAL_DIR"
 git init
 "$AXON_BIN" init trial --backend file
-"$AXON_BIN" plan --title 'Gitで共有する仕事' -m '目的と完了条件'
+"$AXON_BIN" capture --accept --title 'Gitで共有する仕事' -m '目的と完了条件'
 ```
 
 通常操作は両方式で同じです。fileのGit driver登録・追跡・競合解決は [file保存とGit統合](../development/lifecycle-file.md#git-driver) に従います。backendの変更にinitを使わず、新規保存先を別に選びます。
@@ -61,6 +61,6 @@ binaryを指定した場合はその指定を、未指定なら対象環境で�
 
 ## 旧データを持ち込む場合
 
-旧schemaの自動移行・一括取り込みはありません。旧binaryと旧保存先を維持したまま読み取り、新しい空の保存先へ必要な計画を手動で登録します。目的、本文、関係、今後の扱いを確認し、未判断はcapture、採用済みはplanを使います。旧状態を機械的に対応付けたり、過去の日時・記録者・IDを再現した履歴として作ったりしません。必要な旧記録は出典を示したNoteとして残せます。依存・所属は新IDで照合してください。
+旧schemaの自動移行・一括取り込みはありません。旧binaryと旧保存先を維持したまま読み取り、新しい空の保存先へ必要な計画を手動で登録します。目的、本文、関係、今後の扱いを確認し、未判断は `capture`、採用済みは `capture --accept` を使います。旧状態を機械的に対応付けたり、過去の日時・記録者・IDを再現した履歴として作ったりしません。必要な旧記録は出典を示したNoteとして残せます。依存・所属は新IDで照合してください。
 
 既存の `.axon` を上書き・コピーして新形式とみなさず、メインrepositoryのbinary・実データ・管理計画の切替は別途明示された作業として扱います。

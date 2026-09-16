@@ -1,16 +1,19 @@
 use super::*;
 
 #[derive(Clone, Copy, ValueEnum)]
-pub enum KindFilter {
+pub enum EntityKind {
     Issue,
     Group,
 }
-impl KindFilter {
+impl EntityKind {
+    pub fn kind(self) -> Kind {
+        match self {
+            Self::Issue => Kind::Issue,
+            Self::Group => Kind::Group,
+        }
+    }
     fn matches(self, entity: &Entity) -> bool {
-        matches!(
-            (self, entity.kind),
-            (Self::Issue, Kind::Issue) | (Self::Group, Kind::Group)
-        )
+        self.kind() == entity.kind
     }
 }
 #[derive(Clone, Copy, ValueEnum)]
@@ -36,7 +39,7 @@ impl LifecycleFilter {
 pub struct Selection {
     /// Restrict the Entity kind before evaluating any conditions
     #[arg(long)]
-    kind: Option<KindFilter>,
+    kind: Option<EntityKind>,
     /// Literal, case-sensitive text in current title or description; AND with other filters. Search Note bodies with axon note search
     #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
     search: Option<String>,
@@ -200,12 +203,12 @@ pub fn operation_label(command: &Command) -> String {
         Command::Dep {
             command: Dependency::Rm { id, .. },
         } => ("dep rm", Some(id)),
-        Command::Group {
-            command: Group::Set { id, .. },
-        } => ("group set", Some(id)),
-        Command::Group {
-            command: Group::Unset { id },
-        } => ("group unset", Some(id)),
+        Command::Parent {
+            command: Parent::Set { id, .. },
+        } => ("parent set", Some(id)),
+        Command::Parent {
+            command: Parent::Unset { id },
+        } => ("parent unset", Some(id)),
         Command::Note {
             command: Notes::Add { id, .. },
         } => ("note add", Some(id)),
@@ -215,14 +218,7 @@ pub fn operation_label(command: &Command) -> String {
         Command::Note {
             command: Notes::Show { id, .. },
         } => ("note show", Some(id)),
-        Command::Plan(_) => ("plan", None),
         Command::Capture(_) => ("capture", None),
-        Command::Group {
-            command: Group::Plan(_),
-        } => ("group plan", None),
-        Command::Group {
-            command: Group::Capture(_),
-        } => ("group capture", None),
         Command::List(_) => ("list", None),
         Command::Tasks(_) => ("tasks", None),
         Command::Triage(_) => ("triage", None),
@@ -249,7 +245,7 @@ pub fn render_root_help() -> String {
         (
             "Workflow",
             &[
-                "triage", "tasks", "capture", "plan", "accept", "start", "release", "complete",
+                "triage", "tasks", "capture", "accept", "start", "release", "complete",
             ],
         ),
         ("Inspect", &["show", "list", "log", "note", "actor"]),
@@ -259,7 +255,7 @@ pub fn render_root_help() -> String {
                 "export",
                 "import",
                 "write",
-                "group",
+                "parent",
                 "dep",
                 "when",
                 "withdraw",
