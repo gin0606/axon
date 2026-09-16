@@ -26,7 +26,7 @@
 | [SQLite CLI](development/lifecycle-sqlite.md) | 公開操作とSQLite adapter |
 | [file保存とGit統合](development/lifecycle-file.md) | writer、worktree、merge CLI・driver |
 | [専用移行ツール](../tools/lifecycle-migration/README.md) | 旧file/SQLiteから単一lifecycleへのbackup・変換・検証・明示適用 |
-| [候補と外部条件](development/lifecycle-candidates.md) | triage/tasksとprocess評価 |
+| [候補と外部条件](development/lifecycle-candidates.md) | proposals/tasksとprocess評価 |
 | [記録者連携](development/lifecycle-recorder.md) | 自動取得と保存済み詳細 |
 | [検証方針](development/verification.md) | CI、declarationを含む独立fixture、モデル検証の分担 |
 
@@ -49,6 +49,6 @@
 - 文書を移動・分割したら、README、AGENTS.md、モデル冒頭などの参照元も更新する。
 - 利用者向け文書は日本語で書き、CLIの識別子は実際の表記を併記する。段落内には手動改行を入れず、表示幅による折り返しに任せる。
 
-候補の `triage/tasks` と外部コマンドの実行契約は [候補一覧と外部条件](development/lifecycle-candidates.md) を参照する。
+候補の `proposals/tasks` と外部コマンドの実行契約は [候補一覧と外部条件](development/lifecycle-candidates.md) を参照する。
 
 [file保存とGit統合](development/lifecycle-file.md) は新lifecycleのwriter・merge CLI・Git driverの入口です。

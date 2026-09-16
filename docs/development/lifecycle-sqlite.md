@@ -29,7 +29,7 @@ cd "$FIXTURE_DIR"
 
 `list` と `show` は保存情報だけを読む。行は ID・種別・状況・タイトル、作成日時順（同時刻は ID 順）。`show` は本文、Note 件数、所属、直接の未充足前提と Group の全子孫のツリー・終了数（Group・Issue を含み、対象自身を除く）を表示する。Note 本文は `note list`、状態変更の前後・理由・統合結果は `log` で読む。記録は共通コアの因果順、並行記録のみ ID 順であり、時刻順への並べ替えはしない。直前の記録と先後関係がない箇所には`Concurrent branch` と表示し、逐次操作と区別する。通常表示では端末制御文字をエスケープする。
 
-候補の `triage/tasks` と `condition` の設定・評価は [候補一覧と外部条件](lifecycle-candidates.md) を参照する。記録者は独立crateから取得できた任意情報を添える。file 保存・merge は [file保存とGit統合](lifecycle-file.md) を参照する。同じ通常CLIを利用できる。
+候補の `proposals/tasks` と `condition` の設定・評価は [候補一覧と外部条件](lifecycle-candidates.md) を参照する。記録者は独立crateから取得できた任意情報を添える。file 保存・merge は [file保存とGit統合](lifecycle-file.md) を参照する。同じ通常CLIを利用できる。
 
 ## 保存と失敗の境界
 

@@ -20,6 +20,6 @@ description: Axonの単一lifecycle・情報モデルとCLI保存操作の共通
 
 対象、採用判断、作業選択、実装・review・commitの権限は呼び出し側workflowが与える。kitはそれらを選ばない。CLIが操作を受け付けることも権限の根拠ではない。与えられた効果は重ねて確認せず実行できるが、意味を変える未確定な判断は呼び出し側へ返す。
 
-構文の不確実さは保存先不要のhelpで解決する。保存情報は `list`・`show --details`・`log`・`note` で調べ、外部条件の評価が必要なときだけ `triage / tasks` を使う。任意recorderは認証・lock・生存確認ではない。
+構文の不確実さは保存先不要のhelpで解決する。保存情報は `list`・`show --details`・`log`・`note` で調べ、外部条件の評価が必要なときだけ `proposals / tasks` を使う。任意recorderは認証・lock・生存確認ではない。
 
 要求した作用、完全ID、保存結果（適用済み・未適用・部分適用・不明）、最終状態と関係への影響を返す。保存結果を確認するためだけの追加mutationはしない。

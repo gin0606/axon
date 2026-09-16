@@ -17,11 +17,11 @@ EntityはIssueまたはGroup。同じID namespaceと操作を使う。lifecycle�
 
 `list` は非浮上・terminalを含む保存済み全件で、`--kind issue|group`、`--lifecycle not-started` など、`--terminal=false`、`--search='text'` でAND絞り込みできる。検索は現在のtitle・本文だけのcase-sensitiveなliteral一致。単一検索の不一致だけで意味上の重複なしと断定しない。
 
-`triage` は自身と全祖先が浮上したUndecided、`tasks` は同条件のNotStartedと浮上を問わない全InProgressを示す。親や依存待ちもtasksに入る。候補一覧はinventoryではなく、不在は削除・登録失敗・未着手を立証しない。`--kind`・`--search` は対象候補を先に絞り、残る候補の祖先は通常どおり評価する。
+`proposals` は自身と全祖先が浮上したUndecided、`tasks` は同条件のNotStartedと浮上を問わない全InProgressを示す。親や依存待ちもtasksに入る。候補一覧はinventoryではなく、不在は削除・登録失敗・未着手を立証しない。`--kind`・`--search` は対象候補を先に絞り、残る候補の祖先は通常どおり評価する。
 
 `show ID` は保存本文、Note件数、所属、直接の未充足前提、Groupの全子孫ツリーと終了件数を読む。`show ID --details` は保存lifecycle・条件、親・全直接dependency・直接dependentも取得できる。充足済みの依存を待ち理由の欠如から消えたと判断しない。祖先は親IDを辿り、子孫はツリーから対象IDを選んで必要な本文・Note・logを取得する。通常showもdetailsも条件を実行しない。
 
-`note search 語句` は終了Entityを含む全Note本文を条件実行なしで横断検索する。case-sensitiveなliteral部分一致でtrim・Unicode正規化はせず、空文字は構文エラー、非一致はstdout空・stderr案内で正常終了する。完全Entity ID・安定Note ID・日時・最初の一致の抜粋を1 Note＝1行で示し、Entityのlist順とNoteの因果順を保つ。抜粋の省略側は…、改行・バックスラッシュ・制御文字は可視化する。原文は`note show ID NOTE_ID`で読む。list/tasks/triageの検索にはNote本文を含めない。
+`note search 語句` は終了Entityを含む全Note本文を条件実行なしで横断検索する。case-sensitiveなliteral部分一致でtrim・Unicode正規化はせず、空文字は構文エラー、非一致はstdout空・stderr案内で正常終了する。完全Entity ID・安定Note ID・日時・最初の一致の抜粋を1 Note＝1行で示し、Entityのlist順とNoteの因果順を保つ。抜粋の省略側は…、改行・バックスラッシュ・制御文字は可視化する。原文は`note show ID NOTE_ID`で読む。list/tasks/proposalsの検索にはNote本文を含めない。
 
 `note list ID` は全Noteの本文・安定ID・日時・actor、`note show ID NOTE_ID` は個別Noteを読む。`log ID` は状態変更・統合の経緯。分岐の記録を時刻で一本の操作列へ並べ直さない。`--recorder-details` で保存済みdataを取得する。`actor` は現在環境の任意actorを表示するだけで、過去の記録者・所有者・今のwriterの終了を立証しない。
 

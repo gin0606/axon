@@ -221,7 +221,7 @@ pub fn operation_label(command: &Command) -> String {
         Command::Capture(_) => ("capture", None),
         Command::List(_) => ("list", None),
         Command::Tasks(_) => ("tasks", None),
-        Command::Triage(_) => ("triage", None),
+        Command::Proposals(_) => ("proposals", None),
         Command::Init { .. } => ("init", None),
         Command::Merge { .. } => ("merge", None),
         Command::Storage { .. } => ("storage check", None),
@@ -245,7 +245,13 @@ pub fn render_root_help() -> String {
         (
             "Workflow",
             &[
-                "triage", "tasks", "capture", "accept", "start", "release", "complete",
+                "proposals",
+                "tasks",
+                "capture",
+                "accept",
+                "start",
+                "release",
+                "complete",
             ],
         ),
         ("Inspect", &["show", "list", "log", "note", "actor"]),

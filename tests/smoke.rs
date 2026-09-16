@@ -790,7 +790,7 @@ fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation
     assert!(trace.find(&root).unwrap() < trace.find(&nested).unwrap());
     assert!(trace.find(&nested).unwrap() < trace.find(&child).unwrap());
     fs::write(f.0.join("observations"), "").unwrap();
-    assert!(f.ok(&["triage"]).contains(&draft));
+    assert!(f.ok(&["proposals"]).contains(&draft));
     assert_eq!(
         fs::read_to_string(f.0.join("observations")).unwrap(),
         "root\nnested\ndraft\n"
@@ -811,7 +811,7 @@ fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation
             .unwrap()
             .is_empty()
     );
-    assert!(failure(f.run(&["triage"])).contains("exit status: 23"));
+    assert!(failure(f.run(&["proposals"])).contains("exit status: 23"));
 }
 
 #[test]
@@ -856,7 +856,7 @@ fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
     assert!(!f.0.join("forbidden").exists());
     let before = Store::open(&f.db()).unwrap().read().unwrap().1;
     assert!(f.ok(&["tasks"]).is_empty());
-    assert!(f.ok(&["triage"]).is_empty());
+    assert!(f.ok(&["proposals"]).is_empty());
     assert!(
         failure(f.run(&["condition", "set", &id, "--command", " "])).contains("empty condition")
     );

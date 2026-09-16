@@ -11,4 +11,4 @@ description: 指定Entityのstart・release・completeを同期する。実装�
 
 `complete ID` は外部workflowの成果・検証が完了したという判断を受けて実行する。Groupでは目的・完了条件と成果の統合、全子孫の終了、必要な検証を独立に確認する。showで子を辿り、必要な本文・Note・logを読む。全子孫のNote一括取得は必須にしない。Groupのcomplete自体を最終確認済みの入力とし、別の確認フラグや状態を作らない。子の終了から親のcompleteへ自動で広げない。
 
-complete前後に直接dependent、祖先・子孫とtasks/triageへの影響を確認する。追加Noteは別capabilityとして保存確認してから進める。最終lifecycle、保存結果と波及を返す。
+complete前後に直接dependent、祖先・子孫とtasks/proposalsへの影響を確認する。追加Noteは別capabilityとして保存確認してから進める。最終lifecycle、保存結果と波及を返す。

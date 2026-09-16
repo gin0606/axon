@@ -74,7 +74,7 @@ enum Command {
     /// List saved Entities in creation order without running conditions
     List(ListOptions),
     /// List surfaced Undecided Entities with surfaced ancestors
-    Triage(CandidateOptions),
+    Proposals(CandidateOptions),
     /// List surfaced NotStarted Entities and all InProgress work, including blocked work
     Tasks(CandidateOptions),
     /// Set or repair resurfacing conditions without running them
@@ -200,7 +200,7 @@ enum Merge {
 The working directory is the current Git worktree root, or the management root outside Git.
 Ctrl-C and timeout send TERM to the process group, then KILL after 1s.
 Each stdout/stderr stream retains up to 64 KiB (first and last 32 KiB on overflow).
-Examples: axon tasks --condition-timeout 500ms; axon triage --trace-conditions
+Examples: axon tasks --condition-timeout 500ms; axon proposals --trace-conditions
 Absence from a candidate list does not mean an Entity is missing. Use list for the complete inventory."
 )]
 struct CandidateOptions {
@@ -796,7 +796,7 @@ fn run(command: Command) -> Result<Output> {
         }
         Command::Export { .. }
         | Command::List(_)
-        | Command::Triage(_)
+        | Command::Proposals(_)
         | Command::Tasks(_)
         | Command::Show { .. }
         | Command::Log { .. }
@@ -806,8 +806,8 @@ fn run(command: Command) -> Result<Output> {
             let (_, snapshot) = store.read()?;
             let empty_hint = match &command {
                 Command::List(_) => "No matching Entities.",
-                Command::Triage(_) => {
-                    "No triage candidates. Conditions and ancestor scope may hide saved Entities; use axon list for the inventory."
+                Command::Proposals(_) => {
+                    "No proposals candidates. Conditions and ancestor scope may hide saved Entities; use axon list for the inventory."
                 }
                 Command::Tasks(_) => {
                     "No task candidates. Conditions and ancestor scope may hide saved Entities; use axon list for the inventory."
@@ -831,9 +831,9 @@ fn run(command: Command) -> Result<Output> {
                 Command::Note {
                     command: Notes::Search { query },
                 } => search_notes(&snapshot, &query)?,
-                Command::Triage(ref options) | Command::Tasks(ref options) => {
-                    let kind = if matches!(command, Command::Triage(_)) {
-                        CandidateList::Triage
+                Command::Proposals(ref options) | Command::Tasks(ref options) => {
+                    let kind = if matches!(command, Command::Proposals(_)) {
+                        CandidateList::Proposals
                     } else {
                         CandidateList::Tasks
                     };

@@ -345,6 +345,8 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
         let script = f.ok(&["completion", shell]);
         assert!(!script.contains('\x1b'));
         assert!(script.contains("tasks"));
+        assert!(script.contains("proposals"));
+        assert!(!script.contains("triage"));
     }
     for value in [
         "0ms",
@@ -750,7 +752,7 @@ fn note_search_preserves_entity_ties_and_concurrent_causal_order() {
 }
 
 #[test]
-fn triage_search_excludes_note_only_candidates_before_conditions() {
+fn proposals_search_excludes_note_only_candidates_before_conditions() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "q", "--backend", backend]);
@@ -770,13 +772,13 @@ fn triage_search_excludes_note_only_candidates_before_conditions() {
         let other = f.ok(&["capture", "--title", "other", "--command", "exit 19"]);
         let other = created(&other);
         f.ok(&["note", "add", other, "-m", "needle"]);
-        let rows = f.ok(&["triage", "--kind", "issue", "--search", "needle"]);
+        let rows = f.ok(&["proposals", "--kind", "issue", "--search", "needle"]);
         assert!(rows.contains(child) && !rows.contains(other));
         assert_eq!(
             fs::read_to_string(f.0.join("observed")).unwrap(),
             "parent\n"
         );
-        assert_eq!(f.run(&["triage", "--search="]).status.code(), Some(2));
+        assert_eq!(f.run(&["proposals", "--search="]).status.code(), Some(2));
         assert_eq!(f.run(&["tasks", "--search="]).status.code(), Some(2));
     }
 }

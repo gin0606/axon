@@ -23,9 +23,9 @@ fn both_backends_support_the_daily_workflow() {
         let second = created(f.ok(&[
             "capture", "--accept", "--title", "実装", "--parent", &group, "--needs", &first,
         ]));
-        assert!(f.ok(&["triage"]).contains(&first));
+        assert!(f.ok(&["proposals"]).contains(&first));
         f.ok(&["accept", &first]);
-        assert!(f.ok(&["triage"]).is_empty());
+        assert!(f.ok(&["proposals"]).is_empty());
         f.ok(&["condition", "set", &second, "--command", "exit 1"]);
         assert!(!f.ok(&["tasks"]).contains(&second));
         assert!(f.ok(&["list"]).contains(&second));
@@ -145,7 +145,7 @@ fn help_exposes_single_lifecycle_commands() {
     let f = Fixture::new();
     let help = f.ok(&["--help"]);
     for name in [
-        "triage",
+        "proposals",
         "tasks",
         "accept",
         "withdraw",
@@ -158,7 +158,7 @@ fn help_exposes_single_lifecycle_commands() {
     ] {
         assert!(help.contains(name));
     }
-    for old in ["ready", "claims", "decide", "migrate"] {
+    for old in ["ready", "claims", "decide", "migrate", "triage"] {
         assert!(
             !help
                 .lines()
@@ -166,6 +166,21 @@ fn help_exposes_single_lifecycle_commands() {
         );
         failure(f.run(&[old]));
     }
+    let rejected = f.run(&["triage"]);
+    assert_eq!(rejected.status.code(), Some(2));
+    assert!(failure(rejected).contains("unrecognized subcommand"));
+    let proposals_help = f.ok(&["proposals", "--help"]);
+    for option in [
+        "--kind",
+        "--search",
+        "--condition-timeout",
+        "--trace-conditions",
+    ] {
+        assert!(proposals_help.contains(option));
+    }
+    let docs = f.ok(&["docs"]);
+    assert!(docs.contains("axon proposals"));
+    assert!(!docs.contains("triage"));
     for args in [
         vec!["init", "--help"],
         vec!["merge", "--help"],
