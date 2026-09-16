@@ -8,7 +8,7 @@ Issue/Groupは共通の `<prefix>-<ランダム6文字>` namespaceを使う。�
 
 全Entity入力は完全IDまたは一意なsuffixを受け付ける。対象だけでなくparent/needsも同じ規則。曖昧なときは候補IDを示して拒否し、保存を変更しない。mutationではlock取得後のsnapshotで解決する。既存の長いIDを改番しない。Note・状態記録・storeの安定IDはEntityの短いIDと別の契約であり、内部識別子の長さは変更しない。
 
-登録titleは `--title`。本文は `-m/--description` または `-F/--description-file`。Noteは `-m/--message` または `-F/--file`。旧位置引数や旧本文optionの互換入口は提供しない。`-F -` はUTF-8のstdinを一度読む。本文・Noteをtrimして保存しない。初期の `--parent`、反復可能な `--needs`、`--command` は作成と同時に検査・保存する。作成中に条件を実行しない。通常writeはtitleと本文を一transactionで編集する。
+登録titleは `--title`。本文は `-m/--description` または `-F/--file`。Noteは `-m/--message` または `-F/--file`。旧位置引数や旧本文optionの互換入口は提供しない。`-F -` はUTF-8のstdinを一度読む。本文・Noteをtrimして保存しない。初期の `--parent`、反復可能な `--needs`、`--command` は作成と同時に検査・保存する。作成中に条件を実行しない。通常writeはtitleと本文を一transactionで編集する。
 
 option値の先頭hyphenは `--description='--text'` のように渡す。構文は `axon help <COMMAND PATH>` で確認できる。
 

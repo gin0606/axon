@@ -6,7 +6,7 @@
 
 各mutationは単独のshell呼出しにし、その終了コードを個別確認する。後続commandの成功で失敗を隠さない。複数段階の状態・本文・関係変更は一つのtransactionではない。順序、各段階のpostconditionと適用済み範囲を保持する。
 
-本文の `-m/--description` と `-F/--description-file`、Noteの `-m/--message` と `-F/--file` はそれぞれ排他で、`-F -` はstdin。file/stdinは初回mutation前に正確なUTF-8 bytesを独立snapshotへ保存しdigestを記録する。結果不明の間は保持し、元fileの後の編集を再試行へ混入させない。コマンドに先頭hyphenを含むoption値は `--message='--text'` のように渡す。shellの補間で内容を変えない。
+本文の `-m/--description` と `-F/--file`、Noteの `-m/--message` と `-F/--file` はそれぞれ排他で、`-F -` はstdin。file/stdinは初回mutation前に正確なUTF-8 bytesを独立snapshotへ保存しdigestを記録する。結果不明の間は保持し、元fileの後の編集を再試行へ混入させない。コマンドに先頭hyphenを含むoption値は `--message='--text'` のように渡す。shellの補間で内容を変えない。
 
 ## 保存先と権限
 

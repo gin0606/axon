@@ -11,7 +11,7 @@ FIXTURE_DIR="$(mktemp -d)"
 cd "$FIXTURE_DIR"
 "$AXON_BIN" init demo
 "$AXON_BIN" capture --kind group --accept --title '画面を実装する' -m '完了条件を記載する'
-"$AXON_BIN" capture --accept --title 'フォームを作る' --parent GROUP_ID --description-file body.md
+"$AXON_BIN" capture --accept --title 'フォームを作る' --parent GROUP_ID --file body.md
 "$AXON_BIN" start GROUP_ID
 "$AXON_BIN" start ISSUE_ID
 "$AXON_BIN" note add ISSUE_ID -m '成果と検証結果'
@@ -23,7 +23,7 @@ cd "$FIXTURE_DIR"
 
 `GROUP_ID`・`ISSUE_ID` は作成時に返る完全なIDまたは一意なsuffixへ置き換える。Group の `complete` は計画全体の最終確認済みという明示入力であり、子の完了だけで親を自動完了しない。
 
-登録は `capture` の一つで、`--kind issue|group` が種別、`--accept` が初期 lifecycle を選ぶ。`--kind` の既定は `issue`、`--accept` 省略時は Undecided、指定時は NotStarted。タイトルは `--title`、本文は `-m/--description` または `-F/--description-file`、`write ID` も同じ本文 option を使う。Note は `note add ID -m/--message` または `-F/--file`。ファイル引数 `-` は UTF-8 の標準入力を一度読む。本文 option 同士は排他。位置引数は対象 ID、親は `--parent`、依存先は繰り返し可能な `--needs`。入力や操作の拒否は非ゼロで終了する。
+登録は `capture` の一つで、`--kind issue|group` が種別、`--accept` が初期 lifecycle を選ぶ。`--kind` の既定は `issue`、`--accept` 省略時は Undecided、指定時は NotStarted。タイトルは `--title`、本文は `-m/--description` または `-F/--file`、`write ID` も同じ本文 option を使う。Note は `note add ID -m/--message` または `-F/--file`。ファイル引数 `-` は UTF-8 の標準入力を一度読む。本文 option 同士は排他。位置引数は対象 ID、親は `--parent`、依存先は繰り返し可能な `--needs`。入力や操作の拒否は非ゼロで終了する。
 
 `accept / withdraw / start / release / complete / cancel / reconsider ID` は `-r/--reason` を履歴へ保存する。`parent set ID --parent G` / `parent unset ID` と `dep add|rm ID --needs B` は共通コアの関係制約を使う。
 

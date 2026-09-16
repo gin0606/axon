@@ -237,7 +237,7 @@ struct Body {
     #[arg(short = 'm', long, conflicts_with = "description_file")]
     description: Option<String>,
     /// Read UTF-8 text from a file; - reads standard input
-    #[arg(short = 'F', long)]
+    #[arg(short = 'F', long = "file")]
     description_file: Option<PathBuf>,
 }
 impl Body {
@@ -967,7 +967,7 @@ fn run(command: Command) -> Result<Output> {
             let body = body.read()?;
             if title.is_none() && body.is_none() {
                 return Err(sqlite::Error::Invalid(
-                    "write requires --title, --description or --description-file".into(),
+                    "write requires --title, --description or --file".into(),
                 ));
             }
             let text = store.update(|_, snapshot| {

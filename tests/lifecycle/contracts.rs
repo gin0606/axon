@@ -317,6 +317,51 @@ fn no_op_confirmation_uses_locked_state_and_keeps_snapshot_and_bytes() {
 }
 
 #[test]
+fn file_flags_share_spelling_and_preserve_text_on_both_backends() {
+    for backend in ["sqlite", "file"] {
+        let f = Fixture::new();
+        f.ok(&["init", "text", "--backend", backend]);
+        let path = f.0.join("body.txt");
+        let body = "  本文\nsecond line\n";
+        fs::write(&path, body).unwrap();
+        let path = path.to_str().unwrap();
+        for flag in ["-F", "--file"] {
+            let output = f.ok(&["capture", "--title", "Text", flag, path]);
+            let id = created(&output);
+            assert!(f.ok(&["show", id]).contains(body));
+            f.ok(&["write", id, "--description", "temporary"]);
+            f.ok(&["write", id, flag, path]);
+            assert!(f.ok(&["show", id]).contains(body));
+            f.ok(&["note", "add", id, flag, path]);
+            assert!(f.ok(&["note", "list", id]).contains(body));
+            let before = snapshot(&f);
+            for args in [
+                vec!["capture", "--title", "Rejected", "--description-file", path],
+                vec!["write", id, "--description-file", path],
+                vec!["note", "add", id, "--description-file", path],
+                vec![
+                    "capture",
+                    "--title",
+                    "Rejected",
+                    "--description",
+                    "inline",
+                    flag,
+                    path,
+                ],
+                vec!["write", id, "--description", "inline", flag, path],
+                vec!["note", "add", id, "--message", "inline", flag, path],
+            ] {
+                let output = f.run(&args);
+                assert_eq!(output.status.code(), Some(2), "{args:?}");
+                assert!(output.stdout.is_empty());
+                assert!(!output.stderr.is_empty());
+                assert_eq!(snapshot(&f), before);
+            }
+        }
+    }
+}
+
+#[test]
 fn utility_commands_work_without_discovery_and_timeout_units_validate_before_storage() {
     let f = Fixture::new();
     fs::write(f.0.join(".git"), "broken marker").unwrap();
@@ -378,7 +423,20 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
             .lines()
             .any(|line| line.ends_with(':') && line.contains("Plan"))
     );
-    assert!(f.ok(&["docs"]).contains("Cancelled is terminal"));
+    for args in [
+        vec!["capture", "--help"],
+        vec!["write", "--help"],
+        vec!["note", "add", "--help"],
+    ] {
+        let leaf = f.ok(&args);
+        assert!(leaf.contains("-F, --file"));
+        assert!(!leaf.contains("--description-file"));
+    }
+    let docs = f.ok(&["docs"]);
+    assert!(docs.contains("Cancelled is terminal"));
+    assert!(docs.contains("Short flags select inline (-m) or file (-F) input"));
+    assert!(docs.contains("--description or --message"));
+    assert!(!docs.contains("--description-file"));
     assert!(f.ok(&["help", "note", "show"]).contains("<NOTE_ID>"));
     assert!(!f.ok(&["actor"]).is_empty());
     let version = f.ok(&["--version"]);
@@ -415,7 +473,12 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
         vec!["capture", "--accept", "old positional title"],
         vec!["capture", "--title", "Title", "--message", "old body"],
         vec![
-            "capture", "--accept", "--title", "Title", "--file", "old.md",
+            "capture",
+            "--accept",
+            "--title",
+            "Title",
+            "--description-file",
+            "old.md",
         ],
     ] {
         assert_eq!(f.run(&args).status.code(), Some(2));
