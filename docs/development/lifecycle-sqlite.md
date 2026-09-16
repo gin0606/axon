@@ -21,15 +21,15 @@ cd "$FIXTURE_DIR"
 "$AXON_BIN" complete GROUP_ID
 ```
 
-`GROUP_ID`・`ISSUE_ID` は作成時に返る完全なIDまたは一意なsuffixへ置き換える。Group の `complete` は計画全体の最終確認済みという明示入力であり、子の完了だけで親を自動完了しない。
+`GROUP_ID`・`ISSUE_ID` は作成時に返る完全なIDまたは一意なsuffixへ置き換える。Group の `axon complete` は計画全体の最終確認済みという明示入力であり、子の完了だけで親を自動完了しない。
 
-登録は `capture` の一つで、`--kind issue|group` が種別、`--accept` が初期 lifecycle を選ぶ。`--kind` の既定は `issue`、`--accept` 省略時は Undecided、指定時は NotStarted。タイトルは `--title`、本文は `-m/--description` または `-F/--file`、`write ID` も同じ本文 option を使う。Note は `note add ID -m/--message` または `-F/--file`。ファイル引数 `-` は UTF-8 の標準入力を一度読む。本文 option 同士は排他。位置引数は対象 ID、親は `--parent`、依存先は繰り返し可能な `--needs`。入力や操作の拒否は非ゼロで終了する。
+登録は `axon capture` の一つで、`--kind issue|group` が種別、`--accept` が初期 lifecycle を選ぶ。`--kind` の既定は `issue`、`--accept` 省略時は `Undecided`、指定時は `NotStarted`。タイトルは `--title`、本文は `-m/--description` または `-F/--file`、`axon write ID` も同じ本文 option を使う。Note は `axon note add ID -m/--message` または `-F/--file`。ファイル引数 `-` は UTF-8 の標準入力を一度読む。本文 option 同士は排他。位置引数は対象 ID、親は `--parent`、依存先は繰り返し可能な `--needs`。入力や操作の拒否は非ゼロで終了する。
 
-`accept / withdraw / start / release / complete / cancel / reconsider ID` は `-r/--reason` を履歴へ保存する。`parent set ID --parent G` / `parent unset ID` と `dep add|rm ID --needs B` は共通コアの関係制約を使う。
+`axon accept|withdraw|start|release|complete|cancel|reconsider ID` は `-r/--reason` を履歴へ保存する。`axon parent set ID --parent G` / `axon parent unset ID` と `axon dep add|rm ID --needs B` は共通コアの関係制約を使う。
 
-`list` と `show` は保存情報だけを読む。行は ID・種別・状況・タイトル、作成日時順（同時刻は ID 順）。`show` は本文、Note 件数、所属、直接の未充足前提と Group の全子孫のツリー・終了数（Group・Issue を含み、対象自身を除く）を表示する。Note 本文は `note list`、状態変更の前後・理由・統合結果は `log` で読む。記録は共通コアの因果順、並行記録のみ ID 順であり、時刻順への並べ替えはしない。直前の記録と先後関係がない箇所には`Concurrent branch` と表示し、逐次操作と区別する。通常表示では端末制御文字をエスケープする。
+`axon list` と `axon show` は保存情報だけを読む。行は ID・種別・状況・タイトル、作成日時順（同時刻は ID 順）。`axon show` は本文、Note 件数、所属、直接の未充足前提と Group の全子孫のツリー・終了数（Group・Issue を含み、対象自身を除く）を表示する。Note 本文は `axon note list`、状態変更の前後・理由・統合結果は `axon log` で読む。記録は共通コアの因果順、並行記録のみ ID 順であり、時刻順への並べ替えはしない。直前の記録と先後関係がない箇所には`Concurrent branch` と表示し、逐次操作と区別する。通常表示では端末制御文字をエスケープする。
 
-候補の `proposals/tasks` と `condition` の設定・評価は [候補一覧と外部条件](lifecycle-candidates.md) を参照する。記録者は独立crateから取得できた任意情報を添える。file 保存・merge は [file保存とGit統合](lifecycle-file.md) を参照する。同じ通常CLIを利用できる。
+候補の `axon proposals|tasks` と `axon condition` の設定・評価は [候補一覧と外部条件](lifecycle-candidates.md) を参照する。記録者は独立crateから取得できた任意情報を添える。file 保存・統合 は [file保存とGit統合](lifecycle-file.md) を参照する。同じ通常CLIを利用できる。
 
 ## 保存と失敗の境界
 
@@ -39,16 +39,16 @@ SQLite は `application_id`・`user_version`・schema・整合性と共通 snaps
 
 内部 Git 呼出しは `GIT_*` の override を除外し、現在 directory を探索の起点にする。Git 内では最寄りの `.git` と Git が返す root を照合し、bare repository・壊れた marker から祖先へ fallback しない。repository が探索境界。SQLite は common Git directory の親の `.axon/axon.db` を共有する。Git 外では最寄りの正本または `init.pending` を持つ祖先を選び、空の `.axon` と lock だけは無視する。混在・破損・不明 schema・初期化途中は別の保存先へ fallback しない。
 
-`init [prefix]` は管理root名が既定prefixの新規作成で、SQLiteが既定。`--backend file` は [file保存](lifecycle-file.md) を参照する。再実行・Git 外の入れ子初期化を拒否し、ignore・attributes・Git config を編集しない。backend 共通の OS lock 下で存在を照合し、同期した pending marker と一時DBを作り、hard link で正本を上書きせず公開する。公開後に directory を同期し、marker を除く。途中失敗は artifact の path を報告して保持する。writer を止め、marker・一時DB・正本を保全して手動で確認する。init を修復として再実行しない。
+`axon init [prefix]` は管理root名が既定prefixの新規作成で、SQLiteが既定。`--backend file` は [file保存](lifecycle-file.md) を参照する。再実行・Git 外の入れ子初期化を拒否し、ignore・attributes・Git config を編集しない。backend 共通の OS lock 下で存在を照合し、同期した pending marker と一時DBを作り、hard link で正本を上書きせず公開する。公開後に directory を同期し、marker を除く。途中失敗は artifact の path を報告して保持する。writer を止め、marker・一時DB・正本を保全して手動で確認する。`axon init` を修復として再実行しない。
 
 ## 検証境界
 
-`cargo test --lib --bin axon --test smoke` は共通コア、SQLite commit 拒否時の原子性、登録から Group 完了、入力・表示・出力失敗、並行 start と Note・別 Entity の保存、分岐統合済み snapshot の往復、旧・未知・破損 schema、混在・marker 拒否、Git 外の探索・境界、実 linked worktree 共有、並行 init を独立 fixture で検証する。実管理データも installed `axon` も使わない。
+`cargo test --lib --bin axon --test smoke` は共通コア、SQLite commit 拒否時の原子性、登録から Group 完了、入力・表示・出力失敗、並行 `axon start` と Note・別 Entity の保存、分岐統合済み snapshot の往復、旧・未知・破損 schema、混在・marker 拒否、Git 外の探索・境界、実 linked worktree 共有、並行 `axon init` を独立 fixture で検証する。実管理データも installed `axon` も使わない。
 
-旧 process 監督・file crash/merge・記録者・旧 CLI のテストは `archive/three-axis/tests` にある過去の検証資料で、新 binary のテストとして実行しない。process監督・file/merge・記録者の検証は新smokeと記録者crateで実行する。今回の I/O・CLI 接続はコアの lifecycle/包含/dependency の意味を変更しないため、新しい Quint 状態を加えない。
+旧 process 監督・fileの障害・統合・記録者・旧 CLI のテストは `archive/three-axis/tests` にある過去の検証資料で、新 binary のテストとして実行しない。process監督・file保存・統合・記録者の検証は新smokeと記録者crateで実行する。今回の I/O・CLI 接続はコアの lifecycle/包含/dependency の意味を変更しないため、新しい Quint 状態を加えない。
 
 記録者の自動取得・詳細参照は [記録者連携](lifecycle-recorder.md)、初回試用と手動持込みは [使い始める](../guide/getting-started.md) を参照する。
 
 ## Declarationの一括反映
 
-`import apply FILE` の共通入口は `src/declaration_file.rs::apply`。`Store::update` がIMMEDIATE transactionを取得した後にFILEを読み、`Declaration::check`の候補snapshotを一回で保存する。commitが拒否されれば前のsnapshotが残り、結果は既存のResult unknown契約で報告する。保存成功後はtransaction内で得たsnapshotによるcanonical declarationを公開し、保存先を再読しない。全件の最終値が一致する再試行はsnapshotを変更せず、FILEの更新だけを完了する。
+`axon import apply FILE` の共通入口は `src/declaration_file.rs::apply`。`Store::update` がIMMEDIATE transactionを取得した後にFILEを読み、`Declaration::check`の候補snapshotを一回で保存する。commitが拒否されれば前のsnapshotが残り、結果は既存のResult unknown契約で報告する。保存成功後はtransaction内で得たsnapshotによるcanonical declarationを公開し、保存先を再読しない。全件の最終値が一致する再試行はsnapshotを変更せず、FILEの更新だけを完了する。

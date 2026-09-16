@@ -13,7 +13,7 @@ description: Axonの操作契約の上に、自律実行とユーザー判断の
 
 ユーザーへ返すのは、依頼と確定情報から復元できず、何を、なぜ、いつ行うかを変える重要な意思決定である。目的、scope、完了条件、採否、時期、計画の意味、複数の妥当な選択肢から価値判断で選ぶ事項が該当する。操作の技術的な大きさだけを理由に確認を増やさない。
 
-`tasks`または`proposals`から着手対象や判断対象を選ぶことは、このworkflowではユーザーの意思決定とする。ただし、ユーザーが対象を指定した場合、または明示的な上位workflowが対象選択の範囲を与えた場合は、その範囲内で選択できる。
+`axon tasks`または`axon proposals`から着手対象や判断対象を選ぶことは、このworkflowではユーザーの意思決定とする。ただし、ユーザーが対象を指定した場合、または明示的な上位workflowが対象選択の範囲を与えた場合は、その範囲内で選択できる。
 
 ## 合意済みの計画構造を自律して整える
 
@@ -23,28 +23,28 @@ description: Axonの操作契約の上に、自律実行とユーザー判断の
 - 合意済み成果に論理的に必要な先行条件はdependencyとして設定する。任意の順序付け、代替前提の選択、採用判断を伴うdependencyは確認する。
 - 合意済みscopeを実行可能な単位へ分け、子Entity、包含、必要なdependencyを作れる。新しい目的、scope、公開仕様、採用判断、独立した完了単位を加える場合は確認する。
 
-本文・関係の編集とlifecycle判断を分ける。編集のためだけに状態を往復させない。終了Groupの構成固定やCompleted再開禁止を補償遷移で迂回しない。
+本文・関係の編集とlifecycle判断を分ける。編集のためだけに状態を往復させない。終了Groupの構成固定や`Completed`再開禁止を補償遷移で迂回しない。
 
 ## 既存情報と波及を調べる
 
-既存Entityを変更するときは `axon show ID --details` で保存状態・条件・全直接関係を読み、判断や現在の計画に関係するlogとNoteを確認する。古いNoteを年齢だけで無関係とみなさない。導出される候補への影響が必要な場合だけtasks/proposalsを評価する。
+既存Entityを変更するときは `axon show ID --details` で保存状態・条件・全直接関係を読み、判断や現在の計画に関係するlogとNoteを確認する。古いNoteを年齢だけで無関係とみなさない。導出される候補への影響が必要な場合だけ`axon tasks`/`axon proposals`を評価する。
 
-終了状態・構造に影響する操作やcompleteでは、detailsの直接dependent、親を辿った祖先、全子孫ツリーで確認した子孫への波及を調べる。Cancelledはdependencyを満たさず、子の終了は親のcompleteを代行しない。関係先のために新しい採否や目的を決める必要があれば、その判断だけを返す。
+終了状態・構造に影響する操作や`axon complete`では、detailsの直接dependent、親を辿った祖先、全子孫ツリーで確認した子孫への波及を調べる。`Cancelled`はdependencyを満たさず、子の終了は親の`axon complete`を代行しない。関係先のために新しい採否や目的を決める必要があれば、その判断だけを返す。
 
 ## 新規Entityの重複を扱う
 
-新規登録前に`axon list --terminal=false`と必要なfrontierを確認する。`--search`は現在のtitle、descriptionのリテラル一致で候補を絞る用途に限り、一つの検索で該当しないことを意味的な重複なしの根拠にしない。Noteに残る情報を探す場合は`axon note search 語句`を使い、抜粋から対象を選んで`note show ID NOTE_ID`で原文を読む。Noteだけの一致はlist/tasks/proposalsの検索に含まれない。同じ目的、scope、完了条件、kind、構造的役割、採否と作業状態が合う未終端Entityが一つだけあり、依頼が新しいIDではなく成果の記録を求めている場合は、そのEntityを再利用する。
+新規登録前に`axon list --terminal=false`と必要なfrontierを確認する。`--search`は現在のtitle、descriptionのリテラル一致で候補を絞る用途に限り、一つの検索で該当しないことを意味的な重複なしの根拠にしない。Noteに残る情報を探す場合は`axon note search 語句`を使い、抜粋から対象を選んで`axon note show ID NOTE_ID`で原文を読む。Noteだけの一致は`axon list`/`axon tasks`/`axon proposals`の検索に含まれない。同じ目的、scope、完了条件、kind、構造的役割、採否と作業状態が合う未終端Entityが一つだけあり、依頼が新しいIDではなく成果の記録を求めている場合は、そのEntityを再利用する。
 
-採否の不一致、CompletedまたはCancelled、cross-kind、scopeや構造的役割の差、複数候補がある場合は、再利用、再判断、新規作成をユーザーへ返す。部分的に重なるだけのEntityは登録を妨げない。ユーザーが新しいIDの作成を明示した場合は、その選択に従う。
+採否の不一致、`Completed`または`Cancelled`、cross-kind、scopeや構造的役割の差、複数候補がある場合は、再利用、再判断、新規作成をユーザーへ返す。部分的に重なるだけのEntityは登録を妨げない。ユーザーが新しいIDの作成を明示した場合は、その選択に従う。
 
 ## Noteとreasonを分ける
 
 後続作業に必要な確定済みの実装・調査結果、制約、申し送りは、対象と情報分類が明確なら本文を構成してNoteへ追加する。ユーザーの判断を代弁する本文、または対象か情報分類が曖昧な場合だけ確認する。
 
-単なる進捗実況、定型的な開始・完了報告、状態変更reasonと同じ内容はNoteにしない。reasonを受け付けるlifecycle操作には、判断または作業状況から復元できる理由を必要に応じて付ける。conditionは現在の条件だけを編集し、reasonを受け付けない。releaseやcompleteに先立つNoteは、保存と番号を確認してから状態を変更し、後続操作が失敗しても再追加しない。
+単なる進捗実況、定型的な開始・完了報告、状態変更reasonと同じ内容はNoteにしない。reasonを受け付けるlifecycle操作には、判断または作業状況から復元できる理由を必要に応じて付ける。`axon condition`は現在の条件だけを編集し、reasonを受け付けない。`axon release`や`axon complete`に先立つNoteは、保存と番号を確認してから状態を変更し、後続操作が失敗しても再追加しない。
 
 ## 失敗と権限不足を扱う
 
 入力と現在状態を照合でき、同じ効果へ収束する再試行は自律して行う。結果不明、競合、重複作成の可能性、rollback、補償操作、別の最終状態が必要な場合は停止し、観測済みの状態と必要な判断を示す。
 
-active backendの保存先へのmutationだけがsandboxに拒否された場合は、そのmutation commandだけをホストの許可機構で再実行する。特にGit内のSQLiteはcommon Git directoryの親の`.axon/axon.db`を共有し、current worktree外への書込みになり得る。file backendはcurrent worktreeのGit管理対象になり得る`.axon/state.jsonl`を変更するため、Axon操作の権限をstage、commit、merge、破棄の権限へ広げず、変更artifactを呼び出し元へ返す。別worktreeの未統合snapshotや未調整の実作業はcurrent worktreeから観測できない。読み取りcommandや他のprogramまで権限を広げず、再実行できなければ観測できた適用範囲を返し、不明な保存結果を未反映と断定しない。
+active backendの保存先へのmutationだけがsandboxに拒否された場合は、そのmutation commandだけをホストの許可機構で再実行する。特にGit内のSQLiteはcommon Git directoryの親の`.axon/axon.db`を共有し、current worktree外への書込みになり得る。file backendはcurrent worktreeのGit管理対象になり得る`.axon/state.jsonl`を変更するため、Axon操作の権限をGitのstage、commit、merge、破棄の権限へ広げず、変更artifactを呼び出し元へ返す。別worktreeの未統合snapshotや未調整の実作業はcurrent worktreeから観測できない。読み取りcommandや他のprogramまで権限を広げず、再実行できなければ観測できた適用範囲を返し、不明な保存結果を未反映と断定しない。

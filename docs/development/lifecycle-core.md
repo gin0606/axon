@@ -2,17 +2,17 @@
 
 正本は [literate spec](../../spec/lifecycle_proposal.md)。新しい [Rust library](../../src/lib.rs) の `lifecycle` module は SQL、filesystem、外部コマンド評価を呼ばない。`Snapshot` の操作と検査、`encode` / `decode` の byte 列を、両 backend が共通で使う。`cargo test --lib` で独立したメモリ上の fixture を検証する。
 
-この境界は Issue / Group の登録、基本遷移、包含・dependency の変更、文面編集、Note、分岐した記録と明示選択を扱う。候補評価は `candidates`、条件設定は `set_condition`、三者比較は `MergePlan` が扱う。file adapter と merge CLI は [file保存とGit統合](lifecycle-file.md) に接続する。[SQLite CLI](lifecycle-sqlite.md) が保存 adapter と公開入口を提供する。`archive/three-axis/src` の旧 module と `archive/three-axis/tests` は置換前の三軸 CLI に属し、新仕様の規範にしない。
+この境界は Issue / Group の登録、基本遷移、包含・dependency の変更、文面編集、Note、分岐した記録と明示選択を扱う。候補評価は `candidates`、条件設定は `set_condition`、三者比較は `MergePlan` が扱う。file adapter と `axon merge` CLI は [file保存とGit統合](lifecycle-file.md) に接続する。[SQLite CLI](lifecycle-sqlite.md) が保存 adapter と公開入口を提供する。`archive/three-axis/src` の旧 module と `archive/three-axis/tests` は置換前の三軸 CLI に属し、新仕様の規範にしない。
 
 ## 通常操作と構造
 
 `Current` は最大一つの親 Group と outgoing dependency 集合を保持する。`create`、`set_parent`、`add_dependency` / `remove_dependency` は候補 snapshot の全体検査後に確定し、拒否時は記録も現在値も変えない。同値の関係指定は成功した no-op とする。状態変更は `check_operation` と同じ前提を検査し、成功時だけ履歴を加える。外部条件は評価しない。
 
-子の着手には親の InProgress、着手・完了には直接依存先すべての Completed が必要になる。Group の解放は進行中の子がいると拒否し、完了・取りやめは未終了の子がいると拒否する。`perform(..., Operation::Complete, ...)` 自体を Group 全体の最終確認済みという明示入力とする。`check_operation` や子の終了は最終確認を記録せず、親を自動変更しない。
+子の着手には親の `InProgress`、着手・完了には直接依存先すべての `Completed` が必要になる。Group の解放は進行中の子がいると拒否し、完了・取りやめは未終了の子がいると拒否する。`perform(..., Operation::Complete, ...)` 自体を Group 全体の最終確認済みという明示入力とする。`check_operation` や子の終了は最終確認を記録せず、親を自動変更しない。
 
-終了した親の構成と配下の lifecycle は固定する。終了した Entity 自体の所属は、元と先の親が終了していなければ変更できる。InProgress の部分木は InProgress の親へ、または所属なしへ移動できる。Completed の outgoing dependency は固定し、Cancelled の依存編集は許す。
+終了した親の構成と配下の lifecycle は固定する。終了した Entity 自体の所属は、元と先の親が終了していなければ変更できる。`InProgress` の部分木は `InProgress` の親へ、または所属なしへ移動できる。`Completed` の outgoing dependency は固定し、`Cancelled` の依存編集は許す。
 
-全体検査は包含の参照・循環と、進行中の祖先、終了した Group の子孫、Completed の依存先を検査する。通常完了の前提を「直属の子、自身と全祖先の依存先」へ縮約し、動的な Entity 集合に Kahn 法を適用する。Completed / Cancelled もグラフに含む。codec と明示統合もこの検査を使い、統合では選択した終了済み Group の全子孫の集合・所属・lifecycle も選択元と照合する。
+全体検査は包含の参照・循環と、進行中の祖先、終了した Group の子孫、`Completed` の依存先を検査する。通常完了の前提を「直属の子、自身と全祖先の依存先」へ縮約し、動的な Entity 集合に Kahn 法を適用する。`Completed` / `Cancelled` もグラフに含む。codec と明示統合もこの検査を使い、統合では選択した終了済み Group の全子孫の集合・所属・lifecycle も選択元と照合する。
 
 ## 現在値と不変な記録
 
@@ -38,7 +38,7 @@
 
 再統合では、選択済みの先端が相手を包含し、同じ現在値であるか、過去の統合入力に相手の先端と現在値の完全な組が残っていれば、その先端を再利用する。逆向きの取り込みでも記録を増殖させない。文面編集は履歴を作らないため、状態先端の先行関係だけでは過去の選択済み入力と見なさない。直接の `Snapshot::integrate` は引き続き明示的な統合記録を作る低水準入口である。
 
-この engine は条件文字列を保存値として比較するだけで、環境、shell、filesystem、SQLite、Git にアクセスしない。`prepare/check/apply` の公開 CLI、入力ファイルの保全と変更検知、正本への公開は file adapter 側で接続する。
+この engine は条件文字列を保存値として比較するだけで、環境、shell、filesystem、SQLite、Git にアクセスしない。`axon merge prepare|check|apply` の公開 CLI、入力ファイルの保全と変更検知、正本への公開は file adapter 側で接続する。
 
 ## 検査と canonical codec
 
@@ -48,7 +48,7 @@ JSONL の header は `format: "axon-lifecycle/v1"` と store ID を持ち、Enti
 
 ## 検証の対応
 
-- 基本遷移: `lifecycle_rules` / `lifecycle_proposal` の七操作、Completed の固定。Rust は全状態 × 全操作の行列と失敗時の原子性を検査する。
+- 基本遷移: `lifecycle_rules` / `lifecycle_proposal` の七操作、`Completed` の固定。Rust は全状態 × 全操作の行列と失敗時の原子性を検査する。
 - 情報操作: `lifecycle_information` の編集制約・他 Entity 不変・Note 追記・状態と履歴の一体性。Rust は Issue / Group、全 lifecycle、同内容の独立 Note、任意の記録者情報を検査する。
 - 分岐と保存: 正本の「SQLite と file backend の実装範囲」を Rust の縦断テストで検査する。日時逆転、並行履歴、明示選択後の通常操作、不正な参照・ID 衝突、canonical bytes 往復を含む。通常操作モデルの一本の履歴へ統合を押し込めない。
 

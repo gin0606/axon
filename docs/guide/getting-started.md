@@ -30,7 +30,7 @@ cd "$AXON_TRIAL_DIR"
 "$AXON_BIN" note list ID --recorder-details
 ```
 
-初期化は新規作成専用です。SQLiteの置き場所とGit worktree共有は [保存先](storage.md) を参照してください。file backendとmergeの利用手順は [file保存とGit統合](../development/lifecycle-file.md) を参照してください。
+初期化は新規作成専用です。SQLiteの置き場所とGit worktree共有は [保存先](storage.md) を参照してください。file backendと`axon merge`の利用手順は [file保存とGit統合](../development/lifecycle-file.md) を参照してください。
 
 ## 保存方式を選ぶ
 
@@ -49,18 +49,18 @@ git init
 "$AXON_BIN" capture --accept --title 'Gitで共有する仕事' -m '目的と完了条件'
 ```
 
-通常操作は両方式で同じです。fileのGit driver登録・追跡・競合解決は [file保存とGit統合](../development/lifecycle-file.md#git-driver) に従います。backendの変更にinitを使わず、新規保存先を別に選びます。
+通常操作は両方式で同じです。fileのGit driver登録・追跡・競合解決は [file保存とGit統合](../development/lifecycle-file.md#git-driver) に従います。backendの変更に`axon init`を使わず、新規保存先を別に選びます。
 
 ## Agent向けskill
 
 [`axon-kit`](../../plugins/axon-kit/skills) は操作契約、[`axon`](../../plugins/axon/skills) は任意の個人用協業方針です。plugin内に必要なreferenceを同梱しているため、利用先repositoryにAxonのソースcheckoutを置く必要はありません。対応するCLIとpluginを対象環境へ導入し、管理するrepositoryで呼び出します。
 
-binaryを指定した場合はその指定を、未指定なら対象環境で発見した `axon` を使います。skillはversion・helpで対応を照合して実行ファイルとrootを固定します。旧版のCLIやsessionに読み込まれた旧skillが混在する場合は、その不一致を解決してから操作します。開発版の試用では上記の絶対パスを渡す方法も使えます。
+binaryを指定した場合はその指定を、未指定なら対象環境で発見した `axon` を使います。skillは`axon --version`・`axon --help`で対応を照合して実行ファイルとrootを固定します。旧版のCLIやsessionに読み込まれた旧skillが混在する場合は、その不一致を解決してから操作します。開発版の試用では上記の絶対パスを渡す方法も使えます。
 
 例えば「このrepositoryの懸念をAxonに未判断として記録して」と依頼できます。対象と任せる範囲は依頼が決め、登録から実装・commitの権限を推測しません。
 
 ## 旧データを持ち込む場合
 
-旧schemaの自動移行・一括取り込みはありません。旧binaryと旧保存先を維持したまま読み取り、新しい空の保存先へ必要な計画を手動で登録します。目的、本文、関係、今後の扱いを確認し、未判断は `capture`、採用済みは `capture --accept` を使います。旧状態を機械的に対応付けたり、過去の日時・記録者・IDを再現した履歴として作ったりしません。必要な旧記録は出典を示したNoteとして残せます。依存・所属は新IDで照合してください。
+旧schemaの自動移行・一括取り込みはありません。旧binaryと旧保存先を維持したまま読み取り、新しい空の保存先へ必要な計画を手動で登録します。目的、本文、関係、今後の扱いを確認し、未判断は `axon capture`、採用済みは `axon capture --accept` を使います。旧状態を機械的に対応付けたり、過去の日時・記録者・IDを再現した履歴として作ったりしません。必要な旧記録は出典を示したNoteとして残せます。依存・所属は新IDで照合してください。
 
 既存の `.axon` を上書き・コピーして新形式とみなさず、メインrepositoryのbinary・実データ・管理計画の切替は別途明示された作業として扱います。
