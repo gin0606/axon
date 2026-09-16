@@ -49,6 +49,20 @@
 - 文書を移動・分割したら、README、AGENTS.md、モデル冒頭などの参照元も更新する。
 - 利用者向け文書は日本語で書き、CLIの識別子は実際の表記を併記する。段落内には手動改行を入れず、表示幅による折り返しに任せる。
 
+### Axonの操作・遷移・状態の表記
+
+このリポジトリが書く日本語の文書・skillでは、散文でAxonの操作・遷移・状態を指す語を必ずcode表記にする。code表記でない英単語はAxonの操作を指さない。この読み分けを契約とし、Axonの操作を指さない語は規約の対象外とする。英語のCLI出力・help・内蔵文書には適用しない。
+
+1. コマンドの実行を指すときは、`axon start`・`axon show ID --details`・`axon merge prepare …`のように、引用するcode spanを`axon`から始める。同じ列挙では`axon accept|withdraw|cancel|reconsider`のようにまとめてよい。
+2. コマンドの一部を単独で指す場合は、段階名の`prepare`・`check`・`apply`、フラグの`--details`・`--version`、引数名の`parent`・`needs`のように、その部分だけをcode表記にする。複数のコマンドに共通し、namespaceを特定できない段階名もこの形にする。
+3. コマンドという手段ではなくlifecycleの遷移概念を指すときは、specの遷移名`Accept`・`Withdraw`・`Start`・`Release`・`Complete`・`Cancel`・`Reconsider`を使う。これらはQuintの型構築子でもあるが、他ツールの識別子としての除外よりこの規則を優先する。
+4. 状態は`Undecided`・`NotStarted`・`InProgress`・`Completed`・`Cancelled`のようにcode表記にする。遷移の動詞形`Complete`と、状態の過去分詞形`Completed`を区別する。
+5. 一般的な意味での作業の中断・完了・統合・リリースは日本語で書き、Axonのコマンド名・遷移名・状態名と同じ英単語を裸で散文に使わない。ただし、次の対象外に該当する場合を除く。
+6. Axon固有の名詞（Issue、Group、Entity、Note、lifecycle、dependency、declaration）、情報モデルのfield名や記録の名詞（actor、log、reason、parent、condition）、declarationや統合のrepairsのoperation種別名（write、parent、dependency、condition）、リポジトリ内のpath・ディレクトリ名、Git・YAML・SQLite・Quint・Rustなど他ツール・他仕様の識別子、一般技術語は対象外。他ツールの識別子は節・表の冒頭または近くの文でツールを示す。その語を主語に操作の挙動を述べる文はコマンド側とみなす。たとえば「`axon condition`は現在の条件だけを編集する」はコマンドの説明、「logのreason」は記録の説明となる。helpも、`axon help`の実行とhelpの出力内容を区別する。
+7. skillのdescriptionは冒頭でAxon対象と分かるようにし、Axonの操作を指す場合は上記のコマンド表記にする。
+
+確認時は、`axon --help`の全subcommand、`axon import`・`axon merge`の下位subcommand、状態5語、遷移7語を対象に、fenced code・inline code span・frontmatterのname行を除いた散文をcase-sensitiveかつ単語境界`[A-Za-z-]`で検索する。残存箇所を全て分類し、Axonの操作・遷移・状態を裸で指す箇所がないことを確認する。対象語で始まるcode spanも列挙し、コマンド引用が`axon`から始まることを確認する。検索は発見の補助であり、意味の判定や文脈の確認を置き換えない。
+
 候補の `proposals/tasks` と外部コマンドの実行契約は [候補一覧と外部条件](development/lifecycle-candidates.md) を参照する。
 
 [file保存とGit統合](development/lifecycle-file.md) は新lifecycleのwriter・merge CLI・Git driverの入口です。

@@ -2,7 +2,7 @@
 
 ## 初回実行前
 
-対象root・binary・引数・payloadを固定し、保存情報を読む。Entityは `show ID --details`、判断理由はlog・必要なNote、構造変更やterminal化は親・子孫・直接dependentまで調べる。別writerやGit/editor操作との未調整競合があれば先に直列化または分離する。
+対象root・binary・引数・payloadを固定し、保存情報を読む。Entityは `axon show ID --details`、判断理由はlog・必要なNote、構造変更やterminal化は親・子孫・直接dependentまで調べる。別writerやGit/editor操作との未調整競合があれば先に直列化または分離する。
 
 各mutationは単独のshell呼出しにし、その終了コードを個別確認する。後続commandの成功で失敗を隠さない。複数段階の状態・本文・関係変更は一つのtransactionではない。順序、各段階のpostconditionと適用済み範囲を保持する。
 
@@ -10,13 +10,13 @@
 
 ## 保存先と権限
 
-Git内のSQLiteはcommon Git directoryの親の `.axon/axon.db` をworktree間で共有する。fileは現在worktreeの `.axon/state.jsonl` で、他worktreeの未統合データは観測できない。Git外は最寄りの管理root。別worktreeはSQLiteの独立fixtureではない。混在・破損・unknown schema・init途中から別保存先へfallbackしない。
+Git内のSQLiteはcommon Git directoryの親の `.axon/axon.db` をworktree間で共有する。fileは現在worktreeの `.axon/state.jsonl` で、他worktreeの未統合データは観測できない。Git外は最寄りの管理root。別worktreeはSQLiteの独立fixtureではない。混在・破損・unknown schema・`axon init`途中から別保存先へfallbackしない。
 
 意図した保存先への当該mutationだけがsandboxに拒否された場合は、そのcommandだけをホストの許可機構へ渡す。無関係な読み取りやprogram、別binary、backend切替まで許可範囲を広げない。変更fileをstage/commitする権限は呼び出し側が別に与える。
 
 ## 成功とno-op
 
-終了0と完全IDの確認文を読み、show/details・log・個別Noteで要求した作用を検証する。writeの同値や同じparent/dependency/conditionは `No changes` の成功で履歴を増やさない。同値lifecycleは拒否で、開始済みを新たなstart成功と扱わない。作成とNote追記は非冪等で、再実行すると別IDになる。
+終了0と完全IDの確認文を読み、`axon show`・`axon show --details`・log・個別Noteで要求した作用を検証する。`axon write`の同値や同じparent/dependency/conditionの値は `No changes` の成功で履歴を増やさない。同値lifecycleは拒否で、開始済みを新たな`axon start`成功と扱わない。作成とNote追記は非冪等で、再実行すると別IDになる。
 
 ## 失敗・部分適用・結果不明
 
