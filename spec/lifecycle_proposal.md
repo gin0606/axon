@@ -2308,7 +2308,7 @@ Entity の現在値を選ぶ自動統合は現行の慎重な単位を維持す�
 
 維持する安全性は、計画全体と変更差分を保存前に検査できること、取得後に編集の前提が変わっていたら競合として止めること、部分適用を作らないこと、障害後の再実行で新規 Entity を重複作成しないことである。単一 lifecycle への再構築時に一度外した機能を、現行モデルに合わせて定め直す。旧 Revision・claim・observed の Control state・Disposition による編集固定は再導入しない。
 
-この機能は既存の lifecycle・包含・dependency・終了構成の制約を迂回せず、通常操作と同じ共通コアの検査を通す。再浮上条件と Note は扱わない。既存 Entity の lifecycle 遷移も扱わず、`accept`・`start`・`done`・`cancel` などの通常コマンドに任せる。
+この機能は既存の lifecycle・包含・dependency・終了構成の制約を迂回せず、通常操作と同じ共通コアの検査を通す。再浮上条件と Note は扱わない。既存 Entity の lifecycle 遷移も扱わず、`accept`・`start`・`complete`・`cancel` などの通常コマンドに任せる。
 
 ### 対象範囲と編集集合
 
