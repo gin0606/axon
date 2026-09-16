@@ -1,5 +1,5 @@
 //! Declaration publication shares the file backend's atomic replacement boundary.
-use crate::sqlite::Result;
+use crate::sqlite::{Error, Result};
 use std::path::Path;
 
 pub fn rewrite(path: &Path, before: &[u8], bytes: &[u8]) -> Result<()> {
@@ -43,11 +43,7 @@ fn apply_with(
             Ok((before, rewritten, changed))
         })
         .map_err(|error| {
-            if matches!(&error, crate::sqlite::Error::Commit(_))
-                || error
-                    .to_string()
-                    .contains("result unknown after publication")
-            {
+            if matches!(&error, Error::Commit(_) | Error::PublicationUnknown(_)) {
                 crate::sqlite::invalid(format!(
                     "Result unknown: storage save: {error}; declaration unchanged"
                 ))
@@ -58,7 +54,7 @@ fn apply_with(
             }
         })?;
     publish(path, &before, rewritten.as_bytes()).map_err(|error| {
-        let boundary = if error.to_string().contains("result unknown after publication") {
+        let boundary = if matches!(&error, Error::PublicationUnknown(_)) {
             "Result unknown: declaration publication"
         } else {
             "Not applied: declaration unchanged"
@@ -73,7 +69,7 @@ mod tests {
     #[test]
     fn apply_rewrite_failures_preserve_storage_and_allow_retry() {
         for file_backend in [false, true] {
-            for failure in ["write", "drift", "sync"] {
+            for failure in ["write", "drift", "sync", "typed", "misleading"] {
                 let root = std::env::temp_dir()
                     .join(format!("axon-apply-{:032x}", rand::random::<u128>()));
                 std::fs::create_dir(&root).unwrap();
@@ -92,7 +88,13 @@ mod tests {
                 };
                 let error =
                     super::apply_with(&mut store, &path, context(), |path, before, bytes| {
-                        match failure {
+                        let result = match failure {
+                            "typed" => Err(super::Error::PublicationUnknown(
+                                "changed diagnostic".into(),
+                            )),
+                            "misleading" => {
+                                Err(crate::sqlite::invalid("result unknown after publication"))
+                            }
                             "write" => {
                                 Err(crate::sqlite::invalid("injected temporary write failure"))
                             }
@@ -113,14 +115,19 @@ mod tests {
                                 || Ok(()),
                                 || Err(crate::sqlite::invalid("injected sync failure")),
                             ),
-                        }
+                        };
+                        assert_eq!(
+                            matches!(&result, Err(super::Error::PublicationUnknown(_))),
+                            matches!(failure, "sync" | "typed")
+                        );
+                        result
                     })
                     .unwrap_err()
                     .to_string();
                 assert!(error.contains("Applied: storage applied"), "{error}");
                 let applied = store.read().unwrap().1;
                 assert_eq!(applied.entities().count(), 3);
-                if failure == "sync" {
+                if matches!(failure, "sync" | "typed") {
                     assert!(
                         error.contains("Result unknown: declaration publication"),
                         "{error}"
@@ -173,8 +180,9 @@ mod tests {
             },
             || Ok(()),
         )
-        .unwrap_err()
-        .to_string();
+        .unwrap_err();
+        assert!(matches!(&error, super::Error::Invalid(_)));
+        let error = error.to_string();
         assert!(
             error.contains("not applied")
                 && error.contains("destination changed")
@@ -189,8 +197,9 @@ mod tests {
             || Ok(()),
             || Err(std::io::Error::other("injected sync failure").into()),
         )
-        .unwrap_err()
-        .to_string();
+        .unwrap_err();
+        assert!(matches!(&error, super::Error::PublicationUnknown(_)));
+        let error = error.to_string();
         assert!(
             error.contains("result unknown after publication"),
             "{error}"

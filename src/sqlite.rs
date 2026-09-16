@@ -7,6 +7,8 @@ use std::{path::Path, time::Duration};
 pub enum Error {
     #[error("{0}")]
     Invalid(String),
+    #[error("{0}")]
+    PublicationUnknown(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("SQLite: {0}")]
