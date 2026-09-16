@@ -64,7 +64,7 @@ fn short_ids_and_suffixes_work_across_mutations_and_preserve_long_ids() {
         f.ok(&["accept", short]);
         f.ok(&["start", suffix(group)]);
         f.ok(&["start", suffix(&dep)]);
-        f.ok(&["done", suffix(&dep)]);
+        f.ok(&["complete", suffix(&dep)]);
         f.ok(&[
             "write",
             short,
@@ -101,7 +101,7 @@ fn short_ids_and_suffixes_work_across_mutations_and_preserve_long_ids() {
         f.ok(&["withdraw", short]);
         f.ok(&["accept", short]);
         f.ok(&["start", short]);
-        f.ok(&["done", short]);
+        f.ok(&["complete", short]);
         assert!(f.ok(&["log", short]).contains("InProgress → Completed"));
         assert!(!f.0.join("observed").exists());
         let long = "project-454e0188d65fbdee8090f4c245831b2a";
@@ -199,7 +199,7 @@ fn details_show_saved_relationships_once_without_running_conditions() {
     let parent = created(&parent);
     let dep = f.plan("Dependency");
     f.ok(&["start", &dep]);
-    f.ok(&["done", &dep]);
+    f.ok(&["complete", &dep]);
     let a = f.ok(&[
         "plan",
         "--title",
@@ -471,7 +471,11 @@ fn tty_decoration_preserves_text_and_does_not_style_user_content() {
     let f = Fixture::new();
     f.init();
     let id = f.plan("USER_TITLE");
-    for args in [vec!["show", &id], vec!["--help"], vec!["done", "--help"]] {
+    for args in [
+        vec!["show", &id],
+        vec!["--help"],
+        vec!["complete", "--help"],
+    ] {
         let plain = f.ok(&args);
         let colored = terminal_output(&f, &args, false);
         assert!(colored.contains('\x1b'), "{colored}");
@@ -509,8 +513,8 @@ fn show_group_displays_all_descendants_in_tree_order_and_counts_terminal_entitie
         for id in [root, group, nested, leaf] {
             f.ok(&["start", id]);
         }
-        f.ok(&["done", leaf]);
-        f.ok(&["done", nested]);
+        f.ok(&["complete", leaf]);
+        f.ok(&["complete", nested]);
         for args in [vec!["show", root], vec!["show", root, "--details"]] {
             let output = f.ok(&args);
             let tree = output.split("Descendants: ").nth(1).unwrap();
@@ -530,7 +534,7 @@ fn show_group_displays_all_descendants_in_tree_order_and_counts_terminal_entitie
             assert!(!output.contains("Awaiting final confirmation"));
         }
         assert!(!f.ok(&["show", leaf]).contains("Descendants:"));
-        f.ok(&["done", group]);
+        f.ok(&["complete", group]);
         f.ok(&["cancel", sibling]);
         let output = f.ok(&["show", root]);
         assert!(output.contains("Descendants: 5/5 terminal (3 completed, 2 cancelled)"));
@@ -545,7 +549,7 @@ fn note_search_literal_excerpts_and_scope_match_on_both_backends() {
         f.ok(&["init", "q", "--backend", backend]);
         let a = f.plan("TitleOnly");
         f.ok(&["start", &a]);
-        f.ok(&["done", &a]);
+        f.ok(&["complete", &a]);
         let group = f.ok(&["group", "capture", "--title", "Group"]);
         let b = created(&group);
         f.ok(&["cancel", b]);

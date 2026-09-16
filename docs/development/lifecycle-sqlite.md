@@ -15,17 +15,17 @@ cd "$FIXTURE_DIR"
 "$AXON_BIN" start GROUP_ID
 "$AXON_BIN" start ISSUE_ID
 "$AXON_BIN" note add ISSUE_ID -m '成果と検証結果'
-"$AXON_BIN" done ISSUE_ID
+"$AXON_BIN" complete ISSUE_ID
 "$AXON_BIN" show GROUP_ID
 "$AXON_BIN" note list ISSUE_ID
-"$AXON_BIN" done GROUP_ID
+"$AXON_BIN" complete GROUP_ID
 ```
 
-`GROUP_ID`・`ISSUE_ID` は作成時に返る完全なIDまたは一意なsuffixへ置き換える。Group の `done` は計画全体の最終確認済みという明示入力であり、子の完了だけで親を自動完了しない。
+`GROUP_ID`・`ISSUE_ID` は作成時に返る完全なIDまたは一意なsuffixへ置き換える。Group の `complete` は計画全体の最終確認済みという明示入力であり、子の完了だけで親を自動完了しない。
 
 登録は `capture` / `plan` と `group capture` / `group plan`。タイトルは `--title`、本文は `-m/--description` または `-F/--description-file`、`write ID` も同じ本文 option を使う。Note は `note add ID -m/--message` または `-F/--file`。ファイル引数 `-` は UTF-8 の標準入力を一度読む。本文 option 同士は排他。位置引数は対象 ID、親は `--parent`、依存先は繰り返し可能な `--needs`。入力や操作の拒否は非ゼロで終了する。
 
-`accept / withdraw / start / release / done / cancel / reconsider ID` は `-r/--reason` を履歴へ保存する。`group set ID --parent G` / `group unset ID` と `dep add|rm ID --needs B` は共通コアの関係制約を使う。
+`accept / withdraw / start / release / complete / cancel / reconsider ID` は `-r/--reason` を履歴へ保存する。`group set ID --parent G` / `group unset ID` と `dep add|rm ID --needs B` は共通コアの関係制約を使う。
 
 `list` と `show` は保存情報だけを読む。行は ID・種別・状況・タイトル、作成日時順（同時刻は ID 順）。`show` は本文、Note 件数、所属、直接の未充足前提と Group の全子孫のツリー・終了数（Group・Issue を含み、対象自身を除く）を表示する。Note 本文は `note list`、状態変更の前後・理由・統合結果は `log` で読む。記録は共通コアの因果順、並行記録のみ ID 順であり、時刻順への並べ替えはしない。直前の記録と先後関係がない箇所には`Concurrent branch` と表示し、逐次操作と区別する。通常表示では端末制御文字をエスケープする。
 

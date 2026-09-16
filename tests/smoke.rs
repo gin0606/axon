@@ -143,7 +143,7 @@ fn registration_to_group_completion_and_records() {
     failure(f.run(&["start", &issue]));
     f.ok(&["start", &group]);
     f.ok(&["start", &dependency]);
-    f.ok(&["done", &dependency]);
+    f.ok(&["complete", &dependency]);
     f.ok(&[
         "write",
         &issue,
@@ -154,14 +154,14 @@ fn registration_to_group_completion_and_records() {
     ]);
     f.ok(&["start", &issue]);
     f.ok(&["note", "add", &issue, "-m", "検証結果"]);
-    failure(f.run(&["done", &group]));
+    failure(f.run(&["complete", &group]));
     let show = f.ok(&["show", &issue]);
     assert!(show.starts_with(&issue));
     assert!(show.contains("1 notes"));
     assert!(show.contains("編集本文"));
     assert!(!show.contains("検証結果"));
     assert!(!show.contains("Dependency must complete:"));
-    f.ok(&["done", &issue, "--reason", "検証完了"]);
+    f.ok(&["complete", &issue, "--reason", "検証完了"]);
     assert!(
         f.ok(&["show", &group])
             .contains("1/1 terminal (1 completed, 0 cancelled)")
@@ -170,7 +170,7 @@ fn registration_to_group_completion_and_records() {
         f.ok(&["show", &group])
             .contains("Awaiting final confirmation")
     );
-    f.ok(&["done", &group]);
+    f.ok(&["complete", &group]);
     assert!(f.ok(&["note", "list", &issue]).contains("検証結果"));
     let log = f.ok(&["log", &issue]);
     assert!(log.contains("InProgress → Completed"));
@@ -252,8 +252,14 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
     failure(f.run(&["write", &id]));
     failure(f.run(&["note", "add", &id]));
     failure(f.run(&["write", &id, "-m", "x", "-F", "-"]));
-    assert!(f.ok(&["--help"]).contains("done"));
-    assert!(f.ok(&["done", "--help"]).contains("final review"));
+    let help = f.ok(&["--help"]);
+    let listed = |name: &str| {
+        help.lines()
+            .any(|line| line.trim_start().starts_with(&format!("{name} ")))
+    };
+    assert!(listed("complete") && !listed("done"), "{help}");
+    assert!(f.ok(&["complete", "--help"]).contains("final review"));
+    assert!(failure(f.run(&["done", &id])).contains("unrecognized subcommand"));
 }
 #[test]
 fn concurrent_start_has_one_winner_and_other_writes_survive() {
@@ -807,8 +813,8 @@ fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
     f.ok(&["group", "set", &id, "--parent", &root]);
     f.ok(&["accept", &id]);
     f.ok(&["start", &id]);
-    f.ok(&["done", &id]);
-    f.ok(&["done", &root]);
+    f.ok(&["complete", &id]);
+    f.ok(&["complete", &root]);
     set_when(&f, &id, "exit 2");
     f.ok(&["when", "clear", &id]);
     f.ok(&["note", "add", &id, "-m", "supplement"]);
@@ -1142,7 +1148,7 @@ fn recorder_is_automatic_durable_optional_and_not_an_operation_guard() {
     success(
         without_recorder(&mut f.command())
             .env("AXON_ACTOR", "another-worker")
-            .args(["done", id])
+            .args(["complete", id])
             .output()
             .unwrap(),
     );

@@ -8,10 +8,10 @@ EntityはIssueまたはGroup。同じID namespaceと操作を使う。lifecycle�
 | plan / group plan | 採用済みのNotStartedを新規作成 |
 | accept / withdraw | Undecided→NotStarted / NotStarted→Undecided |
 | start / release | NotStarted→InProgress / InProgress→NotStarted |
-| done | InProgress→Completed |
+| complete | InProgress→Completed |
 | cancel / reconsider | 未終了→Cancelled / Cancelled→Undecided |
 
-同値のlifecycle遷移は拒否される。Completedの再開はない。親は一つのGroupで、子のstartには親がInProgressであることが必要。start/doneには直接dependencyが全員Completedであることが必要。Groupのstartは子を開始せず、releaseはInProgressの子孫がいない場合だけ。Groupのdoneは子のterminal化に加え計画全体の最終確認を表す。循環・終了Groupの構成固定などのguardを状態の往復や別保存経路で迂回しない。取消が子を自動取消することもない。
+同値のlifecycle遷移は拒否される。Completedの再開はない。親は一つのGroupで、子のstartには親がInProgressであることが必要。start/completeには直接dependencyが全員Completedであることが必要。Groupのstartは子を開始せず、releaseはInProgressの子孫がいない場合だけ。Groupのcompleteは子のterminal化に加え計画全体の最終確認を表す。循環・終了Groupの構成固定などのguardを状態の往復や別保存経路で迂回しない。取消が子を自動取消することもない。
 
 ## 読む目的から入口を選ぶ
 

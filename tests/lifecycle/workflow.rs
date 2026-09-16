@@ -57,11 +57,11 @@ fn both_backends_support_the_daily_workflow() {
         for n in 0..4 {
             assert!(saved.contains(&format!("結果 {n}")));
         }
-        f.ok(&["done", &first]);
+        f.ok(&["complete", &first]);
         f.ok(&["start", &second]);
-        failure(f.run(&["done", &group]));
+        failure(f.run(&["complete", &group]));
         f.ok(&["note", "add", &second, "-m", "成果を統合・検証済み"]);
-        f.ok(&["done", &second]);
+        f.ok(&["complete", &second]);
         let review = f.ok(&["show", &group]);
         assert!(review.contains("2/2 terminal (2 completed, 0 cancelled)"));
         assert!(review.contains("Awaiting final confirmation"));
@@ -70,7 +70,7 @@ fn both_backends_support_the_daily_workflow() {
             f.ok(&["note", "list", &second])
                 .contains("成果を統合・検証済み")
         );
-        f.ok(&["done", &group]);
+        f.ok(&["complete", &group]);
         assert!(f.ok(&["tasks"]).is_empty());
         assert!(f.ok(&["log", &group]).contains("InProgress → Completed"));
     }
@@ -126,7 +126,7 @@ fn sqlite_worktrees_share_parallel_work_and_notes() {
         f.ok(&["note", "list", &issue])
             .contains("linked worktreeからの記録")
     );
-    f.ok(&["done", &issue]);
+    f.ok(&["complete", &issue]);
     assert!(linked.ok(&["tasks"]).is_empty());
     assert!(!linked.db().exists());
 }

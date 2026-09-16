@@ -23,7 +23,7 @@ use std::{
     styles = display::cli_styles(),
     color = display::cli_color(),
     about = "A local issue tracker for Issues and Groups",
-    after_help = "Use axon docs for the lifecycle and daily workflow. Group done explicitly confirms that the entire plan has passed final review."
+    after_help = "Use axon docs for the lifecycle and daily workflow. Group complete explicitly confirms that the entire plan has passed final review."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -117,7 +117,7 @@ enum Command {
     /// Release InProgress work back to NotStarted
     Release(Change),
     /// Complete work; for a Group, explicitly confirm final review of the entire plan
-    Done(Change),
+    Complete(Change),
     /// Cancel work
     Cancel(Change),
     /// Return a Cancelled Entity to Undecided
@@ -1094,7 +1094,7 @@ fn run(command: Command) -> Result<Output> {
                 Command::Withdraw(args) => (args, Operation::Withdraw),
                 Command::Start(args) => (args, Operation::Start),
                 Command::Release(args) => (args, Operation::Release),
-                Command::Done(args) => (args, Operation::Complete),
+                Command::Complete(args) => (args, Operation::Complete),
                 Command::Cancel(args) => (args, Operation::Cancel),
                 Command::Reconsider(args) => (args, Operation::Reconsider),
                 _ => unreachable!(),

@@ -24,13 +24,13 @@
 
 `capture --title '懸念' -m '内容'` は未判断、`plan --title '仕事' -m '目的と完了条件'` は未着手の採用済みIssueを登録します。`group capture` / `group plan` はGroupを作ります。作成時の `--parent G` と繰り返せる `--needs B` で関係を付けられます。
 
-未判断を採用するには `accept ID`、未着手の採用を撤回するには `withdraw ID`。作業は `start ID`、中断は `release ID -r '理由'`、完了は `done ID`、取りやめは `cancel ID -r '理由'`、取りやめの再検討は `reconsider ID`。完了したEntityは再開しません。結果は `note add ID -m '結果'` へ残し、本文変更は `write ID --title '題名' -m '本文'` で行います。
+未判断を採用するには `accept ID`、未着手の採用を撤回するには `withdraw ID`。作業は `start ID`、中断は `release ID -r '理由'`、完了は `complete ID`、取りやめは `cancel ID -r '理由'`、取りやめの再検討は `reconsider ID`。完了したEntityは再開しません。結果は `note add ID -m '結果'` へ残し、本文変更は `write ID --title '題名' -m '本文'` で行います。
 
 ## Groupと関係
 
 `group set A --parent G` / `group unset A` で所属を変更し、`dep add A --needs B` / `dep rm A --needs B` で依存を変更します。親や依存先の状態、循環、終了した構成の制約はCLIが検査します。Groupをstartしても子はstartされません。
 
-Groupのdone前には目的・完了条件、全子孫の終了、成果の統合と必要な検証を確認します。showの全子孫ツリーを確認し、必要な本文・Note・logを読んで不足を確認します。全子孫Noteの一括取得は必須ではありません。子の終了だけで親を自動完了せず、Groupに対するdone自体を計画全体の最終確認済みという入力にします。
+Groupの完了前には目的・完了条件、全子孫の終了、成果の統合と必要な検証を確認します。showの全子孫ツリーを確認し、必要な本文・Note・logを読んで不足を確認します。全子孫Noteの一括取得は必須ではありません。子の終了だけで親を自動完了せず、Groupに対する `complete` 自体を計画全体の最終確認済みという入力にします。
 
 ## 計画をまとめて登録・編集する
 

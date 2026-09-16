@@ -66,12 +66,12 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
     );
     f.ok(&["release", &issue]);
     f.ok(&["start", &issue]);
-    f.ok(&["done", &issue]);
+    f.ok(&["complete", &issue]);
     assert!(
         f.ok(&["show", &group])
             .contains("Awaiting final confirmation")
     );
-    f.ok(&["done", &group]);
+    f.ok(&["complete", &group]);
     assert!(f.ok(&["log", &issue]).contains("Completed"));
     assert!(f.ok(&["tasks"]).is_empty());
     let before = fs::read(state(&f)).unwrap();
@@ -682,7 +682,7 @@ fn worktree_conflict_resolution_preserves_operations_and_finishes_group() {
         &f.0,
         &["worktree", "add", "-qb", "remaining", b.0.to_str().unwrap()],
     );
-    a.ok(&["done", &id]);
+    a.ok(&["complete", &id]);
     a.ok(&["note", "add", &id, "-m", "completed branch evidence"]);
     b.ok(&["release", &id, "-r", "remaining work"]);
     b.ok(&["note", "add", &id, "-m", "remaining branch evidence"]);
@@ -753,7 +753,7 @@ fn worktree_conflict_resolution_preserves_operations_and_finishes_group() {
     assert!(log.contains("InProgress → NotStarted"));
     assert!(log.contains("Integrated"));
     a.ok(&["start", &id]);
-    a.ok(&["done", &id]);
+    a.ok(&["complete", &id]);
     assert!(
         a.ok(&["show", &group])
             .contains("Awaiting final confirmation")
@@ -761,7 +761,7 @@ fn worktree_conflict_resolution_preserves_operations_and_finishes_group() {
     let notes = a.ok(&["note", "list", &id]);
     assert!(notes.contains("completed branch evidence"));
     assert!(notes.contains("remaining branch evidence"));
-    a.ok(&["done", &group]);
+    a.ok(&["complete", &group]);
     commit(&a.0, "verify delivery");
     git(&f.0, &["merge", "--ff-only", "finished"]);
     assert!(f.ok(&["tasks"]).is_empty());

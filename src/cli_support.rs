@@ -185,7 +185,7 @@ pub fn operation_label(command: &Command) -> String {
         Command::Withdraw(c) => ("withdraw", Some(&c.id)),
         Command::Start(c) => ("start", Some(&c.id)),
         Command::Release(c) => ("release", Some(&c.id)),
-        Command::Done(c) => ("done", Some(&c.id)),
+        Command::Complete(c) => ("complete", Some(&c.id)),
         Command::Cancel(c) => ("cancel", Some(&c.id)),
         Command::Reconsider(c) => ("reconsider", Some(&c.id)),
         Command::When {
@@ -249,7 +249,7 @@ pub fn render_root_help() -> String {
         (
             "Workflow",
             &[
-                "triage", "tasks", "capture", "plan", "accept", "start", "release", "done",
+                "triage", "tasks", "capture", "plan", "accept", "start", "release", "complete",
             ],
         ),
         ("Inspect", &["show", "list", "log", "note", "actor"]),

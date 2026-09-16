@@ -25,7 +25,7 @@ cd "$AXON_TRIAL_DIR"
 "$AXON_BIN" show ID
 "$AXON_BIN" start ID
 "$AXON_BIN" note add ID -m '確認した結果'
-"$AXON_BIN" done ID
+"$AXON_BIN" complete ID
 "$AXON_BIN" log ID --recorder-details
 "$AXON_BIN" note list ID --recorder-details
 ```

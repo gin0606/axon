@@ -6,7 +6,7 @@ suffix works wherever a command takes an Entity ID. Note IDs are complete stable
 record IDs; they do not indicate priority or order.
 
 Lifecycle
-  capture -> Undecided -> accept -> NotStarted -> start -> InProgress -> done -> Completed
+  capture -> Undecided -> accept -> NotStarted -> start -> InProgress -> complete -> Completed
   plan creates NotStarted work whose purpose and completion criteria are adopted.
   withdraw returns NotStarted to Undecided; release returns InProgress to NotStarted.
   cancel terminates unfinished work; reconsider returns Cancelled to Undecided.
@@ -15,8 +15,8 @@ Lifecycle
 A child starts only while its parent Group is InProgress. Explicit dependencies
 must be Completed before work starts or completes. Cancelled is terminal but does
 not satisfy a dependency. Group completion also requires all direct children to
-be terminal. Running done on a Group explicitly confirms final review of the
-entire plan, including the outcomes and Notes of its descendants.
+be terminal. Running complete on a Group explicitly confirms final review of
+the entire plan, including the outcomes and Notes of its descendants.
 
 Daily workflow
   axon capture --title 'Investigate a concern' -m 'Context and uncertainty'
@@ -26,7 +26,7 @@ Daily workflow
   axon show ID
   axon start ID
   axon note add ID -F result.md
-  axon done ID
+  axon complete ID
 
 Reading and resurfacing
   triage lists surfaced Undecided work. tasks lists surfaced NotStarted work and
