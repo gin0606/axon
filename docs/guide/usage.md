@@ -85,7 +85,7 @@ fileの別worktreeでは同じEntityをそれぞれstartできます。Gitで取
 
 ## 再浮上
 
-`when set ID --command 'test -f ready.txt'` は条件を保存し、`when clear ID` は解除します。保存時には実行しません。triage/tasksだけが必要な条件を `/bin/sh -c` で評価し、終了0は成立、1は未成立、その他は一覧の失敗です。`--condition-timeout` と `--trace-conditions` の契約は [外部条件](../development/lifecycle-candidates.md) を参照してください。
+`condition set ID --command 'test -f ready.txt'` は条件を保存し、`condition unset ID` は解除します。保存時には実行しません。triage/tasksだけが必要な条件を `/bin/sh -c` で評価し、終了0は成立、1は未成立、その他は一覧の失敗です。`--condition-timeout` と `--trace-conditions` の契約は [外部条件](../development/lifecycle-candidates.md) を参照してください。
 
 IDはprefix＋ランダム6文字で、完全IDまたは一意なsuffixを指定できます。CLI生成文は英語、TTYでは意味に応じて装飾し、NO_COLORまたは非TTYでは装飾しません。一覧の絞り込み・検索、Note個別参照と保存結果は [CLI契約](../reference/lifecycle-cli.md) を参照してください。
 

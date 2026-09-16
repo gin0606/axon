@@ -272,12 +272,15 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
         listed("parent") && !listed("group") && !listed("plan"),
         "{help}"
     );
+    assert!(listed("condition") && !listed("when"), "{help}");
     assert!(f.ok(&["complete", "--help"]).contains("final review"));
     for old in [
         vec!["done", id.as_str()],
         vec!["plan", "--title", "x"],
         vec!["group", "capture", "--title", "x"],
         vec!["group", "set", id.as_str(), "--parent", id.as_str()],
+        vec!["when", "set", id.as_str(), "--command", "exit 0"],
+        vec!["when", "clear", id.as_str()],
     ] {
         assert!(failure(f.run(&old)).contains("unrecognized subcommand"));
     }
@@ -722,8 +725,8 @@ fn inherited_git_overrides_do_not_select_a_foreign_store() {
     assert_eq!(before, fs::read(repo.join(".axon/axon.db")).unwrap());
 }
 
-fn set_when(f: &Fixture, id: &str, command: &str) {
-    f.ok(&["when", "set", id, "--command", command]);
+fn set_condition(f: &Fixture, id: &str, command: &str) {
+    f.ok(&["condition", "set", id, "--command", command]);
 }
 fn new_entity(f: &Fixture, args: &[&str]) -> String {
     f.ok(args).split_whitespace().next().unwrap().into()
@@ -751,10 +754,10 @@ fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation
         ],
     );
     let draft = new_entity(&f, &["capture", "--title", "draft", "--parent", &nested]);
-    set_when(&f, &root, "echo root >> observations; test -f open");
-    set_when(&f, &nested, "echo nested >> observations");
-    set_when(&f, &child, "echo child >> observations");
-    set_when(&f, &draft, "echo draft >> observations");
+    set_condition(&f, &root, "echo root >> observations; test -f open");
+    set_condition(&f, &nested, "echo nested >> observations");
+    set_condition(&f, &child, "echo child >> observations");
+    set_condition(&f, &draft, "echo draft >> observations");
     let initial = f.ok(&["tasks"]);
     assert!(initial.contains(&dep));
     assert!(!initial.contains(&root));
@@ -799,7 +802,7 @@ fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation
     assert!(rows.contains(&root) && rows.contains(&nested));
     assert!(!rows.contains(&child));
     f.ok(&["cancel", &child]);
-    set_when(&f, &root, "exit 23");
+    set_condition(&f, &root, "exit 23");
     fs::write(f.0.join("observations"), "").unwrap();
     let rows = f.ok(&["tasks"]);
     assert!(rows.contains(&root) && rows.contains(&nested));
@@ -821,8 +824,8 @@ fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
     );
     let id = new_entity(&f, &["capture", "--title", "item", "--parent", &root]);
     let script = "echo executed >> forbidden; exit 23";
-    set_when(&f, &root, script);
-    set_when(&f, &id, script);
+    set_condition(&f, &root, script);
+    set_condition(&f, &id, script);
     for args in [
         vec!["list"],
         vec!["show", &id],
@@ -838,7 +841,7 @@ fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
     f.ok(&["start", &id]);
     f.ok(&["release", &id]);
     f.ok(&["cancel", &id]);
-    set_when(&f, &id, script);
+    set_condition(&f, &id, script);
     f.ok(&["reconsider", &id]);
     f.ok(&["write", &id, "--title", "changed"]);
     f.ok(&["parent", "unset", &id]);
@@ -847,14 +850,16 @@ fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
     f.ok(&["start", &id]);
     f.ok(&["complete", &id]);
     f.ok(&["complete", &root]);
-    set_when(&f, &id, "exit 2");
-    f.ok(&["when", "clear", &id]);
+    set_condition(&f, &id, "exit 2");
+    f.ok(&["condition", "unset", &id]);
     f.ok(&["note", "add", &id, "-m", "supplement"]);
     assert!(!f.0.join("forbidden").exists());
     let before = Store::open(&f.db()).unwrap().read().unwrap().1;
     assert!(f.ok(&["tasks"]).is_empty());
     assert!(f.ok(&["triage"]).is_empty());
-    assert!(failure(f.run(&["when", "set", &id, "--command", " "])).contains("empty condition"));
+    assert!(
+        failure(f.run(&["condition", "set", &id, "--command", " "])).contains("empty condition")
+    );
     assert_eq!(Store::open(&f.db()).unwrap().read().unwrap().1, before);
 }
 
@@ -865,7 +870,7 @@ fn condition_results_diagnostics_and_repair_do_not_publish_partial_rows() {
     let ongoing = f.accepted("ongoing");
     f.ok(&["start", &ongoing]);
     let id = f.accepted("condition");
-    set_when(
+    set_condition(
         &f,
         &id,
         "printf '\\033bad\\377'; printf problem >&2; exit 23",
@@ -883,19 +888,19 @@ fn condition_results_diagnostics_and_repair_do_not_publish_partial_rows() {
     }
     assert!(!error.contains("Condition trace:"));
     assert_eq!(Store::open(&f.db()).unwrap().read().unwrap().1, before);
-    set_when(&f, &id, "exit 1");
+    set_condition(&f, &id, "exit 1");
     let out = f.run(&["tasks", "--trace-conditions"]);
     assert!(!String::from_utf8(out.stdout).unwrap().contains(&id));
     let trace = String::from_utf8(out.stderr).unwrap();
     assert!(trace.contains("not satisfied (exit 1)"));
     assert_eq!(trace.matches("(empty)").count(), 2);
-    set_when(&f, &id, "echo ignored; echo ignored >&2; exit 0");
+    set_condition(&f, &id, "echo ignored; echo ignored >&2; exit 0");
     let out = f.run(&["tasks"]);
     assert!(out.status.success() && out.stderr.is_empty());
     assert!(!String::from_utf8(out.stdout).unwrap().contains("ignored"));
-    set_when(&f, &id, "echo signal-detail >&2; kill -TERM $$");
+    set_condition(&f, &id, "echo signal-detail >&2; kill -TERM $$");
     assert!(failure(f.run(&["tasks"])).contains("signal-detail"));
-    f.ok(&["when", "clear", &id]);
+    f.ok(&["condition", "unset", &id]);
     assert!(f.ok(&["tasks"]).contains(&id));
 }
 
@@ -906,7 +911,7 @@ fn condition_output_keeps_both_edges_per_stream_in_trace_and_failure() {
     let id = f.accepted("output");
     let script = "awk 'BEGIN { for (i=0;i<40000;i++) printf \"A\"; for (i=0;i<40000;i++) printf \"B\" }'; awk 'BEGIN { for (i=0;i<40000;i++) printf \"C\"; for (i=0;i<40000;i++) printf \"D\" }' >&2";
     for exit in [0, 23] {
-        set_when(&f, &id, &format!("{script}; exit {exit}"));
+        set_condition(&f, &id, &format!("{script}; exit {exit}"));
         let out = f.run(&["tasks", "--trace-conditions"]);
         assert_eq!(out.status.success(), exit == 0);
         let err = String::from_utf8(out.stderr).unwrap();
@@ -963,7 +968,7 @@ fn condition_timeout_and_ctrl_c_terminate_shell_and_descendants() {
     f.init();
     let id = f.accepted("interrupt");
     let script = "echo $$ > shell-pid; sh -c 'trap \"\" TERM; echo $$ > descendant-pid; while :; do :; done' </dev/null >/dev/null 2>/dev/null & wait";
-    set_when(&f, &id, script);
+    set_condition(&f, &id, script);
     let before = Store::open(&f.db()).unwrap().read().unwrap().1;
     for interrupt in [false, true] {
         let mut cmd = f.command();
@@ -1009,7 +1014,7 @@ fn condition_default_timeout_is_thirty_seconds_in_a_real_process() {
     let f = Fixture::new();
     f.init();
     let id = f.accepted("default timeout");
-    set_when(&f, &id, "sleep 60");
+    set_condition(&f, &id, "sleep 60");
     let start = std::time::Instant::now();
     let error = failure(f.run(&["tasks"]));
     assert!(start.elapsed() >= std::time::Duration::from_secs(30));
@@ -1037,7 +1042,7 @@ fn candidate_help_timeout_validation_and_trace_sink_failure() {
     for value in ["0", "-1", "NaN", "inf", "1e100", "1e-100", "wrong"] {
         failure(f.run(&["tasks", "--condition-timeout", value]));
     }
-    set_when(&f, &id, "echo ran >> observed");
+    set_condition(&f, &id, "echo ran >> observed");
     let mut cmd = f.command();
     cmd.args(["tasks", "--trace-conditions"]);
     let mut pipe = [0; 2];
@@ -1054,7 +1059,7 @@ fn condition_uses_current_worktree_or_management_root_and_inherits_environment()
     let f = Fixture::new();
     f.init();
     let id = f.accepted("cwd");
-    set_when(
+    set_condition(
         &f,
         &id,
         "pwd; test \"$AXON_TEST_CONDITION\" = inherited; test -f local-file",
@@ -1094,7 +1099,7 @@ fn condition_uses_current_worktree_or_management_root_and_inherits_environment()
     );
     fs::create_dir(other.0.join("subdir")).unwrap();
     let script = "test \"$AXON_TEST_CONDITION\" = inherited && test -f local-file";
-    set_when(&f, &id, script);
+    set_condition(&f, &id, script);
     let out = command(&other.0.join("subdir"))
         .env("AXON_TEST_CONDITION", "inherited")
         .args(["tasks", "--trace-conditions"])
@@ -1123,7 +1128,7 @@ fn condition_trace_and_failure_preserve_utf8_across_capture_boundary() {
     let output = format!("{}日", "A".repeat(32767));
     fs::write(f.0.join("utf8-output"), &output).unwrap();
     for exit in [0, 23] {
-        set_when(
+        set_condition(
             &f,
             &id,
             &format!("cat utf8-output; cat utf8-output >&2; exit {exit}"),

@@ -26,10 +26,10 @@ fn both_backends_support_the_daily_workflow() {
         assert!(f.ok(&["triage"]).contains(&first));
         f.ok(&["accept", &first]);
         assert!(f.ok(&["triage"]).is_empty());
-        f.ok(&["when", "set", &second, "--command", "exit 1"]);
+        f.ok(&["condition", "set", &second, "--command", "exit 1"]);
         assert!(!f.ok(&["tasks"]).contains(&second));
         assert!(f.ok(&["list"]).contains(&second));
-        f.ok(&["when", "clear", &second]);
+        f.ok(&["condition", "unset", &second]);
         assert!(f.ok(&["tasks"]).contains(&second));
         failure(f.run(&["start", &first]));
         f.ok(&["start", &group]);

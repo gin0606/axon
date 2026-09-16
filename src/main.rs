@@ -78,9 +78,9 @@ enum Command {
     /// List surfaced NotStarted Entities and all InProgress work, including blocked work
     Tasks(CandidateOptions),
     /// Set or repair resurfacing conditions without running them
-    When {
+    Condition {
         #[command(subcommand)]
-        command: When,
+        command: Condition,
     },
     /// Show text, immediate unmet prerequisites and all Group descendants
     Show {
@@ -128,7 +128,7 @@ enum Command {
         #[command(subcommand)]
         command: Dependency,
     },
-    /// Set or clear the parent Group without changing lifecycle
+    /// Set or unset the parent Group without changing lifecycle
     Parent {
         #[command(subcommand)]
         command: Parent,
@@ -214,18 +214,18 @@ struct CandidateOptions {
     trace_conditions: bool,
 }
 #[derive(Subcommand)]
-enum When {
+enum Condition {
     /// Save or replace a shell condition without evaluating it
     #[command(
-        after_help = "Example: axon when set ID --command 'test -f ready.txt'\nExit 0=satisfied, 1=unsatisfied, others=evaluation failed. Repair broken conditions with set or clear."
+        after_help = "Example: axon condition set ID --command 'test -f ready.txt'\nExit 0=satisfied, 1=unsatisfied, others=evaluation failed. Repair broken conditions with set or unset."
     )]
     Set {
         id: String,
         #[arg(long)]
         command: String,
     },
-    /// Clear the condition without changing lifecycle
-    Clear { id: String },
+    /// Remove the condition without changing lifecycle
+    Unset { id: String },
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum Backend {
@@ -1037,22 +1037,22 @@ fn run(command: Command) -> Result<Output> {
             })?;
             Ok(output(text, true))
         }
-        Command::When { command } => {
+        Command::Condition { command } => {
             let (value, command) = match command {
-                When::Set { id, command } => (id, Some(command)),
-                When::Clear { id } => (id, None),
+                Condition::Set { id, command } => (id, Some(command)),
+                Condition::Unset { id } => (id, None),
             };
             let text = store.update(|_, snapshot| {
                 let id = resolve(snapshot, &value)?;
                 let unchanged = snapshot.entity(&id)?.current.condition == command;
-                let cleared = command.is_none();
+                let unset = command.is_none();
                 snapshot.set_condition(&id, command)?;
                 Ok(confirmation(
                     &id,
                     if unchanged {
                         "No changes"
-                    } else if cleared {
-                        "Condition cleared"
+                    } else if unset {
+                        "Condition unset"
                     } else {
                         "Condition updated"
                     },

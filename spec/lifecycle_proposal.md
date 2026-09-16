@@ -2256,7 +2256,7 @@ Note検索は所属Entityの完全ID・完全な安定Note ID・日時・最初�
 | タイトル・本文を編集 | `axon write A …` |
 | 親 Group を設定・変更 / 解除 | `axon parent set A --parent G` / `axon parent unset A` |
 | 依存先を追加 / 解除 | `axon dep add A --needs B` / `axon dep rm A --needs B` |
-| 再浮上条件を設定 / 解除 | `axon when set A --command '条件コマンド'` / `axon when clear A` |
+| 再浮上条件を設定 / 解除 | `axon condition set A --command '条件コマンド'` / `axon condition unset A` |
 
 登録は一つのコマンドで行い、種別は `--kind issue|group`、採否は `--accept` の有無で指定する。登録と採否は直交し、作成後は同じ ID ベースの操作を使う。操作対象の ID は位置引数、関係先の ID は役割を明示する option とし、登録時の親・依存指定も `--parent`・`--needs` に揃える。`decide` の中間階層は設けない。
 

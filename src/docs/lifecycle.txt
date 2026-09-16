@@ -54,12 +54,13 @@ Reading and resurfacing
   changes and integrations, preserving concurrent branches. --recorder-details
   includes optional stored recorder data; actor information is not ownership.
 
-  when set ID --command 'test -f ready.txt' stores a shell condition without running
-  it. when clear removes it. triage/tasks run /bin/sh -c: 0=satisfied, 1=unsatisfied,
-  other exits fail the list. The default timeout is 30s; --condition-timeout accepts
-  positive integers with ms, s, m or h. --trace-conditions writes captured output
-  to stderr. Conditions run at the current Git worktree root (management root
-  outside Git). Filtering selects candidates before evaluating their ancestors.
+  condition set ID --command 'test -f ready.txt' stores a shell condition without
+  running it. condition unset removes it. triage/tasks run /bin/sh -c: 0=satisfied,
+  1=unsatisfied, other exits fail the list. The default timeout is 30s;
+  --condition-timeout accepts positive integers with ms, s, m or h.
+  --trace-conditions writes captured output to stderr. Conditions run at the
+  current Git worktree root (management root outside Git). Filtering selects
+  candidates before evaluating their ancestors.
 
 Storage and recovery
   init creates a new root; SQLite is the default, --backend file chooses JSONL.

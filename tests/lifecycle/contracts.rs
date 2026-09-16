@@ -79,9 +79,9 @@ fn short_ids_and_suffixes_work_across_mutations_and_preserve_long_ids() {
         f.ok(&["parent", "set", short, "--parent", suffix(group)]);
         f.ok(&["dep", "rm", short, "--needs", suffix(&dep)]);
         f.ok(&["dep", "add", short, "--needs", suffix(&dep)]);
-        f.ok(&["when", "clear", short]);
+        f.ok(&["condition", "unset", short]);
         f.ok(&[
-            "when",
+            "condition",
             "set",
             short,
             "--command",
@@ -154,7 +154,7 @@ fn filters_search_current_text_and_do_not_evaluate_excluded_candidates() {
         let a = created(&a);
         let b = f.accepted("Other");
         f.ok(&["note", "add", &b, "-m", "Needle %_ historical"]);
-        f.ok(&["when", "set", &b, "--command", "exit 19"]);
+        f.ok(&["condition", "set", &b, "--command", "exit 19"]);
         f.ok(&["write", &b, "-m", "current text without query"]);
         let unrelated = f.ok(&[
             "capture",
@@ -298,7 +298,7 @@ fn no_op_confirmation_uses_locked_state_and_keeps_snapshot_and_bytes() {
             vec!["write", &a, "--title", "Text"],
             vec!["parent", "unset", &a],
             vec!["dep", "add", &a, "--needs", &b],
-            vec!["when", "clear", &a],
+            vec!["condition", "unset", &a],
         ] {
             let out = f.ok(&args);
             assert!(out.starts_with(&a) && out.contains("No changes"));
@@ -617,8 +617,8 @@ fn note_search_literal_excerpts_and_scope_match_on_both_backends() {
         let group = f.ok(&["capture", "--kind", "group", "--title", "Group"]);
         let b = created(&group);
         f.ok(&["cancel", b]);
-        f.ok(&["when", "set", &a, "--command", "echo wrong > observed"]);
-        f.ok(&["when", "set", b, "--command", "exit 19"]);
+        f.ok(&["condition", "set", &a, "--command", "echo wrong > observed"]);
+        f.ok(&["condition", "set", b, "--command", "exit 19"]);
         let cases = [
             (
                 "日本語".to_owned(),

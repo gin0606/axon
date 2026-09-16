@@ -191,12 +191,12 @@ pub fn operation_label(command: &Command) -> String {
         Command::Complete(c) => ("complete", Some(&c.id)),
         Command::Cancel(c) => ("cancel", Some(&c.id)),
         Command::Reconsider(c) => ("reconsider", Some(&c.id)),
-        Command::When {
-            command: When::Set { id, .. },
-        } => ("when set", Some(id)),
-        Command::When {
-            command: When::Clear { id },
-        } => ("when clear", Some(id)),
+        Command::Condition {
+            command: Condition::Set { id, .. },
+        } => ("condition set", Some(id)),
+        Command::Condition {
+            command: Condition::Unset { id },
+        } => ("condition unset", Some(id)),
         Command::Dep {
             command: Dependency::Add { id, .. },
         } => ("dep add", Some(id)),
@@ -257,7 +257,7 @@ pub fn render_root_help() -> String {
                 "write",
                 "parent",
                 "dep",
-                "when",
+                "condition",
                 "withdraw",
                 "cancel",
                 "reconsider",
