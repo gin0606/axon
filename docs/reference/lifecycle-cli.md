@@ -57,6 +57,10 @@ bare `axon`、help、-h、--helpは同じ用途別root helpをstdoutへ出して
 
 `export` と `import prepare|check|apply`、`docs declaration` の識別子、declaration の形式、保存結果と診断の区別は [正本spec](../../spec/lifecycle_proposal.md#計画全体の取得と一括編集) の「計画全体の取得と一括編集」に従う。declaration内のIDは完全IDだけを使い、exportの引数は他のcommandと同じくsuffixも受け付ける。保存境界の表示はこの文書の「mutationの結果」と同じApplied、Not applied、Result unknownを使う。
 
+`axon import apply FILE` は書き込みlock内でFILEを読み、checkと同じ検証を再実行し、全変更を一回の保存境界で反映する。拒否時は全件Not applied。成功後は保存したsnapshotからbase・lifecycle・referencesとcanonical順を更新し、keyを保持してFILEを置き換える。成功出力にはbase更新前に新規だったrecordの `key -> 完全ID` の対応を一行ずつ含める。既存の再浮上条件とNoteは保持し、新規の条件は未設定とする。
+
+保存成功後のFILE更新失敗は、保存先のAppliedとdeclarationのNot appliedまたはResult unknownを分けて表示する。rename直前に元bytesを再照合し、編集されていればそのfileを保持する。同じFILEを再applyし、編集集合の全Entityが宣言の最終値に一致すれば保存先はno-opでrewriteだけを完了する。部分一致は競合。SQLite commit失敗とfile正本のrename後sync失敗は保存先のResult unknownで、declarationは更新しない。
+
 ## Note本文の横断検索
 
 `axon note search <語句>` は管理root内の全Entity（Issue・Group、Completed・Cancelledを含む）のNote本文を検索し、条件を実行しない。追加filterは設けない。元の保存文字列にcase-sensitiveなliteral部分一致を適用し、trim・Unicode正規化をしない。空白・改行・%・_・正規表現記号は通常の文字として扱う。空文字は構文エラー（終了2）、該当なしはstdout空・stderrに案内を出して終了0。先頭hyphenの語句は `axon note search -- '--text'` と渡す。
@@ -66,7 +70,3 @@ bare `axon`、help、-h、--helpは同じ用途別root helpをstdoutへ出して
 抜粋は最初の一致と前後24文字で、検索語そのものを省略せず、日本語を壊さない文字単位で切り出す。原文を省略した側に `…` を示す。原文で一致位置と範囲を決めた後、改行を可視の `\n`、元のバックスラッシュを `\\` にし、他の端末制御文字も可視化する。保存本文は変えない。長い検索語でも一行の固定上限で切り捨てない。行単位での絞り込み向けで、固定列・区切りや機械向け出力形式は保証しない。
 
 list・tasks・triageの `--search` はNoteだけの一致ではEntityを返さなくなった。現在の主題は `list --search`、Noteに残る情報は `note search`、原文は `note show ID NOTE_ID` で読む。`note list ID` のEntity IDは引き続き必須。
-
-`axon import apply FILE` は書き込みlock内でFILEを読み、checkと同じ検証を再実行し、全変更を一回の保存境界で反映する。拒否時は全件Not applied。成功後は保存したsnapshotからbase・lifecycle・referencesとcanonical順を更新し、keyを保持してFILEを置き換える。成功出力にはbase更新前に新規だったrecordの `key -> 完全ID` の対応を一行ずつ含める。既存の再浮上条件とNoteは保持し、新規の条件は未設定とする。
-
-保存成功後のFILE更新失敗は、保存先のAppliedとdeclarationのNot appliedまたはResult unknownを分けて表示する。rename直前に元bytesを再照合し、編集されていればそのfileを保持する。同じFILEを再applyし、編集集合の全Entityが宣言の最終値に一致すれば保存先はno-opでrewriteだけを完了する。部分一致は競合。SQLite commit失敗とfile正本のrename後sync失敗は保存先のResult unknownで、declarationは更新しない。
