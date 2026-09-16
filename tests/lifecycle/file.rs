@@ -22,13 +22,15 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
     let f = Fixture::new();
     init_file(&f);
     let group = f
-        .ok(&["group", "plan", "--title", "group"])
+        .ok(&["capture", "--kind", "group", "--accept", "--title", "group"])
         .split_whitespace()
         .next()
         .unwrap()
         .to_string();
     let issue = f
-        .ok(&["plan", "--title", "child", "--parent", &group])
+        .ok(&[
+            "capture", "--accept", "--title", "child", "--parent", &group,
+        ])
         .split_whitespace()
         .next()
         .unwrap()
@@ -66,12 +68,12 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
     );
     f.ok(&["release", &issue]);
     f.ok(&["start", &issue]);
-    f.ok(&["done", &issue]);
+    f.ok(&["complete", &issue]);
     assert!(
         f.ok(&["show", &group])
             .contains("Awaiting final confirmation")
     );
-    f.ok(&["done", &group]);
+    f.ok(&["complete", &group]);
     assert!(f.ok(&["log", &issue]).contains("Completed"));
     assert!(f.ok(&["tasks"]).is_empty());
     let before = fs::read(state(&f)).unwrap();
@@ -116,7 +118,7 @@ fn file_init_preserves_rules_rejects_conflicts_and_existing_store() {
 fn writer_checks_drift_corruption_backend_and_preserves_noop_bytes() {
     let f = Fixture::new();
     init_file(&f);
-    f.plan("one");
+    f.accepted("one");
     let mut bytes = fs::read(state(&f)).unwrap();
     let split = bytes.iter().position(|b| *b == b'\n').unwrap();
     bytes.insert(split, b' ');
@@ -150,7 +152,7 @@ fn writer_checks_drift_corruption_backend_and_preserves_noop_bytes() {
 
 fn branch_inputs(f: &Fixture) -> (PathBuf, PathBuf, PathBuf, EntityId) {
     init_file(f);
-    let id: EntityId = f.plan("job").try_into().unwrap();
+    let id: EntityId = f.accepted("job").try_into().unwrap();
     let mut base = snapshot(f);
     base.perform(&id, Operation::Start, None, ctx()).unwrap();
     let mut ours = base.clone();
@@ -285,7 +287,7 @@ fn file_worktrees_are_isolated_and_git_driver_merges_notes() {
     let f = Fixture::new();
     git(&f.0, &["init", "-q"]);
     init_file(&f);
-    let id = f.plan("job");
+    let id = f.accepted("job");
     git(
         &f.0,
         &[
@@ -393,7 +395,7 @@ fn valid_snapshot_with_unmerged_index_rejects_normal_operations() {
     let f = Fixture::new();
     git(&f.0, &["init", "-q"]);
     init_file(&f);
-    let id = f.plan("job");
+    let id = f.accepted("job");
     git(&f.0, &["add", ".axon/state.jsonl"]);
     let blob =
         String::from_utf8(git_output(&f.0, &["hash-object", ".axon/state.jsonl"]).stdout).unwrap();
@@ -431,7 +433,7 @@ fn git_output(path: &Path, args: &[&str]) -> Output {
 fn adapters_preserve_identical_snapshot_records_and_failures() {
     let f = Fixture::new();
     init_file(&f);
-    let id: EntityId = f.plan("same").try_into().unwrap();
+    let id: EntityId = f.accepted("same").try_into().unwrap();
     let mut expected = snapshot(&f);
     let sqlpath = f.0.join("parity.db");
     let mut sql = Store::create(&sqlpath, "t", &expected).unwrap();
@@ -483,7 +485,7 @@ fn merge_rejects_foreign_store_unreviewed_destination_and_symlink_directory() {
             s.add_note(&id, "unreviewed work".into(), ctx()).unwrap();
             fs::write(state(&target), file::encode("t", &s).unwrap()).unwrap();
         } else {
-            target.plan("must survive");
+            target.accepted("must survive");
         }
         let before = fs::read(state(&target)).unwrap();
         let workspace = target.0.join("review");
@@ -635,13 +637,15 @@ fn worktree_conflict_resolution_preserves_operations_and_finishes_group() {
     git(&f.0, &["init", "-q"]);
     init_file(&f);
     let group = f
-        .ok(&["group", "plan", "--title", "delivery"])
+        .ok(&[
+            "capture", "--kind", "group", "--accept", "--title", "delivery",
+        ])
         .split_whitespace()
         .next()
         .unwrap()
         .to_string();
     let id = f
-        .ok(&["plan", "--title", "job", "--parent", &group])
+        .ok(&["capture", "--accept", "--title", "job", "--parent", &group])
         .split_whitespace()
         .next()
         .unwrap()
@@ -682,7 +686,7 @@ fn worktree_conflict_resolution_preserves_operations_and_finishes_group() {
         &f.0,
         &["worktree", "add", "-qb", "remaining", b.0.to_str().unwrap()],
     );
-    a.ok(&["done", &id]);
+    a.ok(&["complete", &id]);
     a.ok(&["note", "add", &id, "-m", "completed branch evidence"]);
     b.ok(&["release", &id, "-r", "remaining work"]);
     b.ok(&["note", "add", &id, "-m", "remaining branch evidence"]);
@@ -753,7 +757,7 @@ fn worktree_conflict_resolution_preserves_operations_and_finishes_group() {
     assert!(log.contains("InProgress → NotStarted"));
     assert!(log.contains("Integrated"));
     a.ok(&["start", &id]);
-    a.ok(&["done", &id]);
+    a.ok(&["complete", &id]);
     assert!(
         a.ok(&["show", &group])
             .contains("Awaiting final confirmation")
@@ -761,7 +765,7 @@ fn worktree_conflict_resolution_preserves_operations_and_finishes_group() {
     let notes = a.ok(&["note", "list", &id]);
     assert!(notes.contains("completed branch evidence"));
     assert!(notes.contains("remaining branch evidence"));
-    a.ok(&["done", &group]);
+    a.ok(&["complete", &group]);
     commit(&a.0, "verify delivery");
     git(&f.0, &["merge", "--ff-only", "finished"]);
     assert!(f.ok(&["tasks"]).is_empty());

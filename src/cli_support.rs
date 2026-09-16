@@ -1,16 +1,19 @@
 use super::*;
 
 #[derive(Clone, Copy, ValueEnum)]
-pub enum KindFilter {
+pub enum EntityKind {
     Issue,
     Group,
 }
-impl KindFilter {
+impl EntityKind {
+    pub fn kind(self) -> Kind {
+        match self {
+            Self::Issue => Kind::Issue,
+            Self::Group => Kind::Group,
+        }
+    }
     fn matches(self, entity: &Entity) -> bool {
-        matches!(
-            (self, entity.kind),
-            (Self::Issue, Kind::Issue) | (Self::Group, Kind::Group)
-        )
+        self.kind() == entity.kind
     }
 }
 #[derive(Clone, Copy, ValueEnum)]
@@ -36,7 +39,7 @@ impl LifecycleFilter {
 pub struct Selection {
     /// Restrict the Entity kind before evaluating any conditions
     #[arg(long)]
-    kind: Option<KindFilter>,
+    kind: Option<EntityKind>,
     /// Literal, case-sensitive text in current title or description; AND with other filters. Search Note bodies with axon note search
     #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
     search: Option<String>,
@@ -185,27 +188,27 @@ pub fn operation_label(command: &Command) -> String {
         Command::Withdraw(c) => ("withdraw", Some(&c.id)),
         Command::Start(c) => ("start", Some(&c.id)),
         Command::Release(c) => ("release", Some(&c.id)),
-        Command::Done(c) => ("done", Some(&c.id)),
+        Command::Complete(c) => ("complete", Some(&c.id)),
         Command::Cancel(c) => ("cancel", Some(&c.id)),
         Command::Reconsider(c) => ("reconsider", Some(&c.id)),
-        Command::When {
-            command: When::Set { id, .. },
-        } => ("when set", Some(id)),
-        Command::When {
-            command: When::Clear { id },
-        } => ("when clear", Some(id)),
+        Command::Condition {
+            command: Condition::Set { id, .. },
+        } => ("condition set", Some(id)),
+        Command::Condition {
+            command: Condition::Unset { id },
+        } => ("condition unset", Some(id)),
         Command::Dep {
             command: Dependency::Add { id, .. },
         } => ("dep add", Some(id)),
         Command::Dep {
             command: Dependency::Rm { id, .. },
         } => ("dep rm", Some(id)),
-        Command::Group {
-            command: Group::Set { id, .. },
-        } => ("group set", Some(id)),
-        Command::Group {
-            command: Group::Unset { id },
-        } => ("group unset", Some(id)),
+        Command::Parent {
+            command: Parent::Set { id, .. },
+        } => ("parent set", Some(id)),
+        Command::Parent {
+            command: Parent::Unset { id },
+        } => ("parent unset", Some(id)),
         Command::Note {
             command: Notes::Add { id, .. },
         } => ("note add", Some(id)),
@@ -215,17 +218,10 @@ pub fn operation_label(command: &Command) -> String {
         Command::Note {
             command: Notes::Show { id, .. },
         } => ("note show", Some(id)),
-        Command::Plan(_) => ("plan", None),
         Command::Capture(_) => ("capture", None),
-        Command::Group {
-            command: Group::Plan(_),
-        } => ("group plan", None),
-        Command::Group {
-            command: Group::Capture(_),
-        } => ("group capture", None),
         Command::List(_) => ("list", None),
         Command::Tasks(_) => ("tasks", None),
-        Command::Triage(_) => ("triage", None),
+        Command::Proposals(_) => ("proposals", None),
         Command::Init { .. } => ("init", None),
         Command::Merge { .. } => ("merge", None),
         Command::Storage { .. } => ("storage check", None),
@@ -246,26 +242,35 @@ pub fn render_root_help() -> String {
     let mut command = Cli::command();
     command.build();
     let sections: &[(&str, &[&str])] = &[
+        ("Registration", &["capture"]),
         (
-            "Workflow",
+            "Lifecycle transitions",
             &[
-                "triage", "tasks", "capture", "plan", "accept", "start", "release", "done",
-            ],
-        ),
-        ("Inspect", &["show", "list", "log", "note", "actor"]),
-        (
-            "Plan management",
-            &[
-                "export",
-                "import",
-                "write",
-                "group",
-                "dep",
-                "when",
+                "accept",
                 "withdraw",
+                "start",
+                "release",
+                "complete",
                 "cancel",
                 "reconsider",
             ],
+        ),
+        (
+            "Candidates & inspection",
+            &[
+                "proposals",
+                "tasks",
+                "show",
+                "list",
+                "log",
+                "note",
+                "actor",
+                "export",
+            ],
+        ),
+        (
+            "Text & relationships",
+            &["write", "parent", "dep", "condition", "import"],
         ),
         (
             "Setup & utilities",

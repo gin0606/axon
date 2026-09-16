@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, Copy)]
 pub enum CandidateList {
-    Triage,
+    Proposals,
     Tasks,
 }
 
@@ -38,7 +38,7 @@ pub fn candidates_filtered<E: From<Error>>(
             continue;
         }
         let state = match kind {
-            CandidateList::Triage => Lifecycle::Undecided,
+            CandidateList::Proposals => Lifecycle::Undecided,
             CandidateList::Tasks => Lifecycle::NotStarted,
         };
         if entity.current.lifecycle != state {

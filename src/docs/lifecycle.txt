@@ -6,8 +6,9 @@ suffix works wherever a command takes an Entity ID. Note IDs are complete stable
 record IDs; they do not indicate priority or order.
 
 Lifecycle
-  capture -> Undecided -> accept -> NotStarted -> start -> InProgress -> done -> Completed
-  plan creates NotStarted work whose purpose and completion criteria are adopted.
+  capture -> Undecided -> accept -> NotStarted -> start -> InProgress -> complete -> Completed
+  capture registers work: --kind issue|group chooses the kind, and --accept
+  registers it as already adopted, in NotStarted instead of Undecided.
   withdraw returns NotStarted to Undecided; release returns InProgress to NotStarted.
   cancel terminates unfinished work; reconsider returns Cancelled to Undecided.
   Completed work cannot reopen. Notes can be appended even after work is terminal.
@@ -15,26 +16,29 @@ Lifecycle
 A child starts only while its parent Group is InProgress. Explicit dependencies
 must be Completed before work starts or completes. Cancelled is terminal but does
 not satisfy a dependency. Group completion also requires all direct children to
-be terminal. Running done on a Group explicitly confirms final review of the
-entire plan, including the outcomes and Notes of its descendants.
+be terminal. Running complete on a Group explicitly confirms final review of
+the entire plan, including the outcomes and Notes of its descendants.
+parent set ID --parent G sets or moves the parent Group and parent unset ID
+removes it; neither changes lifecycle.
 
 Daily workflow
   axon capture --title 'Investigate a concern' -m 'Context and uncertainty'
-  axon plan --title 'Deliver an adopted outcome' -F plan.md
-  axon triage
+  axon capture --accept --title 'Deliver an adopted outcome' -F plan.md
+  axon capture --kind group --accept --title 'Deliver a plan' -F plan.md
+  axon proposals
   axon tasks
   axon show ID
   axon start ID
   axon note add ID -F result.md
-  axon done ID
+  axon complete ID
 
 Reading and resurfacing
-  triage lists surfaced Undecided work. tasks lists surfaced NotStarted work and
+  proposals lists surfaced Undecided work. tasks lists surfaced NotStarted work and
   all InProgress work, including blocked work. Candidate conditions include every
   ancestor Group. Absence from these lists does not mean an Entity is missing.
   list includes every saved Entity by default, in creation order. --kind,
   --lifecycle, --terminal and --search narrow it without running conditions.
-  list/tasks/triage --search now match only current title and description, not Notes.
+  list/tasks/proposals --search now match only current title and description, not Notes.
   Use note search 'text' for information in Notes across all Entities, including
   Completed and Cancelled work, without running conditions. Matching is literal,
   case-sensitive, with no trimming or Unicode normalization. Empty queries are
@@ -50,12 +54,13 @@ Reading and resurfacing
   changes and integrations, preserving concurrent branches. --recorder-details
   includes optional stored recorder data; actor information is not ownership.
 
-  when set ID --command 'test -f ready.txt' stores a shell condition without running
-  it. when clear removes it. triage/tasks run /bin/sh -c: 0=satisfied, 1=unsatisfied,
-  other exits fail the list. The default timeout is 30s; --condition-timeout accepts
-  positive integers with ms, s, m or h. --trace-conditions writes captured output
-  to stderr. Conditions run at the current Git worktree root (management root
-  outside Git). Filtering selects candidates before evaluating their ancestors.
+  condition set ID --command 'test -f ready.txt' stores a shell condition without
+  running it. condition unset removes it. proposals/tasks run /bin/sh -c: 0=satisfied,
+  1=unsatisfied, other exits fail the list. The default timeout is 30s;
+  --condition-timeout accepts positive integers with ms, s, m or h.
+  --trace-conditions writes captured output to stderr. Conditions run at the
+  current Git worktree root (management root outside Git). Filtering selects
+  candidates before evaluating their ancestors.
 
 Storage and recovery
   init creates a new root; SQLite is the default, --backend file chooses JSONL.
@@ -73,9 +78,10 @@ Storage and recovery
   Git driver configuration, staging and commits remain separate operations.
 
 Use axon help <COMMAND PATH> for exact arguments. Create with --title; descriptions
-accept -m/--description or -F/--description-file (- reads stdin). Notes use
--m/--message or -F/--file. For option values beginning with a hyphen use the equals
-form, for example --description='--text'. No legacy option aliases are provided.
+accept -m/--description or -F/--file (- reads stdin). Notes use
+-m/--message or -F/--file. Short flags select inline (-m) or file (-F) input;
+inline long names identify the field (--description or --message). For option
+values beginning with a hyphen use the equals form, for example --description='--text'. No legacy option aliases are provided.
 
 Use axon docs declaration for plan declaration fields and the bulk-edit workflow.
 Use axon docs declaration --example for a new-plan YAML template.

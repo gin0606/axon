@@ -1131,7 +1131,7 @@ fn candidate_evaluation_matches_boolean_oracle_for_all_three_level_conditions() 
                 (id("leaf"), bits & 4 != 0),
                 (id("draft"), bits & 8 != 0),
             ]);
-            for kind in [CandidateList::Tasks, CandidateList::Triage] {
+            for kind in [CandidateList::Tasks, CandidateList::Proposals] {
                 let mut calls = Vec::new();
                 let actual: Vec<_> = candidates(&snapshot, kind, |entity, _| {
                     calls.push(entity.id.clone());

@@ -32,9 +32,11 @@ fn short_ids_and_suffixes_work_across_mutations_and_preserve_long_ids() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "project", "--backend", backend]);
-        let group = f.ok(&["group", "plan", "--title", "Parent"]);
+        let group = f.ok(&[
+            "capture", "--kind", "group", "--accept", "--title", "Parent",
+        ]);
         let group = created(&group);
-        let dep = f.plan("Prerequisite");
+        let dep = f.accepted("Prerequisite");
         for id in [group, &dep] {
             assert!(id.starts_with("project-"));
             assert_eq!(suffix(id).len(), 6);
@@ -64,7 +66,7 @@ fn short_ids_and_suffixes_work_across_mutations_and_preserve_long_ids() {
         f.ok(&["accept", short]);
         f.ok(&["start", suffix(group)]);
         f.ok(&["start", suffix(&dep)]);
-        f.ok(&["done", suffix(&dep)]);
+        f.ok(&["complete", suffix(&dep)]);
         f.ok(&[
             "write",
             short,
@@ -73,13 +75,13 @@ fn short_ids_and_suffixes_work_across_mutations_and_preserve_long_ids() {
             "--description",
             "Updated body",
         ]);
-        f.ok(&["group", "unset", short]);
-        f.ok(&["group", "set", short, "--parent", suffix(group)]);
+        f.ok(&["parent", "unset", short]);
+        f.ok(&["parent", "set", short, "--parent", suffix(group)]);
         f.ok(&["dep", "rm", short, "--needs", suffix(&dep)]);
         f.ok(&["dep", "add", short, "--needs", suffix(&dep)]);
-        f.ok(&["when", "clear", short]);
+        f.ok(&["condition", "unset", short]);
         f.ok(&[
-            "when",
+            "condition",
             "set",
             short,
             "--command",
@@ -101,7 +103,7 @@ fn short_ids_and_suffixes_work_across_mutations_and_preserve_long_ids() {
         f.ok(&["withdraw", short]);
         f.ok(&["accept", short]);
         f.ok(&["start", short]);
-        f.ok(&["done", short]);
+        f.ok(&["complete", short]);
         assert!(f.ok(&["log", short]).contains("InProgress → Completed"));
         assert!(!f.0.join("observed").exists());
         let long = "project-454e0188d65fbdee8090f4c245831b2a";
@@ -129,8 +131,10 @@ fn filters_search_current_text_and_do_not_evaluate_excluded_candidates() {
         let f = Fixture::new();
         f.ok(&["init", "q", "--backend", backend]);
         let parent = f.ok(&[
+            "capture",
+            "--kind",
             "group",
-            "plan",
+            "--accept",
             "--title",
             "Parent",
             "--command",
@@ -138,7 +142,8 @@ fn filters_search_current_text_and_do_not_evaluate_excluded_candidates() {
         ]);
         let parent = created(&parent);
         let a = f.ok(&[
-            "plan",
+            "capture",
+            "--accept",
             "--title",
             "Needle %_",
             "--parent",
@@ -147,13 +152,15 @@ fn filters_search_current_text_and_do_not_evaluate_excluded_candidates() {
             "Needle %_ body",
         ]);
         let a = created(&a);
-        let b = f.plan("Other");
+        let b = f.accepted("Other");
         f.ok(&["note", "add", &b, "-m", "Needle %_ historical"]);
-        f.ok(&["when", "set", &b, "--command", "exit 19"]);
+        f.ok(&["condition", "set", &b, "--command", "exit 19"]);
         f.ok(&["write", &b, "-m", "current text without query"]);
         let unrelated = f.ok(&[
+            "capture",
+            "--kind",
             "group",
-            "plan",
+            "--accept",
             "--title",
             "Excluded",
             "--command",
@@ -192,16 +199,58 @@ fn filters_search_current_text_and_do_not_evaluate_excluded_candidates() {
 }
 
 #[test]
+fn one_registration_command_selects_kind_and_adoption_independently() {
+    let f = Fixture::new();
+    f.init();
+    for (args, expected) in [
+        (vec!["capture"], "Issue  Undecided"),
+        (vec!["capture", "--accept"], "Issue  NotStarted"),
+        (vec!["capture", "--kind", "group"], "Group  Undecided"),
+        (
+            vec!["capture", "--kind", "group", "--accept"],
+            "Group  NotStarted",
+        ),
+    ] {
+        let mut args = args;
+        args.extend(["--title", "Registered"]);
+        assert!(f.ok(&args).contains(expected), "{args:?}");
+    }
+    let group = f.ok(&["capture", "--kind", "group", "--accept", "--title", "Root"]);
+    let group = created(&group);
+    let dependency = f.accepted("Prerequisite");
+    let child = f.ok(&[
+        "capture",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        "Child",
+        "--parent",
+        group,
+        "--needs",
+        &dependency,
+        "--command",
+        "exit 1",
+    ]);
+    let child = created(&child);
+    let details = f.ok(&["show", child, "--details"]);
+    assert!(details.contains(group) && details.contains(&dependency));
+    assert!(details.contains("exit 1"));
+    assert!(f.ok(&["show", group]).contains(child));
+}
+
+#[test]
 fn details_show_saved_relationships_once_without_running_conditions() {
     let f = Fixture::new();
     f.init();
-    let parent = f.ok(&["group", "plan", "--title", "Plan"]);
+    let parent = f.ok(&["capture", "--kind", "group", "--accept", "--title", "Plan"]);
     let parent = created(&parent);
-    let dep = f.plan("Dependency");
+    let dep = f.accepted("Dependency");
     f.ok(&["start", &dep]);
-    f.ok(&["done", &dep]);
+    f.ok(&["complete", &dep]);
     let a = f.ok(&[
-        "plan",
+        "capture",
+        "--accept",
         "--title",
         "Subject",
         "--parent",
@@ -212,7 +261,7 @@ fn details_show_saved_relationships_once_without_running_conditions() {
         "echo wrong > observed",
     ]);
     let a = created(&a);
-    let dependent = f.ok(&["plan", "--title", "Consumer", "--needs", a]);
+    let dependent = f.ok(&["capture", "--accept", "--title", "Consumer", "--needs", a]);
     let dependent = created(&dependent);
     let plain = f.ok(&["show", a]);
     assert!(
@@ -235,8 +284,8 @@ fn no_op_confirmation_uses_locked_state_and_keeps_snapshot_and_bytes() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "n", "--backend", backend]);
-        let a = f.plan("Text");
-        let b = f.plan("Needs");
+        let a = f.accepted("Text");
+        let b = f.accepted("Needs");
         f.ok(&["dep", "add", &a, "--needs", &b]);
         let before = snapshot(&f);
         let path = if backend == "file" {
@@ -247,9 +296,9 @@ fn no_op_confirmation_uses_locked_state_and_keeps_snapshot_and_bytes() {
         let bytes = fs::read(&path).unwrap();
         for args in [
             vec!["write", &a, "--title", "Text"],
-            vec!["group", "unset", &a],
+            vec!["parent", "unset", &a],
             vec!["dep", "add", &a, "--needs", &b],
-            vec!["when", "clear", &a],
+            vec!["condition", "unset", &a],
         ] {
             let out = f.ok(&args);
             assert!(out.starts_with(&a) && out.contains("No changes"));
@@ -268,6 +317,51 @@ fn no_op_confirmation_uses_locked_state_and_keeps_snapshot_and_bytes() {
 }
 
 #[test]
+fn file_flags_share_spelling_and_preserve_text_on_both_backends() {
+    for backend in ["sqlite", "file"] {
+        let f = Fixture::new();
+        f.ok(&["init", "text", "--backend", backend]);
+        let path = f.0.join("body.txt");
+        let body = "  本文\nsecond line\n";
+        fs::write(&path, body).unwrap();
+        let path = path.to_str().unwrap();
+        for flag in ["-F", "--file"] {
+            let output = f.ok(&["capture", "--title", "Text", flag, path]);
+            let id = created(&output);
+            assert!(f.ok(&["show", id]).contains(body));
+            f.ok(&["write", id, "--description", "temporary"]);
+            f.ok(&["write", id, flag, path]);
+            assert!(f.ok(&["show", id]).contains(body));
+            f.ok(&["note", "add", id, flag, path]);
+            assert!(f.ok(&["note", "list", id]).contains(body));
+            let before = snapshot(&f);
+            for args in [
+                vec!["capture", "--title", "Rejected", "--description-file", path],
+                vec!["write", id, "--description-file", path],
+                vec!["note", "add", id, "--description-file", path],
+                vec![
+                    "capture",
+                    "--title",
+                    "Rejected",
+                    "--description",
+                    "inline",
+                    flag,
+                    path,
+                ],
+                vec!["write", id, "--description", "inline", flag, path],
+                vec!["note", "add", id, "--message", "inline", flag, path],
+            ] {
+                let output = f.run(&args);
+                assert_eq!(output.status.code(), Some(2), "{args:?}");
+                assert!(output.stdout.is_empty());
+                assert!(!output.stderr.is_empty());
+                assert_eq!(snapshot(&f), before);
+            }
+        }
+    }
+}
+
+#[test]
 fn utility_commands_work_without_discovery_and_timeout_units_validate_before_storage() {
     let f = Fixture::new();
     fs::write(f.0.join(".git"), "broken marker").unwrap();
@@ -275,15 +369,74 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
     for args in [vec!["help"], vec!["-h"], vec!["--help"]] {
         assert_eq!(f.ok(&args), help);
     }
-    for heading in [
-        "Workflow:",
-        "Inspect:",
-        "Plan management:",
-        "Setup & utilities:",
-    ] {
-        assert!(help.contains(heading));
+    let expected_sections: &[(&str, &[&str])] = &[
+        ("Registration", &["capture"]),
+        (
+            "Lifecycle transitions",
+            &[
+                "accept",
+                "withdraw",
+                "start",
+                "release",
+                "complete",
+                "cancel",
+                "reconsider",
+            ],
+        ),
+        (
+            "Candidates & inspection",
+            &[
+                "proposals",
+                "tasks",
+                "show",
+                "list",
+                "log",
+                "note",
+                "actor",
+                "export",
+            ],
+        ),
+        (
+            "Text & relationships",
+            &["write", "parent", "dep", "condition", "import"],
+        ),
+        (
+            "Setup & utilities",
+            &["init", "storage", "merge", "completion", "docs", "help"],
+        ),
+    ];
+    let mut previous = 0;
+    for (heading, names) in expected_sections {
+        let heading = format!("{heading}:\n");
+        let offset = help.find(&heading).unwrap();
+        assert!(offset > previous);
+        previous = offset;
+        let section = help[offset + heading.len()..].split("\n\n").next().unwrap();
+        let commands: Vec<_> = section
+            .lines()
+            .map(|line| line.split_whitespace().next().unwrap())
+            .collect();
+        assert_eq!(&commands, names);
     }
-    assert!(f.ok(&["docs"]).contains("Cancelled is terminal"));
+    assert!(
+        !help
+            .lines()
+            .any(|line| line.ends_with(':') && line.contains("Plan"))
+    );
+    for args in [
+        vec!["capture", "--help"],
+        vec!["write", "--help"],
+        vec!["note", "add", "--help"],
+    ] {
+        let leaf = f.ok(&args);
+        assert!(leaf.contains("-F, --file"));
+        assert!(!leaf.contains("--description-file"));
+    }
+    let docs = f.ok(&["docs"]);
+    assert!(docs.contains("Cancelled is terminal"));
+    assert!(docs.contains("Short flags select inline (-m) or file (-F) input"));
+    assert!(docs.contains("--description or --message"));
+    assert!(!docs.contains("--description-file"));
     assert!(f.ok(&["help", "note", "show"]).contains("<NOTE_ID>"));
     assert!(!f.ok(&["actor"]).is_empty());
     let version = f.ok(&["--version"]);
@@ -296,6 +449,8 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
         let script = f.ok(&["completion", shell]);
         assert!(!script.contains('\x1b'));
         assert!(script.contains("tasks"));
+        assert!(script.contains("proposals"));
+        assert!(!script.contains("triage"));
     }
     for value in [
         "0ms",
@@ -315,15 +470,22 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
     }
     assert!(!f.0.join(".axon").exists());
     for args in [
-        vec!["plan", "old positional title"],
+        vec!["capture", "--accept", "old positional title"],
         vec!["capture", "--title", "Title", "--message", "old body"],
-        vec!["plan", "--title", "Title", "--file", "old.md"],
+        vec![
+            "capture",
+            "--accept",
+            "--title",
+            "Title",
+            "--description-file",
+            "old.md",
+        ],
     ] {
         assert_eq!(f.run(&args).status.code(), Some(2));
     }
     fs::remove_file(f.0.join(".git")).unwrap();
     f.init();
-    f.plan("work");
+    f.accepted("work");
     for value in ["500ms", "30s", "2m", "1h"] {
         f.ok(&["tasks", "--condition-timeout", value]);
     }
@@ -342,7 +504,7 @@ fn default_prefix_preserves_management_root_names_including_unicode() {
     );
     let output = success(
         command(&directory)
-            .args(["plan", "--title", "Work"])
+            .args(["capture", "--accept", "--title", "Work"])
             .output()
             .unwrap(),
     );
@@ -377,7 +539,7 @@ fn non_pipe_output_failure_identifies_applied_storage() {
     let writer = unsafe { OwnedFd::from_raw_fd(sockets[1]) };
     let out = f
         .command()
-        .args(["plan", "--title", "Retained"])
+        .args(["capture", "--accept", "--title", "Retained"])
         .stdout(Stdio::from(writer))
         .output()
         .unwrap();
@@ -470,8 +632,12 @@ fn strip_sgr(value: &str) -> String {
 fn tty_decoration_preserves_text_and_does_not_style_user_content() {
     let f = Fixture::new();
     f.init();
-    let id = f.plan("USER_TITLE");
-    for args in [vec!["show", &id], vec!["--help"], vec!["done", "--help"]] {
+    let id = f.accepted("USER_TITLE");
+    for args in [
+        vec!["show", &id],
+        vec!["--help"],
+        vec!["complete", "--help"],
+    ] {
         let plain = f.ok(&args);
         let colored = terminal_output(&f, &args, false);
         assert!(colored.contains('\x1b'), "{colored}");
@@ -488,29 +654,42 @@ fn show_group_displays_all_descendants_in_tree_order_and_counts_terminal_entitie
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "t", "--backend", backend]);
-        let root = f.ok(&["group", "plan", "--title", "Root"]);
+        let root = f.ok(&["capture", "--kind", "group", "--accept", "--title", "Root"]);
         let root = created(&root);
         assert!(
             f.ok(&["show", root])
                 .contains("Descendants: 0/0 terminal (0 completed, 0 cancelled)")
         );
-        let group = f.ok(&["group", "plan", "--title", "Branch", "--parent", root]);
+        let group = f.ok(&[
+            "capture", "--kind", "group", "--accept", "--title", "Branch", "--parent", root,
+        ]);
         let group = created(&group);
-        let sibling = f.ok(&["plan", "--title", "Sibling", "--parent", root]);
+        let sibling = f.ok(&[
+            "capture", "--accept", "--title", "Sibling", "--parent", root,
+        ]);
         let sibling = created(&sibling);
-        let nested = f.ok(&["group", "plan", "--title", "Nested", "--parent", group]);
+        let nested = f.ok(&[
+            "capture", "--kind", "group", "--accept", "--title", "Nested", "--parent", group,
+        ]);
         let nested = created(&nested);
-        let leaf = f.ok(&["plan", "--title", "Leaf", "--parent", nested]);
+        let leaf = f.ok(&["capture", "--accept", "--title", "Leaf", "--parent", nested]);
         let leaf = created(&leaf);
-        let cancelled = f.ok(&["plan", "--title", "Cancelled leaf", "--parent", group]);
+        let cancelled = f.ok(&[
+            "capture",
+            "--accept",
+            "--title",
+            "Cancelled leaf",
+            "--parent",
+            group,
+        ]);
         let cancelled = created(&cancelled);
-        let unrelated = f.plan("Unrelated");
+        let unrelated = f.accepted("Unrelated");
         f.ok(&["cancel", cancelled]);
         for id in [root, group, nested, leaf] {
             f.ok(&["start", id]);
         }
-        f.ok(&["done", leaf]);
-        f.ok(&["done", nested]);
+        f.ok(&["complete", leaf]);
+        f.ok(&["complete", nested]);
         for args in [vec!["show", root], vec!["show", root, "--details"]] {
             let output = f.ok(&args);
             let tree = output.split("Descendants: ").nth(1).unwrap();
@@ -530,7 +709,7 @@ fn show_group_displays_all_descendants_in_tree_order_and_counts_terminal_entitie
             assert!(!output.contains("Awaiting final confirmation"));
         }
         assert!(!f.ok(&["show", leaf]).contains("Descendants:"));
-        f.ok(&["done", group]);
+        f.ok(&["complete", group]);
         f.ok(&["cancel", sibling]);
         let output = f.ok(&["show", root]);
         assert!(output.contains("Descendants: 5/5 terminal (3 completed, 2 cancelled)"));
@@ -543,14 +722,14 @@ fn note_search_literal_excerpts_and_scope_match_on_both_backends() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "q", "--backend", backend]);
-        let a = f.plan("TitleOnly");
+        let a = f.accepted("TitleOnly");
         f.ok(&["start", &a]);
-        f.ok(&["done", &a]);
-        let group = f.ok(&["group", "capture", "--title", "Group"]);
+        f.ok(&["complete", &a]);
+        let group = f.ok(&["capture", "--kind", "group", "--title", "Group"]);
         let b = created(&group);
         f.ok(&["cancel", b]);
-        f.ok(&["when", "set", &a, "--command", "echo wrong > observed"]);
-        f.ok(&["when", "set", b, "--command", "exit 19"]);
+        f.ok(&["condition", "set", &a, "--command", "echo wrong > observed"]);
+        f.ok(&["condition", "set", b, "--command", "exit 19"]);
         let cases = [
             (
                 "日本語".to_owned(),
@@ -682,13 +861,15 @@ fn note_search_preserves_entity_ties_and_concurrent_causal_order() {
 }
 
 #[test]
-fn triage_search_excludes_note_only_candidates_before_conditions() {
+fn proposals_search_excludes_note_only_candidates_before_conditions() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "q", "--backend", backend]);
         let parent = f.ok(&[
+            "capture",
+            "--kind",
             "group",
-            "plan",
+            "--accept",
             "--title",
             "Parent",
             "--command",
@@ -700,13 +881,13 @@ fn triage_search_excludes_note_only_candidates_before_conditions() {
         let other = f.ok(&["capture", "--title", "other", "--command", "exit 19"]);
         let other = created(&other);
         f.ok(&["note", "add", other, "-m", "needle"]);
-        let rows = f.ok(&["triage", "--kind", "issue", "--search", "needle"]);
+        let rows = f.ok(&["proposals", "--kind", "issue", "--search", "needle"]);
         assert!(rows.contains(child) && !rows.contains(other));
         assert_eq!(
             fs::read_to_string(f.0.join("observed")).unwrap(),
             "parent\n"
         );
-        assert_eq!(f.run(&["triage", "--search="]).status.code(), Some(2));
+        assert_eq!(f.run(&["proposals", "--search="]).status.code(), Some(2));
         assert_eq!(f.run(&["tasks", "--search="]).status.code(), Some(2));
     }
 }

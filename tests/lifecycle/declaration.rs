@@ -17,14 +17,28 @@ fn declaration_export_selectors_and_references_are_read_only_on_both_backends() 
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "demo", "--backend", backend]);
-        let outer = created(&f.ok(&["group", "plan", "--title", "Outer"]));
-        let group = created(&f.ok(&["group", "plan", "--title", "Plan", "--parent", &outer]));
-        let external = f.plan("Outside");
-        let done = created(&f.ok(&["plan", "--title", "Finished", "--parent", &group]));
-        let cancelled = created(&f.ok(&["plan", "--title", "Cancelled", "--parent", &group]));
-        let nested = created(&f.ok(&["group", "plan", "--title", "Nested", "--parent", &group]));
+        let outer = created(&f.ok(&["capture", "--kind", "group", "--accept", "--title", "Outer"]));
+        let group = created(&f.ok(&[
+            "capture", "--kind", "group", "--accept", "--title", "Plan", "--parent", &outer,
+        ]));
+        let external = f.accepted("Outside");
+        let done = created(&f.ok(&[
+            "capture", "--accept", "--title", "Finished", "--parent", &group,
+        ]));
+        let cancelled = created(&f.ok(&[
+            "capture",
+            "--accept",
+            "--title",
+            "Cancelled",
+            "--parent",
+            &group,
+        ]));
+        let nested = created(&f.ok(&[
+            "capture", "--kind", "group", "--accept", "--title", "Nested", "--parent", &group,
+        ]));
         let child = created(&f.ok(&[
-            "plan",
+            "capture",
+            "--accept",
             "--title",
             "Body\r\nwith control\u{1}",
             "-m",
@@ -39,7 +53,7 @@ fn declaration_export_selectors_and_references_are_read_only_on_both_backends() 
         f.ok(&["start", &outer]);
         f.ok(&["start", &group]);
         f.ok(&["start", &done]);
-        f.ok(&["done", &done]);
+        f.ok(&["complete", &done]);
         f.ok(&["cancel", &cancelled]);
         let before = snapshot(&f);
         let file_before =
@@ -139,15 +153,18 @@ fn declaration_docs_and_template_work_with_broken_management_root() {
     assert_eq!(d.serialize(&axon::sqlite::empty()).unwrap(), yaml);
     assert!(f.ok(&["docs"]).contains("docs declaration"));
     let help = f.ok(&["--help"]);
-    let section = help
-        .split("Plan management:")
-        .nth(1)
-        .unwrap()
-        .split("Setup & utilities:")
-        .next()
-        .unwrap();
-    assert!(section.contains("export"));
-    assert!(section.contains("import"));
+    for (heading, name) in [
+        ("Candidates & inspection:", "export"),
+        ("Text & relationships:", "import"),
+    ] {
+        let section = help.split(heading).nth(1).unwrap();
+        let section = section.trim_start().split("\n\n").next().unwrap();
+        assert!(
+            section
+                .lines()
+                .any(|line| line.split_whitespace().next() == Some(name))
+        );
+    }
     assert!(f.ok(&["import", "--help"]).contains("prepare"));
     assert!(f.ok(&["import", "check", "--help"]).contains("<FILE>"));
     assert!(f.ok(&["export", "--help"]).contains("<ID>..."));
@@ -189,8 +206,14 @@ fn declaration_prepare_check_new_plan_and_existing_changes_on_both_backends() {
         assert!(text.contains("Situation after: Blocked"));
         assert_eq!(before, snapshot(&f));
         assert_eq!(bytes, fs::read(&path).unwrap());
-        let existing =
-            created(&f.ok(&["plan", "--title", "Original", "--command", "touch executed"]));
+        let existing = created(&f.ok(&[
+            "capture",
+            "--accept",
+            "--title",
+            "Original",
+            "--command",
+            "touch executed",
+        ]));
         let original = f.ok(&["export", &existing]);
         fs::write(&path, &original).unwrap();
         assert!(
@@ -217,8 +240,8 @@ fn declaration_check_rejections_preserve_both_backends_and_input() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "demo", "--backend", backend]);
-        let item = f.plan("Original");
-        let external = f.plan("External");
+        let item = f.accepted("Original");
+        let external = f.accepted("External");
         let exported = f.ok(&["export", &item]);
         let path = f.0.join("plan.yaml");
         let before = snapshot(&f);
@@ -273,10 +296,10 @@ fn declaration_check_rejects_local_and_core_guards_on_both_backends() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "demo", "--backend", backend]);
-        let group = created(&f.ok(&["group", "plan", "--title", "Group"]));
-        let other = created(&f.ok(&["group", "plan", "--title", "Other"]));
-        let a = f.plan("A");
-        let b = f.plan("B");
+        let group = created(&f.ok(&["capture", "--kind", "group", "--accept", "--title", "Group"]));
+        let other = created(&f.ok(&["capture", "--kind", "group", "--accept", "--title", "Other"]));
+        let a = f.accepted("A");
+        let b = f.accepted("B");
         let exported = f.ok(&["export", &a]);
         let path = f.0.join("plan.yaml");
         let reject = |input: String, category: &str| {
@@ -369,7 +392,7 @@ fn declaration_check_rejects_local_and_core_guards_on_both_backends() {
         d.issues[0].parent = Some(Reference::id(&group));
         d.refresh_references(&snapshot(&f)).unwrap();
         reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
-        f.ok(&["done", &a]);
+        f.ok(&["complete", &a]);
         f.ok(&["cancel", &b]);
         for item in [&a, &b] {
             for field in ["title", "description"] {
@@ -386,9 +409,9 @@ fn declaration_check_rejects_local_and_core_guards_on_both_backends() {
         d.issues[0].needs.push(Reference::id(&b));
         d.refresh_references(&snapshot(&f)).unwrap();
         reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
-        f.ok(&["group", "set", &a, "--parent", &group]);
+        f.ok(&["parent", "set", &a, "--parent", &group]);
         f.ok(&["start", &group]);
-        f.ok(&["done", &group]);
+        f.ok(&["complete", &group]);
         let mut d = declaration::parse(&f.ok(&["export", &a])).unwrap();
         d.issues[0].parent = None;
         d.refresh_references(&snapshot(&f)).unwrap();
@@ -498,7 +521,7 @@ fn declaration_apply_registers_edits_and_retries_on_both_backends() {
             .id
             .as_ref()
             .unwrap();
-        f.ok(&["when", "set", first, "--command", "touch executed"]);
+        f.ok(&["condition", "set", first, "--command", "touch executed"]);
         f.ok(&["note", "add", first, "-m", "Keep this note"]);
         let before = snapshot(&f);
         let mut edit = declaration::parse(&f.ok(&["export", group])).unwrap();
@@ -566,7 +589,7 @@ fn declaration_title_changes_escape_each_side_on_both_backends() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "demo", "--backend", backend]);
-        let id = f.plan("Before\nline\r\t\u{1b}");
+        let id = f.accepted("Before\nline\r\t\u{1b}");
         let mut d = declaration::parse(&f.ok(&["export", &id])).unwrap();
         d.issues[0].title = "After\nline\r\t\u{7f}".into();
         d.issues[0].description = "Private full description".into();
@@ -662,11 +685,15 @@ fn declaration_rejects_external_kind_changes_before_apply_and_on_retry() {
             let f = Fixture::new();
             f.ok(&["init", "demo", "--backend", backend]);
             let external = if external_kind == "group" {
-                created(&f.ok(&["group", "plan", "--title", "External"]))
+                created(&f.ok(&[
+                    "capture", "--kind", "group", "--accept", "--title", "External",
+                ]))
             } else {
-                f.plan("External")
+                f.accepted("External")
             };
-            let selected = created(&f.ok(&["plan", "--title", "Original", "--needs", &external]));
+            let selected = created(&f.ok(&[
+                "capture", "--accept", "--title", "Original", "--needs", &external,
+            ]));
             let original = snapshot(&f);
             let mut d = declaration::parse(&f.ok(&["export", &selected])).unwrap();
             d.issues[0].title = "Edited".into();

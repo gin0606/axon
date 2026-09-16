@@ -8,7 +8,7 @@ Issue/Groupは共通の `<prefix>-<ランダム6文字>` namespaceを使う。�
 
 全Entity入力は完全IDまたは一意なsuffixを受け付ける。対象だけでなくparent/needsも同じ規則。曖昧なときは候補IDを示して拒否し、保存を変更しない。mutationではlock取得後のsnapshotで解決する。既存の長いIDを改番しない。Note・状態記録・storeの安定IDはEntityの短いIDと別の契約であり、内部識別子の長さは変更しない。
 
-登録titleは `--title`。本文は `-m/--description` または `-F/--description-file`。Noteは `-m/--message` または `-F/--file`。旧位置引数や旧本文optionの互換入口は提供しない。`-F -` はUTF-8のstdinを一度読む。本文・Noteをtrimして保存しない。初期の `--parent`、反復可能な `--needs`、`--command` は作成と同時に検査・保存する。作成中に条件を実行しない。通常writeはtitleと本文を一transactionで編集する。
+登録titleは `--title`。本文は `-m/--description` または `-F/--file`。Noteは `-m/--message` または `-F/--file`。旧位置引数や旧本文optionの互換入口は提供しない。`-F -` はUTF-8のstdinを一度読む。本文・Noteをtrimして保存しない。初期の `--parent`、反復可能な `--needs`、`--command` は作成と同時に検査・保存する。作成中に条件を実行しない。通常writeはtitleと本文を一transactionで編集する。
 
 option値の先頭hyphenは `--description='--text'` のように渡す。構文は `axon help <COMMAND PATH>` で確認できる。
 
@@ -16,7 +16,7 @@ option値の先頭hyphenは `--description='--text'` のように渡す。構文
 
 listは保存済み全件を作成日時の昇順、同時刻はID順で表示する。`--kind issue|group`、`--lifecycle undecided|not-started|in-progress|completed|cancelled`、`--terminal=true|false` はANDで組み合わせる。terminalはCompletedまたはCancelledで、着手可能・浮上とは別。`--search` は現在title・本文だけのcase-sensitiveなliteral一致。Unicode正規化やtrimをせず、空文字は構文エラー。%、_、正規表現記号に特殊な意味はない。検索時だけMatchedに該当field（Title、Description）を付記する。
 
-triage/tasksはkind/searchで候補を絞ってから、必要な祖先を含め条件を評価する。一回の呼出しで同じ条件を重複評価しない。除外候補の条件は評価しないが、残った候補の祖先ならkindが異なっても評価する。評価失敗時に部分一覧をstdoutへ出さない。時間制限は正整数とms/s/m/hで、既定30s。詳細は [条件契約](../development/lifecycle-candidates.md)。
+proposals/tasksはkind/searchで候補を絞ってから、必要な祖先を含め条件を評価する。一回の呼出しで同じ条件を重複評価しない。除外候補の条件は評価しないが、残った候補の祖先ならkindが異なっても評価する。評価失敗時に部分一覧をstdoutへ出さない。時間制限は正整数とms/s/m/hで、既定30s。詳細は [条件契約](../development/lifecycle-candidates.md)。
 
 通常行は `ID  Kind  Situation  Title`。状況はUndecided、Ready、Blocked、InProgress、InProgress+Blocked、Completed、Cancelled。Ready/Blockedは保存されたNotStartedの親・依存前提から導出し、浮上条件は使わない。保存したタイトルに改行があれば一覧の中では `\n` として一行に保つ。
 
@@ -69,4 +69,4 @@ bare `axon`、help、-h、--helpは同じ用途別root helpをstdoutへ出して
 
 抜粋は最初の一致と前後24文字で、検索語そのものを省略せず、日本語を壊さない文字単位で切り出す。原文を省略した側に `…` を示す。原文で一致位置と範囲を決めた後、改行を可視の `\n`、元のバックスラッシュを `\\` にし、他の端末制御文字も可視化する。保存本文は変えない。長い検索語でも一行の固定上限で切り捨てない。行単位での絞り込み向けで、固定列・区切りや機械向け出力形式は保証しない。
 
-list・tasks・triageの `--search` はNoteだけの一致ではEntityを返さなくなった。現在の主題は `list --search`、Noteに残る情報は `note search`、原文は `note show ID NOTE_ID` で読む。`note list ID` のEntity IDは引き続き必須。
+list・tasks・proposalsの `--search` はNoteだけの一致ではEntityを返さなくなった。現在の主題は `list --search`、Noteに残る情報は `note search`、原文は `note show ID NOTE_ID` で読む。`note list ID` のEntity IDは引き続き必須。

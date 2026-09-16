@@ -23,7 +23,7 @@ use std::{
     styles = display::cli_styles(),
     color = display::cli_color(),
     about = "A local issue tracker for Issues and Groups",
-    after_help = "Use axon docs for the lifecycle and daily workflow. Group done explicitly confirms that the entire plan has passed final review."
+    after_help = "Use axon docs for the lifecycle and daily workflow. Group complete explicitly confirms that the entire plan has passed final review."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -69,25 +69,18 @@ enum Command {
         #[arg(long, value_enum, default_value = "sqlite")]
         backend: Backend,
     },
-    /// Create an Undecided Issue
+    /// Register an Issue or Group; --accept registers it as adopted work
     Capture(Create),
-    /// Create a NotStarted Issue with an adopted plan
-    Plan(Create),
-    /// Create Groups or change their membership
-    Group {
-        #[command(subcommand)]
-        command: Group,
-    },
     /// List saved Entities in creation order without running conditions
     List(ListOptions),
     /// List surfaced Undecided Entities with surfaced ancestors
-    Triage(CandidateOptions),
+    Proposals(CandidateOptions),
     /// List surfaced NotStarted Entities and all InProgress work, including blocked work
     Tasks(CandidateOptions),
     /// Set or repair resurfacing conditions without running them
-    When {
+    Condition {
         #[command(subcommand)]
-        command: When,
+        command: Condition,
     },
     /// Show text, immediate unmet prerequisites and all Group descendants
     Show {
@@ -117,7 +110,7 @@ enum Command {
     /// Release InProgress work back to NotStarted
     Release(Change),
     /// Complete work; for a Group, explicitly confirm final review of the entire plan
-    Done(Change),
+    Complete(Change),
     /// Cancel work
     Cancel(Change),
     /// Return a Cancelled Entity to Undecided
@@ -134,6 +127,11 @@ enum Command {
     Dep {
         #[command(subcommand)]
         command: Dependency,
+    },
+    /// Set or unset the parent Group without changing lifecycle
+    Parent {
+        #[command(subcommand)]
+        command: Parent,
     },
 }
 #[derive(Subcommand)]
@@ -202,7 +200,7 @@ enum Merge {
 The working directory is the current Git worktree root, or the management root outside Git.
 Ctrl-C and timeout send TERM to the process group, then KILL after 1s.
 Each stdout/stderr stream retains up to 64 KiB (first and last 32 KiB on overflow).
-Examples: axon tasks --condition-timeout 500ms; axon triage --trace-conditions
+Examples: axon tasks --condition-timeout 500ms; axon proposals --trace-conditions
 Absence from a candidate list does not mean an Entity is missing. Use list for the complete inventory."
 )]
 struct CandidateOptions {
@@ -216,18 +214,18 @@ struct CandidateOptions {
     trace_conditions: bool,
 }
 #[derive(Subcommand)]
-enum When {
+enum Condition {
     /// Save or replace a shell condition without evaluating it
     #[command(
-        after_help = "Example: axon when set ID --command 'test -f ready.txt'\nExit 0=satisfied, 1=unsatisfied, others=evaluation failed. Repair broken conditions with set or clear."
+        after_help = "Example: axon condition set ID --command 'test -f ready.txt'\nExit 0=satisfied, 1=unsatisfied, others=evaluation failed. Repair broken conditions with set or unset."
     )]
     Set {
         id: String,
         #[arg(long)]
         command: String,
     },
-    /// Clear the condition without changing lifecycle
-    Clear { id: String },
+    /// Remove the condition without changing lifecycle
+    Unset { id: String },
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum Backend {
@@ -239,7 +237,7 @@ struct Body {
     #[arg(short = 'm', long, conflicts_with = "description_file")]
     description: Option<String>,
     /// Read UTF-8 text from a file; - reads standard input
-    #[arg(short = 'F', long)]
+    #[arg(short = 'F', long = "file")]
     description_file: Option<PathBuf>,
 }
 impl Body {
@@ -262,13 +260,21 @@ struct Create {
     /// Title of the new Entity
     #[arg(long)]
     title: String,
+    /// Entity kind to create
+    #[arg(long, value_enum, default_value = "issue")]
+    kind: EntityKind,
+    /// Register as adopted work in NotStarted instead of Undecided
+    #[arg(long)]
+    accept: bool,
     /// Initial shell condition; stored without evaluation
     #[arg(long)]
     command: Option<String>,
     #[command(flatten)]
     body: Body,
+    /// Containing Group; the new Entity starts only while that Group is InProgress
     #[arg(long)]
     parent: Option<String>,
+    /// Dependency that must be Completed first; repeat for several
     #[arg(long)]
     needs: Vec<String>,
 }
@@ -279,17 +285,15 @@ struct Change {
     reason: Option<String>,
 }
 #[derive(Subcommand)]
-enum Group {
-    Capture(Create),
-    Plan(Create),
+enum Parent {
+    /// Set or move the parent Group
     Set {
         id: String,
         #[arg(long)]
         parent: String,
     },
-    Unset {
-        id: String,
-    },
+    /// Remove the parent Group
+    Unset { id: String },
 }
 #[derive(Subcommand)]
 enum Dependency {
@@ -792,7 +796,7 @@ fn run(command: Command) -> Result<Output> {
         }
         Command::Export { .. }
         | Command::List(_)
-        | Command::Triage(_)
+        | Command::Proposals(_)
         | Command::Tasks(_)
         | Command::Show { .. }
         | Command::Log { .. }
@@ -802,8 +806,8 @@ fn run(command: Command) -> Result<Output> {
             let (_, snapshot) = store.read()?;
             let empty_hint = match &command {
                 Command::List(_) => "No matching Entities.",
-                Command::Triage(_) => {
-                    "No triage candidates. Conditions and ancestor scope may hide saved Entities; use axon list for the inventory."
+                Command::Proposals(_) => {
+                    "No proposals candidates. Conditions and ancestor scope may hide saved Entities; use axon list for the inventory."
                 }
                 Command::Tasks(_) => {
                     "No task candidates. Conditions and ancestor scope may hide saved Entities; use axon list for the inventory."
@@ -827,9 +831,9 @@ fn run(command: Command) -> Result<Output> {
                 Command::Note {
                     command: Notes::Search { query },
                 } => search_notes(&snapshot, &query)?,
-                Command::Triage(ref options) | Command::Tasks(ref options) => {
-                    let kind = if matches!(command, Command::Triage(_)) {
-                        CandidateList::Triage
+                Command::Proposals(ref options) | Command::Tasks(ref options) => {
+                    let kind = if matches!(command, Command::Proposals(_)) {
+                        CandidateList::Proposals
                     } else {
                         CandidateList::Tasks
                     };
@@ -954,14 +958,7 @@ fn run(command: Command) -> Result<Output> {
                 diagnostic,
             })
         }
-        Command::Capture(args) => create(&mut store, Kind::Issue, Lifecycle::Undecided, args),
-        Command::Plan(args) => create(&mut store, Kind::Issue, Lifecycle::NotStarted, args),
-        Command::Group {
-            command: Group::Capture(args),
-        } => create(&mut store, Kind::Group, Lifecycle::Undecided, args),
-        Command::Group {
-            command: Group::Plan(args),
-        } => create(&mut store, Kind::Group, Lifecycle::NotStarted, args),
+        Command::Capture(args) => create(&mut store, args),
         Command::Write {
             id: value,
             title,
@@ -970,7 +967,7 @@ fn run(command: Command) -> Result<Output> {
             let body = body.read()?;
             if title.is_none() && body.is_none() {
                 return Err(sqlite::Error::Invalid(
-                    "write requires --title, --description or --description-file".into(),
+                    "write requires --title, --description or --file".into(),
                 ));
             }
             let text = store.update(|_, snapshot| {
@@ -1017,11 +1014,10 @@ fn run(command: Command) -> Result<Output> {
             })?;
             Ok(output(text, true))
         }
-        Command::Group { command } => {
+        Command::Parent { command } => {
             let (value, parent) = match command {
-                Group::Set { id, parent } => (id, Some(parent)),
-                Group::Unset { id } => (id, None),
-                _ => unreachable!(),
+                Parent::Set { id, parent } => (id, Some(parent)),
+                Parent::Unset { id } => (id, None),
             };
             let text = store.update(|_, snapshot| {
                 let id = resolve(snapshot, &value)?;
@@ -1041,22 +1037,22 @@ fn run(command: Command) -> Result<Output> {
             })?;
             Ok(output(text, true))
         }
-        Command::When { command } => {
+        Command::Condition { command } => {
             let (value, command) = match command {
-                When::Set { id, command } => (id, Some(command)),
-                When::Clear { id } => (id, None),
+                Condition::Set { id, command } => (id, Some(command)),
+                Condition::Unset { id } => (id, None),
             };
             let text = store.update(|_, snapshot| {
                 let id = resolve(snapshot, &value)?;
                 let unchanged = snapshot.entity(&id)?.current.condition == command;
-                let cleared = command.is_none();
+                let unset = command.is_none();
                 snapshot.set_condition(&id, command)?;
                 Ok(confirmation(
                     &id,
                     if unchanged {
                         "No changes"
-                    } else if cleared {
-                        "Condition cleared"
+                    } else if unset {
+                        "Condition unset"
                     } else {
                         "Condition updated"
                     },
@@ -1094,7 +1090,7 @@ fn run(command: Command) -> Result<Output> {
                 Command::Withdraw(args) => (args, Operation::Withdraw),
                 Command::Start(args) => (args, Operation::Start),
                 Command::Release(args) => (args, Operation::Release),
-                Command::Done(args) => (args, Operation::Complete),
+                Command::Complete(args) => (args, Operation::Complete),
                 Command::Cancel(args) => (args, Operation::Cancel),
                 Command::Reconsider(args) => (args, Operation::Reconsider),
                 _ => unreachable!(),
@@ -1117,12 +1113,13 @@ fn run(command: Command) -> Result<Output> {
         }
     }
 }
-fn create(
-    store: &mut axon::location::Store,
-    kind: Kind,
-    lifecycle: Lifecycle,
-    args: Create,
-) -> Result<Output> {
+fn create(store: &mut axon::location::Store, args: Create) -> Result<Output> {
+    let kind = args.kind.kind();
+    let lifecycle = if args.accept {
+        Lifecycle::NotStarted
+    } else {
+        Lifecycle::Undecided
+    };
     let description = args.body.read()?.unwrap_or_default();
     let title = args.title;
     let text = store.update(|prefix, snapshot| {

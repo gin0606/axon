@@ -9,18 +9,27 @@ fn both_backends_support_the_daily_workflow() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "trial", "--backend", backend]);
-        let group = created(f.ok(&["group", "plan", "--title", "納品", "-m", "全成果を検証"]));
+        let group = created(f.ok(&[
+            "capture",
+            "--kind",
+            "group",
+            "--accept",
+            "--title",
+            "納品",
+            "-m",
+            "全成果を検証",
+        ]));
         let first = created(f.ok(&["capture", "--title", "調査", "--parent", &group]));
         let second = created(f.ok(&[
-            "plan", "--title", "実装", "--parent", &group, "--needs", &first,
+            "capture", "--accept", "--title", "実装", "--parent", &group, "--needs", &first,
         ]));
-        assert!(f.ok(&["triage"]).contains(&first));
+        assert!(f.ok(&["proposals"]).contains(&first));
         f.ok(&["accept", &first]);
-        assert!(f.ok(&["triage"]).is_empty());
-        f.ok(&["when", "set", &second, "--command", "exit 1"]);
+        assert!(f.ok(&["proposals"]).is_empty());
+        f.ok(&["condition", "set", &second, "--command", "exit 1"]);
         assert!(!f.ok(&["tasks"]).contains(&second));
         assert!(f.ok(&["list"]).contains(&second));
-        f.ok(&["when", "clear", &second]);
+        f.ok(&["condition", "unset", &second]);
         assert!(f.ok(&["tasks"]).contains(&second));
         failure(f.run(&["start", &first]));
         f.ok(&["start", &group]);
@@ -57,11 +66,11 @@ fn both_backends_support_the_daily_workflow() {
         for n in 0..4 {
             assert!(saved.contains(&format!("結果 {n}")));
         }
-        f.ok(&["done", &first]);
+        f.ok(&["complete", &first]);
         f.ok(&["start", &second]);
-        failure(f.run(&["done", &group]));
+        failure(f.run(&["complete", &group]));
         f.ok(&["note", "add", &second, "-m", "成果を統合・検証済み"]);
-        f.ok(&["done", &second]);
+        f.ok(&["complete", &second]);
         let review = f.ok(&["show", &group]);
         assert!(review.contains("2/2 terminal (2 completed, 0 cancelled)"));
         assert!(review.contains("Awaiting final confirmation"));
@@ -70,7 +79,7 @@ fn both_backends_support_the_daily_workflow() {
             f.ok(&["note", "list", &second])
                 .contains("成果を統合・検証済み")
         );
-        f.ok(&["done", &group]);
+        f.ok(&["complete", &group]);
         assert!(f.ok(&["tasks"]).is_empty());
         assert!(f.ok(&["log", &group]).contains("InProgress → Completed"));
     }
@@ -94,7 +103,7 @@ fn sqlite_worktrees_share_parallel_work_and_notes() {
         ],
     );
     f.init();
-    let issue = f.plan("共有する仕事");
+    let issue = f.accepted("共有する仕事");
     let linked = Fixture::new();
     git(
         &f.0,
@@ -126,7 +135,7 @@ fn sqlite_worktrees_share_parallel_work_and_notes() {
         f.ok(&["note", "list", &issue])
             .contains("linked worktreeからの記録")
     );
-    f.ok(&["done", &issue]);
+    f.ok(&["complete", &issue]);
     assert!(linked.ok(&["tasks"]).is_empty());
     assert!(!linked.db().exists());
 }
@@ -136,7 +145,7 @@ fn help_exposes_single_lifecycle_commands() {
     let f = Fixture::new();
     let help = f.ok(&["--help"]);
     for name in [
-        "triage",
+        "proposals",
         "tasks",
         "accept",
         "withdraw",
@@ -149,7 +158,7 @@ fn help_exposes_single_lifecycle_commands() {
     ] {
         assert!(help.contains(name));
     }
-    for old in ["ready", "claims", "decide", "migrate"] {
+    for old in ["ready", "claims", "decide", "migrate", "triage"] {
         assert!(
             !help
                 .lines()
@@ -157,6 +166,21 @@ fn help_exposes_single_lifecycle_commands() {
         );
         failure(f.run(&[old]));
     }
+    let rejected = f.run(&["triage"]);
+    assert_eq!(rejected.status.code(), Some(2));
+    assert!(failure(rejected).contains("unrecognized subcommand"));
+    let proposals_help = f.ok(&["proposals", "--help"]);
+    for option in [
+        "--kind",
+        "--search",
+        "--condition-timeout",
+        "--trace-conditions",
+    ] {
+        assert!(proposals_help.contains(option));
+    }
+    let docs = f.ok(&["docs"]);
+    assert!(docs.contains("axon proposals"));
+    assert!(!docs.contains("triage"));
     for args in [
         vec!["init", "--help"],
         vec!["merge", "--help"],

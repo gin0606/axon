@@ -75,7 +75,7 @@ Cancelledへ対応するGroupの未終了子孫は、既存の合意に従い包
 | 旧条件 | 対応案 |
 | --- | --- |
 | Always | 条件未設定 |
-| Manual | `exit 1`。解除は通常のwhen clear |
+| Manual | `exit 1`。解除は通常の`condition unset` |
 | AtDate | 同じinstantを判定するshell条件。schema 13はUTC午前0時として解釈する |
 | AfterEntity（新Completedを参照） | Completedは通常再開しないため、条件を解除した理由を記録する |
 | その他のAfterEntity | 参照先の終了を新CLIで調べるshell条件。CompletedとCancelledを区別したうえで旧条件の浮上意図へ対応する |

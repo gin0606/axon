@@ -27,8 +27,8 @@ impl Fixture {
     fn ok(&self, args: &[&str]) -> String {
         success(self.run(args))
     }
-    fn plan(&self, title: &str) -> String {
-        self.ok(&["plan", "--title", title])
+    fn accepted(&self, title: &str) -> String {
+        self.ok(&["capture", "--accept", "--title", title])
             .split_whitespace()
             .next()
             .unwrap()
@@ -112,12 +112,21 @@ fn registration_to_group_completion_and_records() {
     let f = Fixture::new();
     f.init();
     let group = f
-        .ok(&["group", "plan", "--title", "計画", "-m", "計画本文"])
+        .ok(&[
+            "capture",
+            "--kind",
+            "group",
+            "--accept",
+            "--title",
+            "計画",
+            "-m",
+            "計画本文",
+        ])
         .split_whitespace()
         .next()
         .unwrap()
         .to_string();
-    let dependency = f.plan("先行");
+    let dependency = f.accepted("先行");
     let issue = f
         .ok(&[
             "capture",
@@ -143,7 +152,7 @@ fn registration_to_group_completion_and_records() {
     failure(f.run(&["start", &issue]));
     f.ok(&["start", &group]);
     f.ok(&["start", &dependency]);
-    f.ok(&["done", &dependency]);
+    f.ok(&["complete", &dependency]);
     f.ok(&[
         "write",
         &issue,
@@ -154,14 +163,14 @@ fn registration_to_group_completion_and_records() {
     ]);
     f.ok(&["start", &issue]);
     f.ok(&["note", "add", &issue, "-m", "検証結果"]);
-    failure(f.run(&["done", &group]));
+    failure(f.run(&["complete", &group]));
     let show = f.ok(&["show", &issue]);
     assert!(show.starts_with(&issue));
     assert!(show.contains("1 notes"));
     assert!(show.contains("編集本文"));
     assert!(!show.contains("検証結果"));
     assert!(!show.contains("Dependency must complete:"));
-    f.ok(&["done", &issue, "--reason", "検証完了"]);
+    f.ok(&["complete", &issue, "--reason", "検証完了"]);
     assert!(
         f.ok(&["show", &group])
             .contains("1/1 terminal (1 completed, 0 cancelled)")
@@ -170,7 +179,7 @@ fn registration_to_group_completion_and_records() {
         f.ok(&["show", &group])
             .contains("Awaiting final confirmation")
     );
-    f.ok(&["done", &group]);
+    f.ok(&["complete", &group]);
     assert!(f.ok(&["note", "list", &issue]).contains("検証結果"));
     let log = f.ok(&["log", &issue]);
     assert!(log.contains("InProgress → Completed"));
@@ -187,8 +196,8 @@ fn registration_to_group_completion_and_records() {
 fn lifecycle_and_relation_edits_use_common_guards() {
     let f = Fixture::new();
     f.init();
-    let a = f.plan("A");
-    let b = f.plan("B");
+    let a = f.accepted("A");
+    let b = f.accepted("B");
     f.ok(&["dep", "add", &a, "--needs", &b]);
     failure(f.run(&["dep", "add", &b, "--needs", &a]));
     f.ok(&["dep", "rm", &a, "--needs", &b]);
@@ -199,16 +208,16 @@ fn lifecycle_and_relation_edits_use_common_guards() {
     f.ok(&["cancel", &a]);
     f.ok(&["reconsider", &a]);
     let g = f
-        .ok(&["group", "capture", "--title", "G"])
+        .ok(&["capture", "--kind", "group", "--title", "G"])
         .split_whitespace()
         .next()
         .unwrap()
         .to_string();
-    f.ok(&["group", "set", &a, "--parent", &g]);
+    f.ok(&["parent", "set", &a, "--parent", &g]);
     assert!(f.ok(&["show", &g]).contains(&a));
-    f.ok(&["group", "unset", &a]);
+    f.ok(&["parent", "unset", &a]);
     f.ok(&["cancel", &g]);
-    failure(f.run(&["group", "set", &a, "--parent", &g]));
+    failure(f.run(&["parent", "set", &a, "--parent", &g]));
 }
 #[test]
 fn stdin_files_help_invalid_arguments_and_terminal_controls() {
@@ -218,7 +227,8 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
     fs::write(&body, "long\n本文").unwrap();
     let id = f
         .ok(&[
-            "plan",
+            "capture",
+            "--accept",
             "--title",
             "safe\x1b[2J",
             "-F",
@@ -252,14 +262,34 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
     failure(f.run(&["write", &id]));
     failure(f.run(&["note", "add", &id]));
     failure(f.run(&["write", &id, "-m", "x", "-F", "-"]));
-    assert!(f.ok(&["--help"]).contains("done"));
-    assert!(f.ok(&["done", "--help"]).contains("final review"));
+    let help = f.ok(&["--help"]);
+    let listed = |name: &str| {
+        help.lines()
+            .any(|line| line.trim_start().starts_with(&format!("{name} ")))
+    };
+    assert!(listed("complete") && !listed("done"), "{help}");
+    assert!(
+        listed("parent") && !listed("group") && !listed("plan"),
+        "{help}"
+    );
+    assert!(listed("condition") && !listed("when"), "{help}");
+    assert!(f.ok(&["complete", "--help"]).contains("final review"));
+    for old in [
+        vec!["done", id.as_str()],
+        vec!["plan", "--title", "x"],
+        vec!["group", "capture", "--title", "x"],
+        vec!["group", "set", id.as_str(), "--parent", id.as_str()],
+        vec!["when", "set", id.as_str(), "--command", "exit 0"],
+        vec!["when", "clear", id.as_str()],
+    ] {
+        assert!(failure(f.run(&old)).contains("unrecognized subcommand"));
+    }
 }
 #[test]
 fn concurrent_start_has_one_winner_and_other_writes_survive() {
     let f = Fixture::new();
     f.init();
-    let id = f.plan("start");
+    let id = f.accepted("start");
     let first = f
         .command()
         .args(["start", &id])
@@ -294,7 +324,7 @@ fn concurrent_start_has_one_winner_and_other_writes_survive() {
     let children: Vec<_> = (0..8)
         .map(|n| {
             f.command()
-                .args(["plan", "--title", &format!("entity {n}")])
+                .args(["capture", "--accept", "--title", &format!("entity {n}")])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
@@ -426,7 +456,7 @@ fn old_unknown_corrupt_and_mixed_stores_are_rejected_without_changes() {
 fn discovery_outside_git_and_git_boundary() {
     let f = Fixture::new();
     f.init();
-    let id = f.plan("outer");
+    let id = f.accepted("outer");
     let nested = f.0.join("nested/deeper");
     fs::create_dir_all(nested.join(".axon")).unwrap();
     fs::write(nested.join(".axon/lock"), "").unwrap();
@@ -481,7 +511,7 @@ fn linked_worktrees_share_sqlite_and_init_is_new_only() {
     assert!(!linked.join(".axon/axon.db").exists());
     let id = success(
         command(&linked)
-            .args(["plan", "--title", "shared"])
+            .args(["capture", "--accept", "--title", "shared"])
             .output()
             .unwrap(),
     )
@@ -525,7 +555,7 @@ fn broken_pipe_is_success_after_storage_is_applied() {
     f.init();
     let mut child = f
         .command()
-        .args(["plan", "--title", "retained"])
+        .args(["capture", "--accept", "--title", "retained"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -549,7 +579,7 @@ fn git_repository_paths_keep_trailing_whitespace() {
     }
     success(
         command(&spaced)
-            .args(["plan", "--title", "only in spaced"])
+            .args(["capture", "--accept", "--title", "only in spaced"])
             .output()
             .unwrap(),
     );
@@ -576,7 +606,7 @@ fn git_repository_paths_keep_trailing_whitespace() {
 fn broken_git_marker_blocks_ancestor_storage_fallback() {
     let f = Fixture::new();
     f.init();
-    f.plan("outer");
+    f.accepted("outer");
     let nested = f.0.join("nested");
     fs::create_dir(&nested).unwrap();
     std::os::unix::fs::symlink("missing-git-directory", nested.join(".git")).unwrap();
@@ -584,7 +614,7 @@ fn broken_git_marker_blocks_ancestor_storage_fallback() {
     for args in [
         vec!["list"],
         vec!["init"],
-        vec!["plan", "--title", "must not reach outer"],
+        vec!["capture", "--accept", "--title", "must not reach outer"],
     ] {
         assert!(
             failure(command(&nested).args(args).output().unwrap()).contains("Git discovery failed")
@@ -617,7 +647,7 @@ fn git_cannot_skip_a_broken_inner_marker_to_an_outer_repository() {
     for args in [
         vec!["list"],
         vec!["init"],
-        vec!["plan", "--title", "wrong store"],
+        vec!["capture", "--accept", "--title", "wrong store"],
     ] {
         assert!(
             failure(command(&nested).args(args).output().unwrap()).contains("Git discovery failed")
@@ -636,7 +666,7 @@ fn bare_repository_is_a_boundary_without_a_dot_git_entry() {
     for args in [
         vec!["list"],
         vec!["init"],
-        vec!["plan", "--title", "wrong store"],
+        vec!["capture", "--accept", "--title", "wrong store"],
     ] {
         assert!(
             failure(command(&bare).args(args).output().unwrap()).contains("Git discovery failed")
@@ -649,12 +679,15 @@ fn bare_repository_is_a_boundary_without_a_dot_git_entry() {
 fn unknown_trigger_with_sqlite_like_name_cannot_destroy_the_snapshot() {
     let f = Fixture::new();
     f.init();
-    f.plan("retained");
+    f.accepted("retained");
     let connection = rusqlite::Connection::open(f.db()).unwrap();
     connection.execute_batch("CREATE TRIGGER sqliteX AFTER UPDATE ON lifecycle_store BEGIN DELETE FROM lifecycle_store; END").unwrap();
     drop(connection);
     let before = fs::read(f.db()).unwrap();
-    assert!(failure(f.run(&["plan", "--title", "must fail"])).contains("unexpected SQLite schema"));
+    assert!(
+        failure(f.run(&["capture", "--accept", "--title", "must fail"]))
+            .contains("unexpected SQLite schema")
+    );
     assert_eq!(before, fs::read(f.db()).unwrap());
     let connection = rusqlite::Connection::open(f.db()).unwrap();
     let count: i64 = connection
@@ -676,7 +709,7 @@ fn inherited_git_overrides_do_not_select_a_foreign_store() {
         .env("GIT_DIR", repo.join(".git"))
         .env("GIT_WORK_TREE", &repo)
         .env("GIT_COMMON_DIR", repo.join(".git"))
-        .args(["plan", "--title", "wrong store"])
+        .args(["capture", "--accept", "--title", "wrong store"])
         .output()
         .unwrap();
     assert!(failure(out).contains("not initialized"));
@@ -692,8 +725,8 @@ fn inherited_git_overrides_do_not_select_a_foreign_store() {
     assert_eq!(before, fs::read(repo.join(".axon/axon.db")).unwrap());
 }
 
-fn set_when(f: &Fixture, id: &str, command: &str) {
-    f.ok(&["when", "set", id, "--command", command]);
+fn set_condition(f: &Fixture, id: &str, command: &str) {
+    f.ok(&["condition", "set", id, "--command", command]);
 }
 fn new_entity(f: &Fixture, args: &[&str]) -> String {
     f.ok(args).split_whitespace().next().unwrap().into()
@@ -703,23 +736,28 @@ fn new_entity(f: &Fixture, args: &[&str]) -> String {
 fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation() {
     let f = Fixture::new();
     f.init();
-    let root = new_entity(&f, &["group", "plan", "--title", "root"]);
+    let root = new_entity(
+        &f,
+        &["capture", "--kind", "group", "--accept", "--title", "root"],
+    );
     let nested = new_entity(
         &f,
-        &["group", "plan", "--title", "nested", "--parent", &root],
+        &[
+            "capture", "--kind", "group", "--accept", "--title", "nested", "--parent", &root,
+        ],
     );
-    let dep = f.plan("dependency");
+    let dep = f.accepted("dependency");
     let child = new_entity(
         &f,
         &[
-            "plan", "--title", "child", "--parent", &nested, "--needs", &dep,
+            "capture", "--accept", "--title", "child", "--parent", &nested, "--needs", &dep,
         ],
     );
     let draft = new_entity(&f, &["capture", "--title", "draft", "--parent", &nested]);
-    set_when(&f, &root, "echo root >> observations; test -f open");
-    set_when(&f, &nested, "echo nested >> observations");
-    set_when(&f, &child, "echo child >> observations");
-    set_when(&f, &draft, "echo draft >> observations");
+    set_condition(&f, &root, "echo root >> observations; test -f open");
+    set_condition(&f, &nested, "echo nested >> observations");
+    set_condition(&f, &child, "echo child >> observations");
+    set_condition(&f, &draft, "echo draft >> observations");
     let initial = f.ok(&["tasks"]);
     assert!(initial.contains(&dep));
     assert!(!initial.contains(&root));
@@ -752,7 +790,7 @@ fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation
     assert!(trace.find(&root).unwrap() < trace.find(&nested).unwrap());
     assert!(trace.find(&nested).unwrap() < trace.find(&child).unwrap());
     fs::write(f.0.join("observations"), "").unwrap();
-    assert!(f.ok(&["triage"]).contains(&draft));
+    assert!(f.ok(&["proposals"]).contains(&draft));
     assert_eq!(
         fs::read_to_string(f.0.join("observations")).unwrap(),
         "root\nnested\ndraft\n"
@@ -764,7 +802,7 @@ fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation
     assert!(rows.contains(&root) && rows.contains(&nested));
     assert!(!rows.contains(&child));
     f.ok(&["cancel", &child]);
-    set_when(&f, &root, "exit 23");
+    set_condition(&f, &root, "exit 23");
     fs::write(f.0.join("observations"), "").unwrap();
     let rows = f.ok(&["tasks"]);
     assert!(rows.contains(&root) && rows.contains(&nested));
@@ -773,18 +811,21 @@ fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation
             .unwrap()
             .is_empty()
     );
-    assert!(failure(f.run(&["triage"])).contains("exit status: 23"));
+    assert!(failure(f.run(&["proposals"])).contains("exit status: 23"));
 }
 
 #[test]
 fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
     let f = Fixture::new();
     f.init();
-    let root = new_entity(&f, &["group", "plan", "--title", "root"]);
+    let root = new_entity(
+        &f,
+        &["capture", "--kind", "group", "--accept", "--title", "root"],
+    );
     let id = new_entity(&f, &["capture", "--title", "item", "--parent", &root]);
     let script = "echo executed >> forbidden; exit 23";
-    set_when(&f, &root, script);
-    set_when(&f, &id, script);
+    set_condition(&f, &root, script);
+    set_condition(&f, &id, script);
     for args in [
         vec!["list"],
         vec!["show", &id],
@@ -800,23 +841,25 @@ fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
     f.ok(&["start", &id]);
     f.ok(&["release", &id]);
     f.ok(&["cancel", &id]);
-    set_when(&f, &id, script);
+    set_condition(&f, &id, script);
     f.ok(&["reconsider", &id]);
     f.ok(&["write", &id, "--title", "changed"]);
-    f.ok(&["group", "unset", &id]);
-    f.ok(&["group", "set", &id, "--parent", &root]);
+    f.ok(&["parent", "unset", &id]);
+    f.ok(&["parent", "set", &id, "--parent", &root]);
     f.ok(&["accept", &id]);
     f.ok(&["start", &id]);
-    f.ok(&["done", &id]);
-    f.ok(&["done", &root]);
-    set_when(&f, &id, "exit 2");
-    f.ok(&["when", "clear", &id]);
+    f.ok(&["complete", &id]);
+    f.ok(&["complete", &root]);
+    set_condition(&f, &id, "exit 2");
+    f.ok(&["condition", "unset", &id]);
     f.ok(&["note", "add", &id, "-m", "supplement"]);
     assert!(!f.0.join("forbidden").exists());
     let before = Store::open(&f.db()).unwrap().read().unwrap().1;
     assert!(f.ok(&["tasks"]).is_empty());
-    assert!(f.ok(&["triage"]).is_empty());
-    assert!(failure(f.run(&["when", "set", &id, "--command", " "])).contains("empty condition"));
+    assert!(f.ok(&["proposals"]).is_empty());
+    assert!(
+        failure(f.run(&["condition", "set", &id, "--command", " "])).contains("empty condition")
+    );
     assert_eq!(Store::open(&f.db()).unwrap().read().unwrap().1, before);
 }
 
@@ -824,10 +867,10 @@ fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
 fn condition_results_diagnostics_and_repair_do_not_publish_partial_rows() {
     let f = Fixture::new();
     f.init();
-    let ongoing = f.plan("ongoing");
+    let ongoing = f.accepted("ongoing");
     f.ok(&["start", &ongoing]);
-    let id = f.plan("condition");
-    set_when(
+    let id = f.accepted("condition");
+    set_condition(
         &f,
         &id,
         "printf '\\033bad\\377'; printf problem >&2; exit 23",
@@ -845,19 +888,19 @@ fn condition_results_diagnostics_and_repair_do_not_publish_partial_rows() {
     }
     assert!(!error.contains("Condition trace:"));
     assert_eq!(Store::open(&f.db()).unwrap().read().unwrap().1, before);
-    set_when(&f, &id, "exit 1");
+    set_condition(&f, &id, "exit 1");
     let out = f.run(&["tasks", "--trace-conditions"]);
     assert!(!String::from_utf8(out.stdout).unwrap().contains(&id));
     let trace = String::from_utf8(out.stderr).unwrap();
     assert!(trace.contains("not satisfied (exit 1)"));
     assert_eq!(trace.matches("(empty)").count(), 2);
-    set_when(&f, &id, "echo ignored; echo ignored >&2; exit 0");
+    set_condition(&f, &id, "echo ignored; echo ignored >&2; exit 0");
     let out = f.run(&["tasks"]);
     assert!(out.status.success() && out.stderr.is_empty());
     assert!(!String::from_utf8(out.stdout).unwrap().contains("ignored"));
-    set_when(&f, &id, "echo signal-detail >&2; kill -TERM $$");
+    set_condition(&f, &id, "echo signal-detail >&2; kill -TERM $$");
     assert!(failure(f.run(&["tasks"])).contains("signal-detail"));
-    f.ok(&["when", "clear", &id]);
+    f.ok(&["condition", "unset", &id]);
     assert!(f.ok(&["tasks"]).contains(&id));
 }
 
@@ -865,10 +908,10 @@ fn condition_results_diagnostics_and_repair_do_not_publish_partial_rows() {
 fn condition_output_keeps_both_edges_per_stream_in_trace_and_failure() {
     let f = Fixture::new();
     f.init();
-    let id = f.plan("output");
+    let id = f.accepted("output");
     let script = "awk 'BEGIN { for (i=0;i<40000;i++) printf \"A\"; for (i=0;i<40000;i++) printf \"B\" }'; awk 'BEGIN { for (i=0;i<40000;i++) printf \"C\"; for (i=0;i<40000;i++) printf \"D\" }' >&2";
     for exit in [0, 23] {
-        set_when(&f, &id, &format!("{script}; exit {exit}"));
+        set_condition(&f, &id, &format!("{script}; exit {exit}"));
         let out = f.run(&["tasks", "--trace-conditions"]);
         assert_eq!(out.status.success(), exit == 0);
         let err = String::from_utf8(out.stderr).unwrap();
@@ -923,9 +966,9 @@ fn assert_process_gone(pid: i32) {
 fn condition_timeout_and_ctrl_c_terminate_shell_and_descendants() {
     let f = Fixture::new();
     f.init();
-    let id = f.plan("interrupt");
+    let id = f.accepted("interrupt");
     let script = "echo $$ > shell-pid; sh -c 'trap \"\" TERM; echo $$ > descendant-pid; while :; do :; done' </dev/null >/dev/null 2>/dev/null & wait";
-    set_when(&f, &id, script);
+    set_condition(&f, &id, script);
     let before = Store::open(&f.db()).unwrap().read().unwrap().1;
     for interrupt in [false, true] {
         let mut cmd = f.command();
@@ -970,8 +1013,8 @@ fn condition_timeout_and_ctrl_c_terminate_shell_and_descendants() {
 fn condition_default_timeout_is_thirty_seconds_in_a_real_process() {
     let f = Fixture::new();
     f.init();
-    let id = f.plan("default timeout");
-    set_when(&f, &id, "sleep 60");
+    let id = f.accepted("default timeout");
+    set_condition(&f, &id, "sleep 60");
     let start = std::time::Instant::now();
     let error = failure(f.run(&["tasks"]));
     assert!(start.elapsed() >= std::time::Duration::from_secs(30));
@@ -983,7 +1026,7 @@ fn candidate_help_timeout_validation_and_trace_sink_failure() {
     use std::os::fd::{FromRawFd, OwnedFd};
     let f = Fixture::new();
     f.init();
-    let id = f.plan("trace");
+    let id = f.accepted("trace");
     let help = f.ok(&["tasks", "--help"]);
     for text in [
         "--condition-timeout",
@@ -999,7 +1042,7 @@ fn candidate_help_timeout_validation_and_trace_sink_failure() {
     for value in ["0", "-1", "NaN", "inf", "1e100", "1e-100", "wrong"] {
         failure(f.run(&["tasks", "--condition-timeout", value]));
     }
-    set_when(&f, &id, "echo ran >> observed");
+    set_condition(&f, &id, "echo ran >> observed");
     let mut cmd = f.command();
     cmd.args(["tasks", "--trace-conditions"]);
     let mut pipe = [0; 2];
@@ -1015,8 +1058,8 @@ fn candidate_help_timeout_validation_and_trace_sink_failure() {
 fn condition_uses_current_worktree_or_management_root_and_inherits_environment() {
     let f = Fixture::new();
     f.init();
-    let id = f.plan("cwd");
-    set_when(
+    let id = f.accepted("cwd");
+    set_condition(
         &f,
         &id,
         "pwd; test \"$AXON_TEST_CONDITION\" = inherited; test -f local-file",
@@ -1056,7 +1099,7 @@ fn condition_uses_current_worktree_or_management_root_and_inherits_environment()
     );
     fs::create_dir(other.0.join("subdir")).unwrap();
     let script = "test \"$AXON_TEST_CONDITION\" = inherited && test -f local-file";
-    set_when(&f, &id, script);
+    set_condition(&f, &id, script);
     let out = command(&other.0.join("subdir"))
         .env("AXON_TEST_CONDITION", "inherited")
         .args(["tasks", "--trace-conditions"])
@@ -1081,11 +1124,11 @@ fn condition_uses_current_worktree_or_management_root_and_inherits_environment()
 fn condition_trace_and_failure_preserve_utf8_across_capture_boundary() {
     let f = Fixture::new();
     f.init();
-    let id = f.plan("utf8");
+    let id = f.accepted("utf8");
     let output = format!("{}日", "A".repeat(32767));
     fs::write(f.0.join("utf8-output"), &output).unwrap();
     for exit in [0, 23] {
-        set_when(
+        set_condition(
             &f,
             &id,
             &format!("cat utf8-output; cat utf8-output >&2; exit {exit}"),
@@ -1121,7 +1164,7 @@ fn recorder_is_automatic_durable_optional_and_not_an_operation_guard() {
     let created = success(
         without_recorder(&mut f.command())
             .env("CODEX_THREAD_ID", "original-session")
-            .args(["plan", "--title", "provenance"])
+            .args(["capture", "--accept", "--title", "provenance"])
             .output()
             .unwrap(),
     );
@@ -1142,7 +1185,7 @@ fn recorder_is_automatic_durable_optional_and_not_an_operation_guard() {
     success(
         without_recorder(&mut f.command())
             .env("AXON_ACTOR", "another-worker")
-            .args(["done", id])
+            .args(["complete", id])
             .output()
             .unwrap(),
     );
@@ -1207,7 +1250,7 @@ fn non_utf8_recorder_environment_does_not_block_writes() {
 fn recorder_details_preserve_unknown_json_and_escape_terminal_controls() {
     let f = Fixture::new();
     f.init();
-    let id = f.plan("unknown metadata");
+    let id = f.accepted("unknown metadata");
     let mut store = Store::open(&f.db()).unwrap();
     store
         .update(|_, snapshot| {
