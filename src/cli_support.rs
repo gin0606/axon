@@ -229,7 +229,9 @@ pub fn operation_label(command: &Command) -> String {
         Command::Init { .. } => ("init", None),
         Command::Merge { .. } => ("merge", None),
         Command::Storage { .. } => ("storage check", None),
-        Command::Docs => ("docs", None),
+        Command::Docs { .. } => ("docs", None),
+        Command::Import { .. } => ("import", None),
+        Command::Export { .. } => ("export", None),
         Command::Actor => ("actor", None),
         Command::Note {
             command: Notes::Search { .. },
@@ -254,6 +256,8 @@ pub fn render_root_help() -> String {
         (
             "Plan management",
             &[
+                "export",
+                "import",
                 "write",
                 "group",
                 "dep",

@@ -77,3 +77,7 @@ Axon自身はGit config・stage・commitを行わない。driverも同じ `Merge
 file snapshotには本文に加え取得できた記録者情報が入る。Gitで追跡するとこれらも共有される。記録者の保存項目は [記録者連携](lifecycle-recorder.md) を参照する。
 
 検証入口は `cargo test --lib --bin axon --test smoke`。fileの並行writer、置換前後障害、drift、初期化、実worktreeとdriver、index guard、両backendの同一snapshot保持を独立fixtureで扱う。保存とCLI接続でlifecycleの意味は変更せず、Quintの状態を増やさない。
+
+## Declarationの一括反映
+
+`import apply FILE` は `src/declaration_file.rs::apply` から通常の `Store::update` を使い、OS lock取得後にdeclarationを読み、全件の検証と一回の正本atomic replaceを行う。保存成功後のdeclaration rewriteは同じpublish実装を使う別の保存境界であり、元bytesの再照合、rename、directory syncを行う。保存先Appliedとdeclaration未更新・結果不明を別々に表示する。再試行は全編集Entityの最終値一致なら正本bytesを保持し、保存したsnapshotからbaseと外部参照を更新する。

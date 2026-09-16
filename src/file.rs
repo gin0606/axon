@@ -2,7 +2,7 @@
 use crate::{
     lifecycle::{self, Snapshot},
     location::Location,
-    sqlite::{Result, invalid, validate_prefix},
+    sqlite::{Error, Result, invalid, validate_prefix},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -80,8 +80,14 @@ pub(crate) fn temporary(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
         .write(true)
         .create_new(true)
         .open(&temp)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|e| {
+            invalid(format!(
+                "temporary write failed: {e}; retained {}",
+                temp.display()
+            ))
+        })?;
     Ok(temp)
 }
 pub(crate) fn publish(
@@ -96,7 +102,7 @@ pub(crate) fn publish(
             .map_err(Into::into)
     })
 }
-fn publish_with(
+pub(crate) fn publish_with(
     path: &Path,
     before: Option<&[u8]>,
     bytes: &[u8],
@@ -129,14 +135,15 @@ fn publish_with(
         ))
     })?;
     sync().map_err(|e| {
-        invalid(format!(
+        Error::PublicationUnknown(format!(
             "result unknown after publication at {}: {e}; inspect state before retrying",
             path.display()
         ))
     })?;
     if before.is_none() {
-        fs::remove_file(&temp)
-            .map_err(|e| invalid(format!("result unknown after publication: {e}")))?;
+        fs::remove_file(&temp).map_err(|e| {
+            Error::PublicationUnknown(format!("result unknown after publication: {e}"))
+        })?;
     }
     Ok(())
 }
@@ -175,6 +182,13 @@ impl Store {
         &mut self,
         change: impl FnOnce(&str, &mut Snapshot) -> Result<T>,
     ) -> Result<T> {
+        self.update_with(change, |_| Ok(()))
+    }
+    pub(crate) fn update_with<T>(
+        &mut self,
+        change: impl FnOnce(&str, &mut Snapshot) -> Result<T>,
+        before_publish: impl FnOnce(&crate::lifecycle::Snapshot) -> Result<()>,
+    ) -> Result<T> {
         let _lock = lock(&self.root.join(".axon/state.lock"))?;
         self.guard()?;
         let path = self.root.join(".axon/state.jsonl");
@@ -189,7 +203,10 @@ impl Store {
         if original == snapshot {
             return Ok(result);
         }
-        publish(&path, Some(&bytes), &next, || self.guard().map(|_| ()))?;
+        publish(&path, Some(&bytes), &next, || {
+            self.guard()?;
+            before_publish(&snapshot)
+        })?;
         Ok(result)
     }
 }
@@ -212,6 +229,7 @@ mod tests {
             || Ok(()),
         )
         .unwrap_err();
+        assert!(matches!(&error, Error::Invalid(_)));
         assert!(error.to_string().contains("not applied"));
         assert_eq!(fs::read(&path).unwrap(), b"old");
         let error = publish_with(
@@ -222,7 +240,40 @@ mod tests {
             || Err(invalid("injected directory sync")),
         )
         .unwrap_err();
+        assert!(matches!(&error, Error::PublicationUnknown(_)));
         assert!(error.to_string().contains("result unknown"));
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn publication_cleanup_failure_is_unknown() {
+        let root =
+            std::env::temp_dir().join(format!("axon-publish-{:032x}", rand::random::<u128>()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("state");
+        let error = publish_with(
+            &path,
+            None,
+            b"new",
+            || Ok(()),
+            || {
+                for entry in fs::read_dir(&root)? {
+                    let entry = entry?;
+                    if entry.path().extension().is_some_and(|ext| ext == "tmp") {
+                        fs::remove_file(entry.path())?;
+                    }
+                }
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(&error, Error::PublicationUnknown(_)));
+        assert!(
+            error
+                .to_string()
+                .starts_with("result unknown after publication:")
+        );
         assert_eq!(fs::read(&path).unwrap(), b"new");
         fs::remove_dir_all(root).unwrap();
     }

@@ -76,3 +76,6 @@ Use axon help <COMMAND PATH> for exact arguments. Create with --title; descripti
 accept -m/--description or -F/--description-file (- reads stdin). Notes use
 -m/--message or -F/--file. For option values beginning with a hyphen use the equals
 form, for example --description='--text'. No legacy option aliases are provided.
+
+Use axon docs declaration for plan declaration fields and the bulk-edit workflow.
+Use axon docs declaration --example for a new-plan YAML template.

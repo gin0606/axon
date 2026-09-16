@@ -1,0 +1,37 @@
+Declarations describe the complete editable fields of a selected plan.
+
+Get a plan: axon export ID... > plan.yaml
+Start a new plan: axon docs declaration --example > plan.yaml
+
+The strict YAML schema is axon-declaration/v1. The root fields are schema,
+groups, issues and references. Every record has id, key, base, lifecycle,
+title, description, parent and needs. References contain id, kind, lifecycle
+and title for targets outside the edited records.
+
+Existing records have a full id and a read-only base fingerprint and lifecycle.
+New records have id: null, base: null, a unique key, and lifecycle: undecided
+or not-started. Keys are file-local aliases. References use { id: FULL-ID } or
+{ key: local-key }. A parent must be a Group; needs lists outgoing dependencies.
+Titles must not be blank. Description text is preserved without trimming.
+
+Edit the declaration, then follow these steps:
+  axon import prepare plan.yaml
+  axon import check plan.yaml
+  axon import apply plan.yaml
+  axon import check plan.yaml
+Prepare assigns new IDs and rewrites the file without changing storage.
+Prepare prints each new record as key -> full ID.
+Check shows old -> new titles on one line (newlines as \n and controls escaped),
+description changed/unchanged, and relationship changes without writing.
+Apply atomically saves changes and rewrites the declaration. Check again to
+confirm that no differences remain. Apply also prints key -> full ID for records
+whose base was null before the rewrite. An outdated base stops the whole apply.
+
+Entities not listed in groups or issues are untouched. Removing a record from
+the file does not delete or cancel it, detach it from its parent, or remove its
+dependencies. To detach an Entity from a Group, write parent: null in its record.
+Use needs: [] for no outgoing dependencies. Use the ordinary cancel command to
+cancel work; declarations do not transition existing lifecycles.
+
+Export never changes storage or runs resurfacing conditions. This explanation
+and --example do not open storage.

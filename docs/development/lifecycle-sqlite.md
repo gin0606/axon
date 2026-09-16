@@ -48,3 +48,7 @@ SQLite は `application_id`・`user_version`・schema・整合性と共通 snaps
 旧 process 監督・file crash/merge・記録者・旧 CLI のテストは `archive/three-axis/tests` にある過去の検証資料で、新 binary のテストとして実行しない。process監督・file/merge・記録者の検証は新smokeと記録者crateで実行する。今回の I/O・CLI 接続はコアの lifecycle/包含/dependency の意味を変更しないため、新しい Quint 状態を加えない。
 
 記録者の自動取得・詳細参照は [記録者連携](lifecycle-recorder.md)、初回試用と手動持込みは [使い始める](../guide/getting-started.md) を参照する。
+
+## Declarationの一括反映
+
+`import apply FILE` の共通入口は `src/declaration_file.rs::apply`。`Store::update` がIMMEDIATE transactionを取得した後にFILEを読み、`Declaration::check`の候補snapshotを一回で保存する。commitが拒否されれば前のsnapshotが残り、結果は既存のResult unknown契約で報告する。保存成功後はtransaction内で得たsnapshotによるcanonical declarationを公開し、保存先を再読しない。全件の最終値が一致する再試行はsnapshotを変更せず、FILEの更新だけを完了する。

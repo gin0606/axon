@@ -32,7 +32,23 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Explain the lifecycle, daily workflow and storage boundaries
-    Docs,
+    Docs {
+        #[command(subcommand)]
+        command: Option<Docs>,
+    },
+    /// Export Issues and complete Group subtrees as canonical declaration YAML
+    #[command(
+        after_help = "Example: axon export ID... > plan.yaml\nEdit title, description, parent or needs in plan.yaml.\nNext: axon import prepare plan.yaml\nFor a new plan: axon docs declaration --example > new-plan.yaml"
+    )]
+    Export {
+        #[arg(required = true, num_args = 1.., value_name = "ID")]
+        ids: Vec<String>,
+    },
+    /// Prepare, check and atomically apply declaration changes
+    Import {
+        #[command(subcommand)]
+        command: Import,
+    },
     /// Show the optional recorder actor detected in the current environment
     Actor,
     /// Write an unstyled shell completion script to stdout
@@ -118,6 +134,33 @@ enum Command {
     Dep {
         #[command(subcommand)]
         command: Dependency,
+    },
+}
+#[derive(Subcommand)]
+enum Import {
+    /// Assign new IDs and atomically rewrite FILE as canonical YAML; storage is unchanged
+    #[command(
+        after_help = "Example: axon import prepare plan.yaml\nPrints new key -> full ID mappings. Storage is unchanged.\nNext: axon import check plan.yaml"
+    )]
+    Prepare { file: PathBuf },
+    /// Validate canonical FILE and display changes without writing or running conditions
+    #[command(
+        after_help = "Example: axon import check plan.yaml\nReview title changes, description change indicators and relationship changes.\nNext, after reviewing: axon import apply plan.yaml"
+    )]
+    Check { file: PathBuf },
+    /// Apply all changes atomically and refresh FILE; safe to retry the same declaration
+    #[command(
+        after_help = "Example: axon import apply plan.yaml\nSaves all changes and refreshes the declaration. Prints key -> full ID mappings for records that had base: null.\nNext: axon import check plan.yaml"
+    )]
+    Apply { file: PathBuf },
+}
+#[derive(Subcommand)]
+enum Docs {
+    /// Explain declaration fields and the prepare/check/apply workflow
+    Declaration {
+        /// Print only a canonical YAML template for a new plan
+        #[arg(long)]
+        example: bool,
     },
 }
 #[derive(Subcommand)]
@@ -534,15 +577,25 @@ fn recorder_display(context: &Context, details: bool) -> String {
     }
     text
 }
+enum Publication {
+    None,
+    Storage,
+    Declaration,
+    StorageAndDeclaration,
+}
 struct Output {
     text: String,
-    saved: bool,
+    publication: Publication,
     diagnostic: String,
 }
 fn output(text: String, saved: bool) -> Output {
     Output {
         text,
-        saved,
+        publication: if saved {
+            Publication::Storage
+        } else {
+            Publication::None
+        },
         diagnostic: String::new(),
     }
 }
@@ -563,7 +616,18 @@ fn branch_boundary<'a>(
 fn run(command: Command) -> Result<Output> {
     match command {
         Command::Actor => return Ok(output(format!("{}\n", actor(&context())), false)),
-        Command::Docs => return Ok(output(include_str!("docs/lifecycle.txt").into(), false)),
+        Command::Docs { command } => {
+            let text = match command {
+                None => include_str!("docs/lifecycle.txt").into(),
+                Some(Docs::Declaration { example: false }) => {
+                    include_str!("docs/declaration.txt").into()
+                }
+                Some(Docs::Declaration { example: true }) => axon::declaration::example()
+                    .serialize(&sqlite::empty())
+                    .map_err(|e| sqlite::Error::Invalid(e.to_string()))?,
+            };
+            return Ok(output(text, false));
+        }
         Command::Completion { shell } => {
             let mut bytes = Vec::new();
             clap_complete::generate(shell, &mut Cli::command(), "axon", &mut bytes);
@@ -650,7 +714,84 @@ fn run(command: Command) -> Result<Output> {
     let location = Location::discover(&cwd, false)?;
     let mut store = location.open()?;
     match command {
-        Command::List(_)
+        Command::Import {
+            command: Import::Apply { file },
+        } => {
+            let outcome = axon::declaration_file::apply(&mut store, &file, context())?;
+            Ok(Output {
+                text: display::human_text(format!(
+                    "Applied: {}; declaration updated: {}\n{}",
+                    if outcome.changed {
+                        "storage applied"
+                    } else {
+                        "storage unchanged (no-op)"
+                    },
+                    file.display(),
+                    declaration_ids(&outcome.new_ids)
+                )),
+                publication: Publication::StorageAndDeclaration,
+                diagnostic: String::new(),
+            })
+        }
+        Command::Import { command } => {
+            let (prefix, snapshot) = store.read()?;
+            let file = match &command {
+                Import::Prepare { file } | Import::Check { file } => file,
+                Import::Apply { .. } => unreachable!(),
+            };
+            let bytes = std::fs::read(file)?;
+            let input = std::str::from_utf8(&bytes)
+                .map_err(|e| sqlite::Error::Invalid(format!("Declaration schema: {e}")))?;
+            let mut declaration = axon::declaration::parse(input)
+                .map_err(|e| sqlite::Error::Invalid(e.to_string()))?;
+            let publication = if matches!(&command, Import::Prepare { .. }) {
+                Publication::Declaration
+            } else {
+                Publication::None
+            };
+            let text = match command {
+                Import::Apply { .. } => unreachable!(),
+                Import::Prepare { ref file } => {
+                    declaration
+                        .prepare(&snapshot, &prefix)
+                        .map_err(|e| sqlite::Error::Invalid(e.to_string()))?;
+                    let text = declaration
+                        .serialize(&snapshot)
+                        .map_err(|e| sqlite::Error::Invalid(e.to_string()))?;
+                    axon::declaration_file::rewrite(file, &bytes, text.as_bytes())?;
+                    format!(
+                        "Prepared {}. Storage unchanged.\n{}",
+                        file.display(),
+                        declaration_ids(&declaration.assigned_new_ids())
+                    )
+                }
+                Import::Check { .. } => {
+                    let checked = declaration
+                        .check(
+                            input,
+                            &snapshot,
+                            Context {
+                                at: Utc::now(),
+                                recorder: None,
+                            },
+                        )
+                        .map_err(|e| sqlite::Error::Invalid(e.to_string()))?;
+                    declaration_changes(
+                        &declaration,
+                        &snapshot,
+                        &checked.snapshot,
+                        checked.already_applied,
+                    )?
+                }
+            };
+            Ok(Output {
+                text: display::human_text(text),
+                publication,
+                diagnostic: String::new(),
+            })
+        }
+        Command::Export { .. }
+        | Command::List(_)
         | Command::Triage(_)
         | Command::Tasks(_)
         | Command::Show { .. }
@@ -674,6 +815,15 @@ fn run(command: Command) -> Result<Output> {
                 _ => "No records.",
             };
             let text = match command {
+                Command::Export { ids } => {
+                    let selectors = ids
+                        .iter()
+                        .map(|id| resolve(&snapshot, id))
+                        .collect::<Result<Vec<_>>>()?;
+                    axon::declaration::export(&snapshot, &selectors)
+                        .and_then(|d| d.serialize(&snapshot))
+                        .map_err(|e| sqlite::Error::Invalid(e.to_string()))?
+                }
                 Command::Note {
                     command: Notes::Search { query },
                 } => search_notes(&snapshot, &query)?,
@@ -800,7 +950,7 @@ fn run(command: Command) -> Result<Output> {
             };
             Ok(Output {
                 text,
-                saved: false,
+                publication: Publication::None,
                 diagnostic,
             })
         }
@@ -1041,10 +1191,14 @@ fn main() -> std::process::ExitCode {
                     let _ = writeln!(
                         std::io::stderr(),
                         "{}: {error}",
-                        if output.saved {
-                            "Error: output failed\nApplied: storage applied; output failed; inspect saved state before retrying"
-                        } else {
-                            "Error: output failed"
+                        match output.publication {
+                            Publication::Storage =>
+                                "Error: output failed\nApplied: storage applied; output failed; inspect saved state before retrying",
+                            Publication::Declaration =>
+                                "Error: output failed\nApplied: declaration updated; storage unchanged; output failed; inspect declaration before retrying",
+                            Publication::StorageAndDeclaration =>
+                                "Error: output failed\nApplied: storage applied; declaration updated; output failed; inspect saved state before retrying",
+                            Publication::None => "Error: output failed",
                         }
                     );
                     std::process::ExitCode::from(1)
@@ -1061,4 +1215,97 @@ fn main() -> std::process::ExitCode {
             std::process::ExitCode::from(1)
         }
     }
+}
+
+fn declaration_ids(ids: &[(String, String)]) -> String {
+    ids.iter()
+        .map(|(key, id)| {
+            format!(
+                "{key} -> {}\n",
+                display::human_text(id).replace('\n', "\\n")
+            )
+        })
+        .collect()
+}
+
+fn declaration_changes(
+    declaration: &axon::declaration::Declaration,
+    before: &Snapshot,
+    after: &Snapshot,
+    applied: bool,
+) -> Result<String> {
+    let mut out = String::new();
+    if applied {
+        out.push_str("Already applied.\n");
+    }
+    for r in declaration.records() {
+        let id: EntityId = r.id.clone().expect("checked ID").try_into()?;
+        let entity = after.entity(&id)?;
+        out.push_str(&format!("{id}:\n"));
+        if let Ok(old) = before.entity(&id) {
+            let a = &old.current;
+            let b = &entity.current;
+            if a == b {
+                out.push_str("  No changes.\n");
+            } else {
+                out.push_str(&format!(
+                    "  title: {}\n  description: {}\n",
+                    if a.title == b.title {
+                        "unchanged".into()
+                    } else {
+                        format!(
+                            "{} -> {}",
+                            display::human_text(&a.title).replace('\n', "\\n"),
+                            display::human_text(&b.title).replace('\n', "\\n")
+                        )
+                    },
+                    if a.description == b.description {
+                        "unchanged"
+                    } else {
+                        "changed"
+                    }
+                ));
+                out.push_str(&format!(
+                    "  parent: {} -> {}\n",
+                    a.parent
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "null".into()),
+                    b.parent
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "null".into())
+                ));
+                for id in a.dependencies.difference(&b.dependencies) {
+                    out.push_str(&format!("  needs: - {id}\n"));
+                }
+                for id in b.dependencies.difference(&a.dependencies) {
+                    out.push_str(&format!("  needs: + {id}\n"));
+                }
+            }
+        } else {
+            out.push_str(&format!(
+                "  Create {}\n  title: new\n  description: new\n  parent: null -> {}\n",
+                axon::declaration::kind(entity.kind),
+                entity
+                    .current
+                    .parent
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "null".into())
+            ));
+            for id in &entity.current.dependencies {
+                out.push_str(&format!("  needs: + {id}\n"));
+            }
+        }
+        out.push_str(&format!(
+            "  Situation after: {} (conditions not evaluated)\n",
+            status(after, entity)
+        ));
+    }
+    if declaration.records().next().is_none() {
+        out.push_str("No changes.\n");
+    }
+    out.push_str("Check passed. Storage and declaration unchanged.\n");
+    Ok(out)
 }

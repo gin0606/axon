@@ -9,7 +9,7 @@
 | 文書 | 読む目的 |
 | --- | --- |
 | [使い始める](guide/getting-started.md) | 新binary選択、独立SQLite試用、手動持込み、同梱skill |
-| [日常の操作](guide/usage.md) | 候補、状態変更、Group最終確認、記録参照 |
+| [日常の操作](guide/usage.md) | 候補、状態変更、Group最終確認、記録参照、計画の一括登録・編集 |
 | [状態と用語](guide/concepts.md) | 単一lifecycleと関係 |
 | [保存先とworktree](guide/storage.md) | SQLite共有、fileのworktree隔離、探索・初期化の境界 |
 | [Agentからのアクセス](guide/codex.md) | ホスト権限と保存先 |
@@ -20,20 +20,21 @@
 
 | 文書 | 定義する範囲 |
 | --- | --- |
-| [正本spec](../spec/lifecycle_proposal.md) | lifecycle・構造・候補・情報・表示・保存・統合の契約とモデル |
+| [正本spec](../spec/lifecycle_proposal.md) | lifecycle・構造・候補・情報・表示・保存・統合・一括declarationの契約とモデル |
+| [Declaration](development/lifecycle-declaration.md) | strict YAML、export・import、共通コアとfile書戻しの境界 |
 | [共通コア](development/lifecycle-core.md) | 通常操作、記録、codec、三者比較 |
 | [SQLite CLI](development/lifecycle-sqlite.md) | 公開操作とSQLite adapter |
 | [file保存とGit統合](development/lifecycle-file.md) | writer、worktree、merge CLI・driver |
 | [専用移行ツール](../tools/lifecycle-migration/README.md) | 旧file/SQLiteから単一lifecycleへのbackup・変換・検証・明示適用 |
 | [候補と外部条件](development/lifecycle-candidates.md) | triage/tasksとprocess評価 |
 | [記録者連携](development/lifecycle-recorder.md) | 自動取得と保存済み詳細 |
-| [検証方針](development/verification.md) | CI、独立fixture、モデル検証の分担 |
+| [検証方針](development/verification.md) | CI、declarationを含む独立fixture、モデル検証の分担 |
 
 保存schemaは [SQLite adapter](../src/sqlite.rs) と [file adapter](../src/file.rs)、Usageは [Clap定義](../src/main.rs) を確認します。
 
 ### 設計検討資料
 
-[一括declarationの再設計資料](development/declaration-design-notes.md) は、一括編集を検討するときの目的・保存境界・協業方針をまとめた資料です。採用済みの公開契約や通常操作の手順には使いません。
+[一括declarationの再設計資料](development/declaration-design-notes.md) は、[正本spec](../spec/lifecycle_proposal.md#計画全体の取得と一括編集) の「計画全体の取得と一括編集」を設計したときの目的・保存境界・協業方針と、旧契約との対応・採らなかった案を残した資料です。契約の定義や通常操作の手順には使いません。
 
 ## 過去資料
 

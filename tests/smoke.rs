@@ -1249,3 +1249,6 @@ mod workflow;
 
 #[path = "lifecycle/contracts.rs"]
 mod contracts;
+
+#[path = "lifecycle/declaration.rs"]
+mod declaration;

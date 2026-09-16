@@ -51,6 +51,17 @@ cargo +1.89.0 check --locked --all-targets --all-features
 
 `tests/lifecycle/workflow.rs` は両backendの独立fixtureで登録、候補選択、並行着手・Note、Group最終確認を一巡します。`tests/lifecycle/file.rs` は実Git worktreeで分岐し、自動統合と衝突、prepare/check/apply、stage後の通常操作まで検証します。SQLiteの共有worktreeでの並行着手もworkflow fixtureに含みます。テストはこのcheckoutのbinaryを絶対パスで実行し、Git環境を隔離します。実データやPATH上のbinaryを切り替えません。
 
+### Declaration の独立fixture
+
+[一括declaration](lifecycle-declaration.md) の形式と適用契約はRustで検証します。`src/declaration.rs` と `src/declaration/import.rs` の単体テストはstrict YAML、canonical往復、fingerprint、差分と共通コアの制約を扱います。`tests/lifecycle/declaration.rs` は `smoke` に含まれ、両backendの独立fixtureでexport、雛形、prepare → check → apply → 再check、新規登録と既存subtree編集、競合、保存先・入力の非変更を検査します。
+
+```sh
+cargo test --locked --lib declaration
+cargo test --locked --test smoke declaration
+```
+
+`src/declaration_file.rs` の単体テストは、保存成功後のfile書戻し失敗と再apply、入力bytesの変化、保存結果の診断などI/O境界を検査します。 process fixtureは同じlib test binaryを子processにし、SQLite transaction内（UPDATE後commit前）、file rename前、両backendの保存後書戻し前・書戻し後で強制終了します。barrier待ちは最大10秒、到達後すぐにkillして終了を回収し、完全snapshot・入力bytesと同じfileの再applyへの収束を検査します。`src/declaration/tests.rs` の行列は両backendでCancelled Groupへの所属拒否、Cancelled Entityの依存差替え、新規Groupへの移動、親子反転、進行中subtreeの移動を検査します。recordの正順・逆順・巡回順で共通コアの適用結果を比較し、prepareでcanonical化した各入力をbackendへ適用して結果の一致を確認します。これらは`--lib`としてfast gateにも含まれます。SQLite commit境界の失敗注入は `src/sqlite.rs` にあります。対象の検証後も、必要なfull verificationは上記の共通入口で行います。実データやPATH上のbinaryは変更しません。この機能は通常操作の意味を変えないため、検証のためだけにQuintの状態やactionを追加しません。
+
 ## 過去の三軸実装の検証資料
 
 以下は置換前のコード・モデルに対する検証方針と結果を保存した過去資料です。現在のCIや変更判断へ適用しません。
