@@ -7,12 +7,18 @@ pub fn rewrite(path: &Path, before: &[u8], bytes: &[u8]) -> Result<()> {
     crate::file::publish(&path, Some(before), bytes, || Ok(()))
 }
 
+#[derive(Debug)]
+pub struct ApplyOutcome {
+    pub changed: bool,
+    pub new_ids: Vec<(String, String)>,
+}
+
 /// Read and validate under the storage lock, then rewrite from the committed snapshot.
 pub fn apply(
     store: &mut crate::location::Store,
     path: &Path,
     context: crate::lifecycle::Context,
-) -> Result<bool> {
+) -> Result<ApplyOutcome> {
     apply_with(store, path, context, rewrite)
 }
 
@@ -21,8 +27,8 @@ fn apply_with(
     path: &Path,
     context: crate::lifecycle::Context,
     publish: impl FnOnce(&Path, &[u8], &[u8]) -> Result<()>,
-) -> Result<bool> {
-    let (before, rewritten, changed) = store
+) -> Result<ApplyOutcome> {
+    let (before, rewritten, outcome) = store
         .update(|_, snapshot| {
             let before = crate::file::read_regular(path)?;
             let input = std::str::from_utf8(&before)
@@ -33,6 +39,7 @@ fn apply_with(
                 .check(input, snapshot, context)
                 .map_err(|e| crate::sqlite::invalid(e.to_string()))?;
             let changed = *snapshot != checked.snapshot;
+            let new_ids = declaration.assigned_new_ids();
             declaration
                 .refresh_applied(&checked.snapshot)
                 .map_err(|e| crate::sqlite::invalid(e.to_string()))?;
@@ -40,7 +47,7 @@ fn apply_with(
                 .serialize(&checked.snapshot)
                 .map_err(|e| crate::sqlite::invalid(e.to_string()))?;
             *snapshot = checked.snapshot;
-            Ok((before, rewritten, changed))
+            Ok((before, rewritten, ApplyOutcome { changed, new_ids }))
         })
         .map_err(|error| {
             if matches!(&error, Error::Commit(_) | Error::PublicationUnknown(_)) {
@@ -61,7 +68,7 @@ fn apply_with(
         };
         crate::sqlite::invalid(format!("Applied: storage applied; {boundary}: {error}; retry the same file with axon import apply"))
     })?;
-    Ok(changed)
+    Ok(outcome)
 }
 
 #[cfg(test)]
@@ -149,7 +156,7 @@ mod tests {
                 if failure == "drift" {
                     std::fs::write(&path, &input).unwrap();
                 }
-                assert!(!super::apply(&mut store, &path, context()).unwrap());
+                assert!(!super::apply(&mut store, &path, context()).unwrap().changed);
                 assert_eq!(store.read().unwrap().1, applied);
                 let output = std::fs::read_to_string(&path).unwrap();
                 let d = crate::declaration::parse(&output).unwrap();

@@ -20,9 +20,12 @@ Edit the declaration, then follow these steps:
   axon import apply plan.yaml
   axon import check plan.yaml
 Prepare assigns new IDs and rewrites the file without changing storage.
-Check validates the declaration and shows changes without writing.
+Prepare prints each new record as key -> full ID.
+Check shows old -> new titles on one line (newlines as \n and controls escaped),
+description changed/unchanged, and relationship changes without writing.
 Apply atomically saves changes and rewrites the declaration. Check again to
-confirm that no differences remain. An outdated base stops the whole apply.
+confirm that no differences remain. Apply also prints key -> full ID for records
+whose base was null before the rewrite. An outdated base stops the whole apply.
 
 Entities not listed in groups or issues are untouched. Removing a record from
 the file does not delete or cancel it, detach it from its parent, or remove its

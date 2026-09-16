@@ -166,14 +166,22 @@ fn declaration_prepare_check_new_plan_and_existing_changes_on_both_backends() {
         let path = f.0.join("plan.yaml");
         fs::write(&path, f.ok(&["docs", "declaration", "--example"])).unwrap();
         let args = ["import", "prepare", path.to_str().unwrap()];
-        f.ok(&args);
+        let prepared_output = f.ok(&args);
         let bytes = fs::read(&path).unwrap();
         let d = declaration::parse(std::str::from_utf8(&bytes).unwrap()).unwrap();
         assert!(
             d.records()
                 .all(|r| r.id.is_some() && r.base.is_none() && r.key.is_some())
         );
-        f.ok(&args);
+        for record in d.records() {
+            let mapping = format!(
+                "{} -> {}",
+                record.key.as_ref().unwrap(),
+                record.id.as_ref().unwrap()
+            );
+            assert!(prepared_output.lines().any(|line| line == mapping));
+        }
+        assert_eq!(f.ok(&args), prepared_output);
         assert_eq!(bytes, fs::read(&path).unwrap());
         let text = f.ok(&["import", "check", path.to_str().unwrap()]);
         assert_eq!(text.matches("Create ").count(), 3);
@@ -192,7 +200,7 @@ fn declaration_prepare_check_new_plan_and_existing_changes_on_both_backends() {
         fs::write(&path, original.replace("title: Original", "title: Updated")).unwrap();
         assert!(
             f.ok(&["import", "check", path.to_str().unwrap()])
-                .contains("title: changed")
+                .contains("title: Original -> Updated")
         );
         assert!(!f.0.join("executed").exists());
         f.ok(&["write", &existing, "--title", "Concurrent"]);
@@ -450,7 +458,16 @@ fn declaration_apply_registers_edits_and_retries_on_both_backends() {
         let path = f.0.join("plan.yaml");
         let apply = ["import", "apply", path.to_str().unwrap()];
         fs::write(&path, &input).unwrap();
-        f.ok(&apply);
+        let applied_output = f.ok(&apply);
+        for record in prepared.records() {
+            let mapping = format!(
+                "{} -> {}",
+                record.key.as_ref().unwrap(),
+                record.id.as_ref().unwrap()
+            );
+            assert!(applied_output.lines().any(|line| line == mapping));
+        }
+        assert!(!f.ok(&apply).contains(" -> "));
         let saved = snapshot(&f);
         let canonical = fs::read_to_string(&path).unwrap();
         let d = declaration::parse(&canonical).unwrap();
@@ -542,4 +559,98 @@ fn declaration_apply_registers_edits_and_retries_on_both_backends() {
         assert_eq!(snapshot(&f), before_retry);
     }
     assert_eq!(results[0], results[1]);
+}
+
+#[test]
+fn declaration_title_changes_escape_each_side_on_both_backends() {
+    for backend in ["sqlite", "file"] {
+        let f = Fixture::new();
+        f.ok(&["init", "demo", "--backend", backend]);
+        let id = f.plan("Before\nline\r\t\u{1b}");
+        let mut d = declaration::parse(&f.ok(&["export", &id])).unwrap();
+        d.issues[0].title = "After\nline\r\t\u{7f}".into();
+        d.issues[0].description = "Private full description".into();
+        let path = f.0.join("plan.yaml");
+        fs::write(&path, d.serialize(&snapshot(&f)).unwrap()).unwrap();
+        let text = f.ok(&["import", "check", path.to_str().unwrap()]);
+        assert!(
+            text.lines()
+                .any(|line| line == "  title: Before\\nline\\r\\t\\x1b -> After\\nline\\r\\t\\x7f"),
+            "{text}"
+        );
+        assert!(text.contains("description: changed"));
+        assert!(!text.contains("Private full description"));
+        d.issues[0].title = "Before\nline\r\t\u{1b}".into();
+        fs::write(&path, d.serialize(&snapshot(&f)).unwrap()).unwrap();
+        assert!(
+            f.ok(&["import", "check", path.to_str().unwrap()])
+                .contains("title: unchanged")
+        );
+    }
+}
+
+#[test]
+fn declaration_help_gives_examples_and_next_commands_without_opening_either_backend() {
+    for backend in ["sqlite", "file"] {
+        let f = Fixture::new();
+        f.ok(&["init", "demo", "--backend", backend]);
+        let storage = f.0.join(if backend == "sqlite" {
+            ".axon/axon.db"
+        } else {
+            ".axon/state.jsonl"
+        });
+        fs::write(&storage, "broken storage").unwrap();
+        for (args, example, next) in [
+            (
+                vec!["export", "--help"],
+                "axon export ID... > plan.yaml",
+                "axon import prepare plan.yaml",
+            ),
+            (
+                vec!["import", "prepare", "--help"],
+                "axon import prepare plan.yaml",
+                "axon import check plan.yaml",
+            ),
+            (
+                vec!["import", "check", "--help"],
+                "axon import check plan.yaml",
+                "axon import apply plan.yaml",
+            ),
+            (
+                vec!["import", "apply", "--help"],
+                "axon import apply plan.yaml",
+                "axon import check plan.yaml",
+            ),
+        ] {
+            let output = f.run(&args);
+            assert!(output.stderr.is_empty());
+            let text = success(output);
+            assert!(text.contains(example), "{text}");
+            assert!(text.contains(next), "{text}");
+            assert!(text.contains("Next"), "{text}");
+        }
+        assert_eq!(fs::read_to_string(storage).unwrap(), "broken storage");
+    }
+}
+
+#[test]
+fn declaration_new_id_mappings_stay_on_one_line_on_both_backends() {
+    for backend in ["sqlite", "file"] {
+        let f = Fixture::new();
+        f.ok(&["init", "demo", "--backend", backend]);
+        let mut d = declaration::example();
+        d.groups[0].id = Some("demo-multi\nline\r\t\u{1b}".into());
+        let path = f.0.join("plan.yaml");
+        fs::write(&path, d.serialize(&snapshot(&f)).unwrap()).unwrap();
+        for command in ["prepare", "apply"] {
+            let output = f.ok(&["import", command, path.to_str().unwrap()]);
+            assert!(
+                output
+                    .lines()
+                    .any(|line| line == "plan -> demo-multi\\nline\\r\\t\\x1b"),
+                "{output}"
+            );
+            assert_eq!(output.lines().count(), 4, "{output}");
+        }
+    }
 }

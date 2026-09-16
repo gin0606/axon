@@ -55,7 +55,7 @@ axon import apply new-plan.yaml
 axon import check new-plan.yaml
 ```
 
-`prepare` は保存先を変えず、最終IDを割り当て、外部参照を再生成して同じfileをcanonical形式に置き換えます。コメントは保持しません。`check` はfileも保存先も変えず、作成・文面変更の有無・親の前後・依存の増減を表示します。本文の全文はfile自体の差分で確認してください。`apply` は最新の保存状態で再検証して全件を原子的に反映し、成功後に同じfileの `base` などを更新します。最後の `check` で差分がないことを確認します。
+`prepare` は保存先を変えず、最終IDを割り当て、外部参照を再生成して同じfileをcanonical形式に置き換えます。新規recordの `key -> 完全ID` の対応も一行ずつ表示します。コメントは保持しません。`check` はfileも保存先も変えず、作成・titleの前後・descriptionの変更有無・親の前後・依存の増減を表示します。titleの改行や制御文字はlistと同じ規則で可視化され、一行で表示されます。本文の全文はfile自体の差分で確認してください。`apply` は最新の保存状態で再検証して全件を原子的に反映し、成功後に同じfileの `base` などを更新し、更新前に新規だったrecordの `key -> 完全ID` も表示します。最後の `check` で差分がないことを確認します。
 
 ### 登録後の計画を修正する
 

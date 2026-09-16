@@ -21,9 +21,9 @@ description: Axonのdeclarationをexportし、prepare・check・applyで計画�
 
 各mutationを単独で実行し、終了コードと保存結果を個別に確認する。
 
-1. `import prepare FILE` は保存先を変えず、局所規則とID・kind・外部参照の存在を検査し、新規IDを確定して同じfileをcanonical rewriteする。keyと新規baseのnullを保持し、referencesを再生成する。コメントは保持しない。fileを読み直してIDと内容を確認し、適用入力のbytesとdigestを固定する。prepare成功は競合や共通コアの制約を通過したことを意味しない。
-2. `import check FILE` は全IDが確定したcanonical入力を検証し、Entityごとの作成、文面変更の有無、親の前後、needsの増減と適用後の状況を示す。fileと保存先を変更せず、条件も実行しない。本文全文は保全した元fileとのdiffで確認する。拒否があれば原因を解決して再検査し、差分が依頼の対象・内容と一致することを呼び出し側で確認する。
-3. 呼び出し側から適用権限がある場合に `import apply FILE` を実行する。CLIはlock取得後の入力とsnapshotで再検証し、全件を一つの保存境界で反映する。成功後、保存したsnapshotからbase・lifecycle・referencesと並びを更新し、keyを保持して同じfileを書き戻す。check後の編集は再checkし、古い結果で変更後のfileを承認済み扱いにしない。
+1. `import prepare FILE` は保存先を変えず、局所規則とID・kind・外部参照の存在を検査し、新規IDを確定して同じfileをcanonical rewriteする。keyと新規baseのnullを保持し、referencesを再生成する。コメントは保持しない。出力の `key -> 完全ID` を確認し、fileを読み直して内容を確認し、適用入力のbytesとdigestを固定する。prepare成功は競合や共通コアの制約を通過したことを意味しない。
+2. `import check FILE` は全IDが確定したcanonical入力を検証し、Entityごとの作成、titleの前後（listと同じ改行・制御文字の可視化で一行表示）、descriptionの変更有無、親の前後、needsの増減と適用後の状況を示す。fileと保存先を変更せず、条件も実行しない。本文全文は保全した元fileとのdiffで確認する。拒否があれば原因を解決して再検査し、差分が依頼の対象・内容と一致することを呼び出し側で確認する。
+3. 呼び出し側から適用権限がある場合に `import apply FILE` を実行する。CLIはlock取得後の入力とsnapshotで再検証し、全件を一つの保存境界で反映する。成功後、保存したsnapshotからbase・lifecycle・referencesと並びを更新し、keyを保持して同じfileを書き戻す。成功出力の `key -> 完全ID` はbase更新前に新規だったrecordの対応を示す。check後の編集は再checkし、古い結果で変更後のfileを承認済み扱いにしない。
 4. 再 `import check FILE` で差分なしを確認し、必要な `show --details`・logで完全ID、文面、関係、初期状態を照合する。差分があれば別writerによる変更も含めて調べ、完了と報告しない。保存先とfileそれぞれの結果、適用した対象と未解決事項を返す。
 
 ## 失敗・競合・結果不明

@@ -46,12 +46,14 @@ bare `axon`、help、-h、--helpは同じ用途別root helpをstdoutへ出して
 
 ## 計画全体の取得と一括編集
 
+`export` と `import prepare|check|apply` のhelpは、代表例と次に実行するcommandを保存先を開かずに表示する。
+
 - `axon export ID...` は完全 ID または一意な suffix を一つ以上受け取り、Issue 単体または Group 全子孫の和集合を canonical YAML として stdout に出す。保存先を変更せず、条件を実行しない。
 - `axon docs declaration` は field と新規・既存の違い、prepare → check → apply → 再 check の手順を stdout に説明する。`--example` は新規計画の canonical YAML だけを stdout に出す。どちらも保存先を開かない。引数なしの `axon docs` は従来の説明と declaration への案内を返す。
 
-`axon import prepare FILE` は新規IDを割り当て、外部参照を再生成したcanonical YAMLで同じfileを置き換える。保存先は変更せず、成功時はfile名と保存先未変更を表示する。書込前の失敗・bytes競合はNot applied、rename後の同期失敗はResult unknownとして診断し、残ったtemporary fileは診断で案内する。更新後にstdout出力だけが失敗した場合も、declarationがAppliedで保存先は未変更であることを示す。
+`axon import prepare FILE` は新規IDを割り当て、外部参照を再生成したcanonical YAMLで同じfileを置き換える。保存先は変更せず、成功時はfile名と保存先未変更、新規recordの `key -> 完全ID` の対応を一行ずつ表示する。書込前の失敗・bytes競合はNot applied、rename後の同期失敗はResult unknownとして診断し、残ったtemporary fileは診断で案内する。更新後にstdout出力だけが失敗した場合も、declarationがAppliedで保存先は未変更であることを示す。
 
-`axon import check FILE` は全IDが確定したcanonical YAMLを要求し、違えばprepareを案内する。schema・identityと参照・読み取り専用項目・競合・共通コアの拒否を区別し、作成、文面変更の有無、parentの前後、needsの増減、差分なしと適用後の状況をEntityごとに表示する。条件は実行せず、fileと保存先を変更しない。
+`axon import check FILE` は全IDが確定したcanonical YAMLを要求し、違えばprepareを案内する。schema・identityと参照・読み取り専用項目・競合・共通コアの拒否を区別し、作成、titleの前後、descriptionの変更有無、parentの前後、needsの増減、差分なしと適用後の状況をEntityごとに表示する。titleはlistと同じく改行を `\n`、制御文字を可視escapeにして一行で表示する。条件は実行せず、fileと保存先を変更しない。
 
 `export` と `import prepare|check|apply`、`docs declaration` の識別子、declaration の形式、保存結果と診断の区別は [正本spec](../../spec/lifecycle_proposal.md#計画全体の取得と一括編集) の「計画全体の取得と一括編集」に従う。declaration内のIDは完全IDだけを使い、exportの引数は他のcommandと同じくsuffixも受け付ける。保存境界の表示はこの文書の「mutationの結果」と同じApplied、Not applied、Result unknownを使う。
 
@@ -65,6 +67,6 @@ bare `axon`、help、-h、--helpは同じ用途別root helpをstdoutへ出して
 
 list・tasks・triageの `--search` はNoteだけの一致ではEntityを返さなくなった。現在の主題は `list --search`、Noteに残る情報は `note search`、原文は `note show ID NOTE_ID` で読む。`note list ID` のEntity IDは引き続き必須。
 
-`axon import apply FILE` は書き込みlock内でFILEを読み、checkと同じ検証を再実行し、全変更を一回の保存境界で反映する。拒否時は全件Not applied。成功後は保存したsnapshotからbase・lifecycle・referencesとcanonical順を更新し、keyを保持してFILEを置き換える。既存の再浮上条件とNoteは保持し、新規の条件は未設定とする。
+`axon import apply FILE` は書き込みlock内でFILEを読み、checkと同じ検証を再実行し、全変更を一回の保存境界で反映する。拒否時は全件Not applied。成功後は保存したsnapshotからbase・lifecycle・referencesとcanonical順を更新し、keyを保持してFILEを置き換える。成功出力にはbase更新前に新規だったrecordの `key -> 完全ID` の対応を一行ずつ含める。既存の再浮上条件とNoteは保持し、新規の条件は未設定とする。
 
 保存成功後のFILE更新失敗は、保存先のAppliedとdeclarationのNot appliedまたはResult unknownを分けて表示する。rename直前に元bytesを再照合し、編集されていればそのfileを保持する。同じFILEを再applyし、編集集合の全Entityが宣言の最終値に一致すれば保存先はno-opでrewriteだけを完了する。部分一致は競合。SQLite commit失敗とfile正本のrename後sync失敗は保存先のResult unknownで、declarationは更新しない。

@@ -168,6 +168,14 @@ pub fn parse(input: &str) -> Result<Declaration> {
     Ok(value)
 }
 impl Declaration {
+    /// Assigned identities for records whose base has not yet been refreshed by apply.
+    pub fn assigned_new_ids(&self) -> Vec<(String, String)> {
+        self.records()
+            .filter(|record| record.base.is_none())
+            .filter_map(|record| record.key.clone().zip(record.id.clone()))
+            .collect()
+    }
+
     pub fn records(&self) -> impl Iterator<Item = &Record> {
         self.groups.iter().chain(&self.issues)
     }

@@ -2439,7 +2439,7 @@ fingerprint には declaration が見せる項目だけを含める。文面編�
 
 三つの段階を維持する。ID を apply 前に確定させることが、再試行で重複作成しない唯一の単純な方法であり、`merge prepare / check / apply` と段階構成を揃える。
 
-`axon import prepare FILE` は保存先を変更せず、file だけを置き換える。strict YAML と局所規則（field、key、参照の形、重複、自己依存、親が Group であること）を検証し、既存 Entity の record の ID が保存先に存在し kind が一致すること、編集集合外の参照先が保存先に存在することを確認し、`id: null` の各 Entity に保存先と file の両方で衝突しない最終 ID を割り当てる。いずれかに失敗すれば file を変更しない。割り当て済みの ID が保存先に存在する場合は後述の適用済み判定を行い、該当すればその ID を保持し、該当しなければ別の writer が同じ ID を生成したものとして新しい ID を割り当て直す。key 参照は保持されるため、他の record の参照は変わらない。`key` はそのまま残し、`base` は null のままにする。`references` を現在値から再生成し、canonical 形式で元の場所へ atomic に置き換える。置き換えは file backend の正本と同じ手順に従い、temporary への書込と sync の後、file の bytes が読み取り時と同じであることを再照合してから rename し、directory を sync する。再照合前の失敗と bytes の変化は file を変更せず、rename 後の sync 失敗は file の結果不明として報告する。再照合後の非協調な editor 書込は、正本の保存契約と同じく対象外とする。すでに全 ID が割り当て済みなら新しい ID を発行せず、同じ入力への `prepare` は同じ内容を返す。競合は `prepare` の対象ではない。
+`axon import prepare FILE` は保存先を変更せず、file だけを置き換える。strict YAML と局所規則（field、key、参照の形、重複、自己依存、親が Group であること）を検証し、既存 Entity の record の ID が保存先に存在し kind が一致すること、編集集合外の参照先が保存先に存在することを確認し、`id: null` の各 Entity に保存先と file の両方で衝突しない最終 ID を割り当てる。いずれかに失敗すれば file を変更しない。割り当て済みの ID が保存先に存在する場合は後述の適用済み判定を行い、該当すればその ID を保持し、該当しなければ別の writer が同じ ID を生成したものとして新しい ID を割り当て直す。key 参照は保持されるため、他の record の参照は変わらない。`key` はそのまま残し、`base` は null のままにする。`references` を現在値から再生成し、canonical 形式で元の場所へ atomic に置き換える。置き換えは file backend の正本と同じ手順に従い、temporary への書込と sync の後、file の bytes が読み取り時と同じであることを再照合してから rename し、directory を sync する。再照合前の失敗と bytes の変化は file を変更せず、rename 後の sync 失敗は file の結果不明として報告する。再照合後の非協調な editor 書込は、正本の保存契約と同じく対象外とする。すでに全 ID が割り当て済みなら新しい ID を発行せず、同じ入力への `prepare` は同じ内容を返す。競合は `prepare` の対象ではない。成功時は新規 record の `key -> 完全ID` の対応を一行ずつ表示する。
 
 `axon import check FILE` は file と保存先を変更しない。全 Entity に ID があり、file が canonical 形式であることを要求し、違えば `prepare` が必要であることを報告して暗黙に書き換えない。検証は次の順に行う。
 
@@ -2447,14 +2447,14 @@ fingerprint には declaration が見せる項目だけを含める。文面編�
 2. `base` と保存先の現在値の照合、および新規 Entity の割り当て済み ID が保存先に存在しないことの確認。不一致または存在があれば後述の再試行の適用済み判定を行い、該当すれば以降の検証を省いて適用済みとして扱い、該当しなければ競合とする。`base` が一致するのに file の `lifecycle` が現在値と異なれば、読み取り専用項目の書き換えとして拒否する
 3. 参照先の存在
 4. 編集後の仮 snapshot を共通コアの通常操作で組み立て、包含・dependency・終了構成・固定された文面の制約を通常操作と同じ意味で検査
-5. 作成、title・description の変更有無、parent の前後、`needs` の増減を Entity ごとに表示。差分がなければその旨を表示
+5. 作成、title の変更前後（改行を `\n`、制御文字を可視 escape とする list と同じ一行表示）、description の変更有無、parent の前後、`needs` の増減を Entity ごとに表示。差分がなければその旨を表示
 6. 適用後の状況欄を保存情報から導出できる範囲で表示
 
 description の全文差分は file 自体の git diff に任せ、CLI では変更の有無に留める。再浮上条件は実行しない。一件でも error があれば適用可能とは表示しない。
 
 `axon import apply FILE` は保存先の書き込み lock を取得したあとに file の bytes を読んで digest を保持し、その内容と新しい snapshot に対して `check` と同じ検証を同じ優先順位で再実行し、差分を共通コアの通常操作の列に変換して、一つの保存境界（SQLite の一 transaction、file の一回の atomic replace）で反映する。一件でも拒否されれば全件適用せず、保存先を変えない。操作の適用順は実装が決め、有効な最終状態を中間状態の循環や前提不足で弾かないようにする。たとえば親の解除と依存の削除を追加より先に行う。新規 Entity は `lifecycle` が示す初期状態で作成し、架空の採用履歴を作らない。再浮上条件は既存 Entity では現在値を保持し、新規 Entity では未設定とする。同じ値の再指定は差分ではなく成功した no-op とする。
 
-保存成功後に同じ file を canonical rewrite する。この apply が保存した snapshot から、新規 Entity と既存 Entity の `base` と `lifecycle` を置き換え、`references` を再生成し、record と `needs` の並びを含む canonical 形を file 全体に再適用する。`key` と key 参照は残す。lock 解放後に保存先を読み直して他者の変更を `base` に取り込まない。rewrite は `prepare` と同じ手順で元の場所へ置き換える。rename の直前に file の bytes が読み取り時の digest と一致することを再照合し、変わっていれば file を変更せず、保存先には適用済みで declaration は更新していないことを報告する。rename 後の sync 失敗は declaration の結果不明として報告する。保存先の失敗は既存の保存契約に従い、SQLite commit の失敗と正本の置換後の同期失敗は結果不明として扱う。保存成功後に declaration の更新だけが失敗または結果不明になった場合は、保存先が適用済みであることを明示する。
+保存成功後に同じ file を canonical rewrite する。成功出力には、base の更新前に新規（`base: null`）だった record の `key -> 完全ID` の対応を一行ずつ含める。この apply が保存した snapshot から、新規 Entity と既存 Entity の `base` と `lifecycle` を置き換え、`references` を再生成し、record と `needs` の並びを含む canonical 形を file 全体に再適用する。`key` と key 参照は残す。lock 解放後に保存先を読み直して他者の変更を `base` に取り込まない。rewrite は `prepare` と同じ手順で元の場所へ置き換える。rename の直前に file の bytes が読み取り時の digest と一致することを再照合し、変わっていれば file を変更せず、保存先には適用済みで declaration は更新していないことを報告する。rename 後の sync 失敗は declaration の結果不明として報告する。保存先の失敗は既存の保存契約に従い、SQLite commit の失敗と正本の置換後の同期失敗は結果不明として扱う。保存成功後に declaration の更新だけが失敗または結果不明になった場合は、保存先が適用済みであることを明示する。
 
 ### 再試行
 

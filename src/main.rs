@@ -37,6 +37,9 @@ enum Command {
         command: Option<Docs>,
     },
     /// Export Issues and complete Group subtrees as canonical declaration YAML
+    #[command(
+        after_help = "Example: axon export ID... > plan.yaml\nEdit title, description, parent or needs in plan.yaml.\nNext: axon import prepare plan.yaml\nFor a new plan: axon docs declaration --example > new-plan.yaml"
+    )]
     Export {
         #[arg(required = true, num_args = 1.., value_name = "ID")]
         ids: Vec<String>,
@@ -136,10 +139,19 @@ enum Command {
 #[derive(Subcommand)]
 enum Import {
     /// Assign new IDs and atomically rewrite FILE as canonical YAML; storage is unchanged
+    #[command(
+        after_help = "Example: axon import prepare plan.yaml\nPrints new key -> full ID mappings. Storage is unchanged.\nNext: axon import check plan.yaml"
+    )]
     Prepare { file: PathBuf },
     /// Validate canonical FILE and display changes without writing or running conditions
+    #[command(
+        after_help = "Example: axon import check plan.yaml\nReview title changes, description change indicators and relationship changes.\nNext, after reviewing: axon import apply plan.yaml"
+    )]
     Check { file: PathBuf },
     /// Apply all changes atomically and refresh FILE; safe to retry the same declaration
+    #[command(
+        after_help = "Example: axon import apply plan.yaml\nSaves all changes and refreshes the declaration. Prints key -> full ID mappings for records that had base: null.\nNext: axon import check plan.yaml"
+    )]
     Apply { file: PathBuf },
 }
 #[derive(Subcommand)]
@@ -705,16 +717,17 @@ fn run(command: Command) -> Result<Output> {
         Command::Import {
             command: Import::Apply { file },
         } => {
-            let changed = axon::declaration_file::apply(&mut store, &file, context())?;
+            let outcome = axon::declaration_file::apply(&mut store, &file, context())?;
             Ok(Output {
                 text: display::human_text(format!(
-                    "Applied: {}; declaration updated: {}\n",
-                    if changed {
+                    "Applied: {}; declaration updated: {}\n{}",
+                    if outcome.changed {
                         "storage applied"
                     } else {
                         "storage unchanged (no-op)"
                     },
-                    file.display()
+                    file.display(),
+                    declaration_ids(&outcome.new_ids)
                 )),
                 publication: Publication::StorageAndDeclaration,
                 diagnostic: String::new(),
@@ -746,7 +759,11 @@ fn run(command: Command) -> Result<Output> {
                         .serialize(&snapshot)
                         .map_err(|e| sqlite::Error::Invalid(e.to_string()))?;
                     axon::declaration_file::rewrite(file, &bytes, text.as_bytes())?;
-                    format!("Prepared {}. Storage unchanged.\n", file.display())
+                    format!(
+                        "Prepared {}. Storage unchanged.\n{}",
+                        file.display(),
+                        declaration_ids(&declaration.assigned_new_ids())
+                    )
                 }
                 Import::Check { .. } => {
                     let checked = declaration
@@ -1200,6 +1217,17 @@ fn main() -> std::process::ExitCode {
     }
 }
 
+fn declaration_ids(ids: &[(String, String)]) -> String {
+    ids.iter()
+        .map(|(key, id)| {
+            format!(
+                "{key} -> {}\n",
+                display::human_text(id).replace('\n', "\\n")
+            )
+        })
+        .collect()
+}
+
 fn declaration_changes(
     declaration: &axon::declaration::Declaration,
     before: &Snapshot,
@@ -1223,9 +1251,13 @@ fn declaration_changes(
                 out.push_str(&format!(
                     "  title: {}\n  description: {}\n",
                     if a.title == b.title {
-                        "unchanged"
+                        "unchanged".into()
                     } else {
-                        "changed"
+                        format!(
+                            "{} -> {}",
+                            display::human_text(&a.title).replace('\n', "\\n"),
+                            display::human_text(&b.title).replace('\n', "\\n")
+                        )
                     },
                     if a.description == b.description {
                         "unchanged"
