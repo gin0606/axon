@@ -242,32 +242,35 @@ pub fn render_root_help() -> String {
     let mut command = Cli::command();
     command.build();
     let sections: &[(&str, &[&str])] = &[
+        ("Registration", &["capture"]),
         (
-            "Workflow",
+            "Lifecycle transitions",
             &[
-                "proposals",
-                "tasks",
-                "capture",
                 "accept",
+                "withdraw",
                 "start",
                 "release",
                 "complete",
-            ],
-        ),
-        ("Inspect", &["show", "list", "log", "note", "actor"]),
-        (
-            "Plan management",
-            &[
-                "export",
-                "import",
-                "write",
-                "parent",
-                "dep",
-                "condition",
-                "withdraw",
                 "cancel",
                 "reconsider",
             ],
+        ),
+        (
+            "Candidates & inspection",
+            &[
+                "proposals",
+                "tasks",
+                "show",
+                "list",
+                "log",
+                "note",
+                "actor",
+                "export",
+            ],
+        ),
+        (
+            "Text & relationships",
+            &["write", "parent", "dep", "condition", "import"],
         ),
         (
             "Setup & utilities",

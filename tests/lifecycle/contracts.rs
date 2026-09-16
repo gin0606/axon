@@ -324,14 +324,60 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
     for args in [vec!["help"], vec!["-h"], vec!["--help"]] {
         assert_eq!(f.ok(&args), help);
     }
-    for heading in [
-        "Workflow:",
-        "Inspect:",
-        "Plan management:",
-        "Setup & utilities:",
-    ] {
-        assert!(help.contains(heading));
+    let expected_sections: &[(&str, &[&str])] = &[
+        ("Registration", &["capture"]),
+        (
+            "Lifecycle transitions",
+            &[
+                "accept",
+                "withdraw",
+                "start",
+                "release",
+                "complete",
+                "cancel",
+                "reconsider",
+            ],
+        ),
+        (
+            "Candidates & inspection",
+            &[
+                "proposals",
+                "tasks",
+                "show",
+                "list",
+                "log",
+                "note",
+                "actor",
+                "export",
+            ],
+        ),
+        (
+            "Text & relationships",
+            &["write", "parent", "dep", "condition", "import"],
+        ),
+        (
+            "Setup & utilities",
+            &["init", "storage", "merge", "completion", "docs", "help"],
+        ),
+    ];
+    let mut previous = 0;
+    for (heading, names) in expected_sections {
+        let heading = format!("{heading}:\n");
+        let offset = help.find(&heading).unwrap();
+        assert!(offset > previous);
+        previous = offset;
+        let section = help[offset + heading.len()..].split("\n\n").next().unwrap();
+        let commands: Vec<_> = section
+            .lines()
+            .map(|line| line.split_whitespace().next().unwrap())
+            .collect();
+        assert_eq!(&commands, names);
     }
+    assert!(
+        !help
+            .lines()
+            .any(|line| line.ends_with(':') && line.contains("Plan"))
+    );
     assert!(f.ok(&["docs"]).contains("Cancelled is terminal"));
     assert!(f.ok(&["help", "note", "show"]).contains("<NOTE_ID>"));
     assert!(!f.ok(&["actor"]).is_empty());
