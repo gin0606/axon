@@ -21,12 +21,12 @@
 | 文書 | 定義する範囲 |
 | --- | --- |
 | [正本spec](../spec/lifecycle_proposal.md) | lifecycle・構造・候補・情報・表示・保存・統合・一括declarationの契約とモデル |
-| [Declaration](development/lifecycle-declaration.md) | strict YAML、export・import、共通コアとfile書戻しの境界 |
+| [Declaration](development/lifecycle-declaration.md) | strict YAML、`axon export`・`axon import`、共通コアとfile書戻しの境界 |
 | [共通コア](development/lifecycle-core.md) | 通常操作、記録、codec、三者比較 |
 | [SQLite CLI](development/lifecycle-sqlite.md) | 公開操作とSQLite adapter |
-| [file保存とGit統合](development/lifecycle-file.md) | writer、worktree、merge CLI・driver |
+| [file保存とGit統合](development/lifecycle-file.md) | writer、worktree、`axon merge` CLI・driver |
 | [専用移行ツール](../tools/lifecycle-migration/README.md) | 旧file/SQLiteから単一lifecycleへのbackup・変換・検証・明示適用 |
-| [候補と外部条件](development/lifecycle-candidates.md) | proposals/tasksとprocess評価 |
+| [候補と外部条件](development/lifecycle-candidates.md) | `axon proposals|tasks`とprocess評価 |
 | [記録者連携](development/lifecycle-recorder.md) | 自動取得と保存済み詳細 |
 | [検証方針](development/verification.md) | CI、declarationを含む独立fixture、モデル検証の分担 |
 
@@ -63,6 +63,6 @@
 
 確認時は、`axon --help`の全subcommand、`axon import`・`axon merge`の下位subcommand、状態5語、遷移7語を対象に、fenced code・inline code span・frontmatterのname行を除いた散文をcase-sensitiveかつ単語境界`[A-Za-z-]`で検索する。残存箇所を全て分類し、Axonの操作・遷移・状態を裸で指す箇所がないことを確認する。対象語で始まるcode spanも列挙し、コマンド引用が`axon`から始まることを確認する。検索は発見の補助であり、意味の判定や文脈の確認を置き換えない。
 
-候補の `proposals/tasks` と外部コマンドの実行契約は [候補一覧と外部条件](development/lifecycle-candidates.md) を参照する。
+候補の `axon proposals|tasks` と外部コマンドの実行契約は [候補一覧と外部条件](development/lifecycle-candidates.md) を参照する。
 
-[file保存とGit統合](development/lifecycle-file.md) は新lifecycleのwriter・merge CLI・Git driverの入口です。
+[file保存とGit統合](development/lifecycle-file.md) は新lifecycleのwriter・`axon merge` CLI・Git driverの入口です。

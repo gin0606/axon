@@ -94,7 +94,7 @@ backup・変換・全field/record/関係の照合を行い、正本は置換し�
 }
 ```
 
-`lifecycle` または `condition` を `null` にすると、その項目の基本マッピングを使います。条件の置換は `{"Command":"shell文字列"}`、解除は `"Always"`。理由なし、元digest不一致、存在しない対象、Cancelled祖先に矛盾するoverrideは拒否します。未知schema・field・型・参照切れをoverrideで無視することはできません。
+`lifecycle` または `condition` を `null` にすると、その項目の基本マッピングを使います。条件の置換は `{"Command":"shell文字列"}`、解除は `"Always"`。理由なし、元digest不一致、存在しない対象、`Cancelled`祖先に矛盾するoverrideは拒否します。未知schema・field・型・参照切れをoverrideで無視することはできません。
 
 ## applyとrestore
 

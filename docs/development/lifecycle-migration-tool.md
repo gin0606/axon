@@ -64,21 +64,21 @@ toolはGitのmerge・stage・commit、PATH・plugin・共有Git driverの変更�
 
 | 旧状態 | 新状態 |
 | --- | --- |
-| Accepted / Ended | Completed |
-| Accepted / NotStarted | NotStarted |
-| Undecided / NotStarted | Undecided |
-| 非RejectedのInProgress | InProgress。祖先の着手状態も照合する |
-| Rejected | Cancelled |
+| Accepted / Ended | `Completed` |
+| Accepted / NotStarted | `NotStarted` |
+| Undecided / NotStarted | `Undecided` |
+| 非RejectedのInProgress | `InProgress`。祖先の着手状態も照合する |
+| Rejected | `Cancelled` |
 
-Cancelledへ対応するGroupの未終了子孫は、既存の合意に従い包含を保持してCancelledへ対応させる。Completedの子孫は保持する。その他の組合せや、新しい採否・目的判断が必要な不整合は対象と具体的な補正案をreportに残す。
+`Cancelled`へ対応するGroupの未終了子孫は、既存の合意に従い包含を保持して`Cancelled`へ対応させる。`Completed`の子孫は保持する。その他の組合せや、新しい採否・目的判断が必要な不整合は対象と具体的な補正案をreportに残す。
 
 | 旧条件 | 対応案 |
 | --- | --- |
 | Always | 条件未設定 |
-| Manual | `exit 1`。解除は通常の`condition unset` |
+| Manual | `exit 1`。解除は通常の`axon condition unset` |
 | AtDate | 同じinstantを判定するshell条件。schema 13はUTC午前0時として解釈する |
-| AfterEntity（新Completedを参照） | Completedは通常再開しないため、条件を解除した理由を記録する |
-| その他のAfterEntity | 参照先の終了を新CLIで調べるshell条件。CompletedとCancelledを区別したうえで旧条件の浮上意図へ対応する |
+| AfterEntity（新`Completed`を参照） | `Completed`は通常再開しないため、条件を解除した理由を記録する |
+| その他のAfterEntity | 参照先の終了を新CLIで調べるshell条件。`Completed`と`Cancelled`を区別したうえで旧条件の浮上意図へ対応する |
 | Command | 元文字列を保持し、旧CLI・path・schema依存を静的に確認する。対応が一意でなければ明示overrideを必要とする |
 
 条件文字列の生成は移行専用binaryへの恒久依存を残さない。移行後に利用可能な新CLIと実行環境で完結させる。評価エラーを未成立へ落とさず、移行中の変換・構造検証ではshellを実行しない。実行検査が必要な条件は作用を確認して個別に扱う。
@@ -92,7 +92,7 @@ Axon自身のこのworktreeには、既に移行後の追加記録がある。�
 ## 検証の範囲
 
 - file/SQLite × schema 13/14で、全情報保持と現行コアの検証を行う。
-- InProgress、Cancelled Groupの子孫補正、日付、未成立AfterEntity、Manual、Commandを独立fixtureで扱う。
+- `InProgress`、`Cancelled` Groupの子孫補正、日付、未成立AfterEntity、Manual、Commandを独立fixtureで扱う。
 - 原文保全前にschema正規化していないこと、Noteの因果関係、任意metadataの数値・型を失わないことを検査する。
 - 再実行でID・記録が増えないこと、source/candidate/jobの改変、途中終了、置換前後の失敗、SQLite WAL、移行後の追加記録を伴う復旧拒否を検査する。
 - 対象外rootと共有binaryを変更しないこと、必要な全rootの結果が揃うまで切替完了にならないことを確認する。

@@ -31,9 +31,9 @@ cargo test --lib --bin axon --test smoke
 ```
 
 `--lib` は単一 lifecycle の共通コア・分岐・codec のテストを実行する。
-`--bin axon` は端末表示と条件プロセスの起動・trace flush失敗、`--test smoke` はSQLite/file binary の登録から Group 完了、Note・log、並行操作、schema 拒否、保存先探索・init、入出力失敗を独立 fixture で検証する。
+`--bin axon` は端末表示と条件プロセスの起動・trace flush失敗、`--test smoke` はSQLite/file binary の登録から Group 完了、Note・log、並行操作、schema 拒否、保存先探索・`axon init`、入出力失敗を独立 fixture で検証する。
 
-旧 `archive/three-axis/tests` は新 binary から参照しない過去の検証資料である。process監督と記録者の検証は新smokeへ移植済み。`cargo test` はworkspaceの記録者crate単体テストも実行する。file保存・mergeは `tests/lifecycle/file.rs` をsmokeから実行し、実worktree、driver、index、並行writer、drift拒否を検証する。旧 schema migration の互換検証は新仕様の要件にしない。以降の旧モデル・coverage の個別名も過去の三軸実装に属する。
+旧 `archive/three-axis/tests` は新 binary から参照しない過去の検証資料である。process監督と記録者の検証は新smokeへ移植済み。`cargo test` はworkspaceの記録者crate単体テストも実行する。file保存・統合は `tests/lifecycle/file.rs` をsmokeから実行し、実worktree、driver、index、並行writer、drift拒否を検証する。旧 schema migration の互換検証は新仕様の要件にしない。以降の旧モデル・coverage の個別名も過去の三軸実装に属する。
 
 オプションなしの`cargo test`は引き続きsmokeを含む全test targetの標準入口であり、
 上記を含まない契約はfull verificationで検査する。Lefthookの各jobは失敗時にcommitを
@@ -49,18 +49,18 @@ cargo +1.89.0 check --locked --all-targets --all-features
 
 状態・関係・候補・情報の正本は [lifecycle spec](../../spec/lifecycle_proposal.md)。意味を変える場合は該当モデルを更新し、spec内の生成・型検査・invariant/witness検査を行ってから実装へ反映します。モデルの対象外であるfilesystem、SQLite、実process、Git統合、記録者はRustで検査します。モデルの意味を変えない文書・テスト整理にモデルの再実行は必須にしません。
 
-`tests/lifecycle/workflow.rs` は両backendの独立fixtureで登録、候補選択、並行着手・Note、Group最終確認を一巡します。`tests/lifecycle/file.rs` は実Git worktreeで分岐し、自動統合と衝突、prepare/check/apply、stage後の通常操作まで検証します。SQLiteの共有worktreeでの並行着手もworkflow fixtureに含みます。テストはこのcheckoutのbinaryを絶対パスで実行し、Git環境を隔離します。実データやPATH上のbinaryを切り替えません。
+`tests/lifecycle/workflow.rs` は両backendの独立fixtureで登録、候補選択、並行着手・Note、Group最終確認を一巡します。`tests/lifecycle/file.rs` は実Git worktreeで分岐し、自動統合と衝突、`axon merge prepare|check|apply`、stage後の通常操作まで検証します。SQLiteの共有worktreeでの並行着手もworkflow fixtureに含みます。テストはこのcheckoutのbinaryを絶対パスで実行し、Git環境を隔離します。実データやPATH上のbinaryを切り替えません。
 
 ### Declaration の独立fixture
 
-[一括declaration](lifecycle-declaration.md) の形式と適用契約はRustで検証します。`src/declaration.rs` と `src/declaration/import.rs` の単体テストはstrict YAML、canonical往復、fingerprint、差分と共通コアの制約を扱います。`tests/lifecycle/declaration.rs` は `smoke` に含まれ、両backendの独立fixtureでexport、雛形、prepare → check → apply → 再check、新規登録と既存subtree編集、競合、保存先・入力の非変更を検査します。
+[一括declaration](lifecycle-declaration.md) の形式と適用契約はRustで検証します。`src/declaration.rs` と `src/declaration/import.rs` の単体テストはstrict YAML、canonical往復、fingerprint、差分と共通コアの制約を扱います。`tests/lifecycle/declaration.rs` は `smoke` に含まれ、両backendの独立fixtureで`axon export`、雛形、`axon import prepare` → `axon import check` → `axon import apply` → 再度`axon import check`、新規登録と既存subtree編集、競合、保存先・入力の非変更を検査します。
 
 ```sh
 cargo test --locked --lib declaration
 cargo test --locked --test smoke declaration
 ```
 
-`src/declaration_file.rs` の単体テストは、保存成功後のfile書戻し失敗と再apply、入力bytesの変化、保存結果の診断などI/O境界を検査します。 process fixtureは同じlib test binaryを子processにし、SQLite transaction内（UPDATE後commit前）、file rename前、両backendの保存後書戻し前・書戻し後で強制終了します。barrier待ちは最大10秒、到達後すぐにkillして終了を回収し、完全snapshot・入力bytesと同じfileの再applyへの収束を検査します。`src/declaration/tests.rs` の行列は両backendでCancelled Groupへの所属拒否、Cancelled Entityの依存差替え、新規Groupへの移動、親子反転、進行中subtreeの移動を検査します。recordの正順・逆順・巡回順で共通コアの適用結果を比較し、prepareでcanonical化した各入力をbackendへ適用して結果の一致を確認します。これらは`--lib`としてfast gateにも含まれます。SQLite commit境界の失敗注入は `src/sqlite.rs` にあります。対象の検証後も、必要なfull verificationは上記の共通入口で行います。実データやPATH上のbinaryは変更しません。この機能は通常操作の意味を変えないため、検証のためだけにQuintの状態やactionを追加しません。
+`src/declaration_file.rs` の単体テストは、保存成功後のfile書戻し失敗と再度`axon import apply`、入力bytesの変化、保存結果の診断などI/O境界を検査します。 process fixtureは同じlib test binaryを子processにし、SQLite transaction内（UPDATE後commit前）、file rename前、両backendの保存後書戻し前・書戻し後で強制終了します。barrier待ちは最大10秒、到達後すぐにkillして終了を回収し、完全snapshot・入力bytesと同じfileの再度`axon import apply`への収束を検査します。`src/declaration/tests.rs` の行列は両backendで`Cancelled` Groupへの所属拒否、`Cancelled` Entityの依存差替え、新規Groupへの移動、親子反転、進行中subtreeの移動を検査します。recordの正順・逆順・巡回順で共通コアの適用結果を比較し、`axon import prepare`でcanonical化した各入力をbackendへ適用して結果の一致を確認します。これらは`--lib`としてfast gateにも含まれます。SQLite commit境界の失敗注入は `src/sqlite.rs` にあります。対象の検証後も、必要なfull verificationは上記の共通入口で行います。実データやPATH上のbinaryは変更しません。この機能は通常操作の意味を変えないため、検証のためだけにQuintの状態やactionを追加しません。
 
 ## 過去の三軸実装の検証資料
 
