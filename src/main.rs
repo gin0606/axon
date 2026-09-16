@@ -5,7 +5,7 @@ use cli_support::*;
 
 use axon::{
     lifecycle::*,
-    location::Location,
+    location::{FileIntegration, InitResult, IntegrationChange, Location},
     sqlite::{self, Result},
 };
 use chrono::Utc;
@@ -64,6 +64,9 @@ enum Command {
         command: Storage,
     },
     /// Initialize a new management root (default: SQLite)
+    #[command(
+        after_help = "SQLite creates only .axon/axon.db and does not change Git integration files.\nFile creates .axon/state.jsonl and creates or appends .axon/.gitignore and root .gitattributes, preserving unrelated lines.\nInit does not stage or commit any files."
+    )]
     Init {
         prefix: Option<String>,
         #[arg(long, value_enum, default_value = "sqlite")]
@@ -660,26 +663,16 @@ fn run(command: Command) -> Result<Output> {
             .ok_or_else(|| {
                 sqlite::Error::Invalid("cannot derive an ID prefix; pass axon init PREFIX".into())
             })?;
-        location.init_backend(prefix, matches!(backend, Backend::File))?;
-        return Ok(output(
-            format!(
-                "Initialized {} at {}\n",
-                if matches!(backend, Backend::File) {
-                    "file"
-                } else {
-                    "SQLite"
-                },
-                display::human_text(
-                    if matches!(backend, Backend::File) {
-                        location.root.join(".axon/state.jsonl")
-                    } else {
-                        location.sqlite
-                    }
-                    .display()
-                )
+        let initialized =
+            location.init_backend_with_result(prefix, matches!(backend, Backend::File))?;
+        let text = match initialized {
+            InitResult::Sqlite => format!(
+                "Initialized SQLite at {}\n",
+                display::human_text(location.sqlite.display())
             ),
-            true,
-        ));
+            InitResult::File(integration) => file_init_output(&location, integration),
+        };
+        return Ok(output(text, true));
     }
     match command {
         Command::Storage {
@@ -1112,6 +1105,24 @@ fn run(command: Command) -> Result<Output> {
             Ok(output(text, true))
         }
     }
+}
+
+fn file_init_output(location: &Location, integration: FileIntegration) -> String {
+    fn label(change: IntegrationChange) -> &'static str {
+        match change {
+            IntegrationChange::Created => "Created",
+            IntegrationChange::Appended => "Appended",
+            IntegrationChange::Unchanged => "Unchanged",
+        }
+    }
+    format!(
+        "Initialized file at {}\n{}: {}\n{}: {}\n",
+        display::human_text(location.root.join(".axon/state.jsonl").display()),
+        label(integration.gitignore),
+        display::human_text(location.root.join(".axon/.gitignore").display()),
+        label(integration.attributes),
+        display::human_text(location.root.join(".gitattributes").display()),
+    )
 }
 fn create(store: &mut axon::location::Store, args: Create) -> Result<Output> {
     let kind = args.kind.kind();

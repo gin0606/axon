@@ -488,7 +488,15 @@ Issue と Group は同じ `<prefix>-<ランダム 6 文字>` namespace を使い
 ## DBの互換性検査
 
 通常操作は対応するschema更新をbackup付きで自動実行し、成功後に続行する。現行の基点はv14で、v13 の `AtDate(YYYY-MM-DD)` は UTC 午前 0 時へ移行する。退役した旧版・未来版・未知構造は変更せず拒否する。
-`init` は新規作成専用で、既存正本や初期化途中への再実行を拒否する。既定は SQLite で ignore は変更しない。`--backend file` は Git 内外とも `.axon/.gitignore` と root `.gitattributes` を生成・補完する。Git driver の登録は利用者が通常の `git config` で行う。保存成功境界とinit復旧は[backendとfile保存](file-storage.md)を参照。help、docs、version、completionはDB不要。
+`init` は新規作成専用で、既存正本や初期化途中への再実行を拒否する。既定は SQLite で ignore は変更しない。`--backend file` は Git 内外とも `.axon/.gitignore` と root `.gitattributes` を生成・補完し、成功時は保存処理が返した結果を各 path とともに表示する。
+
+```text
+Initialized file at /path/to/root/.axon/state.jsonl
+Created: /path/to/root/.axon/.gitignore
+Appended: /path/to/root/.gitattributes
+```
+
+必要行が既にあり bytes を変更しなかった file は `Unchanged:` と表示する。SQLite の成功出力は `Initialized SQLite at /path/to/root/.axon/axon.db` の一行だけである。Git driver の登録は利用者が通常の `git config` で行う。保存成功境界とinit復旧は[backendとfile保存](file-storage.md)を参照。help、docs、version、completionはDB不要。
 backend変換は明示した現行schemaのSQLite入力から別directoryへ出力し、元DBの切替はしない。
 診断はpath、版、処理段階、原因、backup先と出力の適用状態を示す。失敗時の途中成果を上書きせず、
 結果不明なら出力とbackupを調べてから再開する。具体的な手順は[手動移行](migration.md)。
