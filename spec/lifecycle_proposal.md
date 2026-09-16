@@ -2394,7 +2394,7 @@ root は `schema`、`groups`、`issues`、`references` の 4 field だけをこ�
 
 `references` には、編集集合の `parent`・`needs` が指す編集集合外の Entity を、`id`、`kind`（`issue` / `group`）、`lifecycle`、`title` の順で一件ずつ読み取り専用として載せる。description、key、関係は持たない。レビュー側が subtree 外の依存先を ID の突き合わせなしに読めるようにするための context である。
 
-`references` は `prepare` と `apply` 後の canonical rewrite で保存先の現在値から再生成する。`check`・`apply` は `references` について、要素の集合が編集集合の `parent`・`needs` が指す編集集合外の Entity の集合と一致すること、および file に書かれた値どうしの形式と ID 順が canonical であることを検査し、title や lifecycle の値が保存先の現在値と一致することは要求しない。過不足があれば `prepare` で再生成する。参照先の title や lifecycle が export 後に変わっても競合にせず、参照先が存在しない場合と、共通コアが拒否する状態（終了した Group を親に指定する、進行中の Entity の祖先に進行中でない Group を置く、外部を経由して循環を作るなど）だけを止める。Cancelled の Entity への依存は共通コアが通常操作で許すため、declaration でも拒否しない。編集者はそれらの値を見て編集したのではなく、旧契約のように全拒否にすると大きな計画ほど無関係な変更で止まるためである。
+`references` は `prepare` と `apply` 後の canonical rewrite で保存先の現在値から再生成する。`check`・`apply` は `references` について、要素の集合が編集集合の `parent`・`needs` が指す編集集合外の Entity の集合と一致すること、および file に書かれた値どうしの形式と ID 順が canonical であることを検査し、kind は保存先の不変な値との一致を要求し、不一致は読み取り専用項目の書き換えとして拒否する。title や lifecycle の値が保存先の現在値と一致することは要求しない。過不足があれば `prepare` で再生成する。参照先の title や lifecycle が export 後に変わっても競合にせず、参照先が存在しない場合、kind が一致しない場合、および共通コアが拒否する状態（終了した Group を親に指定する、進行中の Entity の祖先に進行中でない Group を置く、外部を経由して循環を作るなど）だけを止める。Cancelled の Entity への依存は共通コアが通常操作で許すため、declaration でも拒否しない。編集者はそれらの値を見て編集したのではなく、旧契約のように全拒否にすると大きな計画ほど無関係な変更で止まるためである。
 
 ### canonical 形式
 
@@ -2443,7 +2443,7 @@ fingerprint には declaration が見せる項目だけを含める。文面編�
 
 `axon import check FILE` は file と保存先を変更しない。全 Entity に ID があり、file が canonical 形式であることを要求し、違えば `prepare` が必要であることを報告して暗黙に書き換えない。検証は次の順に行う。
 
-1. strict schema、identity、参照の局所検証と、既存 Entity の ID が保存先に存在し kind が一致すること
+1. strict schema、identity、参照の局所検証と、既存 Entity の ID が保存先に存在し kind が一致すること。`references` に記載された外部 Entity の存在と kind の一致も、再試行の適用済み判定より前に検証する
 2. `base` と保存先の現在値の照合、および新規 Entity の割り当て済み ID が保存先に存在しないことの確認。不一致または存在があれば後述の再試行の適用済み判定を行い、該当すれば以降の検証を省いて適用済みとして扱い、該当しなければ競合とする。`base` が一致するのに file の `lifecycle` が現在値と異なれば、読み取り専用項目の書き換えとして拒否する
 3. 参照先の存在
 4. 編集後の仮 snapshot を共通コアの通常操作で組み立て、包含・dependency・終了構成・固定された文面の制約を通常操作と同じ意味で検査

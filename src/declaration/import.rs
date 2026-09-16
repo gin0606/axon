@@ -182,6 +182,17 @@ impl Declaration {
                 "schema: non-canonical declaration; run axon import prepare FILE",
             ));
         }
+        for reference in &self.references {
+            let id = id(&reference.id)?;
+            let entity = snapshot.entity(&id).map_err(|_| {
+                invalid(format!(
+                    "identity/reference: {id}: ID does not exist in storage"
+                ))
+            })?;
+            if reference.kind != kind(entity.kind) {
+                return Err(invalid(format!("read-only: {id}: kind is fixed")));
+            }
+        }
         let conflicts: Vec<_> = self
             .records()
             .filter_map(|r| {

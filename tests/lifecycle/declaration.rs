@@ -654,3 +654,53 @@ fn declaration_new_id_mappings_stay_on_one_line_on_both_backends() {
         }
     }
 }
+
+#[test]
+fn declaration_rejects_external_kind_changes_before_apply_and_on_retry() {
+    for backend in ["sqlite", "file"] {
+        for external_kind in ["issue", "group"] {
+            let f = Fixture::new();
+            f.ok(&["init", "demo", "--backend", backend]);
+            let external = if external_kind == "group" {
+                created(&f.ok(&["group", "plan", "--title", "External"]))
+            } else {
+                f.plan("External")
+            };
+            let selected = created(&f.ok(&["plan", "--title", "Original", "--needs", &external]));
+            let original = snapshot(&f);
+            let mut d = declaration::parse(&f.ok(&["export", &selected])).unwrap();
+            d.issues[0].title = "Edited".into();
+            let valid = d.serialize(&original).unwrap();
+            let path = f.0.join("plan.yaml");
+            for retry in [false, true] {
+                if retry {
+                    fs::write(&path, &valid).unwrap();
+                    f.ok(&["import", "apply", path.to_str().unwrap()]);
+                }
+                let before = snapshot(&f);
+                d.references[0].kind = if external_kind == "group" {
+                    "issue"
+                } else {
+                    "group"
+                }
+                .into();
+                let input = d.serialize(&before).unwrap();
+                fs::write(&path, &input).unwrap();
+                for operation in ["check", "apply"] {
+                    let error = failure(f.run(&["import", operation, path.to_str().unwrap()]));
+                    assert!(
+                        error.contains("read-only:") && error.contains("kind is fixed"),
+                        "{error}"
+                    );
+                    assert_eq!(snapshot(&f), before);
+                    assert_eq!(fs::read_to_string(&path).unwrap(), input);
+                }
+                d.references[0].kind = external_kind.into();
+                d.references[0].title = "Stale context".into();
+                d.references[0].lifecycle = "cancelled".into();
+                fs::write(&path, d.serialize(&before).unwrap()).unwrap();
+                f.ok(&["import", "check", path.to_str().unwrap()]);
+            }
+        }
+    }
+}
