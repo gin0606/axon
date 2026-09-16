@@ -9,3 +9,7 @@
 単体テストは spec の canonical example、文字列の完全な往復、拒否入力、並び順、fingerprint の境界を検査します。`tests/lifecycle/declaration.rs` は両 backend の独立 fixture で subtree・Issue・和集合、外部参照、保存先非変更と条件未実行を確認し、壊れた管理 root でも docs と雛形が取得できることを検査します。
 
 `src/declaration/import.rs` は保存snapshotとのidentity・base照合、適用済み判定、外部参照の再生成、共通コアの通常操作による仮snapshot構築を共有する。親解除・dependency削除、新規作成、文面変更、親設定、dependency追加の順で差分を検査する。`Checked` のsnapshotは保存前の候補であり、SQLやfileを変更しない。`src/declaration_file.rs` は別のI/O境界としてfile backendのpublish手順を再利用し、temporary書込・sync、入力bytes再照合、rename、directory syncを行う。
+
+`src/declaration/tests.rs` の関係変更行列は、両backendでCancelled Groupへの所属拒否、Cancelled Entityのdependency差替え、新規Groupへの既存Entityの移動、親子Groupの反転、InProgress子孫を持つGroupのInProgress Group間移動を検査する。recordの正順・逆順・巡回順で共通コアの適用結果を比較し、prepareでcanonical化して各backendへ適用した結果との一致、拒否時の保存先と入力の保持を確認する。
+
+`src/declaration_file.rs` のprocess fixtureはlib test binaryを子processとして起動し、本番と共通のapply経路を実行する。SQLiteのUPDATE後commit前、fileのtemporary作成後rename前、両backendの保存後・declaration書戻し前、書戻し後でbarrierに到達した子を強制終了する。再openした保存先の完全snapshotと入力bytes、同じfileの再applyによる通常適用またはno-opへの収束を検査する。停止点はprivateなapply経路からcrate内の保存adapterへ渡し、公開APIと通常操作の意味は変えない。

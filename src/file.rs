@@ -182,6 +182,13 @@ impl Store {
         &mut self,
         change: impl FnOnce(&str, &mut Snapshot) -> Result<T>,
     ) -> Result<T> {
+        self.update_with(change, |_| Ok(()))
+    }
+    pub(crate) fn update_with<T>(
+        &mut self,
+        change: impl FnOnce(&str, &mut Snapshot) -> Result<T>,
+        before_publish: impl FnOnce(&crate::lifecycle::Snapshot) -> Result<()>,
+    ) -> Result<T> {
         let _lock = lock(&self.root.join(".axon/state.lock"))?;
         self.guard()?;
         let path = self.root.join(".axon/state.jsonl");
@@ -196,7 +203,10 @@ impl Store {
         if original == snapshot {
             return Ok(result);
         }
-        publish(&path, Some(&bytes), &next, || self.guard().map(|_| ()))?;
+        publish(&path, Some(&bytes), &next, || {
+            self.guard()?;
+            before_publish(&snapshot)
+        })?;
         Ok(result)
     }
 }

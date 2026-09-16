@@ -269,9 +269,16 @@ impl Store {
         &mut self,
         change: impl FnOnce(&str, &mut Snapshot) -> Result<T>,
     ) -> Result<T> {
+        self.update_with(change, |_| Ok(()))
+    }
+    pub(crate) fn update_with<T>(
+        &mut self,
+        change: impl FnOnce(&str, &mut Snapshot) -> Result<T>,
+        before_publish: impl FnOnce(&crate::lifecycle::Snapshot) -> Result<()>,
+    ) -> Result<T> {
         match self {
-            Self::Sqlite(s) => s.update(change),
-            Self::File(s) => s.update(change),
+            Self::Sqlite(s) => s.update_with(change, before_publish),
+            Self::File(s) => s.update_with(change, before_publish),
         }
     }
 }

@@ -66,6 +66,13 @@ impl Store {
         &mut self,
         change: impl FnOnce(&str, &mut Snapshot) -> Result<T>,
     ) -> Result<T> {
+        self.update_with(change, |_| Ok(()))
+    }
+    pub(crate) fn update_with<T>(
+        &mut self,
+        change: impl FnOnce(&str, &mut Snapshot) -> Result<T>,
+        before_publish: impl FnOnce(&crate::lifecycle::Snapshot) -> Result<()>,
+    ) -> Result<T> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -84,6 +91,7 @@ impl Store {
             "UPDATE lifecycle_store SET snapshot = ?1 WHERE singleton = 1",
             [bytes],
         )?;
+        before_publish(&snapshot)?;
         tx.commit().map_err(Error::Commit)?;
         Ok(result)
     }

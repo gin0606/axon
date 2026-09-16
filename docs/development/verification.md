@@ -60,7 +60,7 @@ cargo test --locked --lib declaration
 cargo test --locked --test smoke declaration
 ```
 
-`src/declaration_file.rs` の単体テストは、保存成功後のfile書戻し失敗と再apply、入力bytesの変化、保存結果の診断などI/O境界を検査します。SQLite commit境界の失敗注入は `src/sqlite.rs` にあります。対象の検証後も、必要なfull verificationは上記の共通入口で行います。実データやPATH上のbinaryは変更しません。この機能は通常操作の意味を変えないため、検証のためだけにQuintの状態やactionを追加しません。
+`src/declaration_file.rs` の単体テストは、保存成功後のfile書戻し失敗と再apply、入力bytesの変化、保存結果の診断などI/O境界を検査します。 process fixtureは同じlib test binaryを子processにし、SQLite transaction内（UPDATE後commit前）、file rename前、両backendの保存後書戻し前・書戻し後で強制終了します。barrier待ちは最大10秒、到達後すぐにkillして終了を回収し、完全snapshot・入力bytesと同じfileの再applyへの収束を検査します。`src/declaration/tests.rs` の行列は両backendでCancelled Groupへの所属拒否、Cancelled Entityの依存差替え、新規Groupへの移動、親子反転、進行中subtreeの移動を検査します。recordの正順・逆順・巡回順で共通コアの適用結果を比較し、prepareでcanonical化した各入力をbackendへ適用して結果の一致を確認します。これらは`--lib`としてfast gateにも含まれます。SQLite commit境界の失敗注入は `src/sqlite.rs` にあります。対象の検証後も、必要なfull verificationは上記の共通入口で行います。実データやPATH上のbinaryは変更しません。この機能は通常操作の意味を変えないため、検証のためだけにQuintの状態やactionを追加しません。
 
 ## 過去の三軸実装の検証資料
 
