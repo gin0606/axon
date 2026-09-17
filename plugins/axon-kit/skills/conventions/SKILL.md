@@ -28,4 +28,4 @@ code表記でない英単語はAxonの操作を指さない。field名、記録�
 
 構文の不確実さは保存先不要のhelpで解決する。保存情報は `axon list`・`axon show --details`・`axon log`・`axon note` で調べ、外部条件の評価が必要なときだけ `axon proposals|tasks` を使う。任意recorderは認証・lock・生存確認ではない。
 
-要求した作用、完全ID、保存結果（適用済み・未適用・部分適用・不明）、最終状態と関係への影響を返す。保存結果は`axon show --details`・log・Noteの読み取りで確認できるため、確認のためだけの追加mutationはしない。
+要求した作用、完全ID、保存結果（適用済み・未適用・部分適用・不明）、最終状態と関係への影響を返す。保存結果は読み取り操作と保全したartifactの照合で確認できるため、確認のためだけの追加mutationはしない。

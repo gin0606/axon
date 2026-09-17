@@ -47,4 +47,4 @@ description: Axonの操作契約の上に、自律実行とユーザー判断の
 
 入力と現在状態を照合でき、同じ効果へ収束する再試行は自律して行う。結果不明、競合、重複作成の可能性、rollback、補償操作、別の最終状態が必要な場合は停止し、観測済みの状態と必要な判断を示す。
 
-active backendの保存先へのmutationだけがsandboxに拒否された場合は、そのmutation commandだけをホストの許可機構で再実行する。特にGit内のSQLiteはcommon Git directoryの親の`.axon/axon.db`を共有し、current worktree外への書込みになり得る。file backendはcurrent worktreeのGit管理対象になり得る`.axon/state.jsonl`を変更するため、Axon操作の権限をGitのstage、commit、merge、破棄の権限へ広げず、変更artifactを呼び出し元へ返す。読み取りcommandや他のprogramまで権限を広げない。再実行できなければ観測できた適用範囲を返す。`Result unknown`は成功でも未適用でもないため、不明な保存結果を未反映と断定しない。
+active backendの保存先へのmutationだけがsandboxに拒否された場合は、そのmutation commandだけをホストの許可機構で再実行する。特にGit内のSQLiteはcommon Git directoryの親の`.axon/axon.db`を共有し、current worktree外への書込みになり得る。file backendはcurrent worktreeのGit管理対象になり得る`.axon/state.jsonl`を変更するため、Axon操作の権限をGitのstage、commit、merge、破棄の権限へ広げず、変更artifactを呼び出し元へ返す。別worktreeの未統合snapshotや未調整の実作業はcurrent worktreeから観測できない。読み取りcommandや他のprogramまで権限を広げない。再実行できなければ観測できた適用範囲を返す。`Result unknown`は成功でも未適用でもないため、不明な保存結果を未反映と断定しない。
