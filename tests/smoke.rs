@@ -1149,6 +1149,7 @@ fn without_recorder(command: &mut Command) -> &mut Command {
         "CODEX_SANDBOX",
         "CLAUDECODE",
         "CLAUDE_CODE",
+        "CLAUDE_CODE_SESSION_ID",
         "AI_AGENT",
         "USER",
     ] {
@@ -1234,15 +1235,64 @@ fn non_utf8_recorder_environment_does_not_block_writes() {
     success(
         without_recorder(&mut f.command())
             .env("AXON_ACTOR", "custom")
-            .env("AXON_SESSION_ID", invalid)
+            .env("AXON_SESSION_ID", &invalid)
             .args(["note", "add", id, "-m", "still saved"])
             .output()
             .unwrap(),
     );
+    success(
+        without_recorder(&mut f.command())
+            .env("CLAUDECODE", "1")
+            .env("CLAUDE_CODE_SESSION_ID", invalid)
+            .args(["note", "add", id, "-m", "saved from claude code"])
+            .output()
+            .unwrap(),
+    );
     assert!(f.ok(&["log", id, "--recorder-details"]).contains("—"));
+    let notes = f.ok(&["note", "list", id, "--recorder-details"]);
+    assert!(notes.contains("custom  data: {}"));
+    assert!(notes.contains("claude-code  data: {}"));
+}
+
+#[test]
+fn claude_code_session_is_recorded_when_available() {
+    let f = Fixture::new();
+    f.init();
+    let claude = |f: &Fixture| {
+        let mut command = f.command();
+        without_recorder(&mut command).env("CLAUDECODE", "1");
+        command
+    };
+    let created = success(
+        claude(&f)
+            .env("CLAUDE_CODE_SESSION_ID", "claude-session")
+            .args(["capture", "--accept", "--title", "claude provenance"])
+            .output()
+            .unwrap(),
+    );
+    let id = created.split_whitespace().next().unwrap();
+    success(
+        claude(&f)
+            .env("CLAUDE_CODE_SESSION_ID", "claude-session")
+            .args(["note", "add", id, "-m", "with session"])
+            .output()
+            .unwrap(),
+    );
+    success(claude(&f).args(["start", id]).output().unwrap());
+    let normal = f.ok(&["log", id]);
+    assert!(normal.contains("claude-code"));
+    assert!(!normal.contains("claude-session"));
+    let details = f.ok(&["log", id, "--recorder-details"]);
+    assert_eq!(
+        details
+            .matches(r#"claude-code  data: {"session_id":"claude-session"}"#)
+            .count(),
+        1
+    );
+    assert_eq!(details.matches("claude-code  data: {}").count(), 1);
     assert!(
         f.ok(&["note", "list", id, "--recorder-details"])
-            .contains("custom  data: {}")
+            .contains(r#"claude-code  data: {"session_id":"claude-session"}"#)
     );
 }
 

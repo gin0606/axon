@@ -22,7 +22,7 @@ fn detect_with(mut read: impl FnMut(&str) -> Option<String>) -> Option<Recorder>
     } else if get("CODEX_SANDBOX").is_some() {
         ("codex".into(), None)
     } else if get("CLAUDECODE").is_some() || get("CLAUDE_CODE").is_some() {
-        ("claude-code".into(), None)
+        ("claude-code".into(), get("CLAUDE_CODE_SESSION_ID"))
     } else if let Some(actor) = get("AI_AGENT") {
         (actor, None)
     } else {
@@ -72,6 +72,34 @@ mod tests {
         assert!(r.data.is_empty());
         let r = detect(&[("AXON_ACTOR", "custom"), ("AXON_SESSION_ID", "session")]).unwrap();
         assert_eq!(r.data["session_id"], "session");
+    }
+
+    #[test]
+    fn claude_code_session_needs_claude_code_detection() {
+        for key in ["CLAUDECODE", "CLAUDE_CODE"] {
+            let r = detect(&[(key, "1"), ("CLAUDE_CODE_SESSION_ID", "session")]).unwrap();
+            assert_eq!(r.actor, "claude-code");
+            assert_eq!(r.data["session_id"], "session");
+        }
+        let r = detect(&[("CLAUDECODE", "1"), ("CLAUDE_CODE_SESSION_ID", " ")]).unwrap();
+        assert_eq!(r.actor, "claude-code");
+        assert!(r.data.is_empty());
+        let r = detect(&[("CLAUDE_CODE_SESSION_ID", "session"), ("USER", "human")]).unwrap();
+        assert_eq!(r.actor, "human");
+        assert!(r.data.is_empty());
+        for (key, value, actor, session) in [
+            ("AXON_ACTOR", "human", "human", None),
+            ("CODEX_THREAD_ID", "thread", "codex", Some("thread")),
+        ] {
+            let r = detect(&[
+                (key, value),
+                ("CLAUDECODE", "1"),
+                ("CLAUDE_CODE_SESSION_ID", "session"),
+            ])
+            .unwrap();
+            assert_eq!(r.actor, actor);
+            assert_eq!(r.data.get("session_id").map(String::as_str), session);
+        }
     }
 
     #[test]
