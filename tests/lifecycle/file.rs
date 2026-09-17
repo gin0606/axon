@@ -4,6 +4,69 @@ use axon::{file, file_merge, location::Location};
 fn init_file(f: &Fixture) {
     f.ok(&["init", "t", "--backend", "file"]);
 }
+
+fn file_init_output(f: &Fixture, gitignore: &str, attributes: &str) -> String {
+    format!(
+        "Initialized file at {}\n{gitignore}: {}\n{attributes}: {}\n",
+        f.0.join(".axon/state.jsonl").display(),
+        f.0.join(".axon/.gitignore").display(),
+        f.0.join(".gitattributes").display(),
+    )
+}
+
+#[test]
+fn init_reports_git_integration_changes_for_each_backend_and_environment() {
+    let created_in_git = Fixture::new();
+    git(&created_in_git.0, &["init", "-q"]);
+    assert_eq!(
+        created_in_git.ok(&["init", "t", "--backend", "file"]),
+        file_init_output(&created_in_git, "Created", "Created")
+    );
+
+    let appended = Fixture::new();
+    fs::write(appended.0.join(".gitattributes"), "*.txt text\n").unwrap();
+    assert_eq!(
+        appended.ok(&["init", "t", "--backend", "file"]),
+        file_init_output(&appended, "Created", "Appended")
+    );
+    assert_eq!(
+        fs::read_to_string(appended.0.join(".gitattributes")).unwrap(),
+        "*.txt text\n/.axon/state.jsonl merge=axon\n"
+    );
+
+    let unchanged = Fixture::new();
+    fs::create_dir(unchanged.0.join(".axon")).unwrap();
+    let ignore = b"*\n!.gitignore\n!state.jsonl\n";
+    let attributes = b"*.txt text\n/.axon/state.jsonl merge=axon\n";
+    fs::write(unchanged.0.join(".axon/.gitignore"), ignore).unwrap();
+    fs::write(unchanged.0.join(".gitattributes"), attributes).unwrap();
+    assert_eq!(
+        unchanged.ok(&["init", "t", "--backend", "file"]),
+        file_init_output(&unchanged, "Unchanged", "Unchanged")
+    );
+    assert_eq!(
+        fs::read(unchanged.0.join(".axon/.gitignore")).unwrap(),
+        ignore
+    );
+    assert_eq!(
+        fs::read(unchanged.0.join(".gitattributes")).unwrap(),
+        attributes
+    );
+
+    let created_outside_git = Fixture::new();
+    assert_eq!(
+        created_outside_git.ok(&["init", "t", "--backend", "file"]),
+        file_init_output(&created_outside_git, "Created", "Created")
+    );
+
+    let sqlite = Fixture::new();
+    assert_eq!(
+        sqlite.ok(&["init", "t"]),
+        format!("Initialized SQLite at {}\n", sqlite.db().display())
+    );
+    assert!(!sqlite.0.join(".axon/.gitignore").exists());
+    assert!(!sqlite.0.join(".gitattributes").exists());
+}
 fn state(f: &Fixture) -> PathBuf {
     f.0.join(".axon/state.jsonl")
 }

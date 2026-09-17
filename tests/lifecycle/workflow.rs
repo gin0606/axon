@@ -188,4 +188,16 @@ fn help_exposes_single_lifecycle_commands() {
     ] {
         f.ok(&args);
     }
+    let init_help = f.ok(&["init", "--help"]);
+    for text in [
+        "SQLite creates only .axon/axon.db",
+        "does not change Git integration files",
+        "File creates .axon/state.jsonl",
+        ".axon/.gitignore",
+        "root .gitattributes",
+        "preserving unrelated lines",
+        "does not stage or commit",
+    ] {
+        assert!(init_help.contains(text), "missing from init help: {text}");
+    }
 }

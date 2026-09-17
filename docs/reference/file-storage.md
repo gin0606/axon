@@ -48,6 +48,7 @@ root の `.gitattributes`:
 親/global ignore が `.axon/` 全体を隠しても変更・拒否しない。
 実際に追跡するかは利用者の責任で、init は Git driver 登録、stage、commit を行わない。
 既に追跡された file は ignore で追跡解除されない。
+成功時は state path の後に `.axon/.gitignore` と `.gitattributes` の絶対 path を毎回列挙し、保存処理の結果を `Created:`、`Appended:`、`Unchanged:` で示す。SQLite init の成功出力は正本の path だけを示す。
 
 ### Git で共有・公開される情報
 

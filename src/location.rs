@@ -17,6 +17,22 @@ pub struct Location {
     pub sqlite: PathBuf,
     common: Option<PathBuf>,
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IntegrationChange {
+    Created,
+    Appended,
+    Unchanged,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IntegrationFile {
+    pub path: PathBuf,
+    pub change: IntegrationChange,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum InitResult {
+    Sqlite,
+    File(Vec<IntegrationFile>),
+}
 pub(crate) fn present(path: &Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
@@ -177,10 +193,7 @@ impl Location {
             None => Err(invalid("not initialized; run axon init")),
         }
     }
-    pub fn init(&self, prefix: &str) -> Result<()> {
-        self.init_backend(prefix, false)
-    }
-    pub fn init_backend(&self, prefix: &str, file_backend: bool) -> Result<()> {
+    pub fn init_backend(&self, prefix: &str, file_backend: bool) -> Result<InitResult> {
         sqlite::validate_prefix(prefix)?;
         let destination = if file_backend {
             self.root.join(".axon/state.jsonl")
@@ -210,7 +223,7 @@ impl Location {
         }
         let pending = directory.join("init.pending");
         let temp = directory.join(format!(".axon-{:032x}.tmp", rand::random::<u128>()));
-        let result = (|| -> Result<()> {
+        let result = (|| -> Result<InitResult> {
             let mut marker = OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -231,8 +244,8 @@ impl Location {
             fs::hard_link(&temp, &destination)?;
             File::open(directory)?.sync_all()?;
             fs::remove_file(&temp)?;
-            if file_backend {
-                ensure_file_integration(&self.root)?;
+            let result = if file_backend {
+                let integration = ensure_file_integration(&self.root)?;
                 if self.common.is_some() {
                     let attributes = git_command(&self.root)
                         .args(["check-attr", "-z", "merge", "--", ".axon/state.jsonl"])
@@ -245,10 +258,13 @@ impl Location {
                         ));
                     }
                 }
-            }
+                InitResult::File(integration)
+            } else {
+                InitResult::Sqlite
+            };
             fs::remove_file(&pending)?;
             File::open(directory)?.sync_all()?;
-            Ok(())
+            Ok(result)
         })();
         result.map_err(|e| invalid(format!("initialization failed at {}: {e}; result may be partial; retain {}, {} and {} for inspection", directory.display(), pending.display(), temp.display(), destination.display())))
     }
@@ -282,8 +298,8 @@ impl Store {
         }
     }
 }
-fn ensure_file_integration(root: &Path) -> Result<()> {
-    for (path, rules) in [
+fn ensure_file_integration(root: &Path) -> Result<Vec<IntegrationFile>> {
+    [
         (
             root.join(".axon/.gitignore"),
             &["*", "!.gitignore", "!state.jsonl"][..],
@@ -292,12 +308,15 @@ fn ensure_file_integration(root: &Path) -> Result<()> {
             root.join(".gitattributes"),
             &["/.axon/state.jsonl merge=axon"][..],
         ),
-    ] {
-        append_rules(&path, rules)?;
-    }
-    Ok(())
+    ]
+    .into_iter()
+    .map(|(path, rules)| {
+        let change = append_rules(&path, rules)?;
+        Ok(IntegrationFile { path, change })
+    })
+    .collect()
 }
-fn append_rules(path: &Path, rules: &[&str]) -> Result<()> {
+fn append_rules(path: &Path, rules: &[&str]) -> Result<IntegrationChange> {
     let existed = present(path)?;
     if existed && !fs::symlink_metadata(path)?.file_type().is_file() {
         return Err(invalid(format!("{} is not a regular file", path.display())));
@@ -361,10 +380,12 @@ fn append_rules(path: &Path, rules: &[&str]) -> Result<()> {
         bytes.push(b'\n');
     }
     if bytes == before {
-        return Ok(());
+        return Ok(IntegrationChange::Unchanged);
     }
     if !existed {
-        return file::publish(path, None, &bytes, || Ok(()));
+        file::publish(path, None, &bytes, || Ok(()))?;
+        return Ok(IntegrationChange::Created);
     }
-    file::publish(path, Some(&before), &bytes, || Ok(()))
+    file::publish(path, Some(&before), &bytes, || Ok(()))?;
+    Ok(IntegrationChange::Appended)
 }
