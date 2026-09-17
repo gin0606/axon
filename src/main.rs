@@ -7,12 +7,12 @@ use axon::{
     Result,
     lifecycle::*,
     location::{InitResult, IntegrationChange, IntegrationFile, Location},
-    sqlite,
+    read, sqlite,
 };
 use chrono::Utc;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     io::{Read, Write},
     path::PathBuf,
     time::Duration,
@@ -361,111 +361,67 @@ fn context() -> Context {
         }),
     }
 }
-fn row(snapshot: &Snapshot, entity: &Entity) -> String {
+fn status_label(status: read::Status) -> &'static str {
+    match status {
+        read::Status::Undecided => "Undecided",
+        read::Status::Ready => "Ready",
+        read::Status::Blocked => "Blocked",
+        read::Status::InProgressBlocked => "InProgress+Blocked",
+        read::Status::InProgress => "InProgress",
+        read::Status::Completed => "Completed",
+        read::Status::Cancelled => "Cancelled",
+    }
+}
+fn row(value: &read::Row<'_>) -> String {
+    let entity = value.entity;
     format!(
         "{}  {}  {}  {}\n",
         display::identity(&entity.id),
         display::muted(format!("{:?}", entity.kind)),
-        display::situation(status(snapshot, entity)),
+        display::situation(status_label(value.status)),
         display::human_text(&entity.current.title).replace('\n', "\\n")
     )
 }
-fn status(snapshot: &Snapshot, entity: &Entity) -> &'static str {
-    match entity.current.lifecycle {
-        Lifecycle::Undecided => "Undecided",
-        Lifecycle::NotStarted
-            if snapshot
-                .check_operation(&entity.id, Operation::Start)
-                .is_ok() =>
-        {
-            "Ready"
-        }
-        Lifecycle::NotStarted => "Blocked",
-        Lifecycle::InProgress
-            if entity.current.dependencies.iter().any(|id| {
-                snapshot
-                    .entity(id)
-                    .is_ok_and(|e| e.current.lifecycle != Lifecycle::Completed)
-            }) =>
-        {
-            "InProgress+Blocked"
-        }
-        Lifecycle::InProgress => "InProgress",
-        Lifecycle::Completed => "Completed",
-        Lifecycle::Cancelled => "Cancelled",
-    }
-}
-fn sorted(mut entities: Vec<&Entity>) -> Vec<&Entity> {
-    entities.sort_by(|a, b| (&a.created_at, &a.id).cmp(&(&b.created_at, &b.id)));
-    entities
-}
-fn show(snapshot: &Snapshot, entity: &Entity, details: bool) -> Result<String> {
-    let mut out = row(snapshot, entity);
-    let notes = snapshot.notes(&entity.id)?.len();
+fn show(value: &read::Detail<'_>, details: bool) -> String {
+    let entity = value.row.entity;
+    let mut out = row(&value.row);
+    let notes = value.note_count;
     if notes > 0 {
         out.push_str(&format!("{notes} notes\n"));
     }
-    let parent = entity
-        .current
-        .parent
-        .as_ref()
-        .map(|id| snapshot.entity(id))
-        .transpose()?;
     let parent_wait = !details
-        && entity.current.lifecycle == Lifecycle::NotStarted
-        && parent.is_some_and(|e| e.current.lifecycle != Lifecycle::InProgress);
-    if let Some(parent) = parent.filter(|_| !parent_wait) {
+        && value
+            .prerequisites
+            .as_ref()
+            .is_some_and(|p| p.parent.is_some());
+    if let Some(parent) = value.parent.filter(|_| !parent_wait) {
         out.push_str(&format!(
             "Parent: {}  {}\n",
             display::identity(&parent.id),
             display::human_text(&parent.current.title)
         ));
     }
-    let dependencies = entity
-        .current
-        .dependencies
-        .iter()
-        .map(|id| snapshot.entity(id))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    if !details
-        && matches!(
-            entity.current.lifecycle,
-            Lifecycle::NotStarted | Lifecycle::InProgress
-        )
-    {
-        let unmet: Vec<_> = dependencies
-            .into_iter()
-            .filter(|e| e.current.lifecycle != Lifecycle::Completed)
-            .collect();
-        if parent_wait || !unmet.is_empty() {
-            out.push_str(&format!(
-                "\n{}\n",
-                display::heading(if entity.current.lifecycle == Lifecycle::NotStarted {
-                    "Required to start"
-                } else {
-                    "Required to complete"
-                })
-            ));
-            if parent_wait {
-                out.push_str(&format!(
-                    "Parent must start: {}",
-                    row(snapshot, parent.unwrap())
-                ));
-            }
-            for dependency in sorted(unmet) {
-                out.push_str(&format!(
-                    "Dependency must complete: {}",
-                    row(snapshot, dependency)
-                ));
-            }
+    if !details && let Some(prerequisites) = &value.prerequisites {
+        out.push_str(&format!(
+            "\n{}\n",
+            display::heading(match prerequisites.operation {
+                read::PrerequisiteOperation::Start => "Required to start",
+                read::PrerequisiteOperation::Complete => "Required to complete",
+            })
+        ));
+        if let Some(parent) = &prerequisites.parent {
+            out.push_str(&format!("Parent must start: {}", row(parent)));
+        }
+        for dependency in &prerequisites.dependencies {
+            out.push_str(&format!("Dependency must complete: {}", row(dependency)));
         }
     }
     if details {
         let lifecycle = format!("{:?}", entity.current.lifecycle);
-        if status(snapshot, entity) != lifecycle {
+        if status_label(value.row.status) != lifecycle {
             out.push_str(&format!("{} {lifecycle}\n", display::muted("Lifecycle:")));
         }
-        if parent.is_none() {
+        if value.parent.is_none() {
             out.push_str("Parent: (none)\n");
         }
         out.push_str(&format!(
@@ -478,26 +434,12 @@ fn show(snapshot: &Snapshot, entity: &Entity, details: bool) -> Result<String> {
                 .map(display::human_text)
                 .unwrap_or_else(|| "(none)".into())
         ));
-        let dependencies = sorted(
-            entity
-                .current
-                .dependencies
-                .iter()
-                .map(|id| snapshot.entity(id))
-                .collect::<std::result::Result<Vec<_>, _>>()?,
-        );
-        let dependents = sorted(
-            snapshot
-                .entities()
-                .filter(|e| e.current.dependencies.contains(&entity.id))
-                .collect(),
-        );
         for (label, related) in [
             (
                 "Dependencies (must be Completed to start or complete):",
-                dependencies,
+                &value.dependencies,
             ),
-            ("Dependents:", dependents),
+            ("Dependents:", &value.dependents),
         ] {
             out.push_str(&format!(
                 "\n{}{}\n",
@@ -505,68 +447,40 @@ fn show(snapshot: &Snapshot, entity: &Entity, details: bool) -> Result<String> {
                 if related.is_empty() { " (none)" } else { "" }
             ));
             for other in related {
-                out.push_str(&row(snapshot, other));
+                out.push_str(&row(other));
             }
         }
     }
     out.push('\n');
     out.push_str(&display::human_text(&entity.current.description));
     out.push('\n');
-    if entity.kind == Kind::Group {
-        let mut children_by_parent: BTreeMap<&EntityId, Vec<&Entity>> = BTreeMap::new();
-        for child in snapshot.entities() {
-            if let Some(parent) = &child.current.parent {
-                children_by_parent.entry(parent).or_default().push(child);
-            }
-        }
-        let children = sorted(children_by_parent.remove(&entity.id).unwrap_or_default());
-        let count = children.len();
-        let mut pending = children
-            .into_iter()
-            .enumerate()
-            .rev()
-            .map(|(i, child)| (child, String::new(), i + 1 == count))
-            .collect::<Vec<_>>();
-        let mut tree = String::new();
-        let mut total = 0;
-        let mut completed = 0;
-        let mut cancelled = 0;
-        while let Some((child, prefix, last)) = pending.pop() {
-            total += 1;
-            completed += usize::from(child.current.lifecycle == Lifecycle::Completed);
-            cancelled += usize::from(child.current.lifecycle == Lifecycle::Cancelled);
-            tree.push_str(&prefix);
-            tree.push_str(if last { "└── " } else { "├── " });
-            tree.push_str(&row(snapshot, child));
-            if child.kind == Kind::Group {
-                let prefix = format!("{prefix}{}", if last { "    " } else { "│   " });
-                let children = sorted(children_by_parent.remove(&child.id).unwrap_or_default());
-                let count = children.len();
-                pending.extend(
-                    children
-                        .into_iter()
-                        .enumerate()
-                        .rev()
-                        .map(|(i, child)| (child, prefix.clone(), i + 1 == count)),
-                );
-            }
-        }
+    if let Some(descendants) = &value.descendants {
+        let total = descendants.entries.len();
+        let completed = descendants.completed;
+        let cancelled = descendants.cancelled;
         out.push_str(&format!(
             "\nDescendants: {}/{total} terminal ({completed} completed, {cancelled} cancelled)\n",
-            completed + cancelled,
+            completed + cancelled
         ));
-        out.push_str(&tree);
-        if snapshot
-            .check_operation(&entity.id, Operation::Complete)
-            .is_ok()
-        {
+        for child in &descendants.entries {
+            for last in &child.ancestor_last {
+                out.push_str(if *last { "    " } else { "│   " });
+            }
+            out.push_str(if child.last {
+                "└── "
+            } else {
+                "├── "
+            });
+            out.push_str(&row(&child.row));
+        }
+        if descendants.awaiting_confirmation {
             out.push_str(&format!(
                 "{}\n",
                 display::heading("Awaiting final confirmation")
             ));
         }
     }
-    Ok(out)
+    out
 }
 fn actor(context: &Context) -> String {
     context
@@ -607,19 +521,10 @@ fn output(text: String, saved: bool) -> Output {
         diagnostic: String::new(),
     }
 }
-fn branch_boundary<'a>(
-    snapshot: &Snapshot,
-    previous: &mut Option<&'a RecordId>,
-    next: &'a RecordId,
-    text: &mut String,
-) -> Result<()> {
-    if let Some(before) = previous
-        && !snapshot.precedes(before, next)?
-    {
+fn branch_boundary(concurrent: bool, text: &mut String) {
+    if concurrent {
         text.push_str("Concurrent branch (not ordered after the preceding record)\n");
     }
-    *previous = Some(next);
-    Ok(())
 }
 fn run(command: Command) -> Result<Output> {
     match command {
@@ -822,7 +727,7 @@ fn run(command: Command) -> Result<Output> {
                 }
                 Command::Note {
                     command: Notes::Search { query },
-                } => search_notes(&snapshot, &query)?,
+                } => search_notes(&read::search_notes(&snapshot, &query)?),
                 Command::Proposals(ref options) | Command::Tasks(ref options) => {
                     let kind = if matches!(command, Command::Proposals(_)) {
                         CandidateList::Proposals
@@ -837,7 +742,7 @@ fn run(command: Command) -> Result<Output> {
                             options.condition_timeout,
                         )
                     };
-                    candidates_filtered(
+                    read::candidates(
                         &snapshot,
                         kind,
                         |e| options.selection.matches(e),
@@ -846,22 +751,24 @@ fn run(command: Command) -> Result<Output> {
                                 .run_command(entity, script)
                                 .map_err(|e| axon::Error::Invalid(e.to_string()))
                         },
+                        options.selection.search.as_deref(),
                     )?
                     .into_iter()
-                    .map(|e| list_row(&snapshot, e, &options.selection))
+                    .map(|e| list_row(&e, options.selection.search.is_some()))
                     .collect()
                 }
-                Command::List(options) => {
-                    sorted(snapshot.entities().filter(|e| options.matches(e)).collect())
-                        .into_iter()
-                        .map(|e| list_row(&snapshot, e, &options.selection))
-                        .collect()
-                }
-                Command::Show { id: value, details } => show(
+                Command::List(options) => read::list(
                     &snapshot,
-                    snapshot.entity(&resolve(&snapshot, &value)?)?,
+                    |e| options.matches(e),
+                    options.selection.search.as_deref(),
+                )
+                .into_iter()
+                .map(|e| list_row(&e, options.selection.search.is_some()))
+                .collect(),
+                Command::Show { id: value, details } => show(
+                    &read::detail(&snapshot, &resolve(&snapshot, &value)?)?,
                     details,
-                )?,
+                ),
                 Command::Note {
                     command:
                         Notes::Show {
@@ -884,9 +791,9 @@ fn run(command: Command) -> Result<Output> {
                     recorder_details,
                 } => {
                     let mut text = String::new();
-                    let mut previous = None;
-                    for record in snapshot.history(&resolve(&snapshot, &value)?)? {
-                        branch_boundary(&snapshot, &mut previous, &record.id, &mut text)?;
+                    for entry in read::history(&snapshot, &resolve(&snapshot, &value)?)? {
+                        branch_boundary(entry.concurrent_with_previous, &mut text);
+                        let record = entry.record;
                         let description = match &record.event {
                             StateEvent::Created { initial, .. } => format!("Created: {initial:?}"),
                             StateEvent::Transition {
@@ -930,10 +837,9 @@ fn run(command: Command) -> Result<Output> {
                         },
                 } => {
                     let mut text = String::new();
-                    let mut previous = None;
-                    for note in snapshot.notes(&resolve(&snapshot, &value)?)? {
-                        branch_boundary(&snapshot, &mut previous, &note.id, &mut text)?;
-                        text.push_str(&format_note(note, recorder_details));
+                    for entry in read::notes(&snapshot, &resolve(&snapshot, &value)?)? {
+                        branch_boundary(entry.concurrent_with_previous, &mut text);
+                        text.push_str(&format_note(entry.record, recorder_details));
                     }
                     text
                 }
@@ -1308,7 +1214,7 @@ fn declaration_changes(
         }
         out.push_str(&format!(
             "  Situation after: {} (conditions not evaluated)\n",
-            status(after, entity)
+            status_label(read::status(after, entity))
         ));
     }
     if declaration.records().next().is_none() {

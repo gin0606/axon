@@ -42,7 +42,7 @@ pub struct Selection {
     kind: Option<EntityKind>,
     /// Literal, case-sensitive text in current title or description; AND with other filters. Search Note bodies with axon note search
     #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
-    search: Option<String>,
+    pub search: Option<String>,
 }
 impl Selection {
     pub fn matches(&self, entity: &Entity) -> bool {
@@ -50,7 +50,7 @@ impl Selection {
             && self
                 .search
                 .as_ref()
-                .is_none_or(|query| !matches_in(entity, query).is_empty())
+                .is_none_or(|query| !read::matches_in(entity, query).is_empty())
     }
 }
 #[derive(Args)]
@@ -75,23 +75,21 @@ impl ListOptions {
                 .is_none_or(|terminal| terminal != entity.current.lifecycle.editable())
     }
 }
-fn matches_in(entity: &Entity, query: &str) -> Vec<String> {
-    let mut locations = Vec::new();
-    if entity.current.title.contains(query) {
-        locations.push("Title".into());
-    }
-    if entity.current.description.contains(query) {
-        locations.push("Description".into());
-    }
-    locations
-}
-pub fn list_row(snapshot: &Snapshot, entity: &Entity, selection: &Selection) -> String {
-    let mut text = row(snapshot, entity);
-    if let Some(query) = &selection.search {
+pub fn list_row(value: &read::Row<'_>, searched: bool) -> String {
+    let mut text = row(value);
+    if searched {
         text.push_str(&format!(
             "  {} {}\n",
             display::muted("Matched:"),
-            matches_in(entity, query).join(", ")
+            value
+                .matches
+                .iter()
+                .map(|location| match location {
+                    read::MatchLocation::Title => "Title",
+                    read::MatchLocation::Description => "Description",
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     text
@@ -301,30 +299,20 @@ pub fn render_root_help() -> String {
     text
 }
 
-pub fn search_notes(snapshot: &Snapshot, query: &str) -> Result<String> {
-    let mut grouped = BTreeMap::<_, Vec<_>>::new();
-    for note in snapshot.all_notes()? {
-        if let Some(position) = note.body.find(query) {
-            grouped
-                .entry(&note.entity)
-                .or_default()
-                .push((note, position));
-        }
-    }
+pub fn search_notes(matches: &[read::NoteMatch<'_>]) -> String {
     let mut text = String::new();
-    for entity in sorted(snapshot.entities().collect()) {
-        for (note, position) in grouped.remove(&entity.id).unwrap_or_default() {
-            text.push_str(&format!(
-                "{}  {}  {}  {} {}\n",
-                display::identity(&entity.id),
-                display::identity(&note.id),
-                display::muted(display::timestamp(&note.context.at)),
-                display::muted("Excerpt:"),
-                note_excerpt(&note.body, position, query.len()),
-            ));
-        }
+    for found in matches {
+        let note = found.note;
+        text.push_str(&format!(
+            "{}  {}  {}  {} {}\n",
+            display::identity(&note.entity),
+            display::identity(&note.id),
+            display::muted(display::timestamp(&note.context.at)),
+            display::muted("Excerpt:"),
+            note_excerpt(&note.body, found.range.start, found.range.len())
+        ));
     }
-    Ok(text)
+    text
 }
 
 fn note_excerpt(body: &str, position: usize, query_len: usize) -> String {
