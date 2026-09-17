@@ -3,7 +3,7 @@
 設計理由、採らなかった案、導入時の検討を残す。
 現在の契約は [状態モデル](../reference/state-model.md)、
 [情報モデル](../reference/information-model.md)、[CLI](../reference/cli.md)、
-保存と型境界は [アーキテクチャ](../development/architecture.md) を参照する。
+保存と型境界は [三軸 CLI のアーキテクチャ](three-axis-architecture.md) を参照する。
 
 以下は初期の軸の検討から Group・情報モデル導入までに蓄積された記録を、
 2026-09-05 の文書再編時に整理したもの。各検討の実施日は記録されていない。

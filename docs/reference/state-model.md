@@ -65,7 +65,7 @@ Group が非浮上になると activation gate が閉じ、子孫は active scop
 
 Issue と Group は同じ公開 ID namespace を使い、kind を ID に埋め込まない。
 ID の表記・解決は [CLI 契約](cli.md)、生成方法と actor の取得は
-[アーキテクチャ](../development/architecture.md) で定める。
+[三軸 CLI のアーキテクチャ](../design/three-axis-architecture.md) で定める。
 
 claim は InProgress のときだけ存在し、独立した予約状態を持たない。
 Group の claim は子孫を lock せず、Group と子孫を別 actor が同時に claim できる。
