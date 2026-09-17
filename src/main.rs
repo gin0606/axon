@@ -4,9 +4,10 @@ mod display;
 use cli_support::*;
 
 use axon::{
+    Result,
     lifecycle::*,
     location::{InitResult, IntegrationChange, IntegrationFile, Location},
-    sqlite::{self, Result},
+    sqlite,
 };
 use chrono::Utc;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
@@ -252,7 +253,7 @@ impl Body {
                 Ok(Some(text))
             }
             Some(path) => Ok(Some(std::fs::read_to_string(&path).map_err(|e| {
-                sqlite::Error::Invalid(format!("cannot read text file {}: {e}", path.display()))
+                axon::Error::Invalid(format!("cannot read text file {}: {e}", path.display()))
             })?)),
             None => Ok(self.description),
         }
@@ -631,7 +632,7 @@ fn run(command: Command) -> Result<Output> {
                 }
                 Some(Docs::Declaration { example: true }) => axon::declaration::example()
                     .serialize(&sqlite::empty())
-                    .map_err(|e| sqlite::Error::Invalid(e.to_string()))?,
+                    .map_err(|e| axon::Error::Invalid(e.to_string()))?,
             };
             return Ok(output(text, false));
         }
@@ -661,7 +662,7 @@ fn run(command: Command) -> Result<Output> {
             .as_deref()
             .or_else(|| default_root.file_name().and_then(|n| n.to_str()))
             .ok_or_else(|| {
-                sqlite::Error::Invalid("cannot derive an ID prefix; pass axon init PREFIX".into())
+                axon::Error::Invalid("cannot derive an ID prefix; pass axon init PREFIX".into())
             })?;
         let text = match location.init_backend(prefix, matches!(backend, Backend::File))? {
             InitResult::Sqlite => format!(
@@ -736,9 +737,9 @@ fn run(command: Command) -> Result<Output> {
             };
             let bytes = std::fs::read(file)?;
             let input = std::str::from_utf8(&bytes)
-                .map_err(|e| sqlite::Error::Invalid(format!("Declaration schema: {e}")))?;
-            let mut declaration = axon::declaration::parse(input)
-                .map_err(|e| sqlite::Error::Invalid(e.to_string()))?;
+                .map_err(|e| axon::Error::Invalid(format!("Declaration schema: {e}")))?;
+            let mut declaration =
+                axon::declaration::parse(input).map_err(|e| axon::Error::Invalid(e.to_string()))?;
             let publication = if matches!(&command, Import::Prepare { .. }) {
                 Publication::Declaration
             } else {
@@ -749,10 +750,10 @@ fn run(command: Command) -> Result<Output> {
                 Import::Prepare { ref file } => {
                     declaration
                         .prepare(&snapshot, &prefix)
-                        .map_err(|e| sqlite::Error::Invalid(e.to_string()))?;
+                        .map_err(|e| axon::Error::Invalid(e.to_string()))?;
                     let text = declaration
                         .serialize(&snapshot)
-                        .map_err(|e| sqlite::Error::Invalid(e.to_string()))?;
+                        .map_err(|e| axon::Error::Invalid(e.to_string()))?;
                     axon::declaration_file::rewrite(file, &bytes, text.as_bytes())?;
                     format!(
                         "Prepared {}. Storage unchanged.\n{}",
@@ -770,7 +771,7 @@ fn run(command: Command) -> Result<Output> {
                                 recorder: None,
                             },
                         )
-                        .map_err(|e| sqlite::Error::Invalid(e.to_string()))?;
+                        .map_err(|e| axon::Error::Invalid(e.to_string()))?;
                     declaration_changes(
                         &declaration,
                         &snapshot,
@@ -817,7 +818,7 @@ fn run(command: Command) -> Result<Output> {
                         .collect::<Result<Vec<_>>>()?;
                     axon::declaration::export(&snapshot, &selectors)
                         .and_then(|d| d.serialize(&snapshot))
-                        .map_err(|e| sqlite::Error::Invalid(e.to_string()))?
+                        .map_err(|e| axon::Error::Invalid(e.to_string()))?
                 }
                 Command::Note {
                     command: Notes::Search { query },
@@ -843,7 +844,7 @@ fn run(command: Command) -> Result<Output> {
                         |entity, script| {
                             evaluation
                                 .run_command(entity, script)
-                                .map_err(|e| sqlite::Error::Invalid(e.to_string()))
+                                .map_err(|e| axon::Error::Invalid(e.to_string()))
                         },
                     )?
                     .into_iter()
@@ -872,7 +873,7 @@ fn run(command: Command) -> Result<Output> {
                     let entity = resolve(&snapshot, &id)?;
                     let note = snapshot.note(&note_id.try_into()?)?;
                     if note.entity != entity {
-                        return Err(sqlite::Error::Invalid(
+                        return Err(axon::Error::Invalid(
                             "Note does not belong to the specified Entity".into(),
                         ));
                     }
@@ -957,7 +958,7 @@ fn run(command: Command) -> Result<Output> {
         } => {
             let body = body.read()?;
             if title.is_none() && body.is_none() {
-                return Err(sqlite::Error::Invalid(
+                return Err(axon::Error::Invalid(
                     "write requires --title, --description or --file".into(),
                 ));
             }
@@ -1174,7 +1175,7 @@ fn main() -> std::process::ExitCode {
     } else {
         let command = Cli::parse().command;
         let label = operation_label(&command);
-        run(command).map_err(|error| sqlite::Error::Invalid(format!("{label}: {error}")))
+        run(command).map_err(|error| axon::Error::Invalid(format!("{label}: {error}")))
     };
     match result {
         Ok(output) => {

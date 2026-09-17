@@ -3,25 +3,9 @@ use crate::lifecycle::{self, Snapshot, StoreId};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::{path::Path, time::Duration};
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("{0}")]
-    Invalid(String),
-    #[error("{0}")]
-    PublicationUnknown(String),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error("SQLite: {0}")]
-    Sql(#[from] rusqlite::Error),
-    #[error("Result unknown: SQLite commit failed: {0}; inspect saved state before retrying")]
-    Commit(rusqlite::Error),
-    #[error(transparent)]
-    Core(#[from] lifecycle::Error),
-}
-pub type Result<T> = std::result::Result<T, Error>;
-pub(crate) fn invalid(message: impl Into<String>) -> Error {
-    Error::Invalid(message.into())
-}
+use crate::error::invalid;
+// Preserve the existing adapter API while callers use the shared root exports.
+pub use crate::{Error, Result, validate_prefix};
 const APPLICATION: i64 = 0x41584c43;
 const VERSION: i64 = 1;
 const SCHEMA: &str = "CREATE TABLE lifecycle_store (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), prefix TEXT NOT NULL, snapshot BLOB NOT NULL)";
@@ -129,12 +113,6 @@ fn read(connection: &Connection) -> Result<(String, Snapshot)> {
     )?;
     validate_prefix(&prefix)?;
     Ok((prefix, lifecycle::decode(&bytes)?))
-}
-pub fn validate_prefix(prefix: &str) -> Result<()> {
-    if prefix.is_empty() {
-        return Err(invalid("Entity prefix must not be empty"));
-    }
-    Ok(())
 }
 pub fn empty() -> Snapshot {
     Snapshot::new(StoreId::generate())

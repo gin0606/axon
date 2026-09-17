@@ -106,8 +106,8 @@ pub fn resolve(snapshot: &Snapshot, value: &str) -> Result<EntityId> {
     matches.sort();
     match matches.as_slice() {
         [id] => Ok(id.clone()),
-        [] => Err(sqlite::Error::Invalid(format!("no such Entity: {value}"))),
-        ids => Err(sqlite::Error::Invalid(format!(
+        [] => Err(axon::Error::Invalid(format!("no such Entity: {value}"))),
+        ids => Err(axon::Error::Invalid(format!(
             "ambiguous Entity ID {value}: {}",
             ids.iter()
                 .map(ToString::to_string)
@@ -129,7 +129,7 @@ fn fresh_entity_id_with(
             return Ok(id);
         }
     }
-    Err(sqlite::Error::Invalid(
+    Err(axon::Error::Invalid(
         "could not allocate a unique Entity ID after 100 attempts".into(),
     ))
 }
