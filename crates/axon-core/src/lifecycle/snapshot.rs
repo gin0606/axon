@@ -350,35 +350,36 @@ impl Snapshot {
             current.head = record_id;
             merged.entities.insert(id, current);
         }
+        let (left_children, right_children, merged_children) = (
+            self.children_by_parent(),
+            other.children_by_parent(),
+            merged.children_by_parent(),
+        );
         for entity in merged.entities() {
             if entity.kind == Kind::Group && !entity.current.lifecycle.editable() {
                 let source = match choices[&entity.id] {
-                    Side::Left => self,
-                    Side::Right => other,
+                    Side::Left => &left_children,
+                    Side::Right => &right_children,
                 };
-                let composition =
-                    |snapshot: &Self| -> BTreeMap<EntityId, (Option<EntityId>, Lifecycle)> {
-                        let mut found = BTreeMap::new();
-                        let mut pending = vec![entity.id.clone()];
-                        while let Some(parent) = pending.pop() {
-                            for child in snapshot
-                                .entities()
-                                .filter(|child| child.current.parent.as_ref() == Some(&parent))
+                let composition = |children: &BTreeMap<&EntityId, Vec<&Entity>>| {
+                    let mut found = BTreeMap::new();
+                    let mut pending = vec![&entity.id];
+                    while let Some(parent) = pending.pop() {
+                        for child in children.get(parent).into_iter().flatten() {
+                            if found
+                                .insert(
+                                    child.id.clone(),
+                                    (child.current.parent.clone(), child.current.lifecycle),
+                                )
+                                .is_none()
                             {
-                                if found
-                                    .insert(
-                                        child.id.clone(),
-                                        (child.current.parent.clone(), child.current.lifecycle),
-                                    )
-                                    .is_none()
-                                {
-                                    pending.push(child.id.clone());
-                                }
+                                pending.push(&child.id);
                             }
                         }
-                        found
-                    };
-                if composition(source) != composition(&merged) {
+                    }
+                    found
+                };
+                if composition(source) != composition(&merged_children) {
                     return Err(invalid(
                         "terminal Group composition differs from selected input",
                     ));

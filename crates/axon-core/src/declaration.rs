@@ -617,6 +617,7 @@ pub fn export(snapshot: &Snapshot, selectors: &[EntityId]) -> Result<Declaration
     if selectors.is_empty() {
         return Err(invalid("at least one selector is required"));
     }
+    let children = snapshot.children_by_parent();
     let mut selected = BTreeSet::new();
     let mut pending = selectors.to_vec();
     while let Some(id) = pending.pop() {
@@ -626,9 +627,10 @@ pub fn export(snapshot: &Snapshot, selectors: &[EntityId]) -> Result<Declaration
         let entity = snapshot.entity(&id).map_err(|e| invalid(e.to_string()))?;
         if entity.kind == Kind::Group {
             pending.extend(
-                snapshot
-                    .entities()
-                    .filter(|e| e.current.parent.as_ref() == Some(&id))
+                children
+                    .get(&id)
+                    .into_iter()
+                    .flatten()
                     .map(|e| e.id.clone()),
             );
         }
