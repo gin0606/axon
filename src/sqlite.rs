@@ -1,5 +1,5 @@
 //! SQLite persists the complete common snapshot, including causal branches.
-use crate::lifecycle::{self, Snapshot, StoreId};
+use crate::lifecycle::{self, Snapshot};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::{path::Path, time::Duration};
 
@@ -115,7 +115,7 @@ fn read(connection: &Connection) -> Result<(String, Snapshot)> {
     Ok((prefix, lifecycle::decode(&bytes)?))
 }
 pub fn empty() -> Snapshot {
-    Snapshot::new(StoreId::generate())
+    Snapshot::empty()
 }
 
 #[cfg(test)]

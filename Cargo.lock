@@ -94,15 +94,28 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 name = "axon"
 version = "0.1.0"
 dependencies = [
+ "axon-core",
  "axon-recorder",
  "blake3",
  "chrono",
  "clap",
  "clap_complete",
- "granit-parser",
  "libc",
  "rand",
  "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "axon-core"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chrono",
+ "granit-parser",
+ "rand",
  "serde",
  "serde-saphyr",
  "serde_json",

@@ -318,7 +318,7 @@ backup の物理配置の違いを、同じ旧記録の別 identity にしない
 
 現行実装では `src/db.rs` の StoreSnapshot は Entity と依存を持つが、全履歴の保存形式ではない。
 Note / Revision は Entity 内連番、判断履歴は Revision 番号を参照する。
-`src/declaration.rs` の import は plan declaration の操作であり、Control / history merge の代用ではない。
+`crates/axon-core/src/declaration.rs` の import は plan declaration の操作であり、Control / history merge の代用ではない。
 
 2026-09-06、Git 2.55.0 の `git merge-file -p` で合成 JSONL の三入力を試した。
 別 Entity の A→G と G→A の追加は exit 0、隣接 Entity の別編集と同じ Note 番号への
