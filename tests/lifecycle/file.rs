@@ -588,6 +588,14 @@ fn git_worktree_operations_start_few_git_processes() {
         assert_eq!(
             observed
                 .iter()
+                .filter(|call| call.starts_with("rev-parse"))
+                .count(),
+            1,
+            "{args:?}: {observed:?}"
+        );
+        assert_eq!(
+            observed
+                .iter()
                 .filter(|call| call.contains("ls-files --unmerged"))
                 .count(),
             2,
