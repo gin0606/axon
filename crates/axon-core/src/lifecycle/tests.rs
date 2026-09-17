@@ -1660,12 +1660,20 @@ fn three_way_preparation_resolution_and_repairs_never_execute_conditions() {
 }
 
 #[test]
-fn parent_stored_under_a_mismatched_key_is_rejected_without_panicking() {
+fn parent_whose_id_duplicates_another_entry_is_rejected_without_panicking() {
     let mut snapshot = fixture(Kind::Group, Lifecycle::NotStarted);
+    snapshot
+        .create(
+            id("other"),
+            Kind::Group,
+            current(Lifecycle::NotStarted),
+            context(11),
+        )
+        .unwrap();
     let mut child = current(Lifecycle::NotStarted);
     child.parent = Some(id("item"));
     snapshot
-        .create(id("child"), Kind::Issue, child, context(11))
+        .create(id("child"), Kind::Issue, child, context(12))
         .unwrap();
     snapshot.entities.get_mut(&id("item")).unwrap().id = id("other");
     assert!(snapshot.validate().is_err());

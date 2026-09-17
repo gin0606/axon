@@ -149,12 +149,14 @@ impl Snapshot {
                     return Err(invalid("Completed Entity has unfinished dependencies"));
                 }
             }
+            // Keys are checked against `Entity::id` only after this; a mismatch is reported here.
+            self.entity(&entity.id)?;
             predecessors.insert(entity.id.clone(), needs);
         }
         // One pass over parents: scanning for children per Entity would be quadratic.
         for entity in self.entities() {
             if let Some(parent) = &entity.current.parent {
-                // Keys are checked against `Entity::id` only after this, so the lookup can miss.
+                // Two entries sharing one `id` pass the check above and leave a key unindexed.
                 predecessors
                     .get_mut(parent)
                     .ok_or_else(|| invalid(format!("missing Entity {parent}")))?
