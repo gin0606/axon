@@ -5,7 +5,7 @@ use cli_support::*;
 
 use axon::{
     lifecycle::*,
-    location::{FileIntegration, InitResult, IntegrationChange, Location},
+    location::{InitResult, IntegrationChange, IntegrationFile, Location},
     sqlite::{self, Result},
 };
 use chrono::Utc;
@@ -663,14 +663,12 @@ fn run(command: Command) -> Result<Output> {
             .ok_or_else(|| {
                 sqlite::Error::Invalid("cannot derive an ID prefix; pass axon init PREFIX".into())
             })?;
-        let initialized =
-            location.init_backend_with_result(prefix, matches!(backend, Backend::File))?;
-        let text = match initialized {
+        let text = match location.init_backend(prefix, matches!(backend, Backend::File))? {
             InitResult::Sqlite => format!(
                 "Initialized SQLite at {}\n",
                 display::human_text(location.sqlite.display())
             ),
-            InitResult::File(integration) => file_init_output(&location, integration),
+            InitResult::File(files) => file_init_output(&location, &files),
         };
         return Ok(output(text, true));
     }
@@ -1107,22 +1105,23 @@ fn run(command: Command) -> Result<Output> {
     }
 }
 
-fn file_init_output(location: &Location, integration: FileIntegration) -> String {
-    fn label(change: IntegrationChange) -> &'static str {
-        match change {
+fn file_init_output(location: &Location, files: &[IntegrationFile]) -> String {
+    let mut text = format!(
+        "Initialized file at {}\n",
+        display::human_text(location.root.join(".axon/state.jsonl").display())
+    );
+    for file in files {
+        let label = match file.change {
             IntegrationChange::Created => "Created",
             IntegrationChange::Appended => "Appended",
             IntegrationChange::Unchanged => "Unchanged",
-        }
+        };
+        text.push_str(&format!(
+            "{label}: {}\n",
+            display::human_text(file.path.display())
+        ));
     }
-    format!(
-        "Initialized file at {}\n{}: {}\n{}: {}\n",
-        display::human_text(location.root.join(".axon/state.jsonl").display()),
-        label(integration.gitignore),
-        display::human_text(location.root.join(".axon/.gitignore").display()),
-        label(integration.attributes),
-        display::human_text(location.root.join(".gitattributes").display()),
-    )
+    text
 }
 fn create(store: &mut axon::location::Store, args: Create) -> Result<Output> {
     let kind = args.kind.kind();

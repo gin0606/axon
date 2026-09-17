@@ -23,15 +23,15 @@ pub enum IntegrationChange {
     Appended,
     Unchanged,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FileIntegration {
-    pub gitignore: IntegrationChange,
-    pub attributes: IntegrationChange,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IntegrationFile {
+    pub path: PathBuf,
+    pub change: IntegrationChange,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InitResult {
     Sqlite,
-    File(FileIntegration),
+    File(Vec<IntegrationFile>),
 }
 pub(crate) fn present(path: &Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
@@ -193,14 +193,7 @@ impl Location {
             None => Err(invalid("not initialized; run axon init")),
         }
     }
-    pub fn init(&self, prefix: &str) -> Result<()> {
-        self.init_backend(prefix, false)
-    }
-    pub fn init_backend(&self, prefix: &str, file_backend: bool) -> Result<()> {
-        self.init_backend_with_result(prefix, file_backend)
-            .map(|_| ())
-    }
-    pub fn init_backend_with_result(&self, prefix: &str, file_backend: bool) -> Result<InitResult> {
+    pub fn init_backend(&self, prefix: &str, file_backend: bool) -> Result<InitResult> {
         sqlite::validate_prefix(prefix)?;
         let destination = if file_backend {
             self.root.join(".axon/state.jsonl")
@@ -305,17 +298,23 @@ impl Store {
         }
     }
 }
-fn ensure_file_integration(root: &Path) -> Result<FileIntegration> {
-    Ok(FileIntegration {
-        gitignore: append_rules(
-            &root.join(".axon/.gitignore"),
-            &["*", "!.gitignore", "!state.jsonl"],
-        )?,
-        attributes: append_rules(
-            &root.join(".gitattributes"),
-            &["/.axon/state.jsonl merge=axon"],
-        )?,
+fn ensure_file_integration(root: &Path) -> Result<Vec<IntegrationFile>> {
+    [
+        (
+            root.join(".axon/.gitignore"),
+            &["*", "!.gitignore", "!state.jsonl"][..],
+        ),
+        (
+            root.join(".gitattributes"),
+            &["/.axon/state.jsonl merge=axon"][..],
+        ),
+    ]
+    .into_iter()
+    .map(|(path, rules)| {
+        let change = append_rules(&path, rules)?;
+        Ok(IntegrationFile { path, change })
     })
+    .collect()
 }
 fn append_rules(path: &Path, rules: &[&str]) -> Result<IntegrationChange> {
     let existed = present(path)?;
