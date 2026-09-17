@@ -7,6 +7,6 @@ description: AxonのSQLite/file保存先を新規初期化し、file snapshotを
 
 `axon-kit:conventions` を使い、共通契約で選択したbinary・対象rootを維持する。`axon init [prefix]` は既定SQLite、`--backend file` は現在worktreeのfileを新規作成する。SQLiteはGit worktree間で共有する。独立試用はGit外かつ既存保存先配下ではないdirectoryで行う。
 
-`axon init --help` と保存先・backendを照合し、単独commandで初期化して`axon list`で確認する。file `axon init`のignore/attributes補完と失敗境界は [保存先と復旧](../conventions/references/storage.md) を読む。既存・混在・破損・初期化途中・未解決indexではartifactを保全し、writerを止めて調査する。`axon init`再実行を修復として使わない。
+`axon init --help` と保存先・backendを照合し、単独commandで初期化して`axon list`で確認する。file `axon init`のignore/attributes補完と失敗境界は [保存先と復旧](../conventions/references/storage.md) を読む。既存・混在・破損・初期化途中・未解決indexではartifactを保全し、writerを止めて調査する。
 
-`axon storage check SNAPSHOT` はfile形式と完全な保存snapshotを、条件実行や正本変更なしに検査する。Git indexの解決やbackend切替は行わない。検査結果、初期化の保存結果、残ったartifactを返す。Git driverの登録・stage・commitはこのskillから許可されない。
+`axon storage check SNAPSHOT` はfile形式と完全な保存snapshotを、条件実行や正本変更なしに検査する。Git indexの解決は行わず、検証済み正本のstageが必要なことを報告する。検査結果、初期化の保存結果、残ったartifactを返す。Git driverの登録・stage・commitはこのskillから許可されない。

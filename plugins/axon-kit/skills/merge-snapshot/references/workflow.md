@@ -4,7 +4,7 @@
 
 完全なbase/ours/theirs、現在のfile正本output、未使用workspaceを確定する。workspaceの親directoryを先に用意する。`axon merge prepare --base B --ours O --theirs T --output OUTPUT --workspace WORKSPACE` を単独で実行する。
 
-非0でも保全入力やreportが残りうるためworkspaceを調べる。同じworkspace名で盲目的に`axon merge prepare`の再実行しない。保全されたbase.jsonl・ours.jsonl・theirs.jsonl、output元bytesのpreimage、絶対path・digest・固定recorder contextを持つmanifest.jsonは編集しない。
+非0でも保全入力やreportが残りうるためworkspaceを調べる。再試行するときは未使用の新しいworkspace名を指定し、前回のworkspaceは保全したまま残す。保全されたbase.jsonl・ours.jsonl・theirs.jsonl、output元bytesのpreimage、絶対path・digest・固定recorder contextを持つmanifest.jsonは編集しない。
 
 ## 選択と修正
 
