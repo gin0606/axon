@@ -30,7 +30,7 @@
 | [記録者連携](development/lifecycle-recorder.md) | 自動取得と保存済み詳細 |
 | [検証方針](development/verification.md) | CI、declarationを含む独立fixture、モデル検証の分担 |
 
-保存schemaは [SQLite adapter](../src/sqlite.rs) と [file adapter](../src/file.rs)、Usageは [Clap定義](../src/main.rs) を確認します。
+保存schemaは [SQLite adapter](../src/sqlite.rs) と [file adapter](../src/file.rs)、Usageは [Clap定義](../src/cli/args.rs) を確認します。
 
 ### 設計検討資料
 
