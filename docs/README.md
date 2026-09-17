@@ -1,6 +1,6 @@
 # ドキュメント
 
-単一 lifecycle の再構築の正本は [literate spec](../spec/lifecycle_proposal.md)、新しい実装の入口は [共通コア](development/lifecycle-core.md) です。利用ガイドは新lifecycleに対応しています。旧三軸のreference/design・モデルは過去資料として区別します。継続する入出力契約は [現行CLI契約](reference/lifecycle-cli.md) に明示し、過去資料の一括廃止から契約の廃止を推論しません。新 binary と `tests/smoke.rs` は [SQLite CLI](development/lifecycle-sqlite.md) の新仕様を対象にします。`archive/three-axis/src` の旧 module と `archive/three-axis/tests` は過去の三軸実装・検証資料です。
+単一 lifecycle の再構築の正本は [literate spec](../spec/lifecycle_proposal.md)、実装の入口は [層構造の地図](development/architecture.md) です。利用ガイドは新lifecycleに対応しています。旧三軸のreference/design・モデルは過去資料として区別します。継続する入出力契約は [現行CLI契約](reference/lifecycle-cli.md) に明示し、過去資料の一括廃止から契約の廃止を推論しません。新 binary と `tests/smoke.rs` は [SQLite CLI](development/lifecycle-sqlite.md) の新仕様を対象にします。`archive/three-axis/src` の旧 module と `archive/three-axis/tests` は過去の三軸実装・検証資料です。
 
 新binaryの利用は [使い始める](guide/getting-started.md) から確認してください。
 
@@ -22,6 +22,7 @@
 | --- | --- |
 | [正本spec](../spec/lifecycle_proposal.md) | lifecycle・構造・候補・情報・表示・保存・統合・一括declarationの契約とモデル |
 | [Declaration](development/lifecycle-declaration.md) | strict YAML、`axon export`・`axon import`、共通コアとfile書戻しの境界 |
+| [層構造の地図](development/architecture.md) | crate・module の配置、依存方向、各層のテスト入口、build provenance |
 | [共通コア](development/lifecycle-core.md) | 通常操作、記録、codec、三者比較 |
 | [SQLite CLI](development/lifecycle-sqlite.md) | 公開操作とSQLite adapter |
 | [file保存とGit統合](development/lifecycle-file.md) | writer、worktree、`axon merge` CLI・driver |
@@ -38,7 +39,7 @@
 
 ## 過去資料
 
-`reference/` のlifecycle-cli.md以外、`design/`、`development/architecture.md`・`branch-history.md` は置換前の三軸CLIの契約・設計です。`development/audits/` は各文書に記した対象・時点に限定した調査です。現行操作の手順には使いません。旧コード・テストは [archive/three-axis](../archive/three-axis/README.md) に隔離し、Cargo・CIの対象から外しています。旧Quintモデル `axon.qnt`・`group_plan.qnt`・`information_model.qnt`・`branch_history.qnt` も過去資料です。新モデルは正本specから生成します。
+`reference/` のlifecycle-cli.md以外、`design/`、`development/branch-history.md` は置換前の三軸CLIの契約・設計です。`development/audits/` は各文書に記した対象・時点に限定した調査です。現行操作の手順には使いません。旧コード・テストは [archive/three-axis](../archive/three-axis/README.md) に隔離し、Cargo・CIの対象から外しています。旧Quintモデル `axon.qnt`・`group_plan.qnt`・`information_model.qnt`・`branch_history.qnt` も過去資料です。新モデルは正本specから生成します。
 
 ## 更新するとき
 
