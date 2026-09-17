@@ -41,18 +41,24 @@ impl Snapshot {
         {
             return Err(invalid("dependencies must be Completed"));
         }
-        let children = self.children(id)?;
-        if matches!(operation, Operation::Complete | Operation::Cancel)
-            && children.iter().any(|e| e.current.lifecycle.editable())
-        {
-            return Err(invalid("all children must be terminal"));
-        }
-        if operation == Operation::Release
-            && children
-                .iter()
-                .any(|e| e.current.lifecycle == Lifecycle::InProgress)
-        {
-            return Err(invalid("cannot release with InProgress children"));
+        // `children` scans every Entity, and list rendering checks `Start` per row.
+        if matches!(
+            operation,
+            Operation::Complete | Operation::Cancel | Operation::Release
+        ) {
+            let children = self.children(id)?;
+            if operation != Operation::Release
+                && children.iter().any(|e| e.current.lifecycle.editable())
+            {
+                return Err(invalid("all children must be terminal"));
+            }
+            if operation == Operation::Release
+                && children
+                    .iter()
+                    .any(|e| e.current.lifecycle == Lifecycle::InProgress)
+            {
+                return Err(invalid("cannot release with InProgress children"));
+            }
         }
         Ok(())
     }
@@ -111,7 +117,7 @@ impl Snapshot {
     }
 
     pub(crate) fn validate_relations(&self) -> Result<()> {
-        let mut predecessors = BTreeMap::new();
+        let mut predecessors: BTreeMap<EntityId, BTreeSet<EntityId>> = BTreeMap::new();
         for entity in self.entities() {
             let mut ancestors = BTreeSet::from([entity.id.clone()]);
             let mut parent = entity.current.parent.as_ref();
@@ -143,8 +149,16 @@ impl Snapshot {
                     return Err(invalid("Completed Entity has unfinished dependencies"));
                 }
             }
-            needs.extend(self.children(&entity.id)?.iter().map(|e| e.id.clone()));
             predecessors.insert(entity.id.clone(), needs);
+        }
+        // One pass over parents: scanning for children per Entity would be quadratic.
+        for entity in self.entities() {
+            if let Some(parent) = &entity.current.parent {
+                predecessors
+                    .get_mut(parent)
+                    .expect("checked ancestor")
+                    .insert(entity.id.clone());
+            }
         }
         // Kahn's algorithm on the spec's contracted completion-precondition graph.
         // Terminal entities remain nodes, so cancellation cannot hide a cycle.
