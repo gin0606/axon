@@ -148,18 +148,28 @@ pub(crate) fn publish_with(
     Ok(())
 }
 pub struct Store {
-    root: PathBuf,
+    location: Location,
 }
 impl Store {
     pub fn open(root: &Path) -> Result<Self> {
-        let store = Self {
-            root: fs::canonicalize(root)?,
-        };
-        store.read()?;
+        let root = fs::canonicalize(root)?;
+        let location = Location::discover(&root, false)?;
+        if location.root != root {
+            return Err(invalid("file backend changed"));
+        }
+        Self::at(location)
+    }
+    /// Discovery runs once per invocation; every guard reuses this location.
+    pub(crate) fn at(location: Location) -> Result<Self> {
+        let store = Self { location };
+        store.backend()?;
         Ok(store)
     }
-    fn guard(&self) -> Result<Location> {
-        if !fs::symlink_metadata(self.root.join(".axon"))?
+    fn root(&self) -> &Path {
+        &self.location.root
+    }
+    fn backend(&self) -> Result<()> {
+        if !fs::symlink_metadata(self.root().join(".axon"))?
             .file_type()
             .is_dir()
         {
@@ -167,16 +177,18 @@ impl Store {
                 "file management directory is not a regular directory",
             ));
         }
-        let location = Location::discover(&self.root, false)?;
-        if location.root != self.root || !location.is_file()? {
+        if !self.location.is_file()? {
             return Err(invalid("file backend changed"));
         }
-        location.check_index()?;
-        Ok(location)
+        Ok(())
+    }
+    fn guard(&self) -> Result<()> {
+        self.backend()?;
+        self.location.check_index()
     }
     pub fn read(&self) -> Result<(String, Snapshot)> {
         self.guard()?;
-        decode(&read_regular(&self.root.join(".axon/state.jsonl"))?)
+        decode(&read_regular(&self.root().join(".axon/state.jsonl"))?)
     }
     pub fn update<T>(
         &mut self,
@@ -189,9 +201,9 @@ impl Store {
         change: impl FnOnce(&str, &mut Snapshot) -> Result<T>,
         before_publish: impl FnOnce(&crate::lifecycle::Snapshot) -> Result<()>,
     ) -> Result<T> {
-        let _lock = lock(&self.root.join(".axon/state.lock"))?;
+        let _lock = lock(&self.root().join(".axon/state.lock"))?;
         self.guard()?;
-        let path = self.root.join(".axon/state.jsonl");
+        let path = self.root().join(".axon/state.jsonl");
         let bytes = read_regular(&path)?;
         let (prefix, mut snapshot) = decode(&bytes)?;
         let original = snapshot.clone();

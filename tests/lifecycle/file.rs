@@ -492,6 +492,147 @@ fn git_output(path: &Path, args: &[&str]) -> Output {
     isolated_git(path).args(args).output().unwrap()
 }
 
+#[cfg(unix)]
+fn git_on_path() -> PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|dir| dir.join("git"))
+        .find(|path| path.is_file())
+        .expect("git on PATH")
+}
+
+/// A `git` that logs its arguments and hands over to the real one.
+#[cfg(unix)]
+fn git_call_log(shim: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let log = shim.join("git-calls");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+        log.display(),
+        git_on_path().display()
+    );
+    let binary = shim.join("git");
+    fs::write(&binary, script).unwrap();
+    fs::set_permissions(&binary, PermissionsExt::from_mode(0o755)).unwrap();
+    log
+}
+
+#[cfg(unix)]
+#[test]
+fn git_worktree_operations_start_few_git_processes() {
+    let f = Fixture::new();
+    git(&f.0, &["init", "-q"]);
+    init_file(&f);
+    let id = f.accepted("counted");
+    let pending = f
+        .ok(&["capture", "--title", "undecided"])
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    let shim = Fixture::new();
+    let log = git_call_log(&shim.0);
+    let calls = |args: &[&str]| -> Vec<String> {
+        fs::write(&log, "").unwrap();
+        success(
+            f.command()
+                .env(
+                    "PATH",
+                    format!(
+                        "{}:{}",
+                        shim.0.display(),
+                        std::env::var("PATH").unwrap_or_default()
+                    ),
+                )
+                .args(args)
+                .output()
+                .unwrap(),
+        );
+        fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    };
+    for args in [
+        vec!["list"],
+        vec!["proposals"],
+        vec!["tasks"],
+        vec!["show", &id],
+    ] {
+        let observed = calls(&args);
+        assert!(observed.len() <= 2, "{args:?}: {observed:?}");
+        assert_eq!(
+            observed
+                .iter()
+                .filter(|call| call.starts_with("rev-parse"))
+                .count(),
+            1,
+            "{args:?}: {observed:?}"
+        );
+        assert_eq!(
+            observed
+                .iter()
+                .filter(|call| call.contains("ls-files --unmerged"))
+                .count(),
+            1,
+            "{args:?}: {observed:?}"
+        );
+    }
+    for args in [
+        vec!["capture", "--title", "written"],
+        vec!["note", "add", &id, "-m", "evidence"],
+        vec!["accept", &pending],
+    ] {
+        let observed = calls(&args);
+        assert!(observed.len() <= 3, "{args:?}: {observed:?}");
+        assert_eq!(
+            observed
+                .iter()
+                .filter(|call| call.contains("ls-files --unmerged"))
+                .count(),
+            2,
+            "{args:?}: {observed:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn newline_in_a_git_worktree_path_fails_discovery_explicitly() {
+    let f = Fixture::new();
+    let repo = f.0.join("repo\nline");
+    fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    for args in [
+        vec!["init", "t", "--backend", "file"],
+        vec!["init", "t"],
+        vec!["list"],
+    ] {
+        let error = failure(command(&repo).args(args).output().unwrap());
+        assert!(error.contains("newline"), "{error}");
+    }
+    assert!(!repo.join(".axon").exists());
+}
+
+#[test]
+fn corrupt_canonical_rejects_reads_and_writes_without_changing_bytes() {
+    let f = Fixture::new();
+    init_file(&f);
+    let id = f.accepted("job");
+    fs::write(state(&f), b"not a snapshot\n").unwrap();
+    let before = fs::read(state(&f)).unwrap();
+    for args in [
+        vec!["list"],
+        vec!["show", &id],
+        vec!["start", &id],
+        vec!["note", "add", &id, "-m", "rejected"],
+        vec!["capture", "--title", "rejected"],
+    ] {
+        failure(f.run(&args));
+        assert_eq!(fs::read(state(&f)).unwrap(), before, "{args:?}");
+    }
+}
+
 #[test]
 fn adapters_preserve_identical_snapshot_records_and_failures() {
     let f = Fixture::new();
