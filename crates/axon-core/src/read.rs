@@ -198,12 +198,7 @@ pub fn detail<'a>(snapshot: &'a Snapshot, id: &EntityId) -> Result<Detail<'a>> {
     .map(|e| row(snapshot, e, None))
     .collect();
     let descendants = if entity.kind == Kind::Group {
-        let mut children_by_parent: BTreeMap<&EntityId, Vec<&Entity>> = BTreeMap::new();
-        for child in snapshot.entities() {
-            if let Some(parent) = &child.current.parent {
-                children_by_parent.entry(parent).or_default().push(child);
-            }
-        }
+        let mut children_by_parent = snapshot.children_by_parent();
         let children = sorted(children_by_parent.remove(id).unwrap_or_default());
         let count = children.len();
         let mut pending = children

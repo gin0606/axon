@@ -10,6 +10,18 @@ impl Snapshot {
             .collect())
     }
 
+    /// Indexes every child under its parent in one pass, for walks that would otherwise
+    /// rescan all Entities per visited node.
+    pub(crate) fn children_by_parent(&self) -> BTreeMap<&EntityId, Vec<&Entity>> {
+        let mut index: BTreeMap<&EntityId, Vec<&Entity>> = BTreeMap::new();
+        for child in self.entities() {
+            if let Some(parent) = &child.current.parent {
+                index.entry(parent).or_default().push(child);
+            }
+        }
+        index
+    }
+
     pub(crate) fn require_open_parent(&self, parent: Option<&EntityId>) -> Result<()> {
         if let Some(id) = parent {
             let parent = self.entity(id)?;
