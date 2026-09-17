@@ -7,8 +7,8 @@ use super::{
 };
 use axon::{
     Result,
+    lifecycle::Snapshot,
     location::{InitResult, Location},
-    sqlite,
 };
 use clap::CommandFactory;
 
@@ -22,7 +22,7 @@ pub(super) fn docs(command: Option<Docs>) -> Result<Output> {
             include_str!("../docs/declaration.txt").into()
         }
         Some(Docs::Declaration { example: true }) => axon::declaration::example()
-            .serialize(&sqlite::empty())
+            .serialize(&Snapshot::empty())
             .map_err(|e| axon::Error::Invalid(e.to_string()))?,
     };
     Ok(output(text, false))

@@ -387,7 +387,7 @@ fn sqlite_roundtrip_preserves_branches_integration_and_failed_changes() {
         f.ok(&["note", "list", "item"])
             .contains("Concurrent branch")
     );
-    let failed: axon::sqlite::Result<()> = store.update(|_, snapshot| {
+    let failed: axon::Result<()> = store.update(|_, snapshot| {
         snapshot.add_note(&eid("item"), "rollback".into(), context())?;
         snapshot.perform(&eid("item"), Operation::Complete, None, context())?;
         Ok(())
@@ -431,13 +431,13 @@ fn old_unknown_corrupt_and_mixed_stores_are_rejected_without_changes() {
                     .unwrap();
             }
             "unknown" => {
-                drop(Store::create(&f.db(), "t", &axon::sqlite::empty()).unwrap());
+                drop(Store::create(&f.db(), "t", &Snapshot::empty()).unwrap());
                 let c = rusqlite::Connection::open(f.db()).unwrap();
                 c.pragma_update(None, "user_version", 999).unwrap();
             }
             "corrupt" => fs::write(f.db(), b"invalid database").unwrap(),
             "mixed" => {
-                drop(Store::create(&f.db(), "t", &axon::sqlite::empty()).unwrap());
+                drop(Store::create(&f.db(), "t", &Snapshot::empty()).unwrap());
                 fs::write(f.0.join(".axon/state.jsonl"), "invalid file").unwrap();
             }
             "pending" => {

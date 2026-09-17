@@ -20,7 +20,7 @@ root build.rs → ビルド時の Git・環境情報 → binary の version 文�
 | --- | --- | --- |
 | 保存から独立したコア | [crates/axon-core/src/lib.rs](../../crates/axon-core/src/lib.rs) | `lifecycle` は `Snapshot`、通常操作・検査、候補導出、因果順、canonical codec、三者比較を扱う。`declaration` は YAML の解析・出力、fingerprint、差分と適用を扱う。`read` は一覧・詳細・履歴・Note の検索と構造化された読み取り結果を返す |
 | 保存 adapter | [src/lib.rs](../../src/lib.rs) | `sqlite` と `file` がコアを呼び、保存の原子性と障害境界を担う。`location::Store` の enum dispatch が backend を選ぶ。`file_merge` は統合 workspace と Git driver、`declaration_file` は宣言ファイルと正本の I/O を接続する |
-| adapter 共通エラー | [src/error.rs](../../src/error.rs) | root の `axon::Error` / `axon::Result` と prefix 検証。コアのエラーを包み、保存・I/O の失敗を表す。互換の `axon::sqlite::{Error, Result}` は再公開 |
+| adapter 共通エラー | [src/error.rs](../../src/error.rs) | root の `axon::Error` / `axon::Result` と prefix 検証。コアのエラーを包み、保存・I/O の失敗を表す |
 | CLI | [src/main.rs](../../src/main.rs)、[src/cli/mod.rs](../../src/cli/mod.rs) | `main.rs` は入口だけを持つ。`cli::mod` が dispatch、stdout/stderr、保存後の出力失敗と終了コードを処理する |
 | 記録者取得 | [crates/axon-recorder/src/lib.rs](../../crates/axon-recorder/src/lib.rs) | 環境や transcript から任意の記録者情報を取得する。コアの lifecycle 判断や保存 adapter を所有しない |
 

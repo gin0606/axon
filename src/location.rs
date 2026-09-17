@@ -237,9 +237,9 @@ impl Location {
                     .write(true)
                     .create_new(true)
                     .open(&temp)?;
-                output.write_all(&file::encode(prefix, &sqlite::empty())?)?;
+                output.write_all(&file::encode(prefix, &Snapshot::empty())?)?;
             } else {
-                drop(sqlite::Store::create(&temp, prefix, &sqlite::empty())?);
+                drop(sqlite::Store::create(&temp, prefix, &Snapshot::empty())?);
             }
             File::open(&temp)?.sync_all()?;
             fs::hard_link(&temp, &destination)?;

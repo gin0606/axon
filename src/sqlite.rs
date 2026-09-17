@@ -3,9 +3,7 @@ use crate::lifecycle::{self, Snapshot};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::{path::Path, time::Duration};
 
-use crate::error::invalid;
-// Preserve the existing adapter API while callers use the shared root exports.
-pub use crate::{Error, Result, validate_prefix};
+use crate::error::{Error, Result, invalid, validate_prefix};
 const APPLICATION: i64 = 0x41584c43;
 const VERSION: i64 = 1;
 const SCHEMA: &str = "CREATE TABLE lifecycle_store (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), prefix TEXT NOT NULL, snapshot BLOB NOT NULL)";
@@ -114,9 +112,6 @@ fn read(connection: &Connection) -> Result<(String, Snapshot)> {
     validate_prefix(&prefix)?;
     Ok((prefix, lifecycle::decode(&bytes)?))
 }
-pub fn empty() -> Snapshot {
-    Snapshot::empty()
-}
 
 #[cfg(test)]
 mod tests {
@@ -128,7 +123,7 @@ mod tests {
             std::env::temp_dir().join(format!("axon-import-{:032x}", rand::random::<u128>()));
         std::fs::create_dir(&root).unwrap();
         let db = root.join("store.db");
-        let before = empty();
+        let before = Snapshot::empty();
         let store = Store::create(&db, "demo", &before).unwrap();
         store.connection.commit_hook(Some(|| true)).unwrap();
         let mut store = crate::location::Store::Sqlite(store);
@@ -158,7 +153,7 @@ mod tests {
     fn failed_commit_keeps_the_previous_snapshot() {
         let path =
             std::env::temp_dir().join(format!("axon-sqlite-{:032x}.db", rand::random::<u128>()));
-        let before = empty();
+        let before = Snapshot::empty();
         let mut store = Store::create(&path, "t", &before).unwrap();
         store.connection.commit_hook(Some(|| true)).unwrap();
         let result = store.update(|_, snapshot| {
