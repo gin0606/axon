@@ -1658,3 +1658,15 @@ fn three_way_preparation_resolution_and_repairs_never_execute_conditions() {
     roundtrip(&merged);
     assert!(!marker.exists());
 }
+
+#[test]
+fn parent_stored_under_a_mismatched_key_is_rejected_without_panicking() {
+    let mut snapshot = fixture(Kind::Group, Lifecycle::NotStarted);
+    let mut child = current(Lifecycle::NotStarted);
+    child.parent = Some(id("item"));
+    snapshot
+        .create(id("child"), Kind::Issue, child, context(11))
+        .unwrap();
+    snapshot.entities.get_mut(&id("item")).unwrap().id = id("other");
+    assert!(snapshot.validate().is_err());
+}

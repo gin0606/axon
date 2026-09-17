@@ -154,9 +154,10 @@ impl Snapshot {
         // One pass over parents: scanning for children per Entity would be quadratic.
         for entity in self.entities() {
             if let Some(parent) = &entity.current.parent {
+                // Keys are checked against `Entity::id` only after this, so the lookup can miss.
                 predecessors
                     .get_mut(parent)
-                    .expect("checked ancestor")
+                    .ok_or_else(|| invalid(format!("missing Entity {parent}")))?
                     .insert(entity.id.clone());
             }
         }
