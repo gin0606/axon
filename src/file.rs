@@ -151,14 +151,6 @@ pub struct Store {
     location: Location,
 }
 impl Store {
-    pub fn open(root: &Path) -> Result<Self> {
-        let root = fs::canonicalize(root)?;
-        let location = Location::discover(&root, false)?;
-        if location.root != root {
-            return Err(invalid("file backend changed"));
-        }
-        Self::at(location)
-    }
     /// Discovery runs once per invocation; every guard reuses this location.
     pub(crate) fn at(location: Location) -> Result<Self> {
         let store = Self { location };

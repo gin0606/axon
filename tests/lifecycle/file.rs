@@ -186,7 +186,7 @@ fn writer_checks_drift_corruption_backend_and_preserves_noop_bytes() {
     let split = bytes.iter().position(|b| *b == b'\n').unwrap();
     bytes.insert(split, b' ');
     fs::write(state(&f), &bytes).unwrap();
-    let mut store = file::Store::open(&f.0).unwrap();
+    let mut store = Location::discover(&f.0, false).unwrap().open().unwrap();
     store.update(|_, _| Ok(())).unwrap();
     assert_eq!(fs::read(state(&f)).unwrap(), bytes);
     let error = store
