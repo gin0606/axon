@@ -33,7 +33,7 @@ cd "$FIXTURE_DIR"
 
 ## 保存と失敗の境界
 
-SQLite は `application_id`・`user_version`・schema・整合性と共通 snapshot を検査する。prefix と、[canonical codec](../../src/lifecycle/codec.rs) の全 snapshot を単一行へ保持し、SQL へ lifecycle の意味を複製しない。分岐の状態記録・Note・統合記録・任意の記録者情報は同じ byte 表現を通して往復する。
+SQLite は `application_id`・`user_version`・schema・整合性と共通 snapshot を検査する。prefix と、[canonical codec](../../crates/axon-core/src/lifecycle/codec.rs) の全 snapshot を単一行へ保持し、SQL へ lifecycle の意味を複製しない。分岐の状態記録・Note・統合記録・任意の記録者情報は同じ byte 表現を通して往復する。
 
 通常 mutation は `BEGIN IMMEDIATE` の後で最新状態を読み、共通コアへ渡して検査し、全 snapshot を一 transaction で保存する。最大30秒の SQLite busy timeout を使う。異なる Entity の変更や Note 追加も同じ境界で直列化する。出力は commit の後。出力失敗は `storage applied; output failed` と明示するため、再実行の前に保存済み状態を照合する。SQLite commitの失敗は `Result unknown` とし保存済み状態を照合する。BrokenPipeは成功として扱う。
 
@@ -43,7 +43,7 @@ SQLite は `application_id`・`user_version`・schema・整合性と共通 snaps
 
 ## 検証境界
 
-`cargo test --lib --bin axon --test smoke` は共通コア、SQLite commit 拒否時の原子性、登録から Group 完了、入力・表示・出力失敗、並行 `axon start` と Note・別 Entity の保存、分岐統合済み snapshot の往復、旧・未知・破損 schema、混在・marker 拒否、Git 外の探索・境界、実 linked worktree 共有、並行 `axon init` を独立 fixture で検証する。実管理データも installed `axon` も使わない。
+`cargo test --workspace --lib --bin axon --test smoke` は共通コア、SQLite commit 拒否時の原子性、登録から Group 完了、入力・表示・出力失敗、並行 `axon start` と Note・別 Entity の保存、分岐統合済み snapshot の往復、旧・未知・破損 schema、混在・marker 拒否、Git 外の探索・境界、実 linked worktree 共有、並行 `axon init` を独立 fixture で検証する。実管理データも installed `axon` も使わない。
 
 旧 process 監督・fileの障害・統合・記録者・旧 CLI のテストは `archive/three-axis/tests` にある過去の検証資料で、新 binary のテストとして実行しない。process監督・file保存・統合・記録者の検証は新smokeと記録者crateで実行する。今回の I/O・CLI 接続はコアの lifecycle/包含/dependency の意味を変更しないため、新しい Quint 状態を加えない。
 

@@ -76,7 +76,7 @@ Axon自身はGit config・stage・commitを行わない。`axon merge driver`も
 
 file snapshotには本文に加え取得できた記録者情報が入る。Gitで追跡するとこれらも共有される。記録者の保存項目は [記録者連携](lifecycle-recorder.md) を参照する。
 
-検証入口は `cargo test --lib --bin axon --test smoke`。fileの並行writer、置換前後障害、drift、初期化、実worktreeとdriver、index guard、両backendの同一snapshot保持を独立fixtureで扱う。保存とCLI接続でlifecycleの意味は変更せず、Quintの状態を増やさない。
+検証入口は `cargo test --workspace --lib --bin axon --test smoke`。fileの並行writer、置換前後障害、drift、初期化、実worktreeとdriver、index guard、両backendの同一snapshot保持を独立fixtureで扱う。保存とCLI接続でlifecycleの意味は変更せず、Quintの状態を増やさない。
 
 ## Declarationの一括反映
 

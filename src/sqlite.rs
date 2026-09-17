@@ -1,27 +1,9 @@
 //! SQLite persists the complete common snapshot, including causal branches.
-use crate::lifecycle::{self, Snapshot, StoreId};
+use crate::lifecycle::{self, Snapshot};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::{path::Path, time::Duration};
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("{0}")]
-    Invalid(String),
-    #[error("{0}")]
-    PublicationUnknown(String),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error("SQLite: {0}")]
-    Sql(#[from] rusqlite::Error),
-    #[error("Result unknown: SQLite commit failed: {0}; inspect saved state before retrying")]
-    Commit(rusqlite::Error),
-    #[error(transparent)]
-    Core(#[from] lifecycle::Error),
-}
-pub type Result<T> = std::result::Result<T, Error>;
-pub(crate) fn invalid(message: impl Into<String>) -> Error {
-    Error::Invalid(message.into())
-}
+use crate::error::{Error, Result, invalid, validate_prefix};
 const APPLICATION: i64 = 0x41584c43;
 const VERSION: i64 = 1;
 const SCHEMA: &str = "CREATE TABLE lifecycle_store (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), prefix TEXT NOT NULL, snapshot BLOB NOT NULL)";
@@ -130,15 +112,6 @@ fn read(connection: &Connection) -> Result<(String, Snapshot)> {
     validate_prefix(&prefix)?;
     Ok((prefix, lifecycle::decode(&bytes)?))
 }
-pub fn validate_prefix(prefix: &str) -> Result<()> {
-    if prefix.is_empty() {
-        return Err(invalid("Entity prefix must not be empty"));
-    }
-    Ok(())
-}
-pub fn empty() -> Snapshot {
-    Snapshot::new(StoreId::generate())
-}
 
 #[cfg(test)]
 mod tests {
@@ -150,7 +123,7 @@ mod tests {
             std::env::temp_dir().join(format!("axon-import-{:032x}", rand::random::<u128>()));
         std::fs::create_dir(&root).unwrap();
         let db = root.join("store.db");
-        let before = empty();
+        let before = Snapshot::empty();
         let store = Store::create(&db, "demo", &before).unwrap();
         store.connection.commit_hook(Some(|| true)).unwrap();
         let mut store = crate::location::Store::Sqlite(store);
@@ -180,7 +153,7 @@ mod tests {
     fn failed_commit_keeps_the_previous_snapshot() {
         let path =
             std::env::temp_dir().join(format!("axon-sqlite-{:032x}.db", rand::random::<u128>()));
-        let before = empty();
+        let before = Snapshot::empty();
         let mut store = Store::create(&path, "t", &before).unwrap();
         store.connection.commit_hook(Some(|| true)).unwrap();
         let result = store.update(|_, snapshot| {

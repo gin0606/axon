@@ -9,6 +9,9 @@ pub struct Snapshot {
     pub(crate) notes: BTreeMap<RecordId, Note>,
 }
 impl Snapshot {
+    pub fn empty() -> Self {
+        Self::new(StoreId::generate())
+    }
     pub fn new(store: StoreId) -> Self {
         Self {
             store,

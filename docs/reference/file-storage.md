@@ -56,7 +56,7 @@ root の `.gitattributes`:
 作業場所の絶対パス、作成・更新・操作時刻が自動保存される。
 actor は実行環境によってエージェント名や `$USER@作業ディレクトリ名` になり、
 絶対パスには OS のユーザー名やローカルのディレクトリ構成が含まれる。
-取得規則は [actor と作業場所](../development/architecture.md#actor-と作業場所) を参照する。
+取得規則は [actor と作業場所](../design/three-axis-architecture.md#actor-と作業場所) を参照する。
 
 作業場所は claim だけでなく履歴にも保存されるため、`done` や `release` では
 過去の絶対パスは消えない。公開 repository で管理する場合は、これらの自動記録情報も

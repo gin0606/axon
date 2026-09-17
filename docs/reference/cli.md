@@ -47,7 +47,7 @@ axon note add <id> -m='--help'
 通常成功時は終了コード 0。DB を開かず、管理 root の有無や DB の状態に依存しない。
 初期化、migration、記録追加、claim 取得、外部 Command 評価は行わない。
 Note・判断履歴・claim と同じ判定関数を使い、優先順位は
-[actor と作業場所](../development/architecture.md#actor-と作業場所)に従う。
+[actor と作業場所](../design/three-axis-architecture.md#actor-と作業場所)に従う。
 
 Note の追記前には、追記と同じ環境・作業ディレクトリで実行する。過去の Note や
 claim の actor は現在値の保証にならず、観測後に環境やディレクトリを変えた場合も

@@ -1,8 +1,8 @@
 //! Worktree-local snapshots, serialized under a stable OS lock.
 use crate::{
+    error::{Error, Result, invalid, validate_prefix},
     lifecycle::{self, Snapshot},
     location::Location,
-    sqlite::{Error, Result, invalid, validate_prefix},
 };
 use serde::{Deserialize, Serialize};
 use std::{

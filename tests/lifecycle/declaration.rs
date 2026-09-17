@@ -150,7 +150,7 @@ fn declaration_docs_and_template_work_with_broken_management_root() {
     let yaml = success(output);
     let d = declaration::parse(&yaml).unwrap();
     assert_eq!(d, declaration::example());
-    assert_eq!(d.serialize(&axon::sqlite::empty()).unwrap(), yaml);
+    assert_eq!(d.serialize(&Snapshot::empty()).unwrap(), yaml);
     assert!(f.ok(&["docs"]).contains("docs declaration"));
     let help = f.ok(&["--help"]);
     for (heading, name) in [
@@ -472,8 +472,8 @@ fn declaration_prepare_reports_applied_file_when_output_fails() {
 #[test]
 fn declaration_apply_registers_edits_and_retries_on_both_backends() {
     let mut prepared = declaration::example();
-    prepared.prepare(&axon::sqlite::empty(), "demo").unwrap();
-    let input = prepared.serialize(&axon::sqlite::empty()).unwrap();
+    prepared.prepare(&Snapshot::empty(), "demo").unwrap();
+    let input = prepared.serialize(&Snapshot::empty()).unwrap();
     let mut results = Vec::new();
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();

@@ -6,7 +6,7 @@ Axon 操作には、このリポジトリの協業方針として [`axon:convent
 
 ## 作業時の参照先
 
-仕様の正本は [spec/lifecycle_proposal.md](spec/lifecycle_proposal.md)。実装の入口は [共通コア](docs/development/lifecycle-core.md)、[SQLite CLI](docs/development/lifecycle-sqlite.md)、[file保存とGit統合](docs/development/lifecycle-file.md)。`src/lib.rs` と `src/main.rs` が現行実装です。
+仕様の正本は [spec/lifecycle_proposal.md](spec/lifecycle_proposal.md)。実装を読む入口は [層構造の地図](docs/development/architecture.md)。crate・module の配置、依存方向、各層のテスト入口と、共通コア・保存 adapter の詳細契約への参照をまとめています。
 
 変更対象の契約は [docs/README.md](docs/README.md) から確認し、設計変更とモデル検証は [検証方針](docs/development/verification.md) に従ってください。`archive/three-axis` の旧コード・テストと、過去資料と明示されたreference/design・Quintモデルは現行仕様の規範にしません。旧Revision・claimの契約を新コアへ持ち込まないでください。
 

@@ -1,9 +1,9 @@
 //! Reviewable merge workspaces bind inputs, resolution, candidate and destination.
 use crate::{
+    error::{Result, invalid},
     file::{self, optional_bytes, read_regular},
     lifecycle::*,
     location::Location,
-    sqlite::{Result, invalid},
 };
 use serde::{Deserialize, Serialize};
 use std::{

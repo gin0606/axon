@@ -1,5 +1,5 @@
 //! Declaration publication shares the file backend's atomic replacement boundary.
-use crate::sqlite::{Error, Result};
+use crate::error::{Error, Result, invalid};
 use std::path::Path;
 
 pub fn rewrite(path: &Path, before: &[u8], bytes: &[u8]) -> Result<()> {
@@ -34,20 +34,20 @@ fn apply_with(
             |_, snapshot| {
                 let before = crate::file::read_regular(path)?;
                 let input = std::str::from_utf8(&before)
-                    .map_err(|e| crate::sqlite::invalid(format!("Declaration schema: {e}")))?;
-                let mut declaration = crate::declaration::parse(input)
-                    .map_err(|e| crate::sqlite::invalid(e.to_string()))?;
+                    .map_err(|e| invalid(format!("Declaration schema: {e}")))?;
+                let mut declaration =
+                    crate::declaration::parse(input).map_err(|e| invalid(e.to_string()))?;
                 let checked = declaration
                     .check(input, snapshot, context)
-                    .map_err(|e| crate::sqlite::invalid(e.to_string()))?;
+                    .map_err(|e| invalid(e.to_string()))?;
                 let changed = *snapshot != checked.snapshot;
                 let new_ids = declaration.assigned_new_ids();
                 declaration
                     .refresh_applied(&checked.snapshot)
-                    .map_err(|e| crate::sqlite::invalid(e.to_string()))?;
+                    .map_err(|e| invalid(e.to_string()))?;
                 let rewritten = declaration
                     .serialize(&checked.snapshot)
-                    .map_err(|e| crate::sqlite::invalid(e.to_string()))?;
+                    .map_err(|e| invalid(e.to_string()))?;
                 *snapshot = checked.snapshot;
                 Ok((before, rewritten, ApplyOutcome { changed, new_ids }))
             },
@@ -55,11 +55,11 @@ fn apply_with(
         )
         .map_err(|error| {
             if matches!(&error, Error::Commit(_) | Error::PublicationUnknown(_)) {
-                crate::sqlite::invalid(format!(
+                invalid(format!(
                     "Result unknown: storage save: {error}; declaration unchanged"
                 ))
             } else {
-                crate::sqlite::invalid(format!(
+                invalid(format!(
                     "Not applied: storage unchanged; declaration unchanged: {error}"
                 ))
             }
@@ -70,13 +70,15 @@ fn apply_with(
         } else {
             "Not applied: declaration unchanged"
         };
-        crate::sqlite::invalid(format!("Applied: storage applied; {boundary}: {error}; retry the same file with axon import apply"))
+        invalid(format!("Applied: storage applied; {boundary}: {error}; retry the same file with axon import apply"))
     })?;
     Ok(outcome)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::invalid;
+
     #[test]
     fn apply_rewrite_failures_preserve_storage_and_allow_retry() {
         for file_backend in [false, true] {
@@ -107,12 +109,8 @@ mod tests {
                             "typed" => Err(super::Error::PublicationUnknown(
                                 "changed diagnostic".into(),
                             )),
-                            "misleading" => {
-                                Err(crate::sqlite::invalid("result unknown after publication"))
-                            }
-                            "write" => {
-                                Err(crate::sqlite::invalid("injected temporary write failure"))
-                            }
+                            "misleading" => Err(invalid("result unknown after publication")),
+                            "write" => Err(invalid("injected temporary write failure")),
                             "drift" => crate::file::publish_with(
                                 path,
                                 Some(before),
@@ -128,7 +126,7 @@ mod tests {
                                 Some(before),
                                 bytes,
                                 || Ok(()),
-                                || Err(crate::sqlite::invalid("injected sync failure")),
+                                || Err(invalid("injected sync failure")),
                             ),
                         };
                         assert_eq!(
@@ -371,3 +369,6 @@ mod process_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod relationship_tests;

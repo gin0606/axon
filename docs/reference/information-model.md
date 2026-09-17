@@ -145,7 +145,7 @@ MergeRecordは入力identityと候補bundle、先行記録、採用結果を保�
 - [状態モデル](state-model.md): 各軸、関係、導出規則
 - [CLI 契約](cli.md): コマンド構文、出力、公開 ID の解決
 - [宣言ファイル](declaration-file.md): export / import の形式と適用
-- [アーキテクチャ](../development/architecture.md): schema、内部型、永続化
+- [三軸 CLI のアーキテクチャ](../design/three-axis-architecture.md): schema、内部型、永続化
 - [設計判断](../design/decisions.md#情報モデルの導入経緯): 発端と代替案
 
 実装作業の分割・依存関係・着手順は、この契約の対象に含めない。

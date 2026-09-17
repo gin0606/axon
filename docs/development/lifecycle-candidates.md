@@ -1,6 +1,6 @@
 # 候補一覧と外部条件
 
-正本は [単一 lifecycle spec](../../spec/lifecycle_proposal.md#評価契約)。`src/lifecycle/candidates.rs` が backend に依存しない候補選択を行い、`src/condition.rs` が CLI の外部プロセスを監督する。旧 `src/derived.rs` の三軸の候補・着手判定は新 CLI から参照しない。
+正本は [単一 lifecycle spec](../../spec/lifecycle_proposal.md#評価契約)。`crates/axon-core/src/lifecycle/candidates.rs` が backend に依存しない候補選択を行い、`src/cli/condition.rs` が CLI の外部プロセスを監督する。旧 `src/derived.rs` の三軸の候補・着手判定は新 CLI から参照しない。
 
 ```sh
 axon proposals

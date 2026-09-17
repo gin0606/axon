@@ -1,8 +1,9 @@
 //! Storage discovery keeps Git boundaries and never falls back from an artifact.
 use crate::{
+    error::{Result, invalid, validate_prefix},
     file,
     lifecycle::Snapshot,
-    sqlite::{self, Result, invalid},
+    sqlite,
 };
 use std::{
     fs::{self, File, OpenOptions},
@@ -194,7 +195,7 @@ impl Location {
         }
     }
     pub fn init_backend(&self, prefix: &str, file_backend: bool) -> Result<InitResult> {
-        sqlite::validate_prefix(prefix)?;
+        validate_prefix(prefix)?;
         let destination = if file_backend {
             self.root.join(".axon/state.jsonl")
         } else {
@@ -236,9 +237,9 @@ impl Location {
                     .write(true)
                     .create_new(true)
                     .open(&temp)?;
-                output.write_all(&file::encode(prefix, &sqlite::empty())?)?;
+                output.write_all(&file::encode(prefix, &Snapshot::empty())?)?;
             } else {
-                drop(sqlite::Store::create(&temp, prefix, &sqlite::empty())?);
+                drop(sqlite::Store::create(&temp, prefix, &Snapshot::empty())?);
             }
             File::open(&temp)?.sync_all()?;
             fs::hard_link(&temp, &destination)?;
