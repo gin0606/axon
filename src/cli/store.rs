@@ -18,7 +18,7 @@ pub(super) fn context() -> Context {
         }),
     }
 }
-pub fn resolve(snapshot: &Snapshot, value: &str) -> Result<EntityId> {
+pub(super) fn resolve(snapshot: &Snapshot, value: &str) -> Result<EntityId> {
     let _: EntityId = value.to_owned().try_into()?;
     let mut matches: Vec<_> = snapshot
         .entities()
@@ -38,7 +38,7 @@ pub fn resolve(snapshot: &Snapshot, value: &str) -> Result<EntityId> {
         ))),
     }
 }
-pub fn fresh_entity_id(prefix: &str, snapshot: &Snapshot) -> Result<EntityId> {
+pub(super) fn fresh_entity_id(prefix: &str, snapshot: &Snapshot) -> Result<EntityId> {
     fresh_entity_id_with(snapshot, || EntityId::generate(prefix))
 }
 pub(super) fn fresh_entity_id_with(
