@@ -52,7 +52,8 @@ pub(crate) fn git_command(cwd: &Path) -> Command {
     }
     command
 }
-fn git(cwd: &Path, args: &[&str]) -> Result<Option<PathBuf>> {
+/// The worktree root and the common directory, from a single rev-parse.
+fn git(cwd: &Path) -> Result<Option<(PathBuf, PathBuf)>> {
     let mut boundary = None;
     for ancestor in cwd.ancestors() {
         if present(&ancestor.join(".git"))? {
@@ -60,22 +61,34 @@ fn git(cwd: &Path, args: &[&str]) -> Result<Option<PathBuf>> {
             break;
         }
     }
-    let result = git_command(cwd).args(args).output();
+    let result = git_command(cwd)
+        .args([
+            "rev-parse",
+            "--show-toplevel",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ])
+        .output();
     match result {
         Ok(output) if output.status.success() => {
             let text =
                 String::from_utf8(output.stdout).map_err(|_| invalid("Git path is not UTF-8"))?;
-            let path = PathBuf::from(text.strip_suffix('\n').unwrap_or(&text));
-            if args.contains(&"--show-toplevel")
-                && let Some(boundary) = boundary
-                && fs::canonicalize(&path)? != fs::canonicalize(boundary)?
+            let mut lines = text.strip_suffix('\n').unwrap_or_default().split('\n');
+            let (Some(root), Some(common), None) = (lines.next(), lines.next(), lines.next())
+            else {
+                return Err(invalid(
+                    "Git discovery failed: expected the working tree root and the common directory on two lines; a Git worktree whose path contains a newline is not supported, so move or rename it",
+                ));
+            };
+            if let Some(boundary) = boundary
+                && fs::canonicalize(root)? != fs::canonicalize(boundary)?
             {
                 return Err(invalid(format!(
                     "Git discovery failed: Git skipped the repository marker at {}",
                     boundary.join(".git").display()
                 )));
             }
-            Ok(Some(path))
+            Ok(Some((root.into(), common.into())))
         }
         failed => {
             // Bare repositories have no .git entry but still form a boundary.
@@ -96,12 +109,7 @@ fn git(cwd: &Path, args: &[&str]) -> Result<Option<PathBuf>> {
 impl Location {
     pub fn discover(cwd: &Path, init: bool) -> Result<Self> {
         let cwd = fs::canonicalize(cwd)?;
-        if let Some(root) = git(&cwd, &["rev-parse", "--show-toplevel"])? {
-            let common = git(
-                &root,
-                &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-            )?
-            .ok_or_else(|| invalid("missing Git common directory"))?;
+        if let Some((root, common)) = git(&cwd)? {
             let sql_root = common
                 .parent()
                 .ok_or_else(|| invalid("Git common directory has no parent"))?;
@@ -184,7 +192,7 @@ impl Location {
     }
     pub fn open(&self) -> Result<Store> {
         match self.artifacts()? {
-            Some(true) => Ok(Store::File(file::Store::open(&self.root)?)),
+            Some(true) => Ok(Store::File(file::Store::at(self.clone())?)),
             Some(false) => {
                 if !fs::symlink_metadata(&self.sqlite)?.file_type().is_file() {
                     return Err(invalid("SQLite canonical path is not a regular file"));

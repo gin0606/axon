@@ -1,6 +1,7 @@
 use axon::{
     file,
     lifecycle::{Context, Current, EntityId, Kind, Lifecycle},
+    location::Location,
     sqlite,
 };
 use axon_lifecycle_migration::{
@@ -488,7 +489,7 @@ fn drift_tampering_and_duplicate_roots_are_rejected() {
     assert!(job::execute(&job, false, true).is_err());
     fs::write(job.join("root/candidate"), candidate).unwrap();
     job::execute(&job, false, true).unwrap();
-    let mut store = file::Store::open(&t.root).unwrap();
+    let mut store = Location::discover(&t.root, false).unwrap().open().unwrap();
     store
         .update(|_, s| {
             s.create(

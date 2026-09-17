@@ -28,11 +28,11 @@ fileの`axon init`は無関係な行を保持して次を補完する。直接�
 
 fileの先頭行は `{"format":"axon-file/v1","prefix":"demo"}`。続く行は既存の `axon-lifecycle/v1` 共通codecそのものであり、store ID・状態・全記録を保持する。旧JSONLの互換読取や暗黙変換はしない。
 
-writerは `.axon/state.lock` のOS lockを取得してから最新の正本を読み、通常操作と全体検査を行う。temporaryの書込・sync後、backend・Git index・元bytesを再照合し、atomic replaceとdirectory syncを終えて成功する。lock fileは置換・削除しない。process終了時はOSがlockを解放する。同値の操作では非canonicalな空白も含め元bytesを保持する。
+writerは `.axon/state.lock` のOS lockを取得してから最新の正本を読み、通常操作と全体検査を行う。temporaryの書込・sync後、backend・Git index・元bytesを再照合し、atomic replaceとdirectory syncを終えて成功する。lock fileは置換・削除しない。process終了時はOSがlockを解放する。同値の操作では非canonicalな空白も含め元bytesを保持する。通常の読み取り・書き込みでは保存先の発見はCLI実行ごとに一回で、以後の再照合はbackend・Git index・元bytesを対象とする。実行の途中でGitのtoplevelやcommon directoryが変わったことは検出しない。
 
 置換前の失敗は `not applied`、置換後のsync失敗は `result unknown` と区別する。結果不明ならprocess終了を確認し、保存済みEntityと記録を照合する。Noteや作成を推測で再実行しない。出力失敗は `storage applied; output failed` で区別する。
 
-通常読取も完全なsnapshotを検査し、Git indexで正本がunmergedなら内容がvalidでも拒否する。Gitがdriverを呼ばないfast-forwardなどでも壊れたsnapshotは受理しない。解決した内容を検査・stageした後に通常操作へ戻る。GitやeditorはOS lockに従わないため、同じworktreeでcheckout/merge/editor保存とAxon書込を並行しない。最終再照合直後の非協調書込やnetwork filesystemの透過的な保証は対象外。
+通常読取も完全なsnapshotを検査し、Git indexで正本がunmergedなら内容がvalidでも拒否する。Gitがdriverを呼ばないfast-forwardなどでも壊れたsnapshotは受理しない。解決した内容を検査・stageした後に通常操作へ戻る。改行を含むpathに置かれたGit worktreeは保存先の発見でエラーにする。GitやeditorはOS lockに従わないため、同じworktreeでcheckout/merge/editor保存とAxon書込を並行しない。最終再照合直後の非協調書込やnetwork filesystemの透過的な保証は対象外。
 
 ## 明示的な統合
 

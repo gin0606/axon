@@ -199,7 +199,7 @@ driver は install 後に各 repository で通常の Git config に登録する�
 `axon merge setup` は提供しない。attribute と ignore は file init が用意する。
 Git の内部祖先統合は binary driver を使い、空・不正・曖昧な祖先を推測して合成しない。
 add/add や delete/modify も、完全な共通入力を構成できなければ手動解決へ返す。
-Git が driver を呼ばない場合も通常 open は index の未解決を拒否し、snapshot を検証する。
+Git が driver を呼ばない場合も通常の読み取り・書き込みは index の未解決を拒否し、snapshot を検証する。
 
 ```sh
 # 一時 repository などの独立 fixture で試す例
