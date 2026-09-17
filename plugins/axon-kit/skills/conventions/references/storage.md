@@ -12,7 +12,7 @@ file `axon init`は無関係な行を保持して `.axon/.gitignore` に `*`、`
 
 ## 通常writerと検査
 
-file writerは `.axon/state.lock` のOS lock取得後に最新の正本を読む。通常操作と全体検査後、temporaryへの書込みと同期、backend/index/元bytesの再照合、atomic replace、directory syncの順で保存する。置換前の失敗はnot applied、置換後同期の失敗はresult unknown。lock fileを削除しない。同値操作は元bytesを保持する。
+file writerは `.axon/state.lock` のOS lock取得後に最新の正本を読む。通常操作と全体検査後、temporaryへの書込みと同期、backend/index/元bytesの再照合、atomic replace、directory syncの順で保存する。置換前の失敗はnot applied、置換後同期の失敗はresult unknown。同値操作は元bytesを保持する。
 
 SQLiteはwrite transactionのlock取得後にsnapshotを読み、コアの操作と全体検査後にcommitする。commit errorは結果不明として保存済み状態を照合する。linked worktreeは同じDBを共有する。
 
@@ -22,4 +22,4 @@ Git/editorはOS lockに従わないため、同じworktreeでcheckout/merge/edit
 
 ## 統合と結果不明
 
-file統合は `axon-kit:merge-snapshot` とその配布内referenceを使う。通常操作から統合時の選択、backend切替、全data移行へ権限を広げない。公開結果が不明ならwriter終了後に正本、候補、記録を照合する。結果不明のままNote追加や状態変更を繰り返さない。
+file統合は `axon-kit:merge-snapshot` とその配布内referenceを使う。通常操作から統合時の選択、backend切替、全data移行へ権限を広げない。公開結果が不明ならwriter終了後に正本、候補、記録を照合する。

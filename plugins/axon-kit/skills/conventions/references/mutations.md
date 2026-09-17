@@ -10,7 +10,7 @@
 
 ## 保存先と権限
 
-Git内のSQLiteはcommon Git directoryの親の `.axon/axon.db` をworktree間で共有する。fileは現在worktreeの `.axon/state.jsonl` で、他worktreeの未統合データは観測できない。Git外は最寄りの管理root。別worktreeはSQLiteの独立fixtureではない。混在・破損・unknown schema・`axon init`途中から別保存先へfallbackしない。
+Git内のSQLiteはcommon Git directoryの親の `.axon/axon.db` をworktree間で共有する。fileは現在worktreeの `.axon/state.jsonl` で、他worktreeの未統合データは観測できない。Git外は最寄りの管理root。別worktreeはSQLiteの独立fixtureではない。
 
 意図した保存先への当該mutationだけがsandboxに拒否された場合は、そのcommandだけをホストの許可機構へ渡す。無関係な読み取りやprogram、別binary、backend切替まで許可範囲を広げない。変更fileをstage/commitする権限は呼び出し側が別に与える。
 
@@ -24,6 +24,6 @@ Git内のSQLiteはcommon Git directoryの親の `.axon/axon.db` をworktree間�
 
 元processの終了を確認し、同じbackend/rootで現在値・記録を再読する。fileは正本の完全な検査も行う。現在値を同じ効果へ収束させる操作は、現在状態と反復契約が合う場合に限り原因を修正して再試行できる。lifecycleは対象状態とlogを照合し、別状態へ進んでいれば再送しない。追加操作の照合は [作成](creation.md) または `axon-kit:add-note` の事前集合・固定payloadの手順に従う。
 
-競合・一致候補複数・欠損した事前証拠などで結論できなければ不明として返し、payloadと観測を保持する。補償遷移、取消、Note削除、rollback、別保存先へ作成で「修復」しない。既に保存確認したNoteは後続状態操作の失敗後も再追加しない。
+競合・一致候補複数・欠損した事前証拠などで結論できなければ不明として返し、payloadと観測を保持する。記録は追記専用で、結果不明のまま別の作用を重ねると適用済み範囲を確定できなくなるため、補償遷移、取消、rollback、別保存先へ作成で「修復」しない。
 
-fileのlockはOSがwriter終了時に解放する。lock fileの削除は別writerとの相互排他を壊すため行わない。同一worktreeでGit/editor書込とAxon書込を並行しない。詳細は [保存先と復旧](storage.md)。
+fileのlockはOSがwriter終了時に解放する。lock fileの削除は別writerとの相互排他を壊すため行わない。詳細は [保存先と復旧](storage.md)。

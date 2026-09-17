@@ -15,7 +15,7 @@ EntityはIssueまたはGroup。同じID namespaceと操作を使う。lifecycle�
 
 ## 読む目的から入口を選ぶ
 
-`axon list` は非浮上・terminalを含む保存済み全件で、`--kind issue|group`、`--lifecycle not-started` など、`--terminal=false`、`--search='text'` でAND絞り込みできる。検索は現在のtitle・本文だけのcase-sensitiveなliteral一致。単一検索の不一致だけで意味上の重複なしと断定しない。
+`axon list` は非浮上・terminalを含む保存済み全件で、`--kind issue|group`、`--lifecycle not-started` など、`--terminal=false`、`--search='text'` でAND絞り込みできる。検索は現在のtitle・本文だけのcase-sensitiveなliteral一致で、不一致は意味上の重複の不在を示さない。
 
 `axon proposals` は自身と全祖先が浮上した`Undecided`、`axon tasks` は同条件の`NotStarted`と浮上を問わない全`InProgress`を示す。親や依存待ちも`axon tasks`に入る。候補一覧はinventoryではなく、不在は削除・登録失敗・未着手を立証しない。`--kind`・`--search` は対象候補を先に絞り、残る候補の祖先は通常どおり評価する。
 
