@@ -224,13 +224,13 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
     let f = Fixture::new();
     f.init();
     let body = f.0.join("body.txt");
-    fs::write(&body, "long\n本文").unwrap();
+    fs::write(&body, "long\n本文\x1b[2J").unwrap();
     let id = f
         .ok(&[
             "capture",
             "--accept",
             "--title",
-            "safe\x1b[2J",
+            "safe",
             "-F",
             body.to_str().unwrap(),
         ])
@@ -239,9 +239,11 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
         .unwrap()
         .to_string();
     let show = f.ok(&["show", &id]);
-    assert!(show.contains("safe\\x1b[2J"));
     assert!(!show.contains('\x1b'));
-    assert!(show.contains("long\n本文"));
+    assert!(show.contains("  long\n  本文\\x1b[2J"));
+    let rejected = failure(f.run(&["write", &id, "--title", "unsafe\x1b[2J"]));
+    assert!(rejected.contains("control character"), "{rejected}");
+    assert!(!rejected.contains('\x1b'));
     let mut child = f
         .command()
         .args(["note", "add", &id, "-F", "-"])
@@ -267,23 +269,10 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
         help.lines()
             .any(|line| line.trim_start().starts_with(&format!("{name} ")))
     };
-    assert!(listed("complete") && !listed("done"), "{help}");
-    assert!(
-        listed("parent") && !listed("group") && !listed("plan"),
-        "{help}"
-    );
-    assert!(listed("condition") && !listed("when"), "{help}");
-    assert!(f.ok(&["complete", "--help"]).contains("final review"));
-    for old in [
-        vec!["done", id.as_str()],
-        vec!["plan", "--title", "x"],
-        vec!["group", "capture", "--title", "x"],
-        vec!["group", "set", id.as_str(), "--parent", id.as_str()],
-        vec!["when", "set", id.as_str(), "--command", "exit 0"],
-        vec!["when", "clear", id.as_str()],
-    ] {
-        assert!(failure(f.run(&old)).contains("unrecognized subcommand"));
+    for name in ["complete", "parent", "condition"] {
+        assert!(listed(name), "{help}");
     }
+    assert!(f.ok(&["complete", "--help"]).contains("final review"));
 }
 #[test]
 fn concurrent_start_has_one_winner_and_other_writes_survive() {
@@ -420,14 +409,14 @@ fn sqlite_roundtrip_preserves_branches_integration_and_failed_changes() {
     );
 }
 #[test]
-fn old_unknown_corrupt_and_mixed_stores_are_rejected_without_changes() {
-    for kind in ["legacy", "unknown", "corrupt", "mixed", "pending"] {
+fn unsupported_unknown_corrupt_and_mixed_stores_are_rejected_without_changes() {
+    for kind in ["wrong-version", "unknown", "corrupt", "mixed", "pending"] {
         let f = Fixture::new();
         fs::create_dir(f.0.join(".axon")).unwrap();
         match kind {
-            "legacy" => {
+            "wrong-version" => {
                 let c = rusqlite::Connection::open(f.db()).unwrap();
-                c.execute_batch("PRAGMA user_version=12; CREATE TABLE entities (id TEXT)")
+                c.execute_batch("PRAGMA user_version=99; CREATE TABLE records (id TEXT)")
                     .unwrap();
             }
             "unknown" => {
@@ -575,7 +564,7 @@ fn git_repository_paths_keep_trailing_whitespace() {
     for path in [&plain, &spaced] {
         fs::create_dir(path).unwrap();
         git(path, &["init", "--quiet"]);
-        success(command(path).args(["init"]).output().unwrap());
+        success(command(path).args(["init", "repo"]).output().unwrap());
     }
     success(
         command(&spaced)
@@ -628,7 +617,11 @@ fn initialization_path_never_emits_terminal_controls() {
     let f = Fixture::new();
     let path = f.0.join("repo\x1b[2J");
     fs::create_dir(&path).unwrap();
-    let out = success(command(&path).args(["init"]).output().unwrap());
+    let rejected = failure(command(&path).args(["init"]).output().unwrap());
+    assert!(!rejected.contains('\x1b'));
+    assert!(rejected.contains("repo\\x1b[2J"), "{rejected}");
+    assert!(!path.join(".axon").exists());
+    let out = success(command(&path).args(["init", "repo"]).output().unwrap());
     assert!(!out.contains('\x1b'));
     assert!(out.contains("repo\\x1b[2J"));
     assert!(path.join(".axon/axon.db").is_file());

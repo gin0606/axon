@@ -25,7 +25,7 @@ pub(super) fn row(value: &read::Row<'_>) -> String {
         display::identity(&entity.id),
         display::muted(format!("{:?}", entity.kind)),
         display::situation(status_label(value.status)),
-        display::human_text(&entity.current.title).replace('\n', "\\n")
+        display::line(&entity.current.title)
     )
 }
 pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
@@ -44,7 +44,7 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
         out.push_str(&format!(
             "Parent: {}  {}\n",
             display::identity(&parent.id),
-            display::human_text(&parent.current.title)
+            display::line(&parent.current.title)
         ));
     }
     if !details && let Some(prerequisites) = &value.prerequisites {
@@ -77,7 +77,7 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
                 .current
                 .condition
                 .as_ref()
-                .map(display::human_text)
+                .map(display::line)
                 .unwrap_or_else(|| "(none)".into())
         ));
         for (label, related) in [
@@ -98,7 +98,7 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
         }
     }
     out.push('\n');
-    out.push_str(&display::human_text(&entity.current.description));
+    out.push_str(&display::block(&entity.current.description));
     out.push('\n');
     if let Some(descendants) = &value.descendants {
         let total = descendants.entries.len();
@@ -132,7 +132,7 @@ pub(super) fn actor(context: &Context) -> String {
     context
         .recorder
         .as_ref()
-        .map(|r| display::human_text(&r.actor))
+        .map(|r| display::line(&r.actor))
         .unwrap_or_else(|| "—".into())
 }
 pub(super) fn recorder_display(context: &Context, details: bool) -> String {
@@ -170,12 +170,7 @@ pub(super) fn file_init_output(location: &Location, files: &[IntegrationFile]) -
 }
 pub(super) fn declaration_ids(ids: &[(String, String)]) -> String {
     ids.iter()
-        .map(|(key, id)| {
-            format!(
-                "{key} -> {}\n",
-                display::human_text(id).replace('\n', "\\n")
-            )
-        })
+        .map(|(key, id)| format!("{key} -> {}\n", display::line(id)))
         .collect()
 }
 
@@ -204,11 +199,7 @@ pub(super) fn declaration_changes(
                     if a.title == b.title {
                         "unchanged".into()
                     } else {
-                        format!(
-                            "{} -> {}",
-                            display::human_text(&a.title).replace('\n', "\\n"),
-                            display::human_text(&b.title).replace('\n', "\\n")
-                        )
+                        format!("{} -> {}", display::line(&a.title), display::line(&b.title))
                     },
                     if a.description == b.description {
                         "unchanged"
@@ -279,17 +270,23 @@ pub fn list_row(value: &read::Row<'_>, searched: bool) -> String {
     }
     text
 }
-pub fn format_note(note: &Note, details: bool) -> String {
+/// `listed` Notes share the output with other records, so their bodies are indented.
+/// A single requested Note prints its body as stored.
+pub fn format_note(note: &Note, details: bool, listed: bool) -> String {
     format!(
         "{}  {}  {}\n{}\n\n",
         display::identity(&note.id),
         display::muted(display::timestamp(&note.context.at)),
         recorder_display(&note.context, details),
-        display::human_text(&note.body)
+        if listed {
+            display::block(&note.body)
+        } else {
+            display::human_text(&note.body)
+        }
     )
 }
 pub fn confirmation(id: &EntityId, effect: &str) -> String {
-    let escaped = display::human_text(effect).replace('\n', "\\n");
+    let escaped = display::line(effect);
     let effect = escaped.as_str();
     let effect = if effect.starts_with("No changes") || effect == "Cancelled" {
         display::muted(effect)

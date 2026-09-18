@@ -197,11 +197,11 @@ fn strict_yaml_rejects_unsupported_constructs_and_wrong_types() {
     for bad in invalid {
         assert!(parse(&bad).is_err(), "accepted {bad}");
     }
-    for schema in ["axon-plan/v3", "future/v2"] {
+    for schema in ["other/v1", "future/v2"] {
         let e = parse(&format!("schema: {schema}\n"))
             .unwrap_err()
             .to_string();
-        assert!(e.contains(schema) && e.contains("old-model"), "{e}");
+        assert!(e.contains(schema) && e.contains(SCHEMA), "{e}");
     }
 }
 #[test]
@@ -295,51 +295,9 @@ fn fingerprint_tokens_and_visible_field_changes() {
     assert_eq!(base, fingerprint(&other));
 }
 #[test]
-fn export_flow_references_preserve_arbitrary_ids() {
-    let mut s = snapshot();
-    s.create(
-        id("parent, with [brackets]"),
-        Kind::Group,
-        current("External"),
-        context(),
-    )
-    .unwrap();
-    let mut c = current("Child");
-    c.parent = Some(id("parent, with [brackets]"));
-    s.create(id("child"), Kind::Issue, c, context()).unwrap();
-    let d = export(&s, &[id("child")]).unwrap();
-    assert_eq!(parse(&d.serialize(&s).unwrap()).unwrap(), d);
-}
-
-#[test]
-fn multiline_ids_use_literal_blocks_and_quoted_flow_references() {
-    for name in ["first\nsecond", "first\nsecond\n"] {
-        let mut s = snapshot();
-        s.create(id(name), Kind::Group, current("Parent"), context())
-            .unwrap();
-        let mut c = current("Child");
-        c.parent = Some(id(name));
-        s.create(id("child"), Kind::Issue, c, context()).unwrap();
-        for selector in [name, "child"] {
-            let declaration = export(&s, &[id(selector)]).unwrap();
-            let yaml = declaration.serialize(&s).unwrap();
-            assert!(
-                yaml.contains(if name.ends_with('\n') {
-                    "  - id: |\n      first\n      second\n"
-                } else {
-                    "  - id: |-\n      first\n      second\n"
-                }),
-                "{yaml}"
-            );
-            assert!(yaml.contains(&format!("parent: {{ id: {} }}", quote(name))));
-            assert_eq!(parse(&yaml).unwrap().serialize(&s).unwrap(), yaml);
-        }
-    }
-}
-#[test]
-fn spec_example_has_identical_canonical_bytes() {
-    let spec = include_str!("../../../../spec/lifecycle_proposal.md");
-    let text = spec
+fn declaration_doc_example_has_identical_canonical_bytes() {
+    let doc = include_str!("../../../../docs/reference/declaration.md");
+    let text = doc
         .split("```yaml\nschema: axon-declaration/v1\n")
         .nth(1)
         .unwrap()

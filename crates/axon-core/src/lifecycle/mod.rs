@@ -1,4 +1,4 @@
-//! Single-lifecycle records and in-memory operations, independent of SQL and I/O.
+//! Lifecycle records and in-memory operations, independent of SQL and I/O.
 //!
 //! Ordinary operations enforce lifecycle, containment and dependency constraints.
 //! Three-way merging preserves records and validates whole-plan selections.

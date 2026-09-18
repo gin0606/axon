@@ -261,6 +261,13 @@ fn merge_workspace_preserves_both_branches_and_rejects_drift() {
         assert!(workspace.join("choices.json").is_file());
         resolve(&workspace, &id);
         file_merge::check(&workspace).unwrap();
+        let candidate = fs::read(workspace.join("candidate.jsonl")).unwrap();
+        file_merge::check(&workspace).unwrap();
+        assert_eq!(
+            candidate,
+            fs::read(workspace.join("candidate.jsonl")).unwrap(),
+            "checking unchanged inputs again yields the same candidate"
+        );
         match drift {
             "input" => fs::write(&theirs, b"changed").unwrap(),
             "destination" => fs::write(state(&f), b"changed").unwrap(),
@@ -451,6 +458,47 @@ fn file_worktrees_are_isolated_and_git_driver_merges_notes() {
         fs::read(state(&f)).unwrap(),
         b"broken fast-forward snapshot"
     );
+}
+
+#[test]
+fn init_from_a_linked_worktree_refuses_the_directory_of_an_existing_file_store() {
+    let f = Fixture::new();
+    git(&f.0, &["init", "-q"]);
+    git(
+        &f.0,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+    );
+    git(&f.0, &["branch", "without-store"]);
+    init_file(&f);
+    let id = f.accepted("job");
+    let before = fs::read(state(&f)).unwrap();
+    let linked = Fixture::new();
+    fs::remove_dir(&linked.0).unwrap();
+    git(
+        &f.0,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            linked.0.to_str().unwrap(),
+            "without-store",
+        ],
+    );
+    let error = failure(linked.run(&["init", "demo"]));
+    assert!(error.contains("already holds a store"), "{error}");
+    assert!(!f.0.join(".axon/axon.db").exists());
+    assert_eq!(before, fs::read(state(&f)).unwrap());
+    assert!(f.ok(&["list"]).contains(&id));
 }
 
 #[test]

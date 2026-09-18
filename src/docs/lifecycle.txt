@@ -38,7 +38,7 @@ Reading and resurfacing
   ancestor Group. Absence from these lists does not mean an Entity is missing.
   list includes every saved Entity by default, in creation order. --kind,
   --lifecycle, --terminal and --search narrow it without running conditions.
-  list/tasks/proposals --search now match only current title and description, not Notes.
+  list/tasks/proposals --search match only current title and description, not Notes.
   Use note search 'text' for information in Notes across all Entities, including
   Completed and Cancelled work, without running conditions. Matching is literal,
   case-sensitive, with no trimming or Unicode normalization. Empty queries are
@@ -64,10 +64,13 @@ Reading and resurfacing
 
 Storage and recovery
   init creates a new root; SQLite is the default, --backend file chooses JSONL.
+  init PREFIX sets the ID prefix: ASCII lowercase letters, digits and hyphens,
+  starting and ending with a letter or digit. Without PREFIX, init lowercases the
+  management root directory name and fails if that is not a valid prefix.
   SQLite is shared by linked Git worktrees at the common Git directory's parent
   .axon/axon.db. File storage is local to each worktree at .axon/state.jsonl.
   Outside Git, the nearest management root is used. Corrupt, mixed, unmerged or
-  incomplete artifacts are errors; no fallback or automatic legacy migration runs.
+  incomplete artifacts are errors; no fallback or automatic conversion runs.
   help, docs, actor, completion and version do not require a store.
 
   Preserve retained artifacts on errors. Applied, Not applied and Result unknown
@@ -77,11 +80,13 @@ Storage and recovery
   merge prepare/check/apply uses retained inputs and explicit resolution choices;
   Git driver configuration, staging and commits remain separate operations.
 
-Use axon help <COMMAND PATH> for exact arguments. Create with --title; descriptions
+Use axon help <COMMAND PATH> for exact arguments. Create with --title. A title is one line of
+at most 200 characters and a --reason one line of at most 500; longer or multi-line text
+belongs in the description or a Note. Descriptions
 accept -m/--description or -F/--file (- reads stdin). Notes use
 -m/--message or -F/--file. Short flags select inline (-m) or file (-F) input;
 inline long names identify the field (--description or --message). For option
-values beginning with a hyphen use the equals form, for example --description='--text'. No legacy option aliases are provided.
+values beginning with a hyphen use the equals form, for example --description='--text'.
 
 Use axon docs declaration for plan declaration fields and the bulk-edit workflow.
 Use axon docs declaration --example for a new-plan YAML template.

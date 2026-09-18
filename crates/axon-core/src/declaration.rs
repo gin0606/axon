@@ -158,7 +158,7 @@ pub fn parse(input: &str) -> Result<Declaration> {
         .map_err(|e| invalid(format!("schema: {e}")))?;
     if probe.schema != SCHEMA {
         return Err(invalid(format!(
-            "schema: unsupported schema {}; expected {SCHEMA}; legacy axon-plan/v3 is an old-model format and is not converted",
+            "schema: unsupported schema {}; expected {SCHEMA}",
             probe.schema
         )));
     }
@@ -186,7 +186,7 @@ impl Declaration {
     fn validate_local(&self) -> Result<()> {
         if self.schema != SCHEMA {
             return Err(invalid(format!(
-                "schema: unsupported schema {}; expected {SCHEMA}; legacy axon-plan/v3 is an old-model format and is not converted",
+                "schema: unsupported schema {}; expected {SCHEMA}",
                 self.schema
             )));
         }

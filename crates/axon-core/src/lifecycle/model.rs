@@ -4,21 +4,26 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+/// Entity IDs appear on command lines, so they stay free of characters a shell would quote.
+fn entity_id_byte(byte: u8) -> bool {
+    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+}
+fn record_id_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'-'
+}
 macro_rules! identifier {
-    ($name:ident, $ascii:literal) => {
+    ($name:ident, $valid:path, $expected:literal) => {
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(try_from = "String", into = "String")]
         pub struct $name(String);
         impl TryFrom<String> for $name {
             type Error = super::Error;
             fn try_from(value: String) -> Result<Self> {
-                if value.is_empty()
-                    || ($ascii
-                        && !value
-                            .bytes()
-                            .all(|b| b.is_ascii_alphanumeric() || b == b'-'))
-                {
-                    return Err(invalid(concat!("invalid ", stringify!($name))));
+                if value.is_empty() || !value.bytes().all($valid) {
+                    return Err(invalid(format!(
+                        concat!("invalid ", stringify!($name), " {:?}: expected ", $expected),
+                        value
+                    )));
                 }
                 Ok(Self(value))
             }
@@ -35,9 +40,17 @@ macro_rules! identifier {
         }
     };
 }
-identifier!(EntityId, false);
-identifier!(RecordId, true);
-identifier!(StoreId, true);
+identifier!(
+    EntityId,
+    entity_id_byte,
+    "ASCII lowercase letters, digits and hyphens"
+);
+identifier!(
+    RecordId,
+    record_id_byte,
+    "ASCII letters, digits and hyphens"
+);
+identifier!(StoreId, record_id_byte, "ASCII letters, digits and hyphens");
 
 impl EntityId {
     pub fn generate(prefix: &str) -> Self {
@@ -126,11 +139,36 @@ pub struct Current {
     pub parent: Option<EntityId>,
     pub dependencies: BTreeSet<EntityId>,
 }
+/// Titles and reasons are shown inside one line. A value that needs line breaks, control
+/// characters or this much room belongs in the description or a Note, and accepting it here
+/// would store a caller's mistake instead of reporting it.
+pub const TITLE_LIMIT: usize = 200;
+pub const REASON_LIMIT: usize = 500;
+pub(crate) fn validate_line(field: &str, value: &str, limit: usize) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(invalid(format!("empty {field}")));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(invalid(format!(
+            "{field} contains a line break or control character"
+        )));
+    }
+    let length = value.chars().count();
+    if length > limit {
+        return Err(invalid(format!(
+            "{field} has {length} characters; the limit is {limit}"
+        )));
+    }
+    Ok(())
+}
+pub(crate) fn validate_reason(reason: &Option<String>) -> Result<()> {
+    reason
+        .as_deref()
+        .map_or(Ok(()), |text| validate_line("reason", text, REASON_LIMIT))
+}
 impl Current {
     pub(crate) fn validate(&self) -> Result<()> {
-        if self.title.trim().is_empty() {
-            return Err(invalid("empty title"));
-        }
+        validate_line("title", &self.title, TITLE_LIMIT)?;
         if self.condition.as_ref().is_some_and(|s| s.trim().is_empty()) {
             return Err(invalid("empty condition command"));
         }

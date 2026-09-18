@@ -122,7 +122,7 @@ pub(super) fn show_note(id: String, note_id: String, recorder_details: bool) -> 
                 "Note does not belong to the specified Entity".into(),
             ));
         }
-        format_note(note, recorder_details)
+        format_note(note, recorder_details, false)
     };
     result(text, "No Notes.")
 }
@@ -145,7 +145,7 @@ pub(super) fn log(value: String, recorder_details: bool) -> Result<Output> {
                     "{before:?} → {after:?}{}",
                     reason
                         .as_ref()
-                        .map(|r| format!("  Reason: {}", display::human_text(r)))
+                        .map(|r| format!("  Reason: {}", display::line(r)))
                         .unwrap_or_default()
                 ),
                 StateEvent::Integration {
@@ -157,7 +157,7 @@ pub(super) fn log(value: String, recorder_details: bool) -> Result<Output> {
                     inputs[*selected].current.lifecycle,
                     reason
                         .as_ref()
-                        .map(|r| format!("  Reason: {}", display::human_text(r)))
+                        .map(|r| format!("  Reason: {}", display::line(r)))
                         .unwrap_or_default()
                 ),
             };
@@ -178,7 +178,7 @@ pub(super) fn list_notes(value: String, recorder_details: bool) -> Result<Output
         let mut text = String::new();
         for entry in read::notes(&snapshot, &resolve(&snapshot, &value)?)? {
             branch_boundary(entry.concurrent_with_previous, &mut text);
-            text.push_str(&format_note(entry.record, recorder_details));
+            text.push_str(&format_note(entry.record, recorder_details, true));
         }
         text
     };

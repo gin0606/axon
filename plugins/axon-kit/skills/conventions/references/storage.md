@@ -4,7 +4,7 @@
 
 Git repositoryの境界で探索を止める。fileは現在worktreeの `.axon/state.jsonl`、SQLiteはcommon Git directoryの親の `.axon/axon.db`。Git外では最寄りの正本または `.axon/init.pending` を持つ祖先が管理root。空の `.axon` とlockだけでは境界にならない。SQLiteとfileが両方存在すれば混在エラー。unknown schema・破損・読取不能・pendingのとき別rootへfallbackしない。他worktreeは全走査されないため一repositoryでbackendを混在させない。
 
-`axon init [PREFIX]` はSQLiteを、`axon init [PREFIX] --backend file` はfileを新規作成する。prefix省略時は管理root名を使う。既存保存先内の入れ子の`axon init`や既存artifactへの`axon init`の再実行は拒否される。file正本のないbranchで`axon init`すると別storeになる。既存storeを使う意図ならその正本をGitで取り込む必要がある。
+`axon init [PREFIX]` はSQLiteを、`axon init [PREFIX] --backend file` はfileを新規作成する。prefixはASCII小文字・数字・ハイフンだけを許し、省略時は管理rootのdirectory名を小文字化した値を使う。規則に合わなければ保存先を作らずに失敗するので、`axon init PREFIX` で明示する。既存保存先内の入れ子の`axon init`や既存artifactへの`axon init`の再実行は拒否される。file正本のないbranchで`axon init`すると別storeになる。既存storeを使う意図ならその正本をGitで取り込む必要がある。
 
 file `axon init`は無関係な行を保持して `.axon/.gitignore` に `*`、`!.gitignore`、`!state.jsonl` を、root `.gitattributes` に `/.axon/state.jsonl merge=axon` を補完する。競合する設定、非通常file、補完後の実効merge属性の上書きは拒否される。親/global ignoreは変更しない。SQLite `axon init`はGit補助fileを編集しない。driver設定・stage・commitは別の権限で行う。
 
@@ -22,4 +22,4 @@ Git/editorはOS lockに従わないため、同じworktreeでcheckout/merge/edit
 
 ## 統合と結果不明
 
-file統合は `axon-kit:merge-snapshot` とその配布内referenceを使う。通常操作から統合時の選択、backend切替、全data移行へ権限を広げない。公開結果が不明ならwriter終了後に正本、候補、記録を照合する。
+file統合は `axon-kit:merge-snapshot` とその配布内referenceを使う。通常操作から統合時の選択、backend切替へ権限を広げない。公開結果が不明ならwriter終了後に正本、候補、記録を照合する。

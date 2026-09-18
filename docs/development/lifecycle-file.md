@@ -1,12 +1,12 @@
-# 単一 lifecycle の file 保存と Git 統合
+# file 保存と Git 統合
 
-[正本spec](../../spec/lifecycle_proposal.md) の保存契約を `src/file.rs`、`src/location.rs`、`src/file_merge.rs` が実装する。通常操作は [SQLite CLI](lifecycle-sqlite.md) と共通で、同じ `Snapshot` の操作・記録・全体検査を通す。旧schemaは自動移行しない。試用・検証は独立fixtureで行う。
+[保存と統合の契約](../reference/storage.md) を `src/file.rs`、`src/location.rs`、`src/file_merge.rs` が実装する。通常操作は [SQLite CLI](lifecycle-sqlite.md) と共通で、同じ `Snapshot` の操作・記録・全体検査を通す。未知のschemaは自動変換しない。試用・検証は独立fixtureで行う。
 
 ## 初期化と探索
 
 `axon init demo --backend file` は現在の管理rootに `.axon/state.jsonl` を新規作成する。Gitでは現在のworktree、Git外では現在directoryを対象とする。Git外で既存管理root内への入れ子の`axon init`は拒否する。通常探索はGit repositoryで止まり、Git外では最寄りの正本または `init.pending` を持つ祖先で止まる。空の `.axon` とlockだけでは止まらない。
 
-既定backendはSQLite。Git common directoryの親にあるSQLiteと現在worktreeのfileが両方あれば拒否する。他worktreeは走査せず、別worktreeだけにあるfileとの混在は検出を保証しない。一repositoryでbackendを混在させない。破損・未知形式・読取不能・pendingから別保存先へfallbackしない。file正本のないbranchは未初期化であり、既存storeを使うには正本をGitで取り込む。そこで`axon init`すると別のstoreになる。
+既定backendはSQLite。Git common directoryの親にあるSQLiteと現在worktreeのfileが両方あれば拒否する。`axon init` は、保存先にするdirectoryに別backendの正本や初期化途中のmarkerがあれば拒否する。linked worktreeからのSQLiteの初期化は、main worktreeのfile正本と同じdirectoryを使うため、この検査で止まる。それ以外のworktreeは走査せず、main以外のlinked worktreeだけにあるfileとの混在は検出しない。一repositoryでbackendを混在させない。破損・未知形式・読取不能・pendingから別保存先へfallbackしない。file正本のないbranchは未初期化であり、既存storeを使うには正本をGitで取り込む。そこで`axon init`すると別のstoreになる。
 
 fileの`axon init`は無関係な行を保持して次を補完する。直接対象を指定する競合設定と、通常fileではない編集先は拒否する。Git内では補完後の実効merge属性も確認し、`.axon/.gitattributes` や Git `info/attributes` で上書きされていれば初期化失敗としてartifactを保持する。親/global ignoreは変更しない。
 
@@ -26,7 +26,7 @@ fileの`axon init`は無関係な行を保持して次を補完する。直接�
 
 ## 保存の保証
 
-fileの先頭行は `{"format":"axon-file/v1","prefix":"demo"}`。続く行は既存の `axon-lifecycle/v1` 共通codecそのものであり、store ID・状態・全記録を保持する。旧JSONLの互換読取や暗黙変換はしない。
+fileの先頭行は `{"format":"axon-file/v1","prefix":"demo"}`。続く行は既存の `axon-lifecycle/v1` 共通codecそのものであり、store ID・状態・全記録を保持する。未知formatの読取や暗黙変換はしない。
 
 writerは `.axon/state.lock` のOS lockを取得してから最新の正本を読み、通常操作と全体検査を行う。temporaryの書込・sync後、backend・Git index・元bytesを再照合し、atomic replaceとdirectory syncを終えて成功する。lock fileは置換・削除しない。process終了時はOSがlockを解放する。同値の操作では非canonicalな空白も含め元bytesを保持する。通常の読み取り・書き込みでは保存先の発見はCLI実行ごとに一回で、以後の再照合はbackend・Git index・元bytesを対象とする。実行の途中でGitのtoplevelやcommon directoryが変わったことは検出しない。
 
@@ -58,7 +58,7 @@ workspaceの親directoryを先に用意し、workspace自身は未使用の名�
 
 `repairs` は選択後のvalidな候補へ順に適用する通常編集。`operation` は `write`（id/title/description）、`parent`（id/parent）、`dependency`（id/needs/present）、`condition`（id/command）で、通常コアの制約に従う。終了構成や`Completed`の編集制限を免除しない。構造的に不正な選択をrepairsで救済することはせず、まず選択自体を整える。条件コマンドは実行しない。
 
-`axon merge check`は全体を検証し、`candidate.jsonl` と入力・解決案・候補を結び付ける `checked.json` を作る。`report.json` にはvalidまたはエラーを残す。これらは編集しない。失敗した再`axon merge check`は前のcheckedを無効化する。`axon merge check`を繰り返すと統合記録IDを再生成しうるため、検査済み候補を確認してから`axon merge apply`する。
+`axon merge check`は全体を検証し、`candidate.jsonl` と入力・解決案・候補を結び付ける `checked.json` を作る。`report.json` にはvalidまたはエラーを残す。これらは編集しない。失敗した再`axon merge check`は前のcheckedを無効化する。統合記録のIDは記録の内容から決まるため、入力と解決案が同じなら`axon merge check`を繰り返しても同じ候補になる。
 
 `axon merge apply`はworkspaceと正本のlockを取り、元入力・保全コピー・解決案・候補・保存先・backendの変更を拒否する。validな正本はレビュー対象のours/theirsいずれかと一致する必要があり、別storeや入力に含まれない追加作業を上書きしない。Git conflict markerのある正本にも、`axon merge prepare`時の元bytesが変わっていなければ適用できる。Git indexは変更しない。`axon merge apply`後の再実行は保存先の変更として拒否するので、結果不明時は記録を照合する。
 

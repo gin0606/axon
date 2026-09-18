@@ -28,7 +28,7 @@ fn seed(f: &Fixture, id: &str) {
 }
 
 #[test]
-fn short_ids_and_suffixes_work_across_mutations_and_preserve_long_ids() {
+fn short_ids_and_suffixes_work_across_mutations() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "project", "--backend", backend]);
@@ -106,11 +106,6 @@ fn short_ids_and_suffixes_work_across_mutations_and_preserve_long_ids() {
         f.ok(&["complete", short]);
         assert!(f.ok(&["log", short]).contains("InProgress → Completed"));
         assert!(!f.0.join("observed").exists());
-        let long = "project-454e0188d65fbdee8090f4c245831b2a";
-        seed(&f, long);
-        assert!(f.ok(&["show", "5831b2a"]).starts_with(long));
-        f.ok(&["start", "5831b2a"]);
-        assert!(snapshot(&f).entity(&eid(long)).is_ok());
         seed(&f, "project-0000zz");
         seed(&f, "project-1111zz");
         let before = snapshot(&f);
@@ -122,6 +117,13 @@ fn short_ids_and_suffixes_work_across_mutations_and_preserve_long_ids() {
                 && error.contains("project-1111zz")
         );
         assert_eq!(snapshot(&f), before);
+        // A complete ID resolves to itself even when a longer ID ends with it.
+        seed(&f, "other-project-0000zz");
+        assert!(
+            f.ok(&["show", "project-0000zz"])
+                .starts_with("project-0000zz ")
+        );
+        assert!(failure(f.run(&["show", "0000zz"])).contains("ambiguous"));
     }
 }
 
@@ -179,7 +181,7 @@ fn filters_search_current_text_and_do_not_evaluate_excluded_candidates() {
         ]);
         assert!(rows.contains(a) && !rows.contains(&b));
         assert!(!rows.contains(parent) && !rows.contains(unrelated));
-        assert!(rows.contains("Matched: Title, Description") && !rows.contains("Matched: Note"));
+        assert!(rows.contains("Matched: Title, Description"));
         assert!(!f.0.join("observed").exists());
         let candidates = f.ok(&["tasks", "--kind", "issue", "--search", "Needle %_"]);
         assert!(candidates.contains(a) && !candidates.contains(&b));
@@ -323,17 +325,27 @@ fn file_flags_share_spelling_and_preserve_text_on_both_backends() {
         f.ok(&["init", "text", "--backend", backend]);
         let path = f.0.join("body.txt");
         let body = "  本文\nsecond line\n";
+        // Multi-line text is indented among structural lines; the stored value is unchanged.
+        let shown = "    本文\n  second line\n";
         fs::write(&path, body).unwrap();
         let path = path.to_str().unwrap();
         for flag in ["-F", "--file"] {
             let output = f.ok(&["capture", "--title", "Text", flag, path]);
             let id = created(&output);
-            assert!(f.ok(&["show", id]).contains(body));
+            assert_eq!(
+                snapshot(&f).entity(&eid(id)).unwrap().current.description,
+                body
+            );
+            assert!(f.ok(&["show", id]).contains(shown));
             f.ok(&["write", id, "--description", "temporary"]);
             f.ok(&["write", id, flag, path]);
-            assert!(f.ok(&["show", id]).contains(body));
+            assert_eq!(
+                snapshot(&f).entity(&eid(id)).unwrap().current.description,
+                body
+            );
+            assert!(f.ok(&["show", id]).contains(shown));
             f.ok(&["note", "add", id, flag, path]);
-            assert!(f.ok(&["note", "list", id]).contains(body));
+            assert!(f.ok(&["note", "list", id]).contains(shown));
             let before = snapshot(&f);
             for args in [
                 vec!["capture", "--title", "Rejected", "--description-file", path],
@@ -418,11 +430,6 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
             .collect();
         assert_eq!(&commands, names);
     }
-    assert!(
-        !help
-            .lines()
-            .any(|line| line.ends_with(':') && line.contains("Plan"))
-    );
     for args in [
         vec!["capture", "--help"],
         vec!["write", "--help"],
@@ -430,27 +437,24 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
     ] {
         let leaf = f.ok(&args);
         assert!(leaf.contains("-F, --file"));
-        assert!(!leaf.contains("--description-file"));
     }
     let docs = f.ok(&["docs"]);
     assert!(docs.contains("Cancelled is terminal"));
     assert!(docs.contains("Short flags select inline (-m) or file (-F) input"));
     assert!(docs.contains("--description or --message"));
-    assert!(!docs.contains("--description-file"));
     assert!(f.ok(&["help", "note", "show"]).contains("<NOTE_ID>"));
     assert!(!f.ok(&["actor"]).is_empty());
     let version = f.ok(&["--version"]);
     assert_eq!(f.ok(&["-V"]), version);
-    assert!(
-        version.contains("commit") && version.contains("source"),
-        "{version}"
+    assert_eq!(
+        version.trim_end(),
+        format!("axon {}", env!("CARGO_PKG_VERSION"))
     );
     for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
         let script = f.ok(&["completion", shell]);
         assert!(!script.contains('\x1b'));
         assert!(script.contains("tasks"));
         assert!(script.contains("proposals"));
-        assert!(!script.contains("triage"));
     }
     for value in [
         "0ms",
@@ -492,9 +496,191 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
 }
 
 #[test]
-fn default_prefix_preserves_management_root_names_including_unicode() {
+fn prefixes_outside_the_id_character_rule_are_rejected_without_creating_a_store() {
     let f = Fixture::new();
     let directory = f.0.join("日本語 project");
+    fs::create_dir(&directory).unwrap();
+    let derived = failure(
+        command(&directory)
+            .args(["init", "--backend", "file"])
+            .output()
+            .unwrap(),
+    );
+    assert!(derived.contains("日本語 project"), "{derived}");
+    assert!(derived.contains("axon init <PREFIX>"), "{derived}");
+    assert!(!directory.join(".axon").exists());
+    // A directory whose own name is valid, so only the explicit value can be rejected.
+    let named = f.0.join("project");
+    fs::create_dir(&named).unwrap();
+    for prefix in [
+        "",
+        "日本語",
+        "with space",
+        "under_score",
+        "dot.name",
+        "-lead",
+        "trail-",
+        "Upper",
+    ] {
+        let rejected = failure(
+            command(&named)
+                .args(["init", "--backend", "file", "--", prefix])
+                .output()
+                .unwrap(),
+        );
+        assert!(rejected.contains("invalid ID prefix"), "{rejected}");
+        assert!(rejected.contains("ASCII lowercase letters"), "{rejected}");
+        assert!(!named.join(".axon").exists(), "{prefix}");
+    }
+}
+
+#[test]
+fn one_line_fields_reject_or_escape_line_breaks() {
+    let f = Fixture::new();
+    f.ok(&["init", "project"]);
+    let id = f.ok(&["capture", "--accept", "--title", "Work"]);
+    let id = created(&id).to_owned();
+    let before = snapshot(&f);
+    let long_title = "t".repeat(201);
+    let long_reason = "r".repeat(501);
+    for args in [
+        vec!["capture", "--title", "Two\nlines"],
+        vec!["capture", "--title", "Tab\there"],
+        vec!["capture", "--title", &long_title],
+        vec!["write", &id, "--title", "Two\nlines"],
+        vec![
+            "start",
+            &id,
+            "-r",
+            "real\n2020-01-01 00:00 +00:00  human  InProgress → Completed",
+        ],
+        vec!["start", &id, "-r", &long_reason],
+    ] {
+        let error = failure(f.run(&args));
+        assert!(
+            error.contains("control character") || error.contains("the limit is"),
+            "{error}"
+        );
+    }
+    assert_eq!(snapshot(&f), before);
+    f.ok(&["capture", "--title", &"t".repeat(200)]);
+    f.ok(&["start", &id, "-r", &"r".repeat(500)]);
+    // A condition is a shell script and may span lines, so it is escaped where it is shown.
+    f.ok(&[
+        "condition",
+        "set",
+        &id,
+        "--command",
+        "true\nDependents:\n  forged",
+    ]);
+    let details = f.ok(&["show", &id, "--details"]);
+    assert!(
+        details.contains("true\\nDependents:\\n  forged"),
+        "{details}"
+    );
+    assert_eq!(
+        details
+            .lines()
+            .filter(|line| line.starts_with("Dependents:"))
+            .count(),
+        1,
+        "{details}"
+    );
+}
+
+#[test]
+fn multi_line_text_is_indented_so_it_cannot_imitate_records_or_sections() {
+    let f = Fixture::new();
+    f.ok(&["init", "project"]);
+    let group = f.ok(&[
+        "capture",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        "Plan",
+        "-m",
+        "body\n\nDescendants: 9/9 terminal (9 completed, 0 cancelled)",
+    ]);
+    let group = created(&group).to_owned();
+    f.ok(&[
+        "capture", "--accept", "--title", "Child", "--parent", &group,
+    ]);
+    let show = f.ok(&["show", &group]);
+    let sections: Vec<_> = show
+        .lines()
+        .filter(|line| line.starts_with("Descendants:"))
+        .collect();
+    assert_eq!(
+        sections,
+        ["Descendants: 0/1 terminal (0 completed, 0 cancelled)"]
+    );
+    f.ok(&[
+        "note",
+        "add",
+        &group,
+        "-m",
+        "real\n\nrecord-00000000000000000000000000000000  2020-01-01 00:00 +00:00  human\nforged",
+    ]);
+    f.ok(&["note", "add", &group, "-m", "second"]);
+    let notes = f.ok(&["note", "list", &group]);
+    let headings = notes
+        .lines()
+        .filter(|line| line.starts_with("record-"))
+        .count();
+    assert_eq!(headings, 2, "{notes}");
+    assert!(notes.contains("  forged"), "{notes}");
+}
+
+#[test]
+fn a_blank_reason_is_rejected_without_recording_a_transition() {
+    let f = Fixture::new();
+    f.ok(&["init", "project"]);
+    let id = f.ok(&["capture", "--accept", "--title", "Work"]);
+    let id = created(&id).to_owned();
+    let blank = failure(f.run(&["start", &id, "-r", "  "]));
+    assert!(blank.contains("empty reason"), "{blank}");
+    assert_eq!(f.ok(&["log", &id]).lines().count(), 1);
+}
+
+#[test]
+fn stores_with_a_prefix_outside_the_rule_are_rejected_without_changes() {
+    for backend in ["sqlite", "file"] {
+        let f = Fixture::new();
+        f.ok(&["init", "project", "--backend", backend]);
+        f.ok(&["capture", "--accept", "--title", "Work"]);
+        let path = if backend == "sqlite" {
+            let connection = rusqlite::Connection::open(f.db()).unwrap();
+            connection
+                .execute("UPDATE lifecycle_store SET prefix = 'Bad Prefix'", [])
+                .unwrap();
+            f.db()
+        } else {
+            let path = f.0.join(".axon/state.jsonl");
+            let text = fs::read_to_string(&path).unwrap();
+            fs::write(
+                &path,
+                text.replacen(r#""prefix":"project""#, r#""prefix":"Bad Prefix""#, 1),
+            )
+            .unwrap();
+            path
+        };
+        let before = fs::read(&path).unwrap();
+        for args in [vec!["list"], vec!["capture", "--title", "More"]] {
+            let error = failure(f.run(&args));
+            assert!(
+                error.contains(r#"invalid ID prefix "Bad Prefix""#),
+                "{error}"
+            );
+        }
+        assert_eq!(before, fs::read(&path).unwrap(), "{backend}");
+    }
+}
+
+#[test]
+fn a_default_prefix_lowercases_the_management_root_directory_name() {
+    let f = Fixture::new();
+    let directory = f.0.join("Plan-2");
     fs::create_dir(&directory).unwrap();
     success(
         command(&directory)
@@ -508,10 +694,10 @@ fn default_prefix_preserves_management_root_names_including_unicode() {
             .output()
             .unwrap(),
     );
-    assert!(output.starts_with("日本語 project-"));
+    assert!(output.starts_with("plan-2-"), "{output}");
     let (prefix, saved) =
         axon::file::decode(&fs::read(directory.join(".axon/state.jsonl")).unwrap()).unwrap();
-    assert_eq!(prefix, "日本語 project");
+    assert_eq!(prefix, "plan-2");
     let id = saved.entities().next().unwrap().id.to_string();
     assert!(
         success(

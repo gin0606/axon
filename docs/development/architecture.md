@@ -1,6 +1,6 @@
 # 実装の層構造
 
-仕様の正本は [literate spec](../../spec/lifecycle_proposal.md)。この文書はコードの配置、依存方向、検証の入口を示す。操作や保存の詳細契約は末尾の参照先に置く。
+振る舞いの契約は [docs/reference](../reference/lifecycle.md) の各文書、状態と遷移のモデルは [spec](../../spec/README.md) にある。この文書はコードの配置、依存方向、検証の入口を示す。操作や保存の詳細契約は末尾の参照先に置く。
 
 ## crate と module の地図
 
@@ -12,8 +12,6 @@ axon binary: src/main.rs → src/cli/
     │       └── axon-core: lifecycle / declaration / read
     ├── axon-core（axon library の再公開経由）
     └── axon-recorder: 任意の記録者情報の取得
-
-root build.rs → ビルド時の Git・環境情報 → binary の version 文字列
 ```
 
 | 層 | 実装の入口 | 責務 |
@@ -22,7 +20,7 @@ root build.rs → ビルド時の Git・環境情報 → binary の version 文�
 | 保存 adapter | [src/lib.rs](../../src/lib.rs) | `sqlite` と `file` がコアを呼び、保存の原子性と障害境界を担う。`location::Store` の enum dispatch が backend を選ぶ。`file_merge` は統合 workspace と Git driver、`declaration_file` は宣言ファイルと正本の I/O を接続する |
 | adapter 共通エラー | [src/error.rs](../../src/error.rs) | root の `axon::Error` / `axon::Result` と prefix 検証。コアのエラーを包み、保存・I/O の失敗を表す |
 | CLI | [src/main.rs](../../src/main.rs)、[src/cli/mod.rs](../../src/cli/mod.rs) | `main.rs` は入口だけを持つ。`cli::mod` が dispatch、stdout/stderr、保存後の出力失敗と終了コードを処理する |
-| 記録者取得 | [crates/axon-recorder/src/lib.rs](../../crates/axon-recorder/src/lib.rs) | 環境や transcript から任意の記録者情報を取得する。コアの lifecycle 判断や保存 adapter を所有しない |
+| 記録者取得 | [crates/axon-recorder/src/lib.rs](../../crates/axon-recorder/src/lib.rs) | 継承された環境変数だけから任意の記録者情報を取得する。コアの lifecycle 判断や保存 adapter を所有しない |
 
 `src/lib.rs` は `axon_core::{lifecycle, declaration, read}` を再公開するため、root library の利用側も同じコア API を使う。保存 adapter の crate 分割や Repository trait は導入せず、backend の切替は `location::Store` に集約する。
 
@@ -63,7 +61,7 @@ cargo tree -p axon-core --depth 1
 | 保存 adapter | `cargo test --locked -p axon --lib`。`src/sqlite.rs`、`src/file.rs`、`src/location.rs`、`src/file_merge.rs`、`src/declaration_file.rs` と関連 test module の保存・障害・process fixture |
 | CLI 内部 | `cargo test --locked -p axon --bin axon`。表示、ID 解決、外部条件 process の単体テスト |
 | 公開 CLI と backend の接続 | `cargo test --locked --test smoke`。`tests/smoke.rs` が `tests/lifecycle/{workflow,file,contracts,declaration}.rs` も読み込み、両 backend の独立 fixture、実 Git worktree、公開出力を検証する |
-| 記録者取得 | `cargo test --locked -p axon-recorder`。検出と transcript 取得の単体テスト |
+| 記録者取得 | `cargo test --locked -p axon-recorder`。環境変数からの検出の単体テスト |
 
 層の整理でも公開コマンド・引数・出力 bytes・終了コード、lifecycle の意味論、canonical bytes は維持する。全体検証とモデルを再検証する条件は [検証方針](verification.md) に従う。
 
@@ -73,32 +71,4 @@ cargo tree -p axon-core --depth 1
 - [Declaration](lifecycle-declaration.md): YAML と一括適用の契約、コアとファイル書戻しの境界。
 - [SQLite CLI](lifecycle-sqlite.md): 公開操作、SQLite transaction、保存先探索と失敗境界。
 - [file保存とGit統合](lifecycle-file.md): writer、公開、worktree、統合 workspace と Git driver。
-- [候補と外部条件](lifecycle-candidates.md)、[記録者連携](lifecycle-recorder.md)、[CLI入出力契約](../reference/lifecycle-cli.md): 外部 process、任意 metadata、表示と入出力の詳細。
-
-## ビルド時のソース由来
-
-`--version` / `-V` は package version を先頭に、ビルド時の完全 commit hash と
-`source clean|modified|unknown` を補足する。build script が文字列を埋め込み、実行時は
-Git・環境変数・DB を参照しない。canonical build も通常の Cargo build と同じ仕組みを使う。
-
-配布工程では `AXON_BUILD_COMMIT`（40 桁または 64 桁の ASCII 十六進数、または `unknown`）と
-`AXON_BUILD_SOURCE_STATE`（`clean`、`modified`、`unknown`）を指定できる。
-どちらか一方でも存在すれば明示指定モードとし、省略した項目は `unknown` にする。
-Git 自動取得とは混ぜない。不正値・空文字・非 Unicode 値は警告して当該項目を `unknown` とする。
-たとえば上流 commit に配布側パッチを当てる場合は、その commit と `modified` を明示する。
-
-指定がなければ Cargo package root 自身が Git worktree root の場合だけ自動取得する。
-linked worktree にも対応する。親 repository 内へ展開した source archive は親の HEAD を採用しない。
-Git を見つけられない場合や各照会が失敗した場合は、取得不能な項目を `unknown` にする。
-Git の repository/index/pathspec を切り替える環境変数は照会から除外する。
-
-modified は staged / unstaged の tracked file と Git が無視しない untracked file を対象にする。
-package root の `.axon`（管理データ）と `target`（標準 build artifact）は tracked でも除外する。
-その他の生成物は `.gitignore` 等で除外する。無視されたソース、Git の assume-unchanged /
-稼働中の並行編集などまで検知する保証はない。Git 照会は build 開始時の観測である。
-commit のみ、変更の有無のみ、metadata のみの変化でも情報を更新するため、build script は
-毎回の Cargo build で再実行する（由来の照会と axon crate 再コンパイルのコストがある）。
-
-これは完全なソース内容や binary の同一性の証明ではない。正式 release では version が通常の
-識別の主となり、commit は補助情報である。commit と modified だけでは配布側のパッチ、
-ビルド設定、未 commit 差分の内容を識別できない。厳密な監査では binary hash と package 情報も記録する。
+- [候補と外部条件](../reference/candidates.md)、[記録者連携](lifecycle-recorder.md)、[CLI入出力契約](../reference/cli.md): 外部 process、任意 metadata、表示と入出力の詳細。

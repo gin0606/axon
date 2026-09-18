@@ -1,14 +1,14 @@
 # axon
 
-軸を分けたローカル issue tracker。このリポジトリは axon 自体の開発で、タスク管理にも axon を使う。
+Issue と Group で個人の仕事や計画を管理するローカル issue tracker。このリポジトリは axon 自体の開発で、タスク管理にも axon を使う。
 
 Axon 操作には、このリポジトリの協業方針として [`axon:conventions`](plugins/axon/skills/conventions/SKILL.md) を適用する。
 
 ## 作業時の参照先
 
-仕様の正本は [spec/lifecycle_proposal.md](spec/lifecycle_proposal.md)。実装を読む入口は [層構造の地図](docs/development/architecture.md)。crate・module の配置、依存方向、各層のテスト入口と、共通コア・保存 adapter の詳細契約への参照をまとめています。
+振る舞いの契約は [docs/reference](docs/reference/lifecycle.md) の各文書、状態と遷移の Quint モデルは [spec](spec/README.md) にある。実装を読む入口は [層構造の地図](docs/development/architecture.md)。crate・module の配置、依存方向、各層のテスト入口と、共通コア・保存 adapter の詳細契約への参照をまとめています。
 
-変更対象の契約は [docs/README.md](docs/README.md) から確認し、設計変更とモデル検証は [検証方針](docs/development/verification.md) に従ってください。`archive/three-axis` の旧コード・テストと、過去資料と明示されたreference/design・Quintモデルは現行仕様の規範にしません。旧Revision・claimの契約を新コアへ持ち込まないでください。
+変更対象の契約は [docs/README.md](docs/README.md) から確認し、設計変更とモデル検証は [検証方針](docs/development/verification.md) に従ってください。契約がその形になっている理由は [設計判断](docs/design/decisions.md) にあります。
 
 現在の件数やタスク状態など、確認元から取得できる現況を継続的な説明としてドキュメントに転記しない。調査・検証結果を残す場合は、時点と条件を明記する。
 

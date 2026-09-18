@@ -230,6 +230,16 @@ impl Location {
                 "already initialized; init never repairs or replaces an existing store",
             ));
         }
+        // A linked worktree shares the SQLite directory with the main worktree, whose file
+        // store `artifacts` does not see from here.
+        for name in ["axon.db", "state.jsonl", "init.pending"] {
+            if present(&directory.join(name))? {
+                return Err(invalid(format!(
+                    "{} already holds a store or an incomplete initialization; init never repairs or replaces one",
+                    directory.display()
+                )));
+            }
+        }
         let pending = directory.join("init.pending");
         let temp = directory.join(format!(".axon-{:032x}.tmp", rand::random::<u128>()));
         let result = (|| -> Result<InitResult> {

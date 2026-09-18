@@ -9,7 +9,7 @@ use std::{io::Read, path::PathBuf, time::Duration};
 
 #[derive(Parser)]
 #[command(
-    version = env!("AXON_VERSION"),
+    version,
     styles = display::cli_styles(),
     color = display::cli_color(),
     about = "A local issue tracker for Issues and Groups",
@@ -55,9 +55,10 @@ pub(super) enum Command {
     },
     /// Initialize a new management root (default: SQLite)
     #[command(
-        after_help = "SQLite creates only .axon/axon.db and does not change Git integration files.\nFile creates .axon/state.jsonl and creates or appends .axon/.gitignore and root .gitattributes, preserving unrelated lines.\nInit does not stage or commit any files."
+        after_help = "PREFIX uses ASCII lowercase letters, digits and hyphens, and starts and ends with a letter or digit.\nWithout PREFIX, init lowercases the management root directory name and fails if that is not a valid prefix.\nSQLite creates only .axon/axon.db and does not change Git integration files.\nFile creates .axon/state.jsonl and creates or appends .axon/.gitignore and root .gitattributes, preserving unrelated lines.\nInit does not stage or commit any files."
     )]
     Init {
+        /// ID prefix for generated Entity IDs
         prefix: Option<String>,
         #[arg(long, value_enum, default_value = "sqlite")]
         backend: Backend,
@@ -250,7 +251,7 @@ impl Body {
 }
 #[derive(Args)]
 pub(super) struct Create {
-    /// Title of the new Entity
+    /// Title of the new Entity: one line, at most 200 characters
     #[arg(long)]
     pub(super) title: String,
     /// Entity kind to create

@@ -122,7 +122,7 @@ pub(super) fn capture(args: Create) -> Result<Output> {
             },
             context(),
         )?;
-        let title = display::human_text(&snapshot.entity(&id)?.current.title).replace('\n', "\\n");
+        let title = display::line(&snapshot.entity(&id)?.current.title);
         Ok(format!(
             "{}  {}  {}  {}  {title}\n",
             display::identity(&id),
