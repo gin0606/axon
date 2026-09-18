@@ -274,7 +274,7 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
     );
     assert!(listed("condition") && !listed("when"), "{help}");
     assert!(f.ok(&["complete", "--help"]).contains("final review"));
-    for old in [
+    for absent in [
         vec!["done", id.as_str()],
         vec!["plan", "--title", "x"],
         vec!["group", "capture", "--title", "x"],
@@ -282,7 +282,7 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
         vec!["when", "set", id.as_str(), "--command", "exit 0"],
         vec!["when", "clear", id.as_str()],
     ] {
-        assert!(failure(f.run(&old)).contains("unrecognized subcommand"));
+        assert!(failure(f.run(&absent)).contains("unrecognized subcommand"));
     }
 }
 #[test]
@@ -420,14 +420,14 @@ fn sqlite_roundtrip_preserves_branches_integration_and_failed_changes() {
     );
 }
 #[test]
-fn old_unknown_corrupt_and_mixed_stores_are_rejected_without_changes() {
-    for kind in ["legacy", "unknown", "corrupt", "mixed", "pending"] {
+fn unsupported_unknown_corrupt_and_mixed_stores_are_rejected_without_changes() {
+    for kind in ["wrong-version", "unknown", "corrupt", "mixed", "pending"] {
         let f = Fixture::new();
         fs::create_dir(f.0.join(".axon")).unwrap();
         match kind {
-            "legacy" => {
+            "wrong-version" => {
                 let c = rusqlite::Connection::open(f.db()).unwrap();
-                c.execute_batch("PRAGMA user_version=12; CREATE TABLE entities (id TEXT)")
+                c.execute_batch("PRAGMA user_version=99; CREATE TABLE records (id TEXT)")
                     .unwrap();
             }
             "unknown" => {

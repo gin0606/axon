@@ -83,7 +83,7 @@ fn read(connection: &Connection) -> Result<(String, Snapshot)> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
     if app != APPLICATION || version != VERSION {
         return Err(invalid(
-            "unsupported or legacy SQLite schema; no migration was performed",
+            "unsupported SQLite schema; storage was not converted or modified",
         ));
     }
     let mut statement = connection.prepare(

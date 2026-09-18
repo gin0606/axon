@@ -158,13 +158,13 @@ fn help_exposes_single_lifecycle_commands() {
     ] {
         assert!(help.contains(name));
     }
-    for old in ["ready", "claims", "decide", "migrate", "triage"] {
+    for absent in ["ready", "claims", "decide", "migrate", "triage"] {
         assert!(
             !help
                 .lines()
-                .any(|line| line.trim_start().starts_with(&format!("{old} ")))
+                .any(|line| line.trim_start().starts_with(&format!("{absent} ")))
         );
-        failure(f.run(&[old]));
+        failure(f.run(&[absent]));
     }
     let rejected = f.run(&["triage"]);
     assert_eq!(rejected.status.code(), Some(2));

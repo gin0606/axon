@@ -37,7 +37,7 @@ pub fn decode(bytes: &[u8]) -> Result<(String, Snapshot)> {
         .map_err(|e| invalid(format!("invalid file header: {e}")))?;
     if header.format != "axon-file/v1" {
         return Err(invalid(
-            "unsupported file format; no migration was performed",
+            "unsupported file format; storage was not converted or modified",
         ));
     }
     validate_prefix(&header.prefix)?;

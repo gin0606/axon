@@ -70,7 +70,7 @@ Storage and recovery
   SQLite is shared by linked Git worktrees at the common Git directory's parent
   .axon/axon.db. File storage is local to each worktree at .axon/state.jsonl.
   Outside Git, the nearest management root is used. Corrupt, mixed, unmerged or
-  incomplete artifacts are errors; no fallback or automatic legacy migration runs.
+  incomplete artifacts are errors; no fallback or automatic conversion runs.
   help, docs, actor, completion and version do not require a store.
 
   Preserve retained artifacts on errors. Applied, Not applied and Result unknown
@@ -84,7 +84,7 @@ Use axon help <COMMAND PATH> for exact arguments. Create with --title; descripti
 accept -m/--description or -F/--file (- reads stdin). Notes use
 -m/--message or -F/--file. Short flags select inline (-m) or file (-F) input;
 inline long names identify the field (--description or --message). For option
-values beginning with a hyphen use the equals form, for example --description='--text'. No legacy option aliases are provided.
+values beginning with a hyphen use the equals form, for example --description='--text'.
 
 Use axon docs declaration for plan declaration fields and the bulk-edit workflow.
 Use axon docs declaration --example for a new-plan YAML template.

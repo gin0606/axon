@@ -197,11 +197,11 @@ fn strict_yaml_rejects_unsupported_constructs_and_wrong_types() {
     for bad in invalid {
         assert!(parse(&bad).is_err(), "accepted {bad}");
     }
-    for schema in ["axon-plan/v3", "future/v2"] {
+    for schema in ["other/v1", "future/v2"] {
         let e = parse(&format!("schema: {schema}\n"))
             .unwrap_err()
             .to_string();
-        assert!(e.contains(schema) && e.contains("old-model"), "{e}");
+        assert!(e.contains(schema) && e.contains(SCHEMA), "{e}");
     }
 }
 #[test]
