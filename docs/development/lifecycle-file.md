@@ -58,7 +58,7 @@ workspaceの親directoryを先に用意し、workspace自身は未使用の名�
 
 `repairs` は選択後のvalidな候補へ順に適用する通常編集。`operation` は `write`（id/title/description）、`parent`（id/parent）、`dependency`（id/needs/present）、`condition`（id/command）で、通常コアの制約に従う。終了構成や`Completed`の編集制限を免除しない。構造的に不正な選択をrepairsで救済することはせず、まず選択自体を整える。条件コマンドは実行しない。
 
-`axon merge check`は全体を検証し、`candidate.jsonl` と入力・解決案・候補を結び付ける `checked.json` を作る。`report.json` にはvalidまたはエラーを残す。これらは編集しない。失敗した再`axon merge check`は前のcheckedを無効化する。`axon merge check`を繰り返すと統合記録IDを再生成しうるため、検査済み候補を確認してから`axon merge apply`する。
+`axon merge check`は全体を検証し、`candidate.jsonl` と入力・解決案・候補を結び付ける `checked.json` を作る。`report.json` にはvalidまたはエラーを残す。これらは編集しない。失敗した再`axon merge check`は前のcheckedを無効化する。統合記録のIDは記録の内容から決まるため、入力と解決案が同じなら`axon merge check`を繰り返しても同じ候補になる。
 
 `axon merge apply`はworkspaceと正本のlockを取り、元入力・保全コピー・解決案・候補・保存先・backendの変更を拒否する。validな正本はレビュー対象のours/theirsいずれかと一致する必要があり、別storeや入力に含まれない追加作業を上書きしない。Git conflict markerのある正本にも、`axon merge prepare`時の元bytesが変わっていなければ適用できる。Git indexは変更しない。`axon merge apply`後の再実行は保存先の変更として拒否するので、結果不明時は記録を照合する。
 

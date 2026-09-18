@@ -334,21 +334,29 @@ impl Snapshot {
             } else {
                 0
             };
-            let record_id = merged.fresh_record_id();
-            merged.states.insert(
-                record_id.clone(),
-                StateRecord {
-                    id: record_id.clone(),
-                    entity: id.clone(),
-                    parents: inputs.iter().map(|c| c.head.clone()).collect(),
-                    context: context.clone(),
-                    event: StateEvent::Integration {
-                        inputs,
-                        selected: selection,
-                        reason: reason.clone(),
-                    },
-                },
-            );
+            let parents: BTreeSet<_> = inputs.iter().map(|c| c.head.clone()).collect();
+            let event = StateEvent::Integration {
+                inputs,
+                selected: selection,
+                reason: reason.clone(),
+            };
+            let record_id = integration_record_id(&merged.store, &id, &parents, &context, &event)?;
+            let record = StateRecord {
+                id: record_id.clone(),
+                entity: id.clone(),
+                parents,
+                context: context.clone(),
+                event,
+            };
+            if merged.notes.contains_key(&record_id)
+                || merged
+                    .states
+                    .get(&record_id)
+                    .is_some_and(|existing| existing != &record)
+            {
+                return Err(invalid("integration record ID collision"));
+            }
+            merged.states.insert(record_id.clone(), record);
             let mut current = selected.clone();
             current.head = record_id;
             merged.entities.insert(id, current);
@@ -561,4 +569,21 @@ fn order<T>(
         return Err(invalid("causal cycle"));
     }
     Ok(result)
+}
+
+/// Integration records take their ID from their content, so repeating the same integration
+/// with the same context yields the same snapshot instead of a fresh random record.
+fn integration_record_id(
+    store: &StoreId,
+    entity: &EntityId,
+    parents: &BTreeSet<RecordId>,
+    context: &Context,
+    event: &StateEvent,
+) -> Result<RecordId> {
+    let content = serde_json::to_vec(&(store, entity, parents, context, event))
+        .map_err(|error| invalid(error.to_string()))?;
+    let digest = blake3::hash(&content);
+    let mut prefix = [0u8; 16];
+    prefix.copy_from_slice(&digest.as_bytes()[..16]);
+    RecordId::try_from(format!("record-{:032x}", u128::from_be_bytes(prefix)))
 }

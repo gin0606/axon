@@ -261,6 +261,13 @@ fn merge_workspace_preserves_both_branches_and_rejects_drift() {
         assert!(workspace.join("choices.json").is_file());
         resolve(&workspace, &id);
         file_merge::check(&workspace).unwrap();
+        let candidate = fs::read(workspace.join("candidate.jsonl")).unwrap();
+        file_merge::check(&workspace).unwrap();
+        assert_eq!(
+            candidate,
+            fs::read(workspace.join("candidate.jsonl")).unwrap(),
+            "checking unchanged inputs again yields the same candidate"
+        );
         match drift {
             "input" => fs::write(&theirs, b"changed").unwrap(),
             "destination" => fs::write(state(&f), b"changed").unwrap(),
