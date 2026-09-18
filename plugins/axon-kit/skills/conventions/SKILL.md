@@ -1,6 +1,6 @@
 ---
 name: conventions
-description: Axonの単一lifecycle・情報モデルとCLI保存操作の共通契約。他のkitと利用側workflowの基盤に使い、対象選択、採用判断、実装、commitは規定しない。
+description: Axonのlifecycle・情報モデルとCLI保存操作の共通契約。他のkitと利用側workflowの基盤に使い、対象選択、採用判断、実装、commitは規定しない。
 ---
 
 # Axonの共通操作契約

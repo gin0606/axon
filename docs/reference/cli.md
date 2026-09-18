@@ -26,7 +26,7 @@ option値の先頭hyphenは `--description='--text'` のように渡す。構文
 | `axon tasks` | 浮上した未着手と着手中のIssue・Group |
 | `axon list` | 非浮上・完了・取りやめも含む保存済みEntityを、必要な条件で絞り込む汎用一覧 |
 
-`axon tasks` は依存先の完了待ちや親の着手待ちの未着手も含み、着手できるものだけには限定しない。着手中だけを一覧する専用の入口は設けない。
+`axon tasks` は依存先の完了待ちや親の着手待ちの未着手も含み、着手できるものだけには限定しない。着手中だけを見るには `axon list --lifecycle in-progress` を使う。
 
 `axon list`は保存済み全件を作成日時の昇順、同時刻はID順で表示する。`--kind issue|group`、`--lifecycle undecided|not-started|in-progress|completed|cancelled`、`--terminal=true|false` はANDで組み合わせる。terminalは`Completed`または`Cancelled`で、着手できることや浮上とは別。`--search` は現在title・本文だけのcase-sensitiveなliteral一致。Unicode正規化やtrimをせず、空文字は構文エラー。%、_、正規表現記号に特殊な意味はない。検索時だけMatchedに該当field（Title、Description）を付記する。
 
@@ -61,7 +61,7 @@ demo-9f2hjx  Issue  Blocked  検索結果を表示する
 
 `axon show ID`は、ID・種別・状況・タイトル、Note件数、所属計画のID・タイトル、本文を基本とする。本文は保存された内容を表示する。Note本文、履歴、内部のcausal情報、不要な設定・件数の羅列、操作コマンドの案内は通常表示から外す。Noteがあれば `5 notes` のように存在を示し、0件ならその表示を省略する。
 
-未充足の前提がある場合だけ、本文の前へ `Required to start` または `Required to complete` の節を置く。満たされていない直接の前提を `Parent must start:`・`Dependency must complete:` として、ID・種別・現在の状況・タイトルの行で示す。満たされた依存や依存先の先のツリーは常時展開しない。親の所属表示と待ち理由が同じ情報になる場合は、重複を避けて配置する。待ち理由の専用コマンドは設けない。
+未充足の前提がある場合だけ、本文の前へ `Required to start` または `Required to complete` の節を置く。満たされていない直接の前提を `Parent must start:`・`Dependency must complete:` として、ID・種別・現在の状況・タイトルの行で示す。満たされた依存や依存先の先のツリーは常時展開しない。親の所属表示と待ち理由が同じ情報になる場合は、重複を避けて配置する。
 
 Groupの場合は、この共通表示の末尾へ全子孫のツリーと短い集計を加える。`Completed`・`Cancelled`も含めて全階層を展開する。各行は一覧と同じID・種別・状況・タイトルとし、兄弟を作成日時順（同時刻はID順）で揃え、別のDependencies節へ同じ情報を再列挙しない。
 
@@ -109,11 +109,11 @@ Groupの場合は、この共通表示の末尾へ全子孫のツリーと短い
 | 依存先を追加 / 解除 | `axon dep add A --needs B` / `axon dep rm A --needs B` |
 | 再浮上条件を設定 / 解除 | `axon condition set A --command '条件コマンド'` / `axon condition unset A` |
 
-登録は一つのコマンドで行い、種別は `--kind issue|group`、採否は `--accept` の有無で指定する。`--kind` の既定は `issue`、`--accept` 省略時は`Undecided`、指定時は`NotStarted`で作成する。登録と採否は直交し、作成後は同じIDベースの操作を使う。操作対象のIDは位置引数、関係先のIDは役割を明示するoptionとし、登録時の親・依存指定も `--parent`・`--needs` に揃える。採否・着手・完了をまとめる中間のsubcommand階層は設けない。
+登録は一つのコマンドで行い、種別は `--kind issue|group`、採否は `--accept` の有無で指定する。`--kind` の既定は `issue`、`--accept` 省略時は`Undecided`、指定時は`NotStarted`で作成する。登録と採否は直交し、作成後は同じIDベースの操作を使う。操作対象のIDは位置引数、関係先のIDは役割を明示するoptionとし、登録時の親・依存指定も `--parent`・`--needs` に揃える。
 
 登録titleは `--title`。本文は `-m/--description` または `-F/--file`。Noteは `-m/--message` または `-F/--file`。本文option同士は排他で、`-F -` はUTF-8のstdinを一度読む。本文・Noteをtrimして保存しない。初期の `--parent`、反復可能な `--needs`、`--command` は作成と同時に検査・保存する。作成中に条件を実行しない。通常の`axon write`はtitleと本文を一transactionで編集し、lifecycleを変えない。長い本文は登録時と同じ本文optionでファイルから渡せる。
 
-`axon accept|withdraw|start|release|complete|cancel|reconsider A` は `-r/--reason` を履歴へ保存する。Groupへの`axon complete`の実行自体を「計画全体の最終確認が通った」という明示入力とする。Axonは子・依存・状態を検査し、確認作業は呼び出す人・エージェントのskillと運用で担う。必須のレビュー確認フラグや独立したレビュー済み状態は設けない。どの変更コマンドも、状態・包含・dependencyの制約を迂回しない。ここで定めた通常操作の名前から推測してコマンドを追加しない。
+`axon accept|withdraw|start|release|complete|cancel|reconsider A` は `-r/--reason` を履歴へ保存する。Groupへの`axon complete`の実行自体を「計画全体の最終確認が通った」という明示入力とする。Axonは子・依存・状態を検査し、確認作業は呼び出す人・エージェントのskillと運用で担う。必須のレビュー確認フラグや独立したレビュー済み状態は設けない。どの変更コマンドも、状態・包含・dependencyの制約を迂回しない。
 
 ## 計画全体の取得と一括編集
 

@@ -38,7 +38,7 @@ Reading and resurfacing
   ancestor Group. Absence from these lists does not mean an Entity is missing.
   list includes every saved Entity by default, in creation order. --kind,
   --lifecycle, --terminal and --search narrow it without running conditions.
-  list/tasks/proposals --search now match only current title and description, not Notes.
+  list/tasks/proposals --search match only current title and description, not Notes.
   Use note search 'text' for information in Notes across all Entities, including
   Completed and Cancelled work, without running conditions. Matching is literal,
   case-sensitive, with no trimming or Unicode normalization. Empty queries are

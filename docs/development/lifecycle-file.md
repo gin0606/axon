@@ -1,4 +1,4 @@
-# 単一 lifecycle の file 保存と Git 統合
+# file 保存と Git 統合
 
 [保存と統合の契約](../reference/storage.md) を `src/file.rs`、`src/location.rs`、`src/file_merge.rs` が実装する。通常操作は [SQLite CLI](lifecycle-sqlite.md) と共通で、同じ `Snapshot` の操作・記録・全体検査を通す。未知のschemaは自動変換しない。試用・検証は独立fixtureで行う。
 

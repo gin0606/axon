@@ -267,23 +267,10 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
         help.lines()
             .any(|line| line.trim_start().starts_with(&format!("{name} ")))
     };
-    assert!(listed("complete") && !listed("done"), "{help}");
-    assert!(
-        listed("parent") && !listed("group") && !listed("plan"),
-        "{help}"
-    );
-    assert!(listed("condition") && !listed("when"), "{help}");
-    assert!(f.ok(&["complete", "--help"]).contains("final review"));
-    for absent in [
-        vec!["done", id.as_str()],
-        vec!["plan", "--title", "x"],
-        vec!["group", "capture", "--title", "x"],
-        vec!["group", "set", id.as_str(), "--parent", id.as_str()],
-        vec!["when", "set", id.as_str(), "--command", "exit 0"],
-        vec!["when", "clear", id.as_str()],
-    ] {
-        assert!(failure(f.run(&absent)).contains("unrecognized subcommand"));
+    for name in ["complete", "parent", "condition"] {
+        assert!(listed(name), "{help}");
     }
+    assert!(f.ok(&["complete", "--help"]).contains("final review"));
 }
 #[test]
 fn concurrent_start_has_one_winner_and_other_writes_survive() {

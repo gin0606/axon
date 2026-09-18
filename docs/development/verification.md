@@ -26,7 +26,7 @@ Rust fileがstagedされているcommitでは、Lefthookがrustfmt、全target�
 cargo test --workspace --lib --bin axon --test smoke
 ```
 
-`--lib` は単一 lifecycle の共通コア・分岐・codec のテストを実行する。`--bin axon` は端末表示と条件プロセスの起動・trace flush失敗、`--test smoke` はSQLite/file binary の登録から Group 完了、Note・log、並行操作、schema 拒否、保存先探索・`axon init`、入出力失敗を独立 fixture で検証する。
+`--lib` は共通コア・分岐・codec のテストを実行する。`--bin axon` は端末表示と条件プロセスの起動・trace flush失敗、`--test smoke` はSQLite/file binary の登録から Group 完了、Note・log、並行操作、schema 拒否、保存先探索・`axon init`、入出力失敗を独立 fixture で検証する。
 
 `cargo test` はworkspaceの記録者crate単体テストも実行する。file保存・統合は `tests/lifecycle/file.rs` をsmokeから実行し、実worktree、driver、index、並行writer、drift拒否を検証する。
 

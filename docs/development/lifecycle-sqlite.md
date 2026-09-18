@@ -1,4 +1,4 @@
-# 単一 lifecycle の SQLite CLI
+# SQLite CLI
 
 `src/main.rs` は [共通コア](lifecycle-core.md) と `src/sqlite.rs`・`src/location.rs` を使う。未知の schema は読み込まず、自動変換しない。保存と統合の契約は [保存と統合の契約](../reference/storage.md)、入出力の契約は [CLIと表示の契約](../reference/cli.md)。
 

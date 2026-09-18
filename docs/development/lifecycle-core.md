@@ -1,4 +1,4 @@
-# 単一 lifecycle の共通コア
+# 共通コア
 
 この境界が実装する契約は [lifecycle](../reference/lifecycle.md)、対応するモデルは [モデル](../../spec/README.md)。[Rust library](../../crates/axon-core/src/lib.rs) の `lifecycle` module は SQL、filesystem、外部コマンド評価を呼ばない。`Snapshot` の操作と検査、`encode` / `decode` の byte 列を、両 backend が共通で使う。`cargo test -p axon-core` で独立したメモリ上の fixture を検証する。
 

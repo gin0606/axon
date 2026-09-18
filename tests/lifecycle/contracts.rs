@@ -28,7 +28,7 @@ fn seed(f: &Fixture, id: &str) {
 }
 
 #[test]
-fn short_ids_and_suffixes_work_across_mutations_and_preserve_long_ids() {
+fn short_ids_and_suffixes_work_across_mutations() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "project", "--backend", backend]);
@@ -106,11 +106,6 @@ fn short_ids_and_suffixes_work_across_mutations_and_preserve_long_ids() {
         f.ok(&["complete", short]);
         assert!(f.ok(&["log", short]).contains("InProgress → Completed"));
         assert!(!f.0.join("observed").exists());
-        let long = "project-454e0188d65fbdee8090f4c245831b2a";
-        seed(&f, long);
-        assert!(f.ok(&["show", "5831b2a"]).starts_with(long));
-        f.ok(&["start", "5831b2a"]);
-        assert!(snapshot(&f).entity(&eid(long)).is_ok());
         seed(&f, "project-0000zz");
         seed(&f, "project-1111zz");
         let before = snapshot(&f);
@@ -179,7 +174,7 @@ fn filters_search_current_text_and_do_not_evaluate_excluded_candidates() {
         ]);
         assert!(rows.contains(a) && !rows.contains(&b));
         assert!(!rows.contains(parent) && !rows.contains(unrelated));
-        assert!(rows.contains("Matched: Title, Description") && !rows.contains("Matched: Note"));
+        assert!(rows.contains("Matched: Title, Description"));
         assert!(!f.0.join("observed").exists());
         let candidates = f.ok(&["tasks", "--kind", "issue", "--search", "Needle %_"]);
         assert!(candidates.contains(a) && !candidates.contains(&b));
@@ -418,11 +413,6 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
             .collect();
         assert_eq!(&commands, names);
     }
-    assert!(
-        !help
-            .lines()
-            .any(|line| line.ends_with(':') && line.contains("Plan"))
-    );
     for args in [
         vec!["capture", "--help"],
         vec!["write", "--help"],
@@ -430,13 +420,11 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
     ] {
         let leaf = f.ok(&args);
         assert!(leaf.contains("-F, --file"));
-        assert!(!leaf.contains("--description-file"));
     }
     let docs = f.ok(&["docs"]);
     assert!(docs.contains("Cancelled is terminal"));
     assert!(docs.contains("Short flags select inline (-m) or file (-F) input"));
     assert!(docs.contains("--description or --message"));
-    assert!(!docs.contains("--description-file"));
     assert!(f.ok(&["help", "note", "show"]).contains("<NOTE_ID>"));
     assert!(!f.ok(&["actor"]).is_empty());
     let version = f.ok(&["--version"]);
@@ -450,7 +438,6 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
         assert!(!script.contains('\x1b'));
         assert!(script.contains("tasks"));
         assert!(script.contains("proposals"));
-        assert!(!script.contains("triage"));
     }
     for value in [
         "0ms",

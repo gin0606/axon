@@ -1,6 +1,6 @@
 # 使い始める
 
-Axonは単一lifecycleでIssueとGroupを管理します。対応するbinaryをPATHから使う場合も、開発版を絶対パスで使う場合も、`axon --version` と `axon --help` で選んだ版を確認します。以下は独立した保存先で試す手順です。
+AxonはIssueとGroupを一つのlifecycleで管理します。対応するbinaryをPATHから使う場合も、開発版を絶対パスで使う場合も、`axon --version` と `axon --help` で選んだ版を確認します。以下は独立した保存先で試す手順です。
 
 ## インストールと対応環境
 

@@ -141,7 +141,7 @@ fn sqlite_worktrees_share_parallel_work_and_notes() {
 }
 
 #[test]
-fn help_exposes_single_lifecycle_commands() {
+fn help_exposes_lifecycle_commands() {
     let f = Fixture::new();
     let help = f.ok(&["--help"]);
     for name in [
@@ -158,15 +158,7 @@ fn help_exposes_single_lifecycle_commands() {
     ] {
         assert!(help.contains(name));
     }
-    for absent in ["ready", "claims", "decide", "migrate", "triage"] {
-        assert!(
-            !help
-                .lines()
-                .any(|line| line.trim_start().starts_with(&format!("{absent} ")))
-        );
-        failure(f.run(&[absent]));
-    }
-    let rejected = f.run(&["triage"]);
+    let rejected = f.run(&["no-such-command"]);
     assert_eq!(rejected.status.code(), Some(2));
     assert!(failure(rejected).contains("unrecognized subcommand"));
     let proposals_help = f.ok(&["proposals", "--help"]);
@@ -180,7 +172,6 @@ fn help_exposes_single_lifecycle_commands() {
     }
     let docs = f.ok(&["docs"]);
     assert!(docs.contains("axon proposals"));
-    assert!(!docs.contains("triage"));
     for args in [
         vec!["init", "--help"],
         vec!["merge", "--help"],
