@@ -1048,6 +1048,7 @@ module group_lifecycle {
 
   // invariant: 未終了の仕事や再検討可能な計画が残っている間、全 lifecycle 操作が行き止まりにならない。
   // 整理・再判断の操作も数えるため、当初の計画どおり必ず完了できるという意味ではない。
+  // 完了した祖先の配下にある取りやめ済みの Entity は、再検討可能な仕事として数えない。
   val invNoUnexpectedDeadEnd =
     (GROUPS.exists(g => plan.groups.get(g) != Completed
       and ancestorGroups(plan, plan.groupParents.get(g)).forall(a => plan.groups.get(a) != Completed))

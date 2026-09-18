@@ -63,7 +63,7 @@ demo-9f2hjx  Issue  Blocked  検索結果を表示する
 
 未充足の前提がある場合だけ、本文の前へ `Required to start` または `Required to complete` の節を置く。満たされていない直接の前提を `Parent must start:`・`Dependency must complete:` として、ID・種別・現在の状況・タイトルの行で示す。満たされた依存や依存先の先のツリーは常時展開しない。親の所属表示と待ち理由が同じ情報になる場合は、重複を避けて配置する。
 
-Groupの場合は、この共通表示の末尾へ全子孫のツリーと短い集計を加える。`Completed`・`Cancelled`も含めて全階層を展開する。各行は一覧と同じID・種別・状況・タイトルとし、兄弟を作成日時順（同時刻はID順）で揃え、別のDependencies節へ同じ情報を再列挙しない。
+Groupの場合は、この共通表示の末尾へ短い集計と全子孫のツリーをこの順で加える。`Completed`・`Cancelled`も含めて全階層を展開する。各行は一覧と同じID・種別・状況・タイトルとし、兄弟を作成日時順（同時刻はID順）で揃え、別のDependencies節へ同じ情報を再列挙しない。
 
 集計は `Descendants: 2/4 terminal (1 completed, 1 cancelled)` のように、全子孫の終了数と完了・取りやめの違いが読める形とする。集計はGroup・Issueの両方を含み、対象自身を除く。全状態の内訳は羅列しない。進行中のGroupで、子が全員終了し自身の依存先も完了していれば `Awaiting final confirmation` を示す。これは導出される案内であり、保存状態やレビュー済み状態を追加しない。
 
@@ -77,7 +77,7 @@ Groupの場合は、この共通表示の末尾へ全子孫のツリーと短い
 
 `axon note list ID --recorder-details`・`axon log ID --recorder-details` は保存済みdataを併記し、通常表示はactorのみとする。`axon actor` は現在環境で検出できたactor、未取得なら `—` を表示し、保存を行わない。取得の契約は [記録者連携](../development/lifecycle-recorder.md) を参照する。
 
-最終確認は、Groupと必要な子の`axon show`と、それぞれのNoteを読む操作を組み合わせる。Noteから成果・検証結果を自動抽出しない。配下の全Noteをまとめて読む専用の入口は設けない。
+最終確認は、Groupと必要な子の`axon show`と、それぞれのNoteを読む操作を組み合わせる。Noteから成果・検証結果を自動抽出しない。
 
 ## Note本文の横断検索
 
@@ -136,7 +136,7 @@ Groupの場合は、この共通表示の末尾へ全子孫のツリーと短い
 
 CLIが生成するhelp・ラベル・診断は英語。利用者のタイトル・本文・Note・理由は原文を保持する。human時刻はlocal時刻と数値UTC offset。C0/C1/ESC、tab、CRは可視escapeし、本文のUnicodeと改行は保持する。
 
-装飾は対象streamがTTYでNO_COLORが存在しない場合だけ。同じ内容からANSIを除けば非TTYとテキスト・順序・空白が一致する。IDはcyan＋bold、見出しはbold、着手はcyan、成功/Readyはgreen、待ちはyellow、未判断はyellow＋bold、kind・terminal・no-op・補助情報はdim、エラーはred＋bold。ユーザー本文・タイトルは着色せず、色だけを意味の手掛かりにしない。`axon completion`は常に装飾なし。
+装飾は対象streamがTTYでNO_COLORが存在しない場合だけ。同じ内容からANSIを除けば非TTYとテキスト・順序・空白が一致する。IDと着手はcyan＋bold、見出しはbold、成功/Readyはgreen、待ちはyellow、未判断はyellow＋bold、kind・terminal・no-op・補助情報はdim、エラーはred＋bold。ユーザー本文・タイトルは着色せず、色だけを意味の手掛かりにしない。`axon completion`は常に装飾なし。
 
 一覧0件はstdoutに行を出さず、短い案内をstderrへ出して終了0。候補不在から保存情報の不存在を推測しない。通常行へ毎回操作例を付けず、helpと`axon docs`へ使い方を分ける。
 

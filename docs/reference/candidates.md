@@ -32,7 +32,7 @@ axon condition unset ID
 
 評価する範囲は次のとおりとする。
 
-- `axon proposals` は `Undecided`、`axon tasks` の浮上判定は `NotStarted` を対象とし、どちらも dependency の完了や親の着手を要求しない。終了した Entity と対象外の状態は、自身の表示のためには評価しない。`axon tasks` は `InProgress` を浮上に関係なく加えるため、`InProgress` の条件は `NotStarted` の子孫の表示に必要な祖先としてのみ評価する。
+- `axon proposals` は `Undecided`、`axon tasks` の浮上判定は `NotStarted` を対象とし、どちらも dependency の完了や親の着手を要求しない。終了した Entity と対象外の状態は、自身の表示のためには評価しない。`axon tasks` は `InProgress` を浮上に関係なく加えるため、`InProgress` の条件は、自身の表示のためには評価せず、子孫の候補判定に必要な祖先としてのみ評価する。候補自身ではない `InProgress` の親も、子の候補判定に必要なら評価する。
 - `--kind`・`--search` の絞り込み後に残る候補とその祖先だけを評価する。除外された候補の条件は評価しないが、残った候補の祖先なら kind が異なっても評価する。
 - 残った候補の祖先を上から評価し、祖先が非浮上ならその配下を評価しない。終了した祖先は評価せず、その配下を非浮上として扱う。
 - 一回の一覧取得で各 Entity を最大一回評価し、子や別の参照から同じ結果を共有する。次の取得では結果を引き継がない。
