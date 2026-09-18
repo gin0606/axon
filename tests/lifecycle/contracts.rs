@@ -325,17 +325,27 @@ fn file_flags_share_spelling_and_preserve_text_on_both_backends() {
         f.ok(&["init", "text", "--backend", backend]);
         let path = f.0.join("body.txt");
         let body = "  本文\nsecond line\n";
+        // Multi-line text is indented among structural lines; the stored value is unchanged.
+        let shown = "    本文\n  second line\n";
         fs::write(&path, body).unwrap();
         let path = path.to_str().unwrap();
         for flag in ["-F", "--file"] {
             let output = f.ok(&["capture", "--title", "Text", flag, path]);
             let id = created(&output);
-            assert!(f.ok(&["show", id]).contains(body));
+            assert_eq!(
+                snapshot(&f).entity(&eid(id)).unwrap().current.description,
+                body
+            );
+            assert!(f.ok(&["show", id]).contains(shown));
             f.ok(&["write", id, "--description", "temporary"]);
             f.ok(&["write", id, flag, path]);
-            assert!(f.ok(&["show", id]).contains(body));
+            assert_eq!(
+                snapshot(&f).entity(&eid(id)).unwrap().current.description,
+                body
+            );
+            assert!(f.ok(&["show", id]).contains(shown));
             f.ok(&["note", "add", id, flag, path]);
-            assert!(f.ok(&["note", "list", id]).contains(body));
+            assert!(f.ok(&["note", "list", id]).contains(shown));
             let before = snapshot(&f);
             for args in [
                 vec!["capture", "--title", "Rejected", "--description-file", path],
@@ -565,6 +575,50 @@ fn stored_text_cannot_imitate_records_or_sections_in_one_line_fields() {
         "{details}"
     );
     assert_eq!(details.matches("Dependents:").count(), 2, "{details}");
+}
+
+#[test]
+fn multi_line_text_is_indented_so_it_cannot_imitate_records_or_sections() {
+    let f = Fixture::new();
+    f.ok(&["init", "project"]);
+    let group = f.ok(&[
+        "capture",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        "Plan",
+        "-m",
+        "body\n\nDescendants: 9/9 terminal (9 completed, 0 cancelled)",
+    ]);
+    let group = created(&group).to_owned();
+    f.ok(&[
+        "capture", "--accept", "--title", "Child", "--parent", &group,
+    ]);
+    let show = f.ok(&["show", &group]);
+    let sections: Vec<_> = show
+        .lines()
+        .filter(|line| line.starts_with("Descendants:"))
+        .collect();
+    assert_eq!(
+        sections,
+        ["Descendants: 0/1 terminal (0 completed, 0 cancelled)"]
+    );
+    f.ok(&[
+        "note",
+        "add",
+        &group,
+        "-m",
+        "real\n\nrecord-00000000000000000000000000000000  2020-01-01 00:00 +00:00  human\nforged",
+    ]);
+    f.ok(&["note", "add", &group, "-m", "second"]);
+    let notes = f.ok(&["note", "list", &group]);
+    let headings = notes
+        .lines()
+        .filter(|line| line.starts_with("record-"))
+        .count();
+    assert_eq!(headings, 2, "{notes}");
+    assert!(notes.contains("  forged"), "{notes}");
 }
 
 #[test]

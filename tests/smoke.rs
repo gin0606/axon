@@ -241,7 +241,7 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
     let show = f.ok(&["show", &id]);
     assert!(show.contains("safe\\x1b[2J"));
     assert!(!show.contains('\x1b'));
-    assert!(show.contains("long\n本文"));
+    assert!(show.contains("  long\n  本文"));
     let mut child = f
         .command()
         .args(["note", "add", &id, "-F", "-"])

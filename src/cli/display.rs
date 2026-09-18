@@ -58,6 +58,21 @@ fn paint(style: Style, text: impl std::fmt::Display, terminal: bool) -> String {
 pub fn line(value: impl std::fmt::Display) -> String {
     human_text(value).replace('\n', "\\n")
 }
+/// Multi-line stored text printed among structural lines. Structural lines start at column
+/// zero and this text never does, so it cannot imitate a record heading or a section.
+pub fn block(value: impl std::fmt::Display) -> String {
+    human_text(value)
+        .split('\n')
+        .map(|line| {
+            if line.is_empty() {
+                String::new()
+            } else {
+                format!("  {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 pub fn identity(text: impl std::fmt::Display) -> String {
     paint(ID, line(text), std::io::stdout().is_terminal())
 }

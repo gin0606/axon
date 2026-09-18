@@ -98,7 +98,7 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
         }
     }
     out.push('\n');
-    out.push_str(&display::human_text(&entity.current.description));
+    out.push_str(&display::block(&entity.current.description));
     out.push('\n');
     if let Some(descendants) = &value.descendants {
         let total = descendants.entries.len();
@@ -270,13 +270,19 @@ pub fn list_row(value: &read::Row<'_>, searched: bool) -> String {
     }
     text
 }
-pub fn format_note(note: &Note, details: bool) -> String {
+/// `listed` Notes share the output with other records, so their bodies are indented.
+/// A single requested Note prints its body as stored.
+pub fn format_note(note: &Note, details: bool, listed: bool) -> String {
     format!(
         "{}  {}  {}\n{}\n\n",
         display::identity(&note.id),
         display::muted(display::timestamp(&note.context.at)),
         recorder_display(&note.context, details),
-        display::human_text(&note.body)
+        if listed {
+            display::block(&note.body)
+        } else {
+            display::human_text(&note.body)
+        }
     )
 }
 pub fn confirmation(id: &EntityId, effect: &str) -> String {
