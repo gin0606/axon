@@ -145,7 +145,7 @@ pub(super) fn log(value: String, recorder_details: bool) -> Result<Output> {
                     "{before:?} → {after:?}{}",
                     reason
                         .as_ref()
-                        .map(|r| format!("  Reason: {}", display::human_text(r)))
+                        .map(|r| format!("  Reason: {}", display::line(r)))
                         .unwrap_or_default()
                 ),
                 StateEvent::Integration {
@@ -157,7 +157,7 @@ pub(super) fn log(value: String, recorder_details: bool) -> Result<Output> {
                     inputs[*selected].current.lifecycle,
                     reason
                         .as_ref()
-                        .map(|r| format!("  Reason: {}", display::human_text(r)))
+                        .map(|r| format!("  Reason: {}", display::line(r)))
                         .unwrap_or_default()
                 ),
             };

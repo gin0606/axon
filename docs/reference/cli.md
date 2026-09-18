@@ -46,7 +46,7 @@ option値の先頭hyphenは `--description='--text'` のように渡す。構文
 | `Completed` | `Completed` | 完了 |
 | `Cancelled` | `Cancelled` | 取りやめ |
 
-親の着手待ちも`Blocked`に含める。これは表示上のまとめ方で、保存する包含と明示dependencyの区別は維持する。Groupの未終了の子は最終確認前の進捗として子一覧へ示し、明示dependencyと混ぜない。保存したタイトルに改行があれば一覧の中では `\n` として一行に保つ。
+親の着手待ちも`Blocked`に含める。これは表示上のまとめ方で、保存する包含と明示dependencyの区別は維持する。Groupの未終了の子は最終確認前の進捗として子一覧へ示し、明示dependencyと混ぜない。一行の中に表示する値（タイトル、理由、actor、条件コマンド、親のタイトル）に含まれる改行は `\n` として表示し、保存された文字列が記録の行や節の見出しを装えないようにする。
 
 ```text
 demo-k3m7pq  Group  InProgress  検索画面を実装する

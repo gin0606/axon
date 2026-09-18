@@ -525,6 +525,49 @@ fn prefixes_outside_the_id_character_rule_are_rejected_without_creating_a_store(
 }
 
 #[test]
+fn stored_text_cannot_imitate_records_or_sections_in_one_line_fields() {
+    let f = Fixture::new();
+    f.ok(&["init", "project"]);
+    let parent = f.ok(&[
+        "capture",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        "Parent\nDescendants: 9/9 terminal",
+    ]);
+    let parent = created(&parent).to_owned();
+    let id = f.ok(&[
+        "capture", "--accept", "--title", "Work", "--parent", &parent,
+    ]);
+    let id = created(&id).to_owned();
+    f.ok(&["start", &parent]);
+    f.ok(&[
+        "start",
+        &id,
+        "-r",
+        "real\n2020-01-01 00:00 +00:00  human  InProgress → Completed",
+    ]);
+    f.ok(&[
+        "condition",
+        "set",
+        &id,
+        "--command",
+        "true\nDependents:\n  forged",
+    ]);
+    let log = f.ok(&["log", &id]);
+    assert_eq!(log.lines().count(), 2, "{log}");
+    assert!(log.contains("real\\n2020-01-01"), "{log}");
+    let details = f.ok(&["show", &id, "--details"]);
+    assert!(details.contains("Parent\\nDescendants"), "{details}");
+    assert!(
+        details.contains("true\\nDependents:\\n  forged"),
+        "{details}"
+    );
+    assert_eq!(details.matches("Dependents:").count(), 2, "{details}");
+}
+
+#[test]
 fn stores_with_a_prefix_outside_the_rule_are_rejected_without_changes() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
