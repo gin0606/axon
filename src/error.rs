@@ -32,7 +32,9 @@ pub fn validate_prefix(prefix: &str) -> Result<()> {
         || prefix.ends_with('-')
         || !prefix.as_bytes().iter().all(allowed)
     {
-        return Err(invalid(format!("invalid ID prefix: use {PREFIX_RULE}")));
+        return Err(invalid(format!(
+            "invalid ID prefix {prefix:?}: expected {PREFIX_RULE}"
+        )));
     }
     Ok(())
 }

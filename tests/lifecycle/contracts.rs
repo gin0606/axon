@@ -492,6 +492,9 @@ fn prefixes_outside_the_id_character_rule_are_rejected_without_creating_a_store(
     assert!(derived.contains("日本語 project"), "{derived}");
     assert!(derived.contains("axon init <PREFIX>"), "{derived}");
     assert!(!directory.join(".axon").exists());
+    // A directory whose own name is valid, so only the explicit value can be rejected.
+    let named = f.0.join("project");
+    fs::create_dir(&named).unwrap();
     for prefix in [
         "",
         "日本語",
@@ -503,13 +506,48 @@ fn prefixes_outside_the_id_character_rule_are_rejected_without_creating_a_store(
         "Upper",
     ] {
         let rejected = failure(
-            command(&directory)
+            command(&named)
                 .args(["init", "--backend", "file", "--", prefix])
                 .output()
                 .unwrap(),
         );
+        assert!(rejected.contains("invalid ID prefix"), "{rejected}");
         assert!(rejected.contains("ASCII lowercase letters"), "{rejected}");
-        assert!(!directory.join(".axon").exists(), "{prefix}");
+        assert!(!named.join(".axon").exists(), "{prefix}");
+    }
+}
+
+#[test]
+fn stores_with_a_prefix_outside_the_rule_are_rejected_without_changes() {
+    for backend in ["sqlite", "file"] {
+        let f = Fixture::new();
+        f.ok(&["init", "project", "--backend", backend]);
+        f.ok(&["capture", "--accept", "--title", "Work"]);
+        let path = if backend == "sqlite" {
+            let connection = rusqlite::Connection::open(f.db()).unwrap();
+            connection
+                .execute("UPDATE lifecycle_store SET prefix = 'Bad Prefix'", [])
+                .unwrap();
+            f.db()
+        } else {
+            let path = f.0.join(".axon/state.jsonl");
+            let text = fs::read_to_string(&path).unwrap();
+            fs::write(
+                &path,
+                text.replacen(r#""prefix":"project""#, r#""prefix":"Bad Prefix""#, 1),
+            )
+            .unwrap();
+            path
+        };
+        let before = fs::read(&path).unwrap();
+        for args in [vec!["list"], vec!["capture", "--title", "More"]] {
+            let error = failure(f.run(&args));
+            assert!(
+                error.contains(r#"invalid ID prefix "Bad Prefix""#),
+                "{error}"
+            );
+        }
+        assert_eq!(before, fs::read(&path).unwrap(), "{backend}");
     }
 }
 
