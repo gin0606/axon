@@ -441,9 +441,9 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
     assert!(!f.ok(&["actor"]).is_empty());
     let version = f.ok(&["--version"]);
     assert_eq!(f.ok(&["-V"]), version);
-    assert!(
-        version.contains("commit") && version.contains("source"),
-        "{version}"
+    assert_eq!(
+        version.trim_end(),
+        format!("axon {}", env!("CARGO_PKG_VERSION"))
     );
     for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
         let script = f.ok(&["completion", shell]);

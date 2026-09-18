@@ -9,7 +9,7 @@ use std::{io::Read, path::PathBuf, time::Duration};
 
 #[derive(Parser)]
 #[command(
-    version = env!("AXON_VERSION"),
+    version,
     styles = display::cli_styles(),
     color = display::cli_color(),
     about = "A local issue tracker for Issues and Groups",
