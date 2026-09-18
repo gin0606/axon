@@ -535,29 +535,37 @@ fn prefixes_outside_the_id_character_rule_are_rejected_without_creating_a_store(
 }
 
 #[test]
-fn stored_text_cannot_imitate_records_or_sections_in_one_line_fields() {
+fn one_line_fields_reject_or_escape_line_breaks() {
     let f = Fixture::new();
     f.ok(&["init", "project"]);
-    let parent = f.ok(&[
-        "capture",
-        "--kind",
-        "group",
-        "--accept",
-        "--title",
-        "Parent\nDescendants: 9/9 terminal",
-    ]);
-    let parent = created(&parent).to_owned();
-    let id = f.ok(&[
-        "capture", "--accept", "--title", "Work", "--parent", &parent,
-    ]);
+    let id = f.ok(&["capture", "--accept", "--title", "Work"]);
     let id = created(&id).to_owned();
-    f.ok(&["start", &parent]);
-    f.ok(&[
-        "start",
-        &id,
-        "-r",
-        "real\n2020-01-01 00:00 +00:00  human  InProgress → Completed",
-    ]);
+    let before = snapshot(&f);
+    let long_title = "t".repeat(201);
+    let long_reason = "r".repeat(501);
+    for args in [
+        vec!["capture", "--title", "Two\nlines"],
+        vec!["capture", "--title", "Tab\there"],
+        vec!["capture", "--title", &long_title],
+        vec!["write", &id, "--title", "Two\nlines"],
+        vec![
+            "start",
+            &id,
+            "-r",
+            "real\n2020-01-01 00:00 +00:00  human  InProgress → Completed",
+        ],
+        vec!["start", &id, "-r", &long_reason],
+    ] {
+        let error = failure(f.run(&args));
+        assert!(
+            error.contains("control character") || error.contains("the limit is"),
+            "{error}"
+        );
+    }
+    assert_eq!(snapshot(&f), before);
+    f.ok(&["capture", "--title", &"t".repeat(200)]);
+    f.ok(&["start", &id, "-r", &"r".repeat(500)]);
+    // A condition is a shell script and may span lines, so it is escaped where it is shown.
     f.ok(&[
         "condition",
         "set",
@@ -565,16 +573,19 @@ fn stored_text_cannot_imitate_records_or_sections_in_one_line_fields() {
         "--command",
         "true\nDependents:\n  forged",
     ]);
-    let log = f.ok(&["log", &id]);
-    assert_eq!(log.lines().count(), 2, "{log}");
-    assert!(log.contains("real\\n2020-01-01"), "{log}");
     let details = f.ok(&["show", &id, "--details"]);
-    assert!(details.contains("Parent\\nDescendants"), "{details}");
     assert!(
         details.contains("true\\nDependents:\\n  forged"),
         "{details}"
     );
-    assert_eq!(details.matches("Dependents:").count(), 2, "{details}");
+    assert_eq!(
+        details
+            .lines()
+            .filter(|line| line.starts_with("Dependents:"))
+            .count(),
+        1,
+        "{details}"
+    );
 }
 
 #[test]

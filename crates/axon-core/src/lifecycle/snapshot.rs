@@ -96,9 +96,7 @@ impl Snapshot {
         context: Context,
     ) -> Result<RecordId> {
         self.check_operation(id, operation)?;
-        if reason.as_ref().is_some_and(|text| text.trim().is_empty()) {
-            return Err(invalid("empty reason"));
-        }
+        validate_reason(&reason)?;
         let entity = self.entity(id)?;
         let before = entity.current.lifecycle;
         let after = operation.apply(before)?;
@@ -270,6 +268,7 @@ impl Snapshot {
     ) -> Result<Self> {
         self.validate()?;
         other.validate()?;
+        validate_reason(&reason)?;
         if self.store != other.store {
             return Err(invalid("different stores"));
         }
@@ -440,8 +439,9 @@ impl Snapshot {
                     operation,
                     before,
                     after,
-                    ..
+                    reason,
                 } => {
+                    validate_reason(reason)?;
                     if record.parents.len() != 1 || operation.apply(*before)? != *after {
                         return Err(invalid("invalid lifecycle transition"));
                     }
@@ -451,8 +451,11 @@ impl Snapshot {
                     }
                 }
                 StateEvent::Integration {
-                    inputs, selected, ..
+                    inputs,
+                    selected,
+                    reason,
                 } => {
+                    validate_reason(reason)?;
                     if inputs.is_empty()
                         || *selected >= inputs.len()
                         || record.parents != inputs.iter().map(|c| c.head.clone()).collect()

@@ -37,6 +37,68 @@ fn fixture(kind: Kind, lifecycle: Lifecycle) -> Snapshot {
         .unwrap();
     snapshot
 }
+#[test]
+fn titles_and_reasons_are_single_lines_within_their_limits_on_input_and_decode() {
+    let at_limit = "字".repeat(TITLE_LIMIT);
+    for (title, accepted) in [
+        (at_limit.as_str(), true),
+        (&"字".repeat(TITLE_LIMIT + 1), false),
+        ("two\nlines", false),
+        ("tab\there", false),
+        ("escape\u{1b}[2J", false),
+        ("c1\u{85}", false),
+        ("   ", false),
+    ] {
+        let mut value = current(Lifecycle::NotStarted);
+        value.title = title.into();
+        let mut snapshot = Snapshot::new(StoreId::generate());
+        let created = snapshot.create(id("item"), Kind::Issue, value, context(10));
+        assert_eq!(created.is_ok(), accepted, "{title:?}");
+        assert_eq!(snapshot.entities().count(), usize::from(accepted));
+    }
+    let mut snapshot = fixture(Kind::Issue, Lifecycle::NotStarted);
+    let before = snapshot.clone();
+    assert!(
+        snapshot
+            .write(&id("item"), Some("two\nlines".into()), None)
+            .is_err()
+    );
+    for reason in [
+        "two\nlines".to_owned(),
+        "r".repeat(REASON_LIMIT + 1),
+        " ".into(),
+    ] {
+        assert!(
+            snapshot
+                .perform(&id("item"), Operation::Start, Some(reason), context(20))
+                .is_err()
+        );
+    }
+    assert_eq!(snapshot, before);
+    snapshot
+        .perform(
+            &id("item"),
+            Operation::Start,
+            Some("r".repeat(REASON_LIMIT)),
+            context(20),
+        )
+        .unwrap();
+    let text = String::from_utf8(encode(&snapshot).unwrap()).unwrap();
+    assert!(
+        decode(
+            text.replace("\"title\":\"task\"", "\"title\":\"two\\nlines\"")
+                .as_bytes()
+        )
+        .is_err()
+    );
+    assert!(
+        decode(
+            text.replace(&"r".repeat(REASON_LIMIT), "two\nlines")
+                .as_bytes()
+        )
+        .is_err()
+    );
+}
 fn roundtrip(snapshot: &Snapshot) {
     let bytes = encode(snapshot).unwrap();
     let restored = decode(&bytes).unwrap();
@@ -148,7 +210,7 @@ fn operation_and_history_are_atomic_and_other_entities_unchanged() {
             .perform(
                 &id("item"),
                 operation,
-                Some("reason\n理由".into()),
+                Some("reason 理由".into()),
                 context(-10),
             )
             .unwrap();
@@ -166,7 +228,7 @@ fn operation_and_history_are_atomic_and_other_entities_unchanged() {
                 operation,
                 before: before.current.lifecycle,
                 after: after.current.lifecycle,
-                reason: Some("reason\n理由".into()),
+                reason: Some("reason 理由".into()),
             }
         );
         assert_eq!(snapshot.entity(&id("other")).unwrap(), &other);

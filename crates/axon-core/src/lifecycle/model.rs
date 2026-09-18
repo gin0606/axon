@@ -139,11 +139,36 @@ pub struct Current {
     pub parent: Option<EntityId>,
     pub dependencies: BTreeSet<EntityId>,
 }
+/// Titles and reasons are shown inside one line. A value that needs line breaks, control
+/// characters or this much room belongs in the description or a Note, and accepting it here
+/// would store a caller's mistake instead of reporting it.
+pub const TITLE_LIMIT: usize = 200;
+pub const REASON_LIMIT: usize = 500;
+pub(crate) fn validate_line(field: &str, value: &str, limit: usize) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(invalid(format!("empty {field}")));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(invalid(format!(
+            "{field} contains a line break or control character"
+        )));
+    }
+    let length = value.chars().count();
+    if length > limit {
+        return Err(invalid(format!(
+            "{field} has {length} characters; the limit is {limit}"
+        )));
+    }
+    Ok(())
+}
+pub(crate) fn validate_reason(reason: &Option<String>) -> Result<()> {
+    reason
+        .as_deref()
+        .map_or(Ok(()), |text| validate_line("reason", text, REASON_LIMIT))
+}
 impl Current {
     pub(crate) fn validate(&self) -> Result<()> {
-        if self.title.trim().is_empty() {
-            return Err(invalid("empty title"));
-        }
+        validate_line("title", &self.title, TITLE_LIMIT)?;
         if self.condition.as_ref().is_some_and(|s| s.trim().is_empty()) {
             return Err(invalid("empty condition command"));
         }

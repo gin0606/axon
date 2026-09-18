@@ -79,7 +79,7 @@ root は `schema`、`groups`、`issues`、`references` の 4 field だけをこ�
 | `key` | string または null | file 内のみ | file-local の別名。`^[a-z][a-z0-9-]{0,63}$` に一致し、`groups`・`issues` を通じて file 内で一意。保存先には保存しない |
 | `base` | fingerprint または null | 読み取り専用 | `axon export` 時点の値の fingerprint。未適用の新規 Entity だけ null |
 | `lifecycle` | `undecided` / `not-started` / `in-progress` / `completed` / `cancelled` | 既存は読み取り専用 | 保存された lifecycle。新規 Entity は `undecided` か `not-started` のどちらかを書く |
-| `title` | string | 編集可 | 空または空白だけを拒否する。それ以外は保存値をそのまま扱う |
+| `title` | string | 編集可 | 空または空白だけの値、改行や制御文字を含む値、200 文字を超える値を拒否する。それ以外は保存値をそのまま扱う |
 | `description` | string | 編集可 | Markdown 本文。空文字は本文なし。trim・正規化をしない |
 | `parent` | 参照 または null | 編集可 | 親 Group。Issue を親にする参照は拒否する |
 | `needs` | 参照の list | 編集可 | outgoing dependency。空なら `[]` |

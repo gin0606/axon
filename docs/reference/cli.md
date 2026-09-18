@@ -111,9 +111,9 @@ Groupの場合は、この共通表示の末尾へ短い集計と全子孫のツ
 
 登録は一つのコマンドで行い、種別は `--kind issue|group`、採否は `--accept` の有無で指定する。`--kind` の既定は `issue`、`--accept` 省略時は`Undecided`、指定時は`NotStarted`で作成する。登録と採否は直交し、作成後は同じIDベースの操作を使う。操作対象のIDは位置引数、関係先のIDは役割を明示するoptionとし、登録時の親・依存指定も `--parent`・`--needs` に揃える。
 
-登録titleは `--title`。本文は `-m/--description` または `-F/--file`。Noteは `-m/--message` または `-F/--file`。本文option同士は排他で、`-F -` はUTF-8のstdinを一度読む。本文・Noteをtrimして保存しない。初期の `--parent`、反復可能な `--needs`、`--command` は作成と同時に検査・保存する。作成中に条件を実行しない。通常の`axon write`はtitleと本文を一transactionで編集し、lifecycleを変えない。長い本文は登録時と同じ本文optionでファイルから渡せる。
+登録titleは `--title`。タイトルは一行の値で、改行や制御文字を含む値と200文字を超える値を拒否する。本文は `-m/--description` または `-F/--file`。Noteは `-m/--message` または `-F/--file`。本文option同士は排他で、`-F -` はUTF-8のstdinを一度読む。本文・Noteをtrimして保存しない。初期の `--parent`、反復可能な `--needs`、`--command` は作成と同時に検査・保存する。作成中に条件を実行しない。通常の`axon write`はtitleと本文を一transactionで編集し、lifecycleを変えない。長い本文は登録時と同じ本文optionでファイルから渡せる。
 
-`axon accept|withdraw|start|release|complete|cancel|reconsider A` は `-r/--reason` を履歴へ保存する。空白だけの理由は拒否する。Groupへの`axon complete`の実行自体を「計画全体の最終確認が通った」という明示入力とする。Axonは子・依存・状態を検査し、確認作業は呼び出す人・エージェントのskillと運用で担う。必須のレビュー確認フラグや独立したレビュー済み状態は設けない。どの変更コマンドも、状態・包含・dependencyの制約を迂回しない。
+`axon accept|withdraw|start|release|complete|cancel|reconsider A` は `-r/--reason` を履歴へ保存する。理由も一行の値で、空白だけの値、改行や制御文字を含む値、500文字を超える値を拒否する。文字数はUnicodeの文字単位で数える。この検証は保存先の読取でも行う。複数行の説明や長い内容は本文かNoteに書く。Groupへの`axon complete`の実行自体を「計画全体の最終確認が通った」という明示入力とする。Axonは子・依存・状態を検査し、確認作業は呼び出す人・エージェントのskillと運用で担う。必須のレビュー確認フラグや独立したレビュー済み状態は設けない。どの変更コマンドも、状態・包含・dependencyの制約を迂回しない。
 
 ## 計画全体の取得と一括編集
 

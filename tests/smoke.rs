@@ -224,13 +224,13 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
     let f = Fixture::new();
     f.init();
     let body = f.0.join("body.txt");
-    fs::write(&body, "long\n本文").unwrap();
+    fs::write(&body, "long\n本文\x1b[2J").unwrap();
     let id = f
         .ok(&[
             "capture",
             "--accept",
             "--title",
-            "safe\x1b[2J",
+            "safe",
             "-F",
             body.to_str().unwrap(),
         ])
@@ -239,9 +239,11 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
         .unwrap()
         .to_string();
     let show = f.ok(&["show", &id]);
-    assert!(show.contains("safe\\x1b[2J"));
     assert!(!show.contains('\x1b'));
-    assert!(show.contains("  long\n  本文"));
+    assert!(show.contains("  long\n  本文\\x1b[2J"));
+    let rejected = failure(f.run(&["write", &id, "--title", "unsafe\x1b[2J"]));
+    assert!(rejected.contains("control character"), "{rejected}");
+    assert!(!rejected.contains('\x1b'));
     let mut child = f
         .command()
         .args(["note", "add", &id, "-F", "-"])

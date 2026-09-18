@@ -251,7 +251,7 @@ impl Body {
 }
 #[derive(Args)]
 pub(super) struct Create {
-    /// Title of the new Entity
+    /// Title of the new Entity: one line, at most 200 characters
     #[arg(long)]
     pub(super) title: String,
     /// Entity kind to create

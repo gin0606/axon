@@ -40,9 +40,9 @@ fn declaration_export_selectors_and_references_are_read_only_on_both_backends() 
             "capture",
             "--accept",
             "--title",
-            "Body\r\nwith control\u{1}",
+            "Body",
             "-m",
-            "\n indented\nlast\n\n",
+            "\n indented\r\nwith control\u{1}\nlast\n\n",
             "--parent",
             &nested,
             "--needs",
@@ -93,8 +93,11 @@ fn declaration_export_selectors_and_references_are_read_only_on_both_backends() 
         assert!(single.groups.is_empty());
         assert_eq!(single.issues.len(), 1);
         assert_eq!(single.issues[0].parent, Some(Reference::id(&nested)));
-        assert_eq!(single.issues[0].title, "Body\r\nwith control\u{1}");
-        assert_eq!(single.issues[0].description, "\n indented\nlast\n\n");
+        assert_eq!(single.issues[0].title, "Body");
+        assert_eq!(
+            single.issues[0].description,
+            "\n indented\r\nwith control\u{1}\nlast\n\n"
+        );
         assert_eq!(
             single
                 .references
@@ -585,30 +588,37 @@ fn declaration_apply_registers_edits_and_retries_on_both_backends() {
 }
 
 #[test]
-fn declaration_title_changes_escape_each_side_on_both_backends() {
+fn declaration_title_changes_show_each_side_and_reject_control_characters() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "demo", "--backend", backend]);
-        let id = f.accepted("Before\nline\r\t\u{1b}");
+        let id = f.accepted("Before title");
         let mut d = declaration::parse(&f.ok(&["export", &id])).unwrap();
-        d.issues[0].title = "After\nline\r\t\u{7f}".into();
+        d.issues[0].title = "After title".into();
         d.issues[0].description = "Private full description".into();
         let path = f.0.join("plan.yaml");
         fs::write(&path, d.serialize(&snapshot(&f)).unwrap()).unwrap();
         let text = f.ok(&["import", "check", path.to_str().unwrap()]);
         assert!(
             text.lines()
-                .any(|line| line == "  title: Before\\nline\\r\\t\\x1b -> After\\nline\\r\\t\\x7f"),
+                .any(|line| line == "  title: Before title -> After title"),
             "{text}"
         );
         assert!(text.contains("description: changed"));
         assert!(!text.contains("Private full description"));
-        d.issues[0].title = "Before\nline\r\t\u{1b}".into();
-        fs::write(&path, d.serialize(&snapshot(&f)).unwrap()).unwrap();
-        assert!(
-            f.ok(&["import", "check", path.to_str().unwrap()])
-                .contains("title: unchanged")
-        );
+        let before = snapshot(&f);
+        for title in ["After\nline", "After\u{1b}[2J", &"a".repeat(201)] {
+            d.issues[0].title = title.into();
+            let input = d.serialize(&before).unwrap();
+            fs::write(&path, &input).unwrap();
+            for command in ["check", "apply"] {
+                let error = failure(f.run(&["import", command, path.to_str().unwrap()]));
+                assert!(error.contains("title"), "{command}: {error}");
+                assert!(!error.contains('\u{1b}'), "{error}");
+            }
+            assert_eq!(fs::read_to_string(&path).unwrap(), input);
+            assert_eq!(snapshot(&f), before);
+        }
     }
 }
 

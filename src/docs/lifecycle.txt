@@ -80,7 +80,9 @@ Storage and recovery
   merge prepare/check/apply uses retained inputs and explicit resolution choices;
   Git driver configuration, staging and commits remain separate operations.
 
-Use axon help <COMMAND PATH> for exact arguments. Create with --title; descriptions
+Use axon help <COMMAND PATH> for exact arguments. Create with --title. A title is one line of
+at most 200 characters and a --reason one line of at most 500; longer or multi-line text
+belongs in the description or a Note. Descriptions
 accept -m/--description or -F/--file (- reads stdin). Notes use
 -m/--message or -F/--file. Short flags select inline (-m) or file (-F) input;
 inline long names identify the field (--description or --message). For option
