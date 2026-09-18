@@ -5,7 +5,7 @@ fn id(value: &str) -> Result<EntityId> {
     value
         .to_owned()
         .try_into()
-        .map_err(|e| invalid(format!("identity/reference: {value}: {e}")))
+        .map_err(|e| invalid(format!("identity/reference: {e}")))
 }
 fn record_id(record: &Record) -> Result<EntityId> {
     id(record

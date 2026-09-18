@@ -4,21 +4,26 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+/// Entity IDs appear on command lines, so they stay free of characters a shell would quote.
+fn entity_id_byte(byte: u8) -> bool {
+    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+}
+fn record_id_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'-'
+}
 macro_rules! identifier {
-    ($name:ident, $ascii:literal) => {
+    ($name:ident, $valid:path, $expected:literal) => {
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(try_from = "String", into = "String")]
         pub struct $name(String);
         impl TryFrom<String> for $name {
             type Error = super::Error;
             fn try_from(value: String) -> Result<Self> {
-                if value.is_empty()
-                    || ($ascii
-                        && !value
-                            .bytes()
-                            .all(|b| b.is_ascii_alphanumeric() || b == b'-'))
-                {
-                    return Err(invalid(concat!("invalid ", stringify!($name))));
+                if value.is_empty() || !value.bytes().all($valid) {
+                    return Err(invalid(format!(
+                        concat!("invalid ", stringify!($name), " {:?}: expected ", $expected),
+                        value
+                    )));
                 }
                 Ok(Self(value))
             }
@@ -35,9 +40,17 @@ macro_rules! identifier {
         }
     };
 }
-identifier!(EntityId, false);
-identifier!(RecordId, true);
-identifier!(StoreId, true);
+identifier!(
+    EntityId,
+    entity_id_byte,
+    "ASCII lowercase letters, digits and hyphens"
+);
+identifier!(
+    RecordId,
+    record_id_byte,
+    "ASCII letters, digits and hyphens"
+);
+identifier!(StoreId, record_id_byte, "ASCII letters, digits and hyphens");
 
 impl EntityId {
     pub fn generate(prefix: &str) -> Self {

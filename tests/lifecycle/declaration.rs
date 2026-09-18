@@ -657,20 +657,37 @@ fn declaration_help_gives_examples_and_next_commands_without_opening_either_back
 }
 
 #[test]
-fn declaration_new_id_mappings_stay_on_one_line_on_both_backends() {
+fn declaration_keeps_a_valid_written_id_and_rejects_ids_outside_the_character_rule() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
         f.ok(&["init", "demo", "--backend", backend]);
-        let mut d = declaration::example();
-        d.groups[0].id = Some("demo-multi\nline\r\t\u{1b}".into());
         let path = f.0.join("plan.yaml");
-        fs::write(&path, d.serialize(&snapshot(&f)).unwrap()).unwrap();
+        let before = snapshot(&f);
+        for written in [
+            "demo-multi\nline",
+            "Demo-upper",
+            "demo with space",
+            "demo_x",
+        ] {
+            let mut d = declaration::example();
+            d.groups[0].id = Some(written.into());
+            let input = d.serialize(&before).unwrap();
+            fs::write(&path, &input).unwrap();
+            for command in ["prepare", "check", "apply"] {
+                let error = failure(f.run(&["import", command, path.to_str().unwrap()]));
+                assert!(error.contains("invalid EntityId"), "{command}: {error}");
+                assert_eq!(error.trim_end().lines().count(), 1, "{error}");
+            }
+            assert_eq!(fs::read_to_string(&path).unwrap(), input);
+            assert_eq!(snapshot(&f), before);
+        }
+        let mut d = declaration::example();
+        d.groups[0].id = Some("demo-custom".into());
+        fs::write(&path, d.serialize(&before).unwrap()).unwrap();
         for command in ["prepare", "apply"] {
             let output = f.ok(&["import", command, path.to_str().unwrap()]);
             assert!(
-                output
-                    .lines()
-                    .any(|line| line == "plan -> demo-multi\\nline\\r\\t\\x1b"),
+                output.lines().any(|line| line == "plan -> demo-custom"),
                 "{output}"
             );
             assert_eq!(output.lines().count(), 4, "{output}");

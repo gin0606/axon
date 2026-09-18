@@ -75,7 +75,7 @@ root は `schema`、`groups`、`issues`、`references` の 4 field だけをこ�
 
 | field | 型 | 編集可否 | 契約 |
 | --- | --- | --- | --- |
-| `id` | string または null | identity | 既存 Entity と `prepare` 済みの新規 Entity では公開 ID。`prepare` 前の新規 Entity だけ null |
+| `id` | string または null | identity | 既存 Entity と `prepare` 済みの新規 Entity では公開 ID。`prepare` 前の新規 Entity だけ null。ASCII 小文字英数字とハイフン以外を含む値は拒否する |
 | `key` | string または null | file 内のみ | file-local の別名。`^[a-z][a-z0-9-]{0,63}$` に一致し、`groups`・`issues` を通じて file 内で一意。保存先には保存しない |
 | `base` | fingerprint または null | 読み取り専用 | `axon export` 時点の値の fingerprint。未適用の新規 Entity だけ null |
 | `lifecycle` | `undecided` / `not-started` / `in-progress` / `completed` / `cancelled` | 既存は読み取り専用 | 保存された lifecycle。新規 Entity は `undecided` か `not-started` のどちらかを書く |
@@ -165,7 +165,7 @@ description の全文差分は file 自体の git diff に任せ、CLI では変
 次はいずれも file 全体を拒否し、部分適用しない。診断は原因の分類、対象 ID、固定されている項目名を示す。
 
 - strict YAML 違反、schema label の不一致、unknown field、重複 key、anchor・alias・merge key・tag
-- 一つの参照 mapping での id と key の併記、`id` が null で `base` が non-null の record、`base` が null の record の `key` 欠落、未解決の ID・key、同じ Entity の二重宣言、解決後の重複した `needs`、自己依存、Issue を親にする参照、新規 Entity の `lifecycle` が `undecided`・`not-started` 以外
+- ASCII 小文字英数字とハイフン以外を含む `id`、一つの参照 mapping での id と key の併記、`id` が null で `base` が non-null の record、`base` が null の record の `key` 欠落、未解決の ID・key、同じ Entity の二重宣言、解決後の重複した `needs`、自己依存、Issue を親にする参照、新規 Entity の `lifecycle` が `undecided`・`not-started` 以外
 - 既存 Entity の `lifecycle` の書き換え、既存 Entity の record を `issues` と `groups` の間で移す kind の変更
 - `base` の不一致、または新規 Entity の割り当て済み ID が保存先に存在すること（再試行の適用済み判定に該当する場合を除く）。保存先の変更と入力側の `base` の改変・null 化は区別せず、いずれも競合として扱う
 - `Completed`・`Cancelled` の title・description の差分、`Completed` の `needs` の差分、終了した Group の構成を変える所属変更、終了した Group を親にする作成・所属変更、進行中の Entity の祖先に進行中でない Group を置く変更、包含の循環、dependency の循環など、共通コアが通常操作でも拒否する変更。新規作成の親は終了していない Group であればよく、進行中である必要はない

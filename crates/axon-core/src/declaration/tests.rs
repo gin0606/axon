@@ -295,48 +295,6 @@ fn fingerprint_tokens_and_visible_field_changes() {
     assert_eq!(base, fingerprint(&other));
 }
 #[test]
-fn export_flow_references_preserve_arbitrary_ids() {
-    let mut s = snapshot();
-    s.create(
-        id("parent, with [brackets]"),
-        Kind::Group,
-        current("External"),
-        context(),
-    )
-    .unwrap();
-    let mut c = current("Child");
-    c.parent = Some(id("parent, with [brackets]"));
-    s.create(id("child"), Kind::Issue, c, context()).unwrap();
-    let d = export(&s, &[id("child")]).unwrap();
-    assert_eq!(parse(&d.serialize(&s).unwrap()).unwrap(), d);
-}
-
-#[test]
-fn multiline_ids_use_literal_blocks_and_quoted_flow_references() {
-    for name in ["first\nsecond", "first\nsecond\n"] {
-        let mut s = snapshot();
-        s.create(id(name), Kind::Group, current("Parent"), context())
-            .unwrap();
-        let mut c = current("Child");
-        c.parent = Some(id(name));
-        s.create(id("child"), Kind::Issue, c, context()).unwrap();
-        for selector in [name, "child"] {
-            let declaration = export(&s, &[id(selector)]).unwrap();
-            let yaml = declaration.serialize(&s).unwrap();
-            assert!(
-                yaml.contains(if name.ends_with('\n') {
-                    "  - id: |\n      first\n      second\n"
-                } else {
-                    "  - id: |-\n      first\n      second\n"
-                }),
-                "{yaml}"
-            );
-            assert!(yaml.contains(&format!("parent: {{ id: {} }}", quote(name))));
-            assert_eq!(parse(&yaml).unwrap().serialize(&s).unwrap(), yaml);
-        }
-    }
-}
-#[test]
 fn declaration_doc_example_has_identical_canonical_bytes() {
     let doc = include_str!("../../../../docs/reference/declaration.md");
     let text = doc

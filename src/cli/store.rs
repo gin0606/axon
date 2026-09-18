@@ -19,7 +19,11 @@ pub(super) fn context() -> Context {
     }
 }
 pub(super) fn resolve(snapshot: &Snapshot, value: &str) -> Result<EntityId> {
-    let _: EntityId = value.to_owned().try_into()?;
+    let exact: EntityId = value.to_owned().try_into()?;
+    // A complete ID always resolves to itself, even when it is also the tail of a longer ID.
+    if snapshot.entity(&exact).is_ok() {
+        return Ok(exact);
+    }
     let mut matches: Vec<_> = snapshot
         .entities()
         .filter(|e| e.id.to_string().ends_with(value))

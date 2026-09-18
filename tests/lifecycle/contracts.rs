@@ -117,6 +117,13 @@ fn short_ids_and_suffixes_work_across_mutations() {
                 && error.contains("project-1111zz")
         );
         assert_eq!(snapshot(&f), before);
+        // A complete ID resolves to itself even when a longer ID ends with it.
+        seed(&f, "other-project-0000zz");
+        assert!(
+            f.ok(&["show", "project-0000zz"])
+                .starts_with("project-0000zz ")
+        );
+        assert!(failure(f.run(&["show", "0000zz"])).contains("ambiguous"));
     }
 }
 
