@@ -113,7 +113,7 @@ Groupの場合は、この共通表示の末尾へ短い集計と全子孫のツ
 
 登録titleは `--title`。本文は `-m/--description` または `-F/--file`。Noteは `-m/--message` または `-F/--file`。本文option同士は排他で、`-F -` はUTF-8のstdinを一度読む。本文・Noteをtrimして保存しない。初期の `--parent`、反復可能な `--needs`、`--command` は作成と同時に検査・保存する。作成中に条件を実行しない。通常の`axon write`はtitleと本文を一transactionで編集し、lifecycleを変えない。長い本文は登録時と同じ本文optionでファイルから渡せる。
 
-`axon accept|withdraw|start|release|complete|cancel|reconsider A` は `-r/--reason` を履歴へ保存する。Groupへの`axon complete`の実行自体を「計画全体の最終確認が通った」という明示入力とする。Axonは子・依存・状態を検査し、確認作業は呼び出す人・エージェントのskillと運用で担う。必須のレビュー確認フラグや独立したレビュー済み状態は設けない。どの変更コマンドも、状態・包含・dependencyの制約を迂回しない。
+`axon accept|withdraw|start|release|complete|cancel|reconsider A` は `-r/--reason` を履歴へ保存する。空白だけの理由は拒否する。Groupへの`axon complete`の実行自体を「計画全体の最終確認が通った」という明示入力とする。Axonは子・依存・状態を検査し、確認作業は呼び出す人・エージェントのskillと運用で担う。必須のレビュー確認フラグや独立したレビュー済み状態は設けない。どの変更コマンドも、状態・包含・dependencyの制約を迂回しない。
 
 ## 計画全体の取得と一括編集
 

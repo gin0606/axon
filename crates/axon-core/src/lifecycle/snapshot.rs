@@ -96,6 +96,9 @@ impl Snapshot {
         context: Context,
     ) -> Result<RecordId> {
         self.check_operation(id, operation)?;
+        if reason.as_ref().is_some_and(|text| text.trim().is_empty()) {
+            return Err(invalid("empty reason"));
+        }
         let entity = self.entity(id)?;
         let before = entity.current.lifecycle;
         let after = operation.apply(before)?;

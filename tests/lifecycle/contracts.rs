@@ -568,6 +568,17 @@ fn stored_text_cannot_imitate_records_or_sections_in_one_line_fields() {
 }
 
 #[test]
+fn a_blank_reason_is_rejected_without_recording_a_transition() {
+    let f = Fixture::new();
+    f.ok(&["init", "project"]);
+    let id = f.ok(&["capture", "--accept", "--title", "Work"]);
+    let id = created(&id).to_owned();
+    let blank = failure(f.run(&["start", &id, "-r", "  "]));
+    assert!(blank.contains("empty reason"), "{blank}");
+    assert_eq!(f.ok(&["log", &id]).lines().count(), 1);
+}
+
+#[test]
 fn stores_with_a_prefix_outside_the_rule_are_rejected_without_changes() {
     for backend in ["sqlite", "file"] {
         let f = Fixture::new();
