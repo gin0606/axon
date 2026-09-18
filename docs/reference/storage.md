@@ -22,7 +22,7 @@ prefixはEntity IDの先頭に使い、ASCIIの小文字英数字とハイフン
 
 Git内では、SQLiteはGit common directoryの親の `.axon/axon.db` をlinked worktree間で共有し、worktreeごとに`axon init`を繰り返す必要はない。fileは現在のworktree rootの `.axon/state.jsonl` を使う。Git外ではどちらも管理rootの `.axon` に同じ名前で置く。storeの識別子は正本の中に保持する。
 
-一つのrepositoryで異種backendを混在させない。探索は他のworktreeを走査しないため、別のworktreeにだけfileの正本がある混在の検出は保証しない。fileの変更はGitで取り込むまで他のworktreeから見えず、同じIssueに別々に着手できる。正本のないbranchは未初期化であり、既存storeを使うには正本を取り込む。そこで`axon init`を実行すると別storeの新規作成になる。
+一つのrepositoryで異種backendを混在させない。`axon init` は、保存先にするdirectoryに別backendの正本や初期化途中のmarkerがあれば拒否する。linked worktreeからのSQLiteの初期化はmain worktreeのfile正本と同じdirectoryを使うので、この検査で止まる。探索はそれ以外のworktreeを走査しないため、main以外のlinked worktreeにだけfileの正本がある混在は検出しない。fileの変更はGitで取り込むまで他のworktreeから見えず、同じIssueに別々に着手できる。正本のないbranchは未初期化であり、既存storeを使うには正本を取り込む。そこで`axon init`を実行すると別storeの新規作成になる。
 
 Git内では現在のrepositoryを探索境界とする。Git外では最寄りの正本または初期化途中のmarkerを持つ祖先を管理rootとし、空の `.axon` やlockだけでは探索を止めない。Git外の`axon init`は現在directoryを対象とし、既存管理root内の入れ子初期化を拒否する。backendは設定fileではなく所定の正本の存在から判別し、二つの正本が揃えば混在、どちらもなければ未初期化とする。混在・破損・読取不能・初期化途中では停止し、別backendや祖先へfallbackしない。
 

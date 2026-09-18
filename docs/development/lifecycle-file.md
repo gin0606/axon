@@ -6,7 +6,7 @@
 
 `axon init demo --backend file` は現在の管理rootに `.axon/state.jsonl` を新規作成する。Gitでは現在のworktree、Git外では現在directoryを対象とする。Git外で既存管理root内への入れ子の`axon init`は拒否する。通常探索はGit repositoryで止まり、Git外では最寄りの正本または `init.pending` を持つ祖先で止まる。空の `.axon` とlockだけでは止まらない。
 
-既定backendはSQLite。Git common directoryの親にあるSQLiteと現在worktreeのfileが両方あれば拒否する。他worktreeは走査せず、別worktreeだけにあるfileとの混在は検出を保証しない。一repositoryでbackendを混在させない。破損・未知形式・読取不能・pendingから別保存先へfallbackしない。file正本のないbranchは未初期化であり、既存storeを使うには正本をGitで取り込む。そこで`axon init`すると別のstoreになる。
+既定backendはSQLite。Git common directoryの親にあるSQLiteと現在worktreeのfileが両方あれば拒否する。`axon init` は、保存先にするdirectoryに別backendの正本や初期化途中のmarkerがあれば拒否する。linked worktreeからのSQLiteの初期化は、main worktreeのfile正本と同じdirectoryを使うため、この検査で止まる。それ以外のworktreeは走査せず、main以外のlinked worktreeだけにあるfileとの混在は検出しない。一repositoryでbackendを混在させない。破損・未知形式・読取不能・pendingから別保存先へfallbackしない。file正本のないbranchは未初期化であり、既存storeを使うには正本をGitで取り込む。そこで`axon init`すると別のstoreになる。
 
 fileの`axon init`は無関係な行を保持して次を補完する。直接対象を指定する競合設定と、通常fileではない編集先は拒否する。Git内では補完後の実効merge属性も確認し、`.axon/.gitattributes` や Git `info/attributes` で上書きされていれば初期化失敗としてartifactを保持する。親/global ignoreは変更しない。
 
