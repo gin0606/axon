@@ -47,13 +47,11 @@ pub(super) fn init(prefix: Option<String>, backend: Backend) -> Result<Output> {
             .and_then(|p| p.parent())
             .expect("management root")
     };
-    let prefix = prefix
-        .as_deref()
-        .or_else(|| default_root.file_name().and_then(|n| n.to_str()))
-        .ok_or_else(|| {
-            axon::Error::Invalid("cannot derive an ID prefix; pass axon init PREFIX".into())
-        })?;
-    let text = match location.init_backend(prefix, matches!(backend, Backend::File))? {
+    let prefix = match prefix {
+        Some(explicit) => explicit,
+        None => default_prefix(default_root)?,
+    };
+    let text = match location.init_backend(&prefix, matches!(backend, Backend::File))? {
         InitResult::Sqlite => format!(
             "Initialized SQLite at {}\n",
             display::human_text(location.sqlite.display())
@@ -61,6 +59,24 @@ pub(super) fn init(prefix: Option<String>, backend: Backend) -> Result<Output> {
         InitResult::File(files) => file_init_output(&location, &files),
     };
     Ok(output(text, true))
+}
+/// The management root directory name, lowercased, when it is a usable ID prefix.
+fn default_prefix(root: &std::path::Path) -> Result<String> {
+    let Some(name) = root.file_name().and_then(|name| name.to_str()) else {
+        return Err(axon::Error::Invalid(format!(
+            "cannot read the management root directory name as an ID prefix; pass one as axon init <PREFIX>, using {}",
+            axon::PREFIX_RULE
+        )));
+    };
+    let prefix = name.to_ascii_lowercase();
+    axon::validate_prefix(&prefix).map_err(|_| {
+        axon::Error::Invalid(format!(
+            "cannot use the directory name {} as an ID prefix; pass one as axon init <PREFIX>, using {}",
+            display::human_text(name),
+            axon::PREFIX_RULE
+        ))
+    })?;
+    Ok(prefix)
 }
 pub(super) fn storage(command: Storage) -> Result<Output> {
     let _cwd = std::env::current_dir()?;

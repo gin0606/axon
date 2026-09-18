@@ -575,7 +575,7 @@ fn git_repository_paths_keep_trailing_whitespace() {
     for path in [&plain, &spaced] {
         fs::create_dir(path).unwrap();
         git(path, &["init", "--quiet"]);
-        success(command(path).args(["init"]).output().unwrap());
+        success(command(path).args(["init", "repo"]).output().unwrap());
     }
     success(
         command(&spaced)
@@ -628,7 +628,11 @@ fn initialization_path_never_emits_terminal_controls() {
     let f = Fixture::new();
     let path = f.0.join("repo\x1b[2J");
     fs::create_dir(&path).unwrap();
-    let out = success(command(&path).args(["init"]).output().unwrap());
+    let rejected = failure(command(&path).args(["init"]).output().unwrap());
+    assert!(!rejected.contains('\x1b'));
+    assert!(rejected.contains("repo\\x1b[2J"), "{rejected}");
+    assert!(!path.join(".axon").exists());
+    let out = success(command(&path).args(["init", "repo"]).output().unwrap());
     assert!(!out.contains('\x1b'));
     assert!(out.contains("repo\\x1b[2J"));
     assert!(path.join(".axon/axon.db").is_file());

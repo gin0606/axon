@@ -55,9 +55,10 @@ pub(super) enum Command {
     },
     /// Initialize a new management root (default: SQLite)
     #[command(
-        after_help = "SQLite creates only .axon/axon.db and does not change Git integration files.\nFile creates .axon/state.jsonl and creates or appends .axon/.gitignore and root .gitattributes, preserving unrelated lines.\nInit does not stage or commit any files."
+        after_help = "PREFIX uses ASCII lowercase letters, digits and hyphens, and starts and ends with a letter or digit.\nWithout PREFIX, init lowercases the management root directory name and fails if that is not a valid prefix.\nSQLite creates only .axon/axon.db and does not change Git integration files.\nFile creates .axon/state.jsonl and creates or appends .axon/.gitignore and root .gitattributes, preserving unrelated lines.\nInit does not stage or commit any files."
     )]
     Init {
+        /// ID prefix for generated Entity IDs
         prefix: Option<String>,
         #[arg(long, value_enum, default_value = "sqlite")]
         backend: Backend,

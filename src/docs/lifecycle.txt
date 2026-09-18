@@ -64,6 +64,9 @@ Reading and resurfacing
 
 Storage and recovery
   init creates a new root; SQLite is the default, --backend file chooses JSONL.
+  init PREFIX sets the ID prefix: ASCII lowercase letters, digits and hyphens,
+  starting and ending with a letter or digit. Without PREFIX, init lowercases the
+  management root directory name and fails if that is not a valid prefix.
   SQLite is shared by linked Git worktrees at the common Git directory's parent
   .axon/axon.db. File storage is local to each worktree at .axon/state.jsonl.
   Outside Git, the nearest management root is used. Corrupt, mixed, unmerged or

@@ -21,9 +21,18 @@ pub(crate) fn invalid(message: impl Into<String>) -> Error {
     Error::Invalid(message.into())
 }
 
+/// The characters an ID prefix may use, for diagnostics that reject one.
+pub const PREFIX_RULE: &str =
+    "ASCII lowercase letters, digits and hyphens, starting and ending with a letter or digit";
+
 pub fn validate_prefix(prefix: &str) -> Result<()> {
-    if prefix.is_empty() {
-        return Err(invalid("Entity prefix must not be empty"));
+    let allowed = |byte: &u8| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-';
+    if prefix.is_empty()
+        || prefix.starts_with('-')
+        || prefix.ends_with('-')
+        || !prefix.as_bytes().iter().all(allowed)
+    {
+        return Err(invalid(format!("invalid ID prefix: use {PREFIX_RULE}")));
     }
     Ok(())
 }

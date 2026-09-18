@@ -492,9 +492,44 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
 }
 
 #[test]
-fn default_prefix_preserves_management_root_names_including_unicode() {
+fn prefixes_outside_the_id_character_rule_are_rejected_without_creating_a_store() {
     let f = Fixture::new();
     let directory = f.0.join("日本語 project");
+    fs::create_dir(&directory).unwrap();
+    let derived = failure(
+        command(&directory)
+            .args(["init", "--backend", "file"])
+            .output()
+            .unwrap(),
+    );
+    assert!(derived.contains("日本語 project"), "{derived}");
+    assert!(derived.contains("axon init <PREFIX>"), "{derived}");
+    assert!(!directory.join(".axon").exists());
+    for prefix in [
+        "",
+        "日本語",
+        "with space",
+        "under_score",
+        "dot.name",
+        "-lead",
+        "trail-",
+        "Upper",
+    ] {
+        let rejected = failure(
+            command(&directory)
+                .args(["init", "--backend", "file", "--", prefix])
+                .output()
+                .unwrap(),
+        );
+        assert!(rejected.contains("ASCII lowercase letters"), "{rejected}");
+        assert!(!directory.join(".axon").exists(), "{prefix}");
+    }
+}
+
+#[test]
+fn a_default_prefix_lowercases_the_management_root_directory_name() {
+    let f = Fixture::new();
+    let directory = f.0.join("Plan-2");
     fs::create_dir(&directory).unwrap();
     success(
         command(&directory)
@@ -508,10 +543,10 @@ fn default_prefix_preserves_management_root_names_including_unicode() {
             .output()
             .unwrap(),
     );
-    assert!(output.starts_with("日本語 project-"));
+    assert!(output.starts_with("plan-2-"), "{output}");
     let (prefix, saved) =
         axon::file::decode(&fs::read(directory.join(".axon/state.jsonl")).unwrap()).unwrap();
-    assert_eq!(prefix, "日本語 project");
+    assert_eq!(prefix, "plan-2");
     let id = saved.entities().next().unwrap().id.to_string();
     assert!(
         success(
