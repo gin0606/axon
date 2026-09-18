@@ -1,6 +1,6 @@
 # 記録者の取得と参照
 
-仕様の正本は [記録者情報](../../spec/lifecycle_proposal.md#記録者情報とエージェント連携)。`crates/axon-recorder` は Axon core に依存しない Rust crate で、継承された環境だけから任意の actor と文字列 metadata を返す。CLI がこれを core の任意の `{actor, data}` に変換し、登録・状態変更・Note の Context に添える。core と SQLite は agent schema、環境検出、権限判断を持たない。
+仕様の正本は [記録者情報](../reference/lifecycle.md#記録者情報とエージェント連携)。`crates/axon-recorder` は Axon core に依存しない Rust crate で、継承された環境だけから任意の actor と文字列 metadata を返す。CLI がこれを core の任意の `{actor, data}` に変換し、登録・状態変更・Note の Context に添える。core と SQLite は agent schema、環境検出、権限判断を持たない。
 
 ## 取得の優先順位
 

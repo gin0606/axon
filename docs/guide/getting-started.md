@@ -1,6 +1,6 @@
 # 使い始める
 
-Axonは単一lifecycleでIssueとGroupを管理します。対応するbinaryをPATHから使う場合も、開発版を絶対パスで使う場合も、`axon --version` と `axon --help` で選んだ版を確認します。以下は既存環境を切り替えずに試す手順です。
+Axonは単一lifecycleでIssueとGroupを管理します。対応するbinaryをPATHから使う場合も、開発版を絶対パスで使う場合も、`axon --version` と `axon --help` で選んだ版を確認します。以下は独立した保存先で試す手順です。
 
 ## インストールと対応環境
 
@@ -55,12 +55,6 @@ git init
 
 [`axon-kit`](../../plugins/axon-kit/skills) は操作契約、[`axon`](../../plugins/axon/skills) は任意の個人用協業方針です。plugin内に必要なreferenceを同梱しているため、利用先repositoryにAxonのソースcheckoutを置く必要はありません。対応するCLIとpluginを対象環境へ導入し、管理するrepositoryで呼び出します。
 
-binaryを指定した場合はその指定を、未指定なら対象環境で発見した `axon` を使います。skillは`axon --version`・`axon --help`で対応を照合して実行ファイルとrootを固定します。旧版のCLIやsessionに読み込まれた旧skillが混在する場合は、その不一致を解決してから操作します。開発版の試用では上記の絶対パスを渡す方法も使えます。
+binaryを指定した場合はその指定を、未指定なら対象環境で発見した `axon` を使います。skillは`axon --version`・`axon --help`で対応を照合して実行ファイルとrootを固定します。対象環境のCLIとsessionに読み込まれたskillのversionが一致しない場合は、その不一致を解決してから操作します。開発版の試用では上記の絶対パスを渡す方法も使えます。
 
 例えば「このrepositoryの懸念をAxonに未判断として記録して」と依頼できます。対象と任せる範囲は依頼が決め、登録から実装・commitの権限を推測しません。
-
-## 旧データを持ち込む場合
-
-旧schemaの自動移行・一括取り込みはありません。旧binaryと旧保存先を維持したまま読み取り、新しい空の保存先へ必要な計画を手動で登録します。目的、本文、関係、今後の扱いを確認し、未判断は `axon capture`、採用済みは `axon capture --accept` を使います。旧状態を機械的に対応付けたり、過去の日時・記録者・IDを再現した履歴として作ったりしません。必要な旧記録は出典を示したNoteとして残せます。依存・所属は新IDで照合してください。
-
-既存の `.axon` を上書き・コピーして新形式とみなさず、メインrepositoryのbinary・実データ・管理計画の切替は別途明示された作業として扱います。

@@ -1,6 +1,6 @@
 # 単一 lifecycle の file 保存と Git 統合
 
-[正本spec](../../spec/lifecycle_proposal.md) の保存契約を `src/file.rs`、`src/location.rs`、`src/file_merge.rs` が実装する。通常操作は [SQLite CLI](lifecycle-sqlite.md) と共通で、同じ `Snapshot` の操作・記録・全体検査を通す。旧schemaは自動移行しない。試用・検証は独立fixtureで行う。
+[保存と統合の契約](../reference/storage.md) を `src/file.rs`、`src/location.rs`、`src/file_merge.rs` が実装する。通常操作は [SQLite CLI](lifecycle-sqlite.md) と共通で、同じ `Snapshot` の操作・記録・全体検査を通す。未知のschemaは自動変換しない。試用・検証は独立fixtureで行う。
 
 ## 初期化と探索
 
@@ -26,7 +26,7 @@ fileの`axon init`は無関係な行を保持して次を補完する。直接�
 
 ## 保存の保証
 
-fileの先頭行は `{"format":"axon-file/v1","prefix":"demo"}`。続く行は既存の `axon-lifecycle/v1` 共通codecそのものであり、store ID・状態・全記録を保持する。旧JSONLの互換読取や暗黙変換はしない。
+fileの先頭行は `{"format":"axon-file/v1","prefix":"demo"}`。続く行は既存の `axon-lifecycle/v1` 共通codecそのものであり、store ID・状態・全記録を保持する。未知formatの読取や暗黙変換はしない。
 
 writerは `.axon/state.lock` のOS lockを取得してから最新の正本を読み、通常操作と全体検査を行う。temporaryの書込・sync後、backend・Git index・元bytesを再照合し、atomic replaceとdirectory syncを終えて成功する。lock fileは置換・削除しない。process終了時はOSがlockを解放する。同値の操作では非canonicalな空白も含め元bytesを保持する。通常の読み取り・書き込みでは保存先の発見はCLI実行ごとに一回で、以後の再照合はbackend・Git index・元bytesを対象とする。実行の途中でGitのtoplevelやcommon directoryが変わったことは検出しない。
 

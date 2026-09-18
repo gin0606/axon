@@ -337,9 +337,9 @@ fn multiline_ids_use_literal_blocks_and_quoted_flow_references() {
     }
 }
 #[test]
-fn spec_example_has_identical_canonical_bytes() {
-    let spec = include_str!("../../../../spec/lifecycle_proposal.md");
-    let text = spec
+fn declaration_doc_example_has_identical_canonical_bytes() {
+    let doc = include_str!("../../../../docs/reference/declaration.md");
+    let text = doc
         .split("```yaml\nschema: axon-declaration/v1\n")
         .nth(1)
         .unwrap()

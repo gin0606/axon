@@ -1,518 +1,151 @@
-# CLI の振る舞いと入出力
+# CLIと表示の契約
 
-## 方針
+この文書は、公開コマンドが受け取る入力と、何をどう表示し、保存結果をどう伝えるかの契約を定める。状態・遷移・包含・dependency・候補集合の意味は [lifecycleと構造の契約](lifecycle.md)、候補一覧の条件評価は [候補と外部条件](candidates.md)、declarationの形式は [計画全体の取得と一括編集](declaration.md) に従う。
 
-axon の操作対象は `Issue` と `Group` の 2 kind を持つ Entity である。どちらも同じ公開 ID、文面、Progress、Disposition、Resurface condition、claim を持つ。対象 kind を先に選ばせる namespace は作らず、ID を受け取る top-level command が kind を解決する。
+## 情報を見る目的
 
-Usage、引数、option、コマンドツリーは Clap の定義から生成する。引数なしの `axon`、`axon help`、`axon -h`、`axon --help` は、次に調べる command をすぐ選べる同一の root help を返す。`axon help <command path>` と各 command の `--help` は Clap による個別の詳細を返す。全 command の help を連結する入口は持たない。`axon docs` は状態モデルと基本 workflow を Markdown ではない端末向け形式で返す。
+採否判断、着手する仕事の選択、着手から完遂、最終確認の四つを、情報を見る目的として扱う。Entityの保存状態とは別の分類であり、四種類の状態や専用画面を追加しない。再開・引継ぎ・計画修正は着手から完遂に含め、採否の再判断が必要なら採否判断へ戻る。
 
-| 分類 | command 順序 |
+利用者はIDを使って操作するため、表示の先頭はID・種別・状況・タイトルとする。内部fieldを並べて利用者に解読させず、その場の判断に必要な内容を短く示す。通常表示へ操作例やコマンド案内を毎回付けず、使い方はhelpへ置く。本文を機械的に要約・分類して判断材料を生成する機能は設けない。
+
+## 識別子と入力
+
+Issue/Groupは共通の `<prefix>-<ランダム6文字>` namespaceを使う。乱数部分は小文字Crockford Base32で紛らわしいi/l/o/uを除く。連番やkind、優先順位の意味を持たせず、同じ保存先で衝突したら再生成する。prefixはASCII小文字の `a-z`、数字、ハイフンだけを許し、空、先頭のハイフン、末尾のハイフンは拒否する。この文字種に限ることで、完全IDをshellでquoteせずに渡せる。`axon init PREFIX` の明示値は変換せず検証する。省略時は管理rootのdirectory名のASCII大文字を小文字化した結果を使い、規則に合わなければ保存先を作らずに失敗し、`axon init PREFIX` での明示を求める。小文字化以外の自動補正はしない。
+
+全Entity入力は完全IDまたは一意なsuffixを受け付ける。対象だけでなく`parent`/`needs`も同じ規則。曖昧なときは候補IDを示して拒否し、保存を変更しない。mutationではlock取得後のsnapshotで解決する。Note・状態記録・storeの安定IDは、Entityの短いIDと別の契約である。
+
+option値の先頭hyphenは `--description='--text'` のように渡す。構文は `axon help <COMMAND PATH>` で確認できる。
+
+## 一覧
+
+一覧の入口は三つとし、候補集合の定義は [lifecycleと構造の契約](lifecycle.md#候補集合) に従う。
+
+| コマンド | 表示対象・役割 |
 | --- | --- |
-| Workflow | `plan`, `capture`, `ready`, `triage`, `start`, `done`, `release` |
-| Inspect | `show`, `list`, `claims`, `log`, `note`, `revision`, `actor` |
-| Plan management | `write`, `group`, `dep`, `decide`, `when`, `export`, `import` |
-| Setup & utilities | `init`, `migrate`, `storage`, `merge`, `completion`, `docs`, `help` |
+| `axon proposals` | 判断候補のIssue・Group |
+| `axon tasks` | 浮上した未着手と着手中のIssue・Group |
+| `axon list` | 非浮上・完了・取りやめも含む保存済みEntityを、必要な条件で絞り込む汎用一覧 |
 
-分類内では、対になる操作と同じ対象を扱う namespace を隣接させる。namespace 内は `group plan|capture|set|unset`、`dep add|rm`、`decide accept|reject|undecide`、`when at|after|manual|command|clear`、`note add|list|show`、`revision list|show|diff`、`import prepare|check|apply` の順とする。
+`axon tasks` は依存先の完了待ちや親の着手待ちの未着手も含み、着手できるものだけには限定しない。着手中だけを一覧する専用の入口は設けない。
 
-## ハイフンで始まる自由記述
+`axon list`は保存済み全件を作成日時の昇順、同時刻はID順で表示する。`--kind issue|group`、`--lifecycle undecided|not-started|in-progress|completed|cancelled`、`--terminal=true|false` はANDで組み合わせる。terminalは`Completed`または`Cancelled`で、着手できることや浮上とは別。`--search` は現在title・本文だけのcase-sensitiveなliteral一致。Unicode正規化やtrimをせず、空文字は構文エラー。%、_、正規表現記号に特殊な意味はない。検索時だけMatchedに該当field（Title、Description）を付記する。
 
-位置引数の title は `--` でオプション解釈を終えてから渡す。他のオプションは
-必ずその前へ置く。Issue/Group の plan/capture で同じ規則を使う。
+`axon proposals|tasks`はkind/searchで候補を絞ってから、必要な祖先を含め条件を評価する。一回の呼出しで同じ条件を重複評価しない。除外候補の条件は評価しないが、残った候補の祖先ならkindが異なっても評価する。評価失敗時に部分一覧をstdoutへ出さない。時間制限は正整数とms/s/m/hで、既定30s。詳細は [候補と外部条件](candidates.md)。`axon list`と保存情報を読む`axon show`は外部条件コマンドを実行しない。
 
-```sh
-axon capture -m='説明' -- '--color フラグを扱う'
-axon group plan -m='説明' -- '--help を整理する'
-```
+一覧とGroupの子一覧は、状態ごとに区切らず作成日時の古い順へ統一する。作成日時そのものを通常の各行へ表示する必要はない。同時刻はID順で安定させる。
 
-自由記述のオプション値は `=` で結ぶ。write の `--title`、作成/write/Note の
-`--message` (`-m`)、decide/when/release の `--reason` (`-r`) が該当する。
+通常行は `ID  Kind  Situation  Title`。状況欄は保存された lifecycle だけの表示ではなく、保存状態と構造から導出する短い表現とする。再浮上条件の成立はこの欄での着手可能性の判定に使わない。
 
-```sh
-axon write <id> --title='--color フラグを扱う'
-axon write <id> --message='--help から始まる本文'
-axon decide accept <id> --reason='--help の仕様を採用する'
-axon note add <id> -m='--help'
-```
-
-引用符は shell が処理するため、引用だけではオプション解釈を止められない。
-`--title -- '本文'` はオプション値を渡す記法ではない。値の欠落位置を検出した
-構文エラーでは `=` を案内し、位置引数用の tip や類似オプションの tip を置換する。
-既存オプションと同形の本文にも `=` を使う。`--help` を独立した引数として渡す
-従来の help 動作は維持する。受け入れ規則、空値の意味、title の正規化は変えない。
-
-## 現在の actor
-
-`axon actor` は引数を取らず、現在の actor ラベルだけを改行付きで stdout に返す。
-通常成功時は終了コード 0。DB を開かず、管理 root の有無や DB の状態に依存しない。
-初期化、migration、記録追加、claim 取得、外部 Command 評価は行わない。
-Note・判断履歴・claim と同じ判定関数を使い、優先順位は
-[actor と作業場所](../design/three-axis-architecture.md#actor-と作業場所)に従う。
-
-Note の追記前には、追記と同じ環境・作業ディレクトリで実行する。過去の Note や
-claim の actor は現在値の保証にならず、観測後に環境やディレクトリを変えた場合も
-次の操作の actor を保証しない。通常シェルで `USER=gin0606`、ディレクトリ名が
-`axon` なら `gin0606@axon` となる。
-
-actor は表示・調査用ラベルであり、一意なセッション ID、認証、排他制御ではない。
-複数の Codex 等が同じラベルを共有し得る。結果不明の Note 追記は actor 一致だけで
-断定せず、追記前になかった Note ID 集合と凍結した本文などを照合する。
-証拠で確定できない結果は unknown として扱う。
-
-## 宣言の説明と新規例
-
-`axon docs declaration` は宣言の必須フィールド、新規と既存の snapshot の違い、
-prepare → check → apply → 再check の手順を端末向け英語で返す。
-`axon docs declaration --example` は新規 Group 1件、その子 Issue 2件、
-子 Issue 間の dependency 1本を含む完全な YAML だけを stdout に返す。
-新規の id/base は null とし、既存 DB の ID や fingerprint を要求しない。
-説明、Markdown fence、ANSI 装飾を含まず、そのまま保存して prepare へ渡せる。
-
-両コマンドは DB を開かず、管理 root、DB の状態、ネット接続、ソース checkout に依存しない。
-取得だけでは登録も着手も行わない。`axon docs` は従来の概念・基本 workflow を維持して
-宣言の説明へ案内し、`import --help` と `import prepare --help` も説明と例へ案内する。
-`export --help` も内蔵説明へ案内する。内蔵説明には外部 dependency・親 Group の
-実在 snapshot を別 export から用意する手順を含め、DB 不要の新規例と区別する。
-外部参照のファイル内欠落、現在 DB の不存在、古い/不正確な base、matching-base の
-snapshot 不一致、不要 snapshot は原因と確認先を分けて案内する。
-形式の正本は [宣言ファイル](declaration-file.md) とする。
-
-## 操作を理解するための案内
-
-利用者の判断を代行せず、axon を正しく操作するための説明を提供する。
-採否、着手対象、優先順位、計画の変更内容は選ばない。原因を説明しないことで
-利用者やエージェントに操作の意味や復旧方法を推測させない。
-
-- 成功時は、対象と確定した効果を簡潔に示す。次の作業を一律に追加しない。
-- 失敗時は、理由と分かっている対象を先に示す。確認用コマンドや、条件付きの
-  解消手段とその影響を案内する。複数の判断があり得る場合に一つを既定の指示にしない。
-- 空結果は成功として扱い、抽出条件による空とデータ全体の不存在を混同させない。
-- help は構文に加えて操作の意味、成立条件、反復時の効果を説明し、共通概念は docs へつなぐ。
-- 診断を作るための追加の状態変更や外部条件の実行は行わない。案内は stderr に置き、
-  export / completion の生成内容や一覧の record 境界を崩さない。
-- 復旧手段が存在しない場合はその制限を明示する。スキーマ番号だけの変更、DB削除、
-  無条件の再実行をデータ保持の復旧手順として案内しない。部分成功を全失敗と説明しない。
-
-例えば Group の完了条件を説明しても、子孫の Reject を推奨しない。固定宣言の編集は
-Undecided への変更、編集、全文確認、再判断の意味を説明し、再採用を自動選択しない。
-
-## コマンド境界
-
-1 つのコマンドが進行と採否の両方を変えない。他の軸の状態が操作を妨げる場合は、その事実と成立条件を説明し、もう一方の軸を暗黙に変更しない。
-
-### 作成
-
-| kind | Accepted で作成 | Undecided で作成 |
+| 状況 | 保存状態・前提 | 意味 |
 | --- | --- | --- |
-| Issue | `axon plan <title>` | `axon capture <title>` |
-| Group | `axon group plan <title>` | `axon group capture <title>` |
+| `Undecided` | `Undecided` | 未判断 |
+| `Ready` | `NotStarted` で親・dependencyの着手前提を満たす | 着手できる |
+| `Blocked` | `NotStarted` で着手前提が不足 | 親の着手待ちまたは依存先の完了待ち |
+| `InProgress` | `InProgress` でdependencyが充足 | 着手中 |
+| `InProgress+Blocked` | `InProgress` で未完了の依存先がある | 着手中で、完了に必要な依存先が残る |
+| `Completed` | `Completed` | 完了 |
+| `Cancelled` | `Cancelled` | 取りやめ |
 
-4 コマンドはいずれも以下の初期入力を受け取る。
+親の着手待ちも`Blocked`に含める。これは表示上のまとめ方で、保存する包含と明示dependencyの区別は維持する。Groupの未終了の子は最終確認前の進捗として子一覧へ示し、明示dependencyと混ぜない。保存したタイトルに改行があれば一覧の中では `\n` として一行に保つ。
 
-- `--parent <group-id>`: 親 Group。
-- `--needs <entity-id>`: outgoing dependency。複数指定は `--needs A --needs B` と反復し、同じ参照は一つにまとめる。
-- `--manual` / `--at <RFC3339>` / `--after <entity-id>` / `--command <shell-string>`: 初期 Resurface condition。一種類だけ指定でき、未指定は Always。`--at` は秒と UTC offset を持つ RFC 3339（例: `2026-12-01T00:00:00+09:00`）とし、条件の意味は `when` と同じ。
+```text
+demo-k3m7pq  Group  InProgress  検索画面を実装する
+demo-8bxw2r  Issue  InProgress+Blocked  検索APIを実装する
+demo-c9d4ts  Issue  Ready  検索フォームを実装する
+demo-9f2hjx  Issue  Blocked  検索結果を表示する
+```
 
-参照 ID は完全 ID または一意な suffix を受け取る。description は `-m/--message` または `-F/--file`（`-` は stdin）、title は従来どおり指定する。shell string は一引数として渡し、先頭がハイフンなら `--command='--help text'` のように `=` を使う。
+例は架空の内容である。列の間隔やグルーピングは実装が決め、固定列や機械向けの出力形式は保証しない。
 
-Entity、親、dependencies、初期条件、Accepted の最初の Declaration Revision は同じ transaction で確定し、参照・包含・待機 graph 等の既存制約を保存境界で検査する。失敗時は Entity、関係、Revision を残さない。初期 Command は保存と成功表示のために実行しない（通常の導出照会では評価する）。
+## `axon show` と待ち理由
 
-Progress は NotStarted、claim なし。plan は Accepted、capture は Undecided。Accepted の最初の Revision は dependencies を含む完成した宣言であり、Control state の条件を含めない。Undecided には Revision を作らない。初期採否と条件は初期値として保存し、架空の判断・条件変更履歴を作らない。
+`axon show ID`は、ID・種別・状況・タイトル、Note件数、所属計画のID・タイトル、本文を基本とする。本文は保存された内容を表示する。Note本文、履歴、内部のcausal情報、不要な設定・件数の羅列、操作コマンドの案内は通常表示から外す。Noteがあれば `5 notes` のように存在を示し、0件ならその表示を省略する。
 
-呼び出すたびに新しい Entity を作る追加操作であり、重複排除や idempotency key はない。既存の固定宣言の変更には引き続き明示的な undecide・編集・再判断が必要。
+未充足の前提がある場合だけ、本文の前へ `Required to start` または `Required to complete` の節を置く。満たされていない直接の前提を `Parent must start:`・`Dependency must complete:` として、ID・種別・現在の状況・タイトルの行で示す。満たされた依存や依存先の先のツリーは常時展開しない。親の所属表示と待ち理由が同じ情報になる場合は、重複を避けて配置する。待ち理由の専用コマンドは設けない。
 
-Group は Issue と同じ自動生成 ID で参照し、slug や kind ごとの参照 namespace は持たない。
+Groupの場合は、この共通表示の末尾へ全子孫のツリーと短い集計を加える。`Completed`・`Cancelled`も含めて全階層を展開する。各行は一覧と同じID・種別・状況・タイトルとし、兄弟を作成日時順（同時刻はID順）で揃え、別のDependencies節へ同じ情報を再列挙しない。
 
-### 共通の状態・宣言・関係操作
+集計は `Descendants: 2/4 terminal (1 completed, 1 cancelled)` のように、全子孫の終了数と完了・取りやめの違いが読める形とする。集計はGroup・Issueの両方を含み、対象自身を除く。全状態の内訳は羅列しない。進行中のGroupで、子が全員終了し自身の依存先も完了していれば `Awaiting final confirmation` を示す。これは導出される案内であり、保存状態やレビュー済み状態を追加しない。
 
-次の command は ID から kind を解決し、Issue / Group の両方へ同じ入口を使う。
+`axon show ID --details` は保存情報の明示的な詳細入口。通常の待ち理由節を保存情報の詳細へ置き換え、親・条件・全直接dependency・直接dependentを取得する。同じ関係を複数の節へ重複して列挙しない。状況と異なる場合だけ保存lifecycleを `Lifecycle:` として別記する。条件未設定、親なし、空の依存集合も `(none)` と明示する。Groupの全子孫ツリーは通常表示と同様に表示する。
 
-- `show` / `write` / `log`
-- `note add|list|show` / `revision list|show|diff`
-- `start` / `done` / `release`
-- `decide accept|reject|undecide`
-- `when at|after|manual|command|clear`
-- `dep add|rm`
+## Noteと履歴
 
-`when after` の参照先と dependency の両端も kind の全組み合わせを許す。`AfterEntity` は参照先が Ended または Rejected なら浮上する。dependency は Rejected を前提喪失として扱う。
+`axon note list ID` は指定EntityのNote本文を全文で、日時・actor・安定Note IDとともに因果順に表示する。通常の逐次記録は保存順に古いものから読み、分岐した記録は因果関係を保持して表示する。並行する記録だけをID順で並べ、分岐間の先後を時刻から捏造しない。`axon note show ID NOTE_ID` は同じEntityの個別Noteの原文を取得する。`axon note add ID …` は追記し、編集・削除は設けない。
 
-title、description、parent Group、outgoing dependency は対象 Entity 自身が所有する plan declaration である。Undecided は draft として実変更でき、Accepted / Rejected は判断対象を固定する。固定済み declaration の変更は `decide undecide`、編集、全文確認、再判断として露出させる。同じ値の再指定は実変更ではないため no-op とする。
+`axon log ID` は状態変更・統合の経緯を読む入口とする。変更前後の状態、日時、記録者、任意の理由を人が読める形で示す。統合では実際の操作と採用結果を区別し、内部の因果辺や記録IDの羅列を通常表示へ出さない。並行する分岐を時刻で逐次操作へ並べ替えない。
 
-Accepted / Rejected への判断時には declaration 全文を 安定IDを持つ Declaration Revision として保存する。直前の Revision と同じなら再利用し、判断履歴から対象 Revision を参照できる。`revision list|show|diff` は Entity と Revision を一つの read transaction から読み、`revision diff` は title、description、parent、outgoing dependency を別々に比較する。optional な description は `present` / `absent` を本文と分けて表示する。
+`axon note list ID --recorder-details`・`axon log ID --recorder-details` は保存済みdataを併記し、通常表示はactorのみとする。`axon actor` は現在環境で検出できたactor、未取得なら `—` を表示し、保存を行わない。取得の契約は [記録者連携](../development/lifecycle-recorder.md) を参照する。
 
-`note add` は本文または file から非空の Note を一件追記する追加操作である。Issue / Group、Progress、Disposition を問わず使え、declaration、状態、関係、導出値を変えない。Note は安定ID、本文、actor、保存時刻を持ち、通常操作では編集・削除しない。`show` は状況と計画の見通しを先に、declaration の固定状態と記録件数を Details に示し、description と全 Note を一つの read transaction から保存順で省略せず表示する。
+最終確認は、Groupと必要な子の`axon show`と、それぞれのNoteを読む操作を組み合わせる。Noteから成果・検証結果を自動抽出しない。配下の全Noteをまとめて読む専用の入口は設けない。
 
-### 明示解除までの待機
+## Note本文の横断検索
 
-`when manual` は明示解除まで非浮上にする条件を設定し、`when clear` で Always に戻す。
-日付・参照先・シェル文字列は受け取らない。任意の reason は判断履歴に保存する。
-全 Progress / Disposition への適用、軸の独立性と Group への作用は
-[状態モデル](state-model.md#resurface-condition) に従う。
+`axon note search <語句>` は管理root内の全Entity（Issue・Group、`Completed`・`Cancelled`を含む）のNote本文を検索し、条件を実行しない。追加filterは設けない。元の保存文字列にcase-sensitiveなliteral部分一致を適用し、trim・Unicode正規化をしない。空白・改行・%・_・正規表現記号は通常の文字として扱う。空文字は構文エラー（終了2）、該当なしはstdout空・stderrに案内を出して終了0。先頭hyphenの語句は `axon note search -- '--text'` と渡す。
 
-### Commandを実行しない閲覧
+同じNote内の複数一致も1 Note＝1行とし、所属Entityの完全ID、完全な安定Note ID、既存のlocal日時と数値UTC offset、`Excerpt:` 付き抜粋を示す。Entityは`axon list`と同じ作成日時昇順・同時刻ID順、Entity内は`axon note list`と同じ因果順・並行記録のID順で並べる。見出し・空行・分岐説明行は加えない。
 
-`list --skip-command-evaluation` と `show <id> --skip-command-evaluation` は、
-対象・祖先・子孫・関係先の Command を一切実行せず保存情報を読む。`list --kind` は併用できる。
-Progress、Disposition、宣言、条件文字列、claim、Note、進行履歴、関係を保持して表示する。
-外部実行なしで確定する導出値は通常どおり計算し、Command が必要な Surfaced、Active scope、
-Ready や root cause は `unevaluated` と明示する。別の確定した要因だけで false と決まる値は `no` とする。
-これは閲覧時の観測であり、保存状態や永続キャッシュには追加しない。正常な読取は exit 0、
-DB読取失敗などはエラーとする。通常モードの評価・表示と状態変更の成立判定は変えない。
-`--trace-conditions` と併用できるが、実行する Command がないため trace block は出ない。
-Note・履歴・Revision の専用閲覧経路も維持する。観測の省略は既存形式モデルの状態や成立意味を
-変更しないため、非実行・未評価表示・通常評価の維持は Rust のテストで検証する。
+抜粋は最初の一致と前後24文字で、検索語そのものを省略せず、日本語を壊さない文字単位で切り出す。原文を省略した側に `…` を示す。原文で一致位置と範囲を決めた後、改行を可視の `\n`、元のバックスラッシュを `\\` にし、他の端末制御文字も可視化する。保存本文は変えない。長い検索語でも一行の固定上限で切り捨てない。行単位での絞り込み向けで、固定列・区切りや機械向け出力形式は保証しない。
 
-### 外部条件の評価
+`axon list|tasks|proposals`の `--search` は現在のtitle・本文だけに一致し、Noteだけの一致ではEntityを返さない。現在の主題は `axon list --search`、Noteに残る情報は `axon note search`、原文は `axon note show ID NOTE_ID` で読む。`axon note list ID` のEntity IDは必須。
 
-`when command` はシェル文字列を設定し、`when clear` は Always に戻す。条件の設定・訂正・
-解除自体は外部コマンドを実行しない。任意の reason は既存の when と同じ判断履歴へ記録する。
+## 登録・状態変更・編集
 
-外部条件は `/bin/sh -c` で実行する。作業ディレクトリは現在の Git worktree の root、
-Git 外では Axon 管理 root とし、起動元の環境変数を継承する。対話・ログイン用の shell 設定は
-読み込まない。条件スクリプトは次の終了コード契約を満たす必要がある。
+以下を公開コマンドの基本構成とする。`A` は操作対象、`B` は依存先、`G` は親GroupのIDを表す。
 
-| 終了 | Axon の扱い |
+| 操作 | コマンド |
 | --- | --- |
-| 0 | 条件成立 |
-| 1 | 条件未成立 |
-| その他、起動失敗、シグナル終了 | 判定失敗として呼び出した Axon コマンドもエラー |
+| 未判断のIssue / Groupを登録 | `axon capture …` / `axon capture --kind group …` |
+| 採用済みのIssue / Groupを登録 | `axon capture --accept …` / `axon capture --kind group --accept …` |
+| 採用 | `axon accept A` |
+| 採用撤回 | `axon withdraw A` |
+| 着手 | `axon start A` |
+| 作業を解放 | `axon release A` |
+| 完了 | `axon complete A` |
+| 取りやめ | `axon cancel A` |
+| 再検討 | `axon reconsider A` |
+| タイトル・本文を編集 | `axon write A …` |
+| 親Groupを設定・変更 / 解除 | `axon parent set A --parent G` / `axon parent unset A` |
+| 依存先を追加 / 解除 | `axon dep add A --needs B` / `axon dep rm A --needs B` |
+| 再浮上条件を設定 / 解除 | `axon condition set A --command '条件コマンド'` / `axon condition unset A` |
 
-これは既存ツール一般の終了コード規約ではない。必要な終了コード変換は利用者のスクリプトが担う。
-判定失敗の診断は対象 Entity、シェル文字列、終了理由、取得できた stdout / stderr を示す。
-正常時の外部出力は通常の Axon 出力へ混ぜない。`ready`、`triage`、`start`、
-`list`、`show`、`import check`、`import apply` は `--trace-conditions` と
-`--condition-timeout <DURATION>` を受け付ける。timeout は Command 1件ごとに既定30秒で、
-`500ms`、`30s`、`2m`、`1h` のような正の有限値を呼び出し単位で指定できる。保存済み条件や
-環境変数には保存せず、同じ呼び出しで評価するすべての Command に適用する。
-指定時は、その操作が実際に評価した終了 0 / 1 の Command ごとに Entity ID、cwd、成立可否と
-終了コード、取得した stdout / stderr を一つの block として stderr へ評価順に表示する。
-空 stream は `(empty)` と表示する。memoized 結果は再表示せず、判定失敗は既存診断だけを出す。
+登録は一つのコマンドで行い、種別は `--kind issue|group`、採否は `--accept` の有無で指定する。`--kind` の既定は `issue`、`--accept` 省略時は`Undecided`、指定時は`NotStarted`で作成する。登録と採否は直交し、作成後は同じIDベースの操作を使う。操作対象のIDは位置引数、関係先のIDは役割を明示するoptionとし、登録時の親・依存指定も `--parent`・`--needs` に揃える。採否・着手・完了をまとめる中間のsubcommand階層は設けない。
 
-stdout と stderr は pipe を並行して最後まで読み、stream ごとに最大64 KiBを保持する。超過時は
-先頭32 KiBと末尾32 KiBの間に省略byte数を示す。通常の判定失敗診断とtraceへ同じ上限を適用する。
-非 UTF-8 byteを lossy UTF-8 として表示するため、元の byte列を完全には再現しない。端末制御文字は
-通常の人向け出力と同じ可視escapeにする。秘密情報を除去する保証はなく、traceは利用者が
-子processの出力を公開する明示的な診断操作である。
-trace blockのstderrへの書き込みまたはflushに失敗した場合は、
-その評価を失敗としてAxonの呼び出しも失敗させる。状態変更前の評価で失敗するため、変更は適用しない。
+登録titleは `--title`。本文は `-m/--description` または `-F/--file`。Noteは `-m/--message` または `-F/--file`。本文option同士は排他で、`-F -` はUTF-8のstdinを一度読む。本文・Noteをtrimして保存しない。初期の `--parent`、反復可能な `--needs`、`--command` は作成と同時に検査・保存する。作成中に条件を実行しない。通常の`axon write`はtitleと本文を一transactionで編集し、lifecycleを変えない。長い本文は登録時と同じ本文optionでファイルから渡せる。
 
-各評価は専用process groupで起動する。timeoutまたはCtrl-CではgroupへTERMを送り、1秒後も
-終了していなければKILLする。timeoutは条件未成立ではなく判定失敗であり、対象Entity、適用した
-duration、終了処理、streamごとの省略有無を診断してAxonをexit 1にする。Ctrl-Cも子孫processを
-同じ手順で終了してからAxonをexit 1にする。
+`axon accept|withdraw|start|release|complete|cancel|reconsider A` は `-r/--reason` を履歴へ保存する。Groupへの`axon complete`の実行自体を「計画全体の最終確認が通った」という明示入力とする。Axonは子・依存・状態を検査し、確認作業は呼び出す人・エージェントのskillと運用で担う。必須のレビュー確認フラグや独立したレビュー済み状態は設けない。どの変更コマンドも、状態・包含・dependencyの制約を迂回しない。ここで定めた通常操作の名前から推測してコマンドを追加しない。
 
-評価するのは surfaced などの導出状態が必要になったときだけであり、単なる Entity の DB 読取を
-実行トリガーにしない。list / show、ready / triage、start の成立検査や import の導出差分でも、
-必要な Entity だけを評価する。`--kind` で除外した候補は評価せず、対象候補の判定に必要な祖先
-Group などの評価は行う。履歴・Note・Revision の参照、claims、export は条件を評価しない。
+## 計画全体の取得と一括編集
 
-1 回の Axon コマンド内では各 Entity の評価は最大 1 回とし、一覧・依存・祖先 Group と
-変更前後の参照で結果を共有する。次の呼び出しでは再評価する。この共有は DB snapshot とは
-別の保証で、異なる Entity の外部条件を同一瞬間に観測する保証はない。
+`axon export` と `axon import prepare|check|apply`、`axon docs declaration` が扱うdeclarationの形式、識別子、競合判定、拒否する入力は [計画全体の取得と一括編集](declaration.md) に従う。declaration内のIDは完全IDだけを使い、`axon export`の引数は他のcommandと同じくsuffixも受け付ける。保存境界の表示はこの文書の「mutationの結果」と同じApplied、Not applied、Result unknownを使う。
 
-状態変更の成立に必要な評価は書き込み確定前に行い、失敗時は変更を適用しない。
-確定後の表示のためだけに追加評価し、成功済みの変更を失敗として返すことはない。
-評価失敗中でも条件の解除・訂正ができる。DB を変更しない読み取りでも、登録された外部
-コマンドの実行は起こりうる。
+`axon export` と `axon import prepare|check|apply` のhelpは、代表例と次に実行するcommandを保存先を開かずに表示する。
 
-専用の評価操作は設けない。永続キャッシュ、実行間隔、ログと終了コードの再生は外部コマンドの責務とする。
-条件の非単調性と Group への作用は [状態モデル](state-model.md#resurface-condition) で定める。
+- `axon export ID...` は完全 ID または一意な suffix を一つ以上受け取り、Issue 単体または Group 全子孫の和集合を canonical YAML として stdout に出す。保存先を変更せず、条件を実行しない。
+- `axon docs declaration` は field と新規・既存の違い、`axon import prepare` → `axon import check` → `axon import apply` → 再度`axon import check` の手順を stdout に説明する。`--example` は新規計画の canonical YAML だけを stdout に出す。どちらも保存先を開かない。引数なしの `axon docs` は状態モデルと基本workflowの説明、および declaration への案内を返す。
 
-### 包含
+`axon import prepare FILE` は新規IDを割り当て、外部参照を再生成したcanonical YAMLで同じfileを置き換える。保存先は変更せず、成功時はfile名と保存先未変更、新規recordの `key -> 完全ID` の対応を一行ずつ表示する。書込前の失敗・bytes競合はNot applied、rename後の同期失敗はResult unknownとして診断し、残ったtemporary fileは診断で案内する。更新後にstdout出力だけが失敗した場合も、declarationがAppliedで保存先は未変更であることを示す。
 
-包含だけを group namespace に置く。
+`axon import check FILE` は全IDが確定したcanonical YAMLを要求し、違えば`axon import prepare`を案内する。schema・identityと参照・読み取り専用項目・競合・共通コアの拒否を区別し、作成、titleの前後、descriptionの変更有無、parentの前後、needsの増減、差分なしと適用後の状況をEntityごとに表示する。titleは`axon list`と同じく改行を `\n`、制御文字を可視escapeにして一行で表示する。条件は実行せず、fileと保存先を変更しない。
 
-- `group set <entity-id> <parent-group-id>` は親の新規設定または移動
-- `group unset <entity-id>` は親の解除
+`axon import apply FILE` は書き込みlock内でFILEを読み、`axon import check`と同じ検証を再実行し、全変更を一回の保存境界で反映する。拒否時は全件Not applied。成功後は保存したsnapshotからbase・lifecycle・referencesとcanonical順を更新し、keyを保持してFILEを置き換える。成功出力にはbase更新前に新規だったrecordの `key -> 完全ID` の対応を一行ずつ含める。既存の再浮上条件とNoteは保持し、新規の条件は未設定とする。
 
-親は必ず Group とし、各 Entity は最大 1 つの親を持つ。設定操作なので、すでに同じ親である set と、親がない unset は成功 no-op になる。
+保存成功後のFILE更新失敗は、保存先のAppliedとdeclarationのNot appliedまたはResult unknownを分けて表示する。rename直前に元bytesを再照合し、編集されていればそのfileを保持する。同じFILEを再度`axon import apply`し、編集集合の全Entityが宣言の最終値に一致すれば保存先はno-opでrewriteだけを完了する。部分一致は競合。SQLite commit失敗とfile正本のrename後sync失敗は保存先のResult unknownで、declarationは更新しない。
 
-### 一覧
+## 表示とstream
 
-`ready` / `triage` / `claims` / `list` は両 kind を同じ一覧に出し、`--kind issue|group` で任意に絞る。1 Entity を1行に出し、各行の第1列はID、第2列はkindとする。`triage` は `Reason:`、`claims` は `Claim:`、`Worktree:`、`Started:` をidentityの後に置く。`list` は Progress / Disposition と、該当する例外状態だけを表示する。
+CLIが生成するhelp・ラベル・診断は英語。利用者のタイトル・本文・Note・理由は原文を保持する。human時刻はlocal時刻と数値UTC offset。C0/C1/ESC、tab、CRは可視escapeし、本文のUnicodeと改行は保持する。
 
-`list` は無指定なら全Entityを含む。`--progress not-started|in-progress|ended`、`--disposition undecided|accepted|rejected`、`--terminal=true|false` と `--kind` をANDで組み合わせて絞れる。terminalはProgress=EndedまたはDisposition=Rejectedで、未指定なら両方を含む。各optionは一度だけ指定できる。不正値や反復は入力エラー、矛盾する組合せは成功の空結果とする。
+装飾は対象streamがTTYでNO_COLORが存在しない場合だけ。同じ内容からANSIを除けば非TTYとテキスト・順序・空白が一致する。IDはcyan＋bold、見出しはbold、着手はcyan、成功/Readyはgreen、待ちはyellow、未判断はyellow＋bold、kind・terminal・no-op・補助情報はdim、エラーはred＋bold。ユーザー本文・タイトルは着色せず、色だけを意味の手掛かりにしない。`axon completion`は常に装飾なし。
 
-保存状態filterに一致すればManual等の未浮上やinactiveなEntityも含む。`--terminal=false` はready / triage / active scopeを意味しない。filterは保存情報・履歴・claimを変更せず、表示順と1 Entity 1行の契約を維持する。保存情報で除外したEntityの行のためにCommandを評価しないが、残した候補の表示に必要な祖先等は通常どおり評価する。`--skip-command-evaluation` と併用できる。
+一覧0件はstdoutに行を出さず、短い案内をstderrへ出して終了0。候補不在から保存情報の不存在を推測しない。通常行へ毎回操作例を付けず、helpと`axon docs`へ使い方を分ける。
 
-`list --search <text>` は現在のtitle、description、対象Entityの全Note本文をリテラル部分一致で検索する。大小文字を区別し、Unicode正規化や空白の除去を行わない。空文字は入力エラー。`%`、`_`、正規表現の記号は通常の文字であり、Noteのactor・日時、古いRevision、判断・進捗履歴は検索しない。kind・状態filterとはANDで併用し、未指定なら通常listの全Entity範囲を検索する。複数箇所の一致も1 Entity 1行とし、既存順序を維持する。検索時だけ行末に `Matched: title, description, note-…` を添え、一致したNote IDはID順に列挙する。全文は `show <id>` / `note show <id> <note-id>` で取得する。検索条件もCommand評価前に適用し、空結果は成功する。option形式の検索語は `--search='--help'` と渡す。
+引数なしの `axon`、`axon help`、`axon -h`、`axon --help`は同じ用途別root helpをstdoutへ出して終了0。leaf help、`axon docs`、`axon actor`、`--version`、`axon completion`は保存先を開かず取得できる。`axon docs`はbinary同梱の端末用説明で、ソースcheckoutやネットワークへ依存しない。`--version`はpackage versionだけを出し、実行directoryやGitから由来を推測しない。
 
-`triage` は非 terminal・自身が surfaced・active scope 内・Undecided または orphaned の4条件をすべて満たす Entity を返す。完全定義と自身の未浮上／祖先 gate による inactive の区別は[状態モデル](state-model.md#observed-情報と-triage-frontier)を参照する。非表示は作成・更新の失敗や不存在を意味しないため、作成を再実行する根拠にはしない。管理 root 全体の棚卸しは `list`、個別の保存状態と非表示理由は `show` で確認する。`ready` と `triage` はそれぞれの frontier であり全件一覧ではない。
+## mutationの結果
 
-`claims` は claim の経過時間やプロセス状態から staleness を推定しない。表示された保存済み事実を基に人が判断し、必要な claim だけ `release` で明示的に解放する。
+成功確認は完全IDが先頭。Created、Note ID recorded、状態遷移の結果、実際に変わったtitle/本文/parent/dependency/conditionを短く示す。保存処理が返した結果を使い、lock前の読取から更新を推定しない。`axon write`・関係・条件の同値操作はNo changesの成功で、保存状態・履歴を変えない。同値lifecycle遷移は拒否される。
 
-### Plan 宣言ファイル
+成功はstdout/終了0、アプリケーションの拒否・失敗はError:を含むstderr/終了1。Clapの構文エラーは既定のerror:/Usage構造と終了2。原因、判明している対象・操作を示し、曖昧なFailedだけで済ませない。
 
-複数 Entity と関係を一枚で編集するときは、`axon export` と `axon import prepare|check|apply` を使う。形式の正は [宣言ファイル](declaration-file.md) とする。
-
-- `export <id>...` は明示 Entity、`export --group <id>` は Group と直下、`--recursive` 付きは全子孫を編集対象にする。selector の和集合だけを選び、関係から編集対象を広げない
-- `import prepare <file>` は新規 Entity の最終 ID を割り当て、同じ file を canonical YAML へ atomic replace する。DB は変えない
-- `import check <file>` は競合と制約を検査し、所有値の構造差分と導出値の差分を表示する。file と DB は変えない
-- `import apply <file>` は write lock 内で同じ検査をやり直し、一つの transaction で全変更を反映してから file の snapshot を更新する
-
-apply は暗黙の既定動作にせず、明示 subcommand だけで実行する。既存の固定済み Entity に一つでも declaration の実変更があれば、file 全体を変更せず拒否する。DB commit 後の file 更新だけが失敗したときは、DB が宣言の最終値に完全一致する場合に限り同じ file の再 apply を DB no-op として受け付ける。
-
-## Group の進行
-
-Group は計画範囲を明示的に進める Entity であり、子孫から自動完了しない。
-
-1. ready な Group を `start` すると activation gate が開く。
-2. 配下の active frontier が `ready` / `triage` に現れる。
-3. 全子孫が terminal になった後、Group 自身を `done` する。
-
-Group の `release` は InProgress の子孫が 0 件のときだけ成功する。Group の claim は子孫を lock せず、Group と子孫を別 actor が同時に claim できる。
-
-`show` は Issue / Group とも Situation を先に表示する。Group は全子孫の Ended、Rejected、未終了かつ非却下の Unfinished を示す。Ended と Rejected の重なりを明記し、terminal 件数を達成率や将来実施の約束に読み替えない。非 terminal Group は Can complete と未充足条件を示し、Ended または Rejected の Group には完了可否を重ねない。Rejected Group はすでに terminal であり、非 terminal な子孫は inactive な保存状態として残るだけでは将来作業や後片付けを要求しないと示す。subtree に保存済み claim があれば件数を示し、外部作業を終了、release、Group 外で継続するかは claimed Entity ごとに判断するよう案内するが、自動変更はしない。続く `Subtree` は terminal を含む全子孫を包含階層どおりに並べ、各 Entity の ID、kind、Progress / Disposition、title と現在の候補を示す。祖先の activation gate は所有 scope にまとめ、子孫の固有の未解決 dependency / Rejected prerequisite / Resurface condition を項目の近くに示す。AfterEntity は Ended または Rejected で成立し、dependency と区別する。選択範囲外の祖先gateもIDとともに示す。Details には保存状態、導出値、claim、declaration と記録件数、直下・全子孫の詳細集計を配置し、その後に関係・長文・履歴を続ける。`Relationships` の `AfterEntity waiter` は対象を直接参照する全 Entity を ID 順に並べ、ID、kind、保存済み Progress / Disposition、title を示す。waiter が terminal、inactive、または条件充足済みでも省略せず、Group waiter の子孫は展開しない。`Dependent` は dependency の逆方向だけを表し、`AfterEntity waiter` と混同しない。`--skip-command-evaluation` でも同じ保存済み waiter を表示し、そのために Command 条件を実行しない。子孫の description、Note、Revision、履歴、claim 詳細は展開せず、必要な Entity を個別に `show` する。
-
-`Dependencies` は選択した Group と全子孫が所有する direct outgoing dependency を owner ごとに表示する。Group 由来の dependency を子孫へ重複表示せず、target は `Satisfied` / `Unresolved` / `Rejected` を区別する。subtree 外の target は `External` と title を示すが、その先の subtree は展開しない。subtree の sibling、dependency owner、target は ID 順とし、状態変化で表示順を変えない。空 Group も `Subtree` に明示し、件数による省略は行わない。
-
-## 反復実行と履歴
-
-| 分類 | command | 同じ入力の反復 |
-| --- | --- | --- |
-| 状態遷移 | `start` / `done` / `release` / `decide` / `when` | 失敗 |
-| 設定 | `write` / `group set|unset` / `dep add|rm` | 成功 no-op |
-| 追加 | `plan` / `capture` / `group plan` / `group capture` | 新規 Entity を追加 |
-| 追記 | `note add` | 新規 Note を追加 |
-
-失敗した遷移と成功 no-op は状態、履歴、`updated_at` を変えない。失敗した遷移は非 0 で終了する。エラーは原因となる事実を先に示し、必要な確認先、操作の成立条件、解消手段とその影響を補足できる。入力された reason などの自由記述を診断へ無関係に転載しない。外部条件の判定失敗では、原因を確認できるよう上記の実行コマンドと外部診断出力を含める。`start` と `done` は reason を持たず、`release` の任意 reason は進行履歴、`decide` / `when` の任意 reason は判断履歴に保存する。reason の有無は操作の成否を変えない。作業結果や通常の申し送りは、declaration の description ではなく Note に残す。追加操作に idempotency key は持たない。
-
-## 原子性と deadlock 防止
-
-`start` は ready の検査と claim の取得、Group の `done` / `release` は子孫条件の検査と進行更新を、それぞれ同じ write transaction で行う。
-
-dependency、`AfterEntity`、包含を activation wait graph と completion wait graph に射影する。relation の追加・置換は両 graph の非循環と包含の不変条件を同じ transaction 内で検査してから保存する。Group を待機元にした dependency / `AfterEntity` は Group 自身と全子孫へ展開する。既存データの循環を解消できるよう、辺を除く `dep rm` / `when clear` / `when at` / `when manual` / `when command` / `group unset` は他の循環が残っていても実行できる。
-
-Ended Group は完了宣言を後から無効にしないため、親変更、subtree の出入り、依存元としての dependency 変更を拒否する。Ended Group 配下の terminal Entity を非 terminal に戻す Disposition 変更も拒否する。
-
-## 出力と管理 root
-
-help、一覧、詳細、成功確認は stdout、エラーは stderr に出す。一覧が空なら stdout を空に保ち、案内だけを stderr に出して成功する。
-
-人向け出力は、Entity一覧、履歴と索引、一件の詳細、状態変更の確認という役割ごとに共通の文字構造と語彙を使う。一覧と履歴は1 recordを1行に置き、一件の詳細では短い metadata を長文やdiffより先に置く。状態変更の確認は対象IDから始め、保存されたsnapshot全体を繰り返さない。Note / Revision一覧は安定IDから始める。照会・diffはIDまたは4文字以上の一意な接頭辞を受け付け、旧番号を参照として受け付けない。判断・進行履歴にもIDを表示する。
-
-### 更新結果の共通契約
-
-更新系の確認・診断は、対象、結果と変更内容または原因、適用範囲、必要な補足案内の順に読む。
-以下は個別コマンドの表示を実装する際の正本であり、代表例は期待する表示を示す。
-状態遷移、設定、追加の意味、保存境界、原子性を変更するものではない。
-
-| 要素 | 語彙と配置 |
-| --- | --- |
-| 対象 | Entity の成功確認は完全 ID を先頭に置く。関係の相手 ID は変更内容に置く。診断は既存の `Error:` に続けて、判明している対象 ID または path と操作を示す。ID 解決前は入力された識別子、保存先の問題は path を使い、未確定 ID を作らない。 |
-| 実変更・追加 | `Title updated`、`Description updated` / `Description removed`、`Dependency added:` / `Dependency removed:`、`Parent:` と最終値を使う。追加は `Created` または `Note <stable-id> recorded`、遷移は `Started` / `Ended` / `Released` など既存の状態確認語を使う。これらは保存処理の成功後だけ表示する。 |
-| 成功 no-op | `No changes` を結果とし、関係操作では `Dependency already present:` / `Dependency already absent:` と相手 ID、または `Parent:` と最終値（親なしは `(none)`）を添える。状態遷移の同値拒否には使わない。 |
-| 拒否・失敗 | `Error:` の本文は原因となる事実を示す。`cannot depend on itself` のような制約違反と、I/O・外部評価失敗や保存データ異常を分ける。結果だけの `Failed` や、入力誤りを `invalid schema` とする表示では代替しない。 |
-| 適用範囲 | 誤解の余地がある場合に `Applied:` / `Not applied:` / `Result unknown:` を使い、項目、Entity、DB、file のどの範囲かを示す。既存診断が同じ事実を本文で明示している場合は重ねない。部分適用は適用済みと未適用または不明を併記する。 |
-| 補足案内 | 確認・復旧方法が必要な場合だけ末尾の `Help:` に置く。原因や適用済み範囲を Help だけへ隠さない。単純な原因で次の行動が分かる場合は省く。 |
-
-単一対象で短い結果は `ID  結果  補足` の一行にする（項目間は空白2つ）。
-複数項目も短ければ同じ行に置ける。複数対象、長い原因、段階結果は複数行とし、
-先頭に対象と結果・原因、続いて必要なラベル付きの行を置く。各行の対象が曖昧になる場合は
-ID または path を添える。同じ情報を埋めるためだけに空欄や全件の snapshot を追加しない。
-
-成功確認は stdout / 終了0、アプリケーションの拒否・実行失敗は stderr / 終了1、
-Clap の構文・引数検証エラーは既存の stderr / 終了2を維持する。
-Clap の `error:`、Usage、help tip の既定構造はアプリケーション診断へ作り直さない。
-一つの呼び出しが途中まで適用された場合も全体は失敗であり、段階結果は stderr の診断で説明する。
-既に出力した成功情報は取り消せないため、終了コードと段階結果を合わせて読む。
-外部 Command の終了値を Axon 自身の終了値と混同しない。既存の BrokenPipe 成功扱いも維持する。
-
-保存処理が返した変更有無を表示へ使い、事前読取だけで実変更を推測しない。
-`write` は実際に保存した項目だけを列挙し、一部項目のみ変更なら全体を `No changes` としない。
-指定された title と description はそれぞれ保存処理へ渡し、同値の場合も保存時の判定を使う。
-`dep add/rm` と `group set/unset` も同じ保存結果で実変更と `No changes` を切り替える。
-成功 no-op は終了0で、保存状態・履歴・`updated_at` を変更しない。
-複数段階の操作で後段が失敗しても、前段の成功を未適用と断定しない。
-結果不明は成功でも未適用でもなく、照合が必要な状態として示す。
-診断を作るためだけの追加 mutation、外部 Command 評価は行わない。
-非 idempotent な作成・Note 追記の無条件再実行を案内せず、対象の保存情報と記録 ID を照合させる。
-
-#### 代表出力
-
-以下の ID と path は説明用。短い成功は stdout / 終了0で、例えば次のように読む。
-
-```text
-axon-a1b2c3  Title updated  Description removed
-axon-a1b2c3  Dependency added: axon-d4e5f6
-axon-a1b2c3  Parent: axon-g7h8i9
-axon-a1b2c3  No changes
-axon-a1b2c3  No changes  Dependency already present: axon-d4e5f6
-axon-a1b2c3  No changes  Dependency already absent: axon-d4e5f6
-axon-a1b2c3  No changes  Parent: (none)
-axon-j1k2l3  Created  Issue  [Accepted]  新しい計画
-axon-a1b2c3  Note note-0123456789abcdef0123456789abcdef recorded
-```
-
-新規追加の再実行は別 ID の追加である。`Created` は既存 Entity の再利用を表さない。
-単純な入力制約拒否と同値遷移拒否の例（stderr / 終了1、保存変更なし）:
-
-```text
-Error: axon-a1b2c3 dep add: Entity axon-a1b2c3 cannot depend on itself
-Error: axon-a1b2c3 decide accept: axon-a1b2c3: Disposition is already Accepted
-Help: No transition was applied. Use `axon show axon-a1b2c3` to inspect the current state; repeating the same transition is an error.
-```
-
-適用前の I/O 失敗（置換前と確認できる場合、stderr / 終了1）:
-
-```text
-Error: /work/.axon/state.jsonl write: permission denied while creating temporary file
-Not applied: state file replacement
-Help: Check directory permissions before retrying.
-```
-
-`write --title ... -m ...` の title 保存後に description 保存が失敗した場合
-（段階ごとの保存境界は維持、stderr / 終了1）:
-
-```text
-Error: axon-a1b2c3 write: description save failed: permission denied
-Applied: axon-a1b2c3 Title updated
-Not applied: axon-a1b2c3 Description update
-Help: Inspect the saved Entity before deciding which fields to retry.
-```
-
-`import apply` は既存の `Plan is valid.`、`Changes:`、`Derived changes (...)`、
-`Applied  <path>` の順と diff 構造を維持する。`Changes:` は DB の差分で、
-`none` は DB の成功 no-op に対応する。`check` の同じ表示は予測であり保存成功を表さない。
-`Applied  <path>` は DB の適用と宣言 file の更新の両方が完了した確認であり、
-DB の実変更があるという意味ではない。複数 Entity の差分は ID ごとに示す。
-例として、導出値に差分のない複数 Entity の title 更新は stdout / 終了0で次の形になる。
-
-```text
-Plan is valid.
-Changes:
-  axon-a1b2c3: title updated
-  axon-d4e5f6: title updated
-Derived changes (ready, blocked, orphaned, active_scope, group_completable):
-  none
-Applied  /work/plan.yml
-```
-
-DB 全体の適用後、宣言 file の置換前に失敗した場合（stderr / 終了1）:
-
-```text
-Error: /work/plan.yml import apply: declaration file refresh failed: permission denied
-Applied: storage declaration values
-Not applied: declaration file refresh at /work/plan.yml
-Help: Inspect saved information with `axon list --skip-command-evaluation` and preserve the file; retry the same file only after verifying the declared final values match storage.
-```
-
-file backend の置換後の同期失敗など、保存結果を確定できない場合（stderr / 終了1）:
-
-```text
-Error: /work/.axon/state.jsonl note add: directory sync failed after replace
-Result unknown: Note append in /work/.axon/state.jsonl
-Help: Confirm the writer has stopped, then inspect saved Note IDs and bodies before retrying.
-```
-
-DB が no-op でも file 更新は別の段階であり、その失敗は成功に変わらない。
-init、migration、merge の複数保存先も同じ規則で、既知の保存先、phase、backup と
-適用状態を示す。個別の保存保証・復旧条件は[保存契約](file-storage.md)と
-[手動移行](migration.md)に従い、この表示規則から全体の原子性を推測しない。
-
-#### 診断の保存境界
-
-通常の診断は操作と判明した対象を含み、自由記述の reason や title を診断の context に転載しない。
-自己依存は通常操作・宣言とも `Entity <id> cannot depend on itself` として拒否する。
-保存済み snapshot の不整合は引き続き保存データ異常として扱う。
-SQLite は transaction の開始・保存・commit、file は置換前・置換後の同期を区別して保存 path を示す。
-SQLite の commit 自体のエラーは保守的に `Result unknown` とし、保存前の拒否と混同しない。
-`Applied: storage declaration values` は import の保存値が確定したことを表し、DB no-op も含む。
-確認出力に失敗しても保存済みの結果は `Applied:` に残す。BrokenPipe の成功扱いは維持する。
-init の Git integration 完了前に state や一部の補助 file を保存した場合も、
-適用済みの段階を診断に残す。
-
-時点・確認経路・維持/修正の処分は
-[2026-09-06 の更新系診断棚卸し](../development/audits/mutation-diagnostics-2026-09-06.md)を参照する。
-成功側との対応、端末条件、残る検証範囲は
-[同日の横断確認](../development/audits/mutation-output-crosscheck-2026-09-06.md)を参照する。
-
-#### 実装への対応
-
-契約策定時点（2026-09-06、`e21b20f` のソース確認）の引継ぎは次のとおり。
-これは実装済みの保証ではなく、後続 Issue が照合する対象の対応表である。
-
-| 対象 | 契約への対応・後続担当 |
-| --- | --- |
-| `write` | 保存結果から変更項目と no-op を確定する。事前読取のみの表示判定を axon-1x115z で修正。複数保存段階の失敗範囲は axon-1ag24h で棚卸しする。 |
-| `dep add/rm`、`group set/unset` | 相手 ID / Parent を保ち、保存時の no-op に `No changes` を付ける。axon-1x115z が担当。 |
-| `plan/capture`、Group 作成、`note add` | 新規追加と ID の意味を維持。入力・保存失敗は axon-1ag24h の棚卸し対象。 |
-| `start/done/release`、`decide`、`when` | 同値は拒否のまま。固定宣言、成立条件、循環・包含、外部評価失敗とともに axon-1ag24h で診断を確認する。 |
-| 自己依存 | `invalid axon schema` という誤分類を axon-1ag24h で修正し、宣言経由と原因の語彙を揃える。 |
-| `import prepare/apply` | DB 差分と file 更新を区別。既存成功 report は axon-1x115z で整合確認し、拒否・段階失敗は axon-1ag24h で棚卸しする。外部参照例・固有診断は axon-50qc1t が担当。 |
-| `init`、migration、merge と共通入力・保存境界 | 既存の適切な診断は維持し、誤分類、適用結果、復旧案内を axon-1ag24h で棚卸しする。parser の自由記述 tip は axon-nnb208 の担当を維持。 |
-
-axon-2b4xyp で両実装の成功、no-op、拒否、段階結果と保存状態を横断確認する。
-
-### 装飾
-
-`show` を含む人向け出力は、stdout が対話 terminal なら状態の識別を補助する ANSI style を使う。非対話出力と `NO_COLOR` では同じ文字、空白、改行、順序を無装飾で出し、状態の違いを色だけでは表さない。title、description、Note本文、reason、actor、worktree、path、Commandのシェル文字列とstdout / stderrに含まれる端末制御文字は、TTYと非TTYの両方で同じ可視escapeにする。改行と通常のUnicode文字は維持し、ESCは`\x1b`、tabは`\t`、CRは`\r`、その他のC0・DEL・C1制御文字は`\x00`から`\x9f`のASCII表記で示す。これは人向け表示だけの変換で、保存値は変更しない。下流でpipeが閉じた場合は成功として扱う。
-
-装飾は保存状態の値ごとではなく、その情報が利用者の現在の操作に持つ意味で決める。
-同じ意味は一覧、詳細、履歴、状態変更確認、help、診断で同じ style を使う。
-
-| 意味 | style | 主な対象 |
-| --- | --- | --- |
-| 文書構造 | bold | section heading、record 内の index |
-| identity | cyan + bold | Entity ID |
-| 現在進行中 | cyan + bold | InProgress、Started |
-| 成立・許可・成功 | green | Accepted、Ready、valid、成功を表す確認語 |
-| 通常の待機 | yellow | Blocked、未解決 dependency、未完了 Group |
-| 利用者の注意・介入が必要 | yellow + bold | Undecided、warning、明示的な判断を待つ印 |
-| 前提喪失・失敗 | red + bold | Orphaned、Rejected prerequisite、error |
-| terminal・非 active・補助情報 | dim | Ended、Rejected、not surfaced、inactive scope、kind、label、timestamp、満足済み関係、no-op |
-| 中立 | plain | NotStarted、通常値、保存された自由記述 |
-
-色と太字は組み合わせて意味を狭める。yellowだけは他Entityや条件の状態変化を待てば進める状態、
-yellow + boldは利用者が確認・判断しなければ進まない状態を表す。redは通常の待機には使わず、現在の計画のままでは
-前提が成立しない状態または失敗に限る。Rejected自体は選択済みのterminal状態なのでdimとし、
-別Entityの前提を失わせている文脈だけredにする。diffの `+` / `-` はgreen / redという
-端末上の慣例を使うが、記号を必ず残し、状態の成功・失敗とは解釈しない。
-
-見出しとEntity-local indexはboldで構造を示し、identityを表すcyanとは分ける。背景色、固定RGB、
-blink、invert、hidden、strikethroughは端末theme、対応差、可読性への依存が大きいため使わない。
-underlineはClapの既定styleへ依存させず、Axonの見出しはboldへ統一する。利用者入力のほか、
-actor、worktree、外部command、pathも値全体を意味色で塗らない。
-
-非TTY の record 境界、先頭の識別子、標準 stream は安定した外部契約とする。
-
-`export` と completion は生成内容そのものを標準出力へ書き、人向けの装飾や表示用escapeを加えない。
-
-Git 配下の file 正本は現在の worktree root の `.axon/state.jsonl`、
-SQLite は common Git directory の親の `.axon/axon.db` を共有する。
-Git 外は最寄りの正本または pending marker がある管理 root の同じ二つの名前を使う。
-設定ファイルはなく、両方存在すれば混在エラー、どちらもなければ未初期化。
-破損・途中生成で fallback しない。一 repository 一 backend を想定し、全 worktree は走査しない。
-Issue と Group は同じ `<prefix>-<ランダム 6 文字>` namespace を使い、完全 ID または一意な suffix で解決する。
-
-## DBの互換性検査
-
-通常操作は対応するschema更新をbackup付きで自動実行し、成功後に続行する。現行の基点はv14で、v13 の `AtDate(YYYY-MM-DD)` は UTC 午前 0 時へ移行する。退役した旧版・未来版・未知構造は変更せず拒否する。
-`init` は新規作成専用で、既存正本や初期化途中への再実行を拒否する。既定は SQLite で ignore は変更しない。`--backend file` は Git 内外とも `.axon/.gitignore` と root `.gitattributes` を生成・補完し、成功時は保存処理が返した結果を各 path とともに表示する。
-
-```text
-Initialized file at /path/to/root/.axon/state.jsonl
-Created: /path/to/root/.axon/.gitignore
-Appended: /path/to/root/.gitattributes
-```
-
-必要行が既にあり bytes を変更しなかった file は `Unchanged:` と表示する。SQLite の成功出力は `Initialized SQLite at /path/to/root/.axon/axon.db` の一行だけである。Git driver の登録は利用者が通常の `git config` で行う。保存成功境界とinit復旧は[backendとfile保存](file-storage.md)を参照。help、docs、version、completionはDB不要。
-backend変換は明示した現行schemaのSQLite入力から別directoryへ出力し、元DBの切替はしない。
-診断はpath、版、処理段階、原因、backup先と出力の適用状態を示す。失敗時の途中成果を上書きせず、
-結果不明なら出力とbackupを調べてから再開する。具体的な手順は[手動移行](migration.md)。
-
-## 手動移行
-
-`axon migrate --source <current-schema-db> --output <未使用directory> --backend <sqlite|file>` は、通常のroot探索を行わず指定DBを読み取り専用で開き、新しい保存先へ変換する。元DBの切替は行わない。詳細は[手動移行](migration.md)。
-
-showは分岐・統合を含む履歴について因果参照と採用先端を表示する。並行記録のID順は時刻の前後を意味しない。
-
-## File storage と merge
-
-`storage check`、`merge prepare/check/apply/driver` の保存・競合・Git 契約は
-[file storage](file-storage.md#cli-workspace-と-git) を参照する。
-これらの明示 snapshot 操作は通常 Store を開かず、stage/commit を行わない。
-
-`--version` / `-V` は package version と、ビルド時の完全 commit hash・source 状態を表示する。
-取得不能な情報は `unknown` とし、実行場所から推定しない。metadata 指定と検知範囲は
-[ビルド時のソース由来](../development/architecture.md#ビルド時のソース由来)を参照。
+保存境界に誤解の余地がある場合はApplied、Not applied、Result unknownを区別する。SQLite commit失敗とfile置換後の同期失敗は再読まで結果不明。保存成功後の出力障害は適用済みを明示し、作成・Noteを盲目的に再送させない。stdoutのBrokenPipeは成功として扱うが、条件traceのstderr障害は一覧失敗。部分適用された複数command列の前段成功を後段失敗で未適用と説明しない。

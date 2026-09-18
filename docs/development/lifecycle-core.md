@@ -1,8 +1,8 @@
 # 単一 lifecycle の共通コア
 
-正本は [literate spec](../../spec/lifecycle_proposal.md)。新しい [Rust library](../../crates/axon-core/src/lib.rs) の `lifecycle` module は SQL、filesystem、外部コマンド評価を呼ばない。`Snapshot` の操作と検査、`encode` / `decode` の byte 列を、両 backend が共通で使う。`cargo test -p axon-core` で独立したメモリ上の fixture を検証する。
+この境界が実装する契約は [lifecycle](../reference/lifecycle.md)、対応するモデルは [モデル](../../spec/README.md)。[Rust library](../../crates/axon-core/src/lib.rs) の `lifecycle` module は SQL、filesystem、外部コマンド評価を呼ばない。`Snapshot` の操作と検査、`encode` / `decode` の byte 列を、両 backend が共通で使う。`cargo test -p axon-core` で独立したメモリ上の fixture を検証する。
 
-この境界は Issue / Group の登録、基本遷移、包含・dependency の変更、文面編集、Note、分岐した記録と明示選択を扱う。候補評価は `candidates`、条件設定は `set_condition`、三者比較は `MergePlan` が扱う。file adapter と `axon merge` CLI は [file保存とGit統合](lifecycle-file.md) に接続する。[SQLite CLI](lifecycle-sqlite.md) が保存 adapter と公開入口を提供する。`archive/three-axis/src` の旧 module と `archive/three-axis/tests` は置換前の三軸 CLI に属し、新仕様の規範にしない。
+この境界は Issue / Group の登録、基本遷移、包含・dependency の変更、文面編集、Note、分岐した記録と明示選択を扱う。候補評価は `candidates`、条件設定は `set_condition`、三者比較は `MergePlan` が扱う。file adapter と `axon merge` CLI は [file保存とGit統合](lifecycle-file.md) に接続する。[SQLite CLI](lifecycle-sqlite.md) が保存 adapter と公開入口を提供する。
 
 ## 通常操作と構造
 
@@ -44,14 +44,14 @@
 
 `Snapshot::validate` は因果 DAG、同一 Entity・stream の参照、単一の作成記録、通常遷移の前後と親の一致、統合入力と選択、現在の lifecycle と先端の一致を検査する。状態先端は保持する全状態記録を因果的に包含する必要があり、統合記録なしに片側の先端だけへ戻す snapshot は拒否する。`encode` / `decode` と明示統合はいずれもこの検査を通す。文面の通常編集履歴は仕様上保存しないため、過去の全編集を再生・証明する仕組みではない。
 
-JSONL の header は `format: "axon-lifecycle/v1"` と store ID を持ち、Entity、State、Note の行を続ける。Entity は ID 順、各 stream の記録は因果順・並行時 ID 順、object のキーは決定的な順にする。decode は header を先頭に要求し、以降の行順は自由だが、未知 format / field、重複 ID、参照切れ、因果循環、状態の根拠不整合は拒否する。終端状態の統合先端では、選択した文面と現在の文面の一致も検査する。記録者 metadata の JSON 数値は任意精度の表現で保持し、整数の桁あふれや小数の丸めで内容や記録の同一性を変えない。decode 後の encode で同じ canonical bytes に収束する。これは共通の論理 snapshot 表現であり、旧 `.axon/state.jsonl` の読み替えや移行ではない。
+JSONL の header は `format: "axon-lifecycle/v1"` と store ID を持ち、Entity、State、Note の行を続ける。Entity は ID 順、各 stream の記録は因果順・並行時 ID 順、object のキーは決定的な順にする。decode は header を先頭に要求し、以降の行順は自由だが、未知 format / field、重複 ID、参照切れ、因果循環、状態の根拠不整合は拒否する。終端状態の統合先端では、選択した文面と現在の文面の一致も検査する。記録者 metadata の JSON 数値は任意精度の表現で保持し、整数の桁あふれや小数の丸めで内容や記録の同一性を変えない。decode 後の encode で同じ canonical bytes に収束する。
 
 ## 検証の対応
 
-- 基本遷移: `lifecycle_rules` / `lifecycle_proposal` の七操作、`Completed` の固定。Rust は全状態 × 全操作の行列と失敗時の原子性を検査する。
-- 情報操作: `lifecycle_information` の編集制約・他 Entity 不変・Note 追記・状態と履歴の一体性。Rust は Issue / Group、全 lifecycle、同内容の独立 Note、任意の記録者情報を検査する。
-- 分岐と保存: 正本の「SQLite と file backend の実装範囲」を Rust の縦断テストで検査する。日時逆転、並行履歴、明示選択後の通常操作、不正な参照・ID 衝突、canonical bytes 往復を含む。通常操作モデルの一本の履歴へ統合を押し込めない。
+- 基本遷移: [`spec/lifecycle_rules.qnt`](../../spec/lifecycle_rules.qnt) と [`spec/issue_lifecycle.qnt`](../../spec/issue_lifecycle.qnt) の七操作、`Completed` の固定。Rust は全状態 × 全操作の行列と失敗時の原子性を検査する。
+- 情報操作: [`spec/lifecycle_information.qnt`](../../spec/lifecycle_information.qnt) の編集制約・他 Entity 不変・Note 追記・状態と履歴の一体性。Rust は Issue / Group、全 lifecycle、同内容の独立 Note、任意の記録者情報を検査する。
+- 分岐と保存: [保存と統合](../reference/storage.md) が定める実装範囲を Rust の縦断テストで検査する。日時逆転、並行履歴、明示選択後の通常操作、不正な参照・ID 衝突、canonical bytes 往復を含む。通常操作モデルの一本の履歴へ統合を押し込めない。
 
-2026-09-11 のこの境界の検証では、lmt で正本から生成し、Quint 0.32.0 / Rust backend / 8 threads / 各 10,000 traces を実行した。基本モデルは最大 80 steps、seed `2026091002`、9 invariant に反例なし・全19 witness 到達。情報モデルは最大 60 steps、seed `2026091101`、7 invariant に反例なし・全18 witness 到達。bounded random simulation の結果であり、Rust の証明や全状態の証明ではない。再現 command は正本の各モデルの検査節を参照する。
+2026-09-11 のこの境界の検証では、Quint 0.32.0 / Rust backend / 8 threads / 各 10,000 traces を実行した。`issue_lifecycle` は最大 80 steps、seed `2026091002`、9 invariant に反例なし・全19 witness 到達。`lifecycle_information` は最大 60 steps、seed `2026091101`、7 invariant に反例なし・全18 witness 到達。bounded random simulation の結果であり、Rust の証明や全状態の証明ではない。再現 command は [モデル](../../spec/README.md) を参照する。
 
 三者比較の検証は Rust の全値比較行列と分岐 fixture で行う。独立 Entity/Note、同値の並行状態先端、本文と完了の衝突、未完了側選択後の通常操作、双方向の再統合、base 記録欠落・改変、ID 衝突、全体循環、終了 Group の子流入・子孫状態差・入れ子移動を含む。通常 lifecycle モデルの意味は変更しておらず、単線履歴モデルへの merge action の追加は行わない。
