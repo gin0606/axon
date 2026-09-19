@@ -63,14 +63,21 @@ Reading and resurfacing
   candidates before evaluating their ancestors.
 
 Storage and recovery
-  init creates a new root; SQLite is the default, --backend file chooses JSONL.
+  init creates a new management root: .axon/state.jsonl and nothing for Git.
+  One storage format; no option selects the format or the location.
   init PREFIX sets the ID prefix: ASCII lowercase letters, digits and hyphens,
   starting and ending with a letter or digit. Without PREFIX, init lowercases the
   management root directory name and fails if that is not a valid prefix.
-  SQLite is shared by linked Git worktrees at the common Git directory's parent
-  .axon/axon.db. File storage is local to each worktree at .axon/state.jsonl.
-  Outside Git, the nearest management root is used. Corrupt, mixed, unmerged or
-  incomplete artifacts are errors; no fallback or automatic conversion runs.
+  Inside Git the store is untracked until you either ignore .axon/ yourself or
+  follow the steps init prints to track it; do not mix the two ways in one
+  repository. Init never creates or edits .gitignore, .gitattributes
+  or Git config, and does not stage or commit.
+  Inside Git, discovery takes the current worktree root's .axon, then the
+  main worktree's .axon, so linked worktrees without one of their own use
+  that store. Git replaces an ignored store without warning when you check
+  out or merge a commit that tracks it. Outside Git, the nearest management
+  root is used. Corrupt, unmerged or incomplete artifacts are errors; no
+  fallback or automatic conversion runs.
   help, docs, actor, completion and version do not require a store.
 
   Preserve retained artifacts on errors. Applied, Not applied and Result unknown

@@ -1,6 +1,6 @@
 # 記録者の取得と参照
 
-仕様の正本は [記録者情報](../reference/lifecycle.md#記録者情報とエージェント連携)。`crates/axon-recorder` は Axon core に依存しない Rust crate で、継承された環境だけから任意の actor と文字列 metadata を返す。CLI がこれを core の任意の `{actor, data}` に変換し、登録・状態変更・Note の Context に添える。core と SQLite は agent schema、環境検出、権限判断を持たない。
+仕様の正本は [記録者情報](../reference/lifecycle.md#記録者情報とエージェント連携)。`crates/axon-recorder` は Axon core に依存しない Rust crate で、継承された環境だけから任意の actor と文字列 metadata を返す。CLI がこれを core の任意の `{actor, data}` に変換し、登録・状態変更・Note の Context に添える。core と保存 adapter は agent schema、環境検出、権限判断を持たない。
 
 ## 取得の優先順位
 
@@ -22,4 +22,4 @@
 
 `axon log ID --recorder-details` と `axon note list ID --recorder-details` は保存時点の actor に加え `data: {...}` をJSON表記で併記する。通常表示は actor のみ。取得し直すのは保存された付随情報であり、現在の session を再探索して書き換える操作ではない。未知 actor・任意の object も core が保持した内容を表示する。記録者なしは `—`、actor のみ取得できた記録の詳細は `data: {}`。
 
-日時が一致しても記録は別IDで保存する。記録者は状態遷移の許可、排他、生存確認、再開保証には使わない。検証はcrate単体と独立SQLite fixtureで行い、実管理データを使わない。lifecycleや関係の意味を変えないためQuintの状態追加は行わない。
+日時が一致しても記録は別IDで保存する。記録者は状態遷移の許可、排他、生存確認、再開保証には使わない。検証はcrate単体と独立fixtureで行い、実管理データを使わない。lifecycleや関係の意味を変えないためQuintの状態追加は行わない。

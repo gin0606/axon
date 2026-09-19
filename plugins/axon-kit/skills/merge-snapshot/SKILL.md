@@ -1,11 +1,11 @@
 ---
 name: merge-snapshot
-description: Axonのfile snapshotを`axon merge prepare`/`axon merge check`/`axon merge apply`で統合する。通常Git操作の完遂やbackend切替には使わない。
+description: Axonの分岐したsnapshotを`axon merge prepare`/`axon merge check`/`axon merge apply`で統合する。通常Git操作の完遂や保存先の初期化には使わない。
 ---
 
-# file snapshotの統合
+# 分岐したsnapshotの統合
 
-`axon-kit:conventions` を使い、指定されたbinaryとfile保存先を固定する。実行前に [統合手順](references/workflow.md) と [保存境界](../conventions/references/storage.md)を読む。入力base/ours/theirsとoutput、workspaceを呼出し側の要求から確定し、保存先や選択を勝手に広げない。
+`axon-kit:conventions` を使い、指定されたbinaryと保存先を固定する。実行前に [統合手順](references/workflow.md) と [保存境界](../conventions/references/storage.md)を読む。入力base/ours/theirsとoutput、workspaceを呼出し側の要求から確定し、保存先や選択を勝手に広げない。
 
 `axon merge prepare --base … --ours … --theirs … --output .axon/state.jsonl --workspace …` は正本を変えず入力を保全する。非0でもworkspaceの保全入力とreportを確認し、準備を成功と誤認しない。
 

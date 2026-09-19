@@ -2,7 +2,7 @@ use super::{args::Cli, display};
 use axon::{
     Result,
     lifecycle::{Context, EntityId, Note, Snapshot},
-    location::{IntegrationChange, IntegrationFile, Location},
+    location::{Initialized, Location},
     read,
 };
 use clap::CommandFactory;
@@ -150,22 +150,53 @@ pub(super) fn branch_boundary(concurrent: bool, text: &mut String) {
         text.push_str("Concurrent branch (not ordered after the preceding record)\n");
     }
 }
-pub(super) fn file_init_output(location: &Location, files: &[IntegrationFile]) -> String {
+/// Axon leaves how Git treats the store to the user; each block reaches one of the two ways.
+pub(super) fn init_output(location: &Location, initialized: &Initialized) -> String {
     let mut text = format!(
-        "Initialized file at {}\n",
+        "Initialized {}\n",
         display::human_text(location.root.join(".axon/state.jsonl").display())
     );
-    for file in files {
-        let label = match file.change {
-            IntegrationChange::Created => "Created",
-            IntegrationChange::Appended => "Appended",
-            IntegrationChange::Unchanged => "Unchanged",
-        };
-        text.push_str(&format!(
-            "{label}: {}\n",
-            display::human_text(file.path.display())
-        ));
+    if initialized.linked_worktree {
+        text.push_str(
+            "This store belongs to this linked worktree; other worktrees do not see it.\n",
+        );
     }
+    if !initialized.git {
+        return text;
+    }
+    text.push_str(&format!(
+        "
+Unless an ignore rule of yours already covers it, Git sees .axon as untracked
+and git add -A would commit the store. Check which applies with:
+       git check-ignore -v .axon/state.jsonl
+Choose one way to use the store; do not mix the two in one repository. Run the
+steps in
+{}:
+
+To keep the store out of Git, ignore the directory by adding this line to the
+file that git rev-parse --git-path info/exclude names (this repository only) or
+to your global Git ignore file:
+       .axon/
+Linked worktrees without a .axon of their own use the main worktree's store.
+Git overwrites an ignored store without warning when you check out or merge a
+commit that tracks .axon/state.jsonl.
+
+To track the store in Git and merge it between branches instead, first remove
+any ignore rule outside .axon that covers the directory, then:
+  1. Create .axon/.gitignore with these lines:
+       *
+       !.gitignore
+       !state.jsonl
+  2. Add this line to .gitattributes in the repository root:
+       /.axon/state.jsonl merge=axon
+  3. Register the merge driver, using the absolute path of the axon binary:
+       git config merge.axon.driver \"'/absolute/path/to/axon' merge driver %O %A %B\"
+  4. Stage and commit the files:
+       git add .axon/state.jsonl .axon/.gitignore .gitattributes
+       git commit -m \"Track the Axon store\"
+",
+        display::human_text(location.root.display())
+    ));
     text
 }
 pub(super) fn declaration_ids(ids: &[(String, String)]) -> String {

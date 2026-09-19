@@ -39,7 +39,7 @@ fn run(command: Command) -> Result<Output> {
         Command::Actor => setup::actor(),
         Command::Docs { command } => setup::docs(command),
         Command::Completion { shell } => setup::completion(shell),
-        Command::Init { prefix, backend } => setup::init(prefix, backend),
+        Command::Init { prefix } => setup::init(prefix),
         Command::Storage { command } => setup::storage(command),
         Command::Merge { command } => setup::merge(command),
         Command::Import { command } => write::import(command),

@@ -9,7 +9,7 @@ description: Axonのdeclarationを`axon export`し、`axon import prepare`・`ax
 
 ## 対象と入力を固定する
 
-呼び出し側から計画の対象、declaration fileの作成・編集・書戻し、active storageへの適用の範囲を受け取る。既存fileは内容と出典を読み、元bytesとdigestを独立snapshotへ保存する。適用前には対象root、backend、完全ID、`axon import prepare`後の入力bytesとdigest、確認した差分を保持し、結果不明の照合が終わるまで破棄しない。同じfileや保存先への未調整のwriter・editor・Git操作を直列化する。
+呼び出し側から計画の対象、declaration fileの作成・編集・書戻し、active storageへの適用の範囲を受け取る。既存fileは内容と出典を読み、元bytesとdigestを独立snapshotへ保存する。適用前には対象root、保存先、完全ID、`axon import prepare`後の入力bytesとdigest、確認した差分を保持し、結果不明の照合が終わるまで破棄しない。同じfileや保存先への未調整のwriter・editor・Git操作を直列化する。
 
 - 既存計画は `axon export ID...` のstdoutを未使用のfileへ保存する。Groupは自身と終了済みを含む全子孫、Issueは単体、複数selectorは和集合。`axon export`は保存先を変更せず条件を実行しない。既存の編集fileへリダイレクトして上書きしない。
 - 新規計画は `axon docs declaration --example` から作る。これは保存先を開かない。`id: null`、`base: null`、一意の `key` を持つrecordに、呼び出し側が決めた初期状態 `undecided` または `not-started` を書く。雛形の初期状態だけから採用判断を推測しない。
@@ -30,7 +30,7 @@ description: Axonのdeclarationを`axon export`し、`axon import prepare`・`ax
 
 保存先とdeclarationは別の保存境界である。`Applied`、`Not applied`、`Result unknown` をそれぞれ読む。保存先成功後のfile更新失敗を全件未適用と扱わない。stdout失敗も未適用の根拠にしない。`axon import prepare`では保存先は未変更でもfileが適用済み・結果不明になり得る。
 
-元processが終了してから、固定したroot/backendで入力file、対象の現在値、記録を照合する。file backendでは正本の検査も行う。`axon import prepare`の結果不明ではfileの実際のID割当てと内容を調べ、確認できた割当てを保持してから続ける。`axon import apply`の結果不明または保存成功後の書戻し失敗では、適用時の確定IDと入力を保持したまま同じfileを`axon import check`する。fileが別途編集されていたら、その差分を保全し、固定した適用入力と混ぜずに照合する。
+元processが終了してから、固定したrootと保存先で入力file、対象の現在値、記録を照合する。正本の検査も行う。`axon import prepare`の結果不明ではfileの実際のID割当てと内容を調べ、確認できた割当てを保持してから続ける。`axon import apply`の結果不明または保存成功後の書戻し失敗では、適用時の確定IDと入力を保持したまま同じfileを`axon import check`する。fileが別途編集されていたら、その差分を保全し、固定した適用入力と混ぜずに照合する。
 
 編集集合の全Entityが最終値（title、description、parent、needs、kind、lifecycle。新規は割当て済みIDで存在し宣言した初期状態）に一致する場合、`axon import apply`の再実行は保存先をno-opにしてrewriteだけを完了する。未適用を確認でき、同じ効果へ収束する場合も固定入力で再試行できる。一部一致や後続の別変更は競合として返す。照合不能なら結果不明を維持し、観測と入力を返す。
 

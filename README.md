@@ -2,7 +2,7 @@
 
 IssueとGroupで個人の仕事や計画を管理するローカルCLIです。未判断、未着手、着手中、完了、取りやめのlifecycleを使い、包含・依存、再浮上条件、Noteと状態変更履歴を扱います。
 
-[使い始める](docs/guide/getting-started.md) で、このcheckoutでビルドしたbinaryを独立したSQLiteまたはfile保存先で試せます。利用中の保存先や実データは自動で切り替えません。[日常の操作](docs/guide/usage.md)、[文書一覧](docs/README.md)、[モデル](spec/README.md) も参照してください。
+[使い始める](docs/guide/getting-started.md) で、このcheckoutでビルドしたbinaryを独立した保存先で試せます。利用中の保存先や実データは自動で切り替えません。[日常の操作](docs/guide/usage.md)、[文書一覧](docs/README.md)、[モデル](spec/README.md) も参照してください。
 
 ## インストール
 
@@ -20,4 +20,4 @@ Rust 1.89以上で `cargo build --locked --bin axon` を実行し、生成され
 
 ## 開発
 
-[層構造の地図](docs/development/architecture.md)、[共通コア](docs/development/lifecycle-core.md)、[Declaration](docs/development/lifecycle-declaration.md)、[SQLite CLI](docs/development/lifecycle-sqlite.md)、[file保存とGit統合](docs/development/lifecycle-file.md)、[候補と外部条件](docs/reference/candidates.md)、[記録者連携](docs/development/lifecycle-recorder.md)、[検証方針](docs/development/verification.md)、[設計判断](docs/design/decisions.md) を参照してください。
+[層構造の地図](docs/development/architecture.md)、[共通コア](docs/development/lifecycle-core.md)、[Declaration](docs/development/lifecycle-declaration.md)、[CLIと保存の接続](docs/development/lifecycle-cli.md)、[file保存とGit統合](docs/development/lifecycle-file.md)、[候補と外部条件](docs/reference/candidates.md)、[記録者連携](docs/development/lifecycle-recorder.md)、[検証方針](docs/development/verification.md)、[設計判断](docs/design/decisions.md) を参照してください。

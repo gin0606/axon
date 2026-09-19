@@ -1,7 +1,8 @@
 use axon::{
     Result,
+    file::Store,
     lifecycle::{Context, EntityId, Recorder, Snapshot},
-    location::{Location, Store},
+    location::Location,
 };
 use chrono::Utc;
 

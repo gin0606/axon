@@ -1,8 +1,8 @@
 # 共通コア
 
-この境界が実装する契約は [lifecycle](../reference/lifecycle.md)、対応するモデルは [モデル](../../spec/README.md)。[Rust library](../../crates/axon-core/src/lib.rs) の `lifecycle` module は SQL、filesystem、外部コマンド評価を呼ばない。`Snapshot` の操作と検査、`encode` / `decode` の byte 列を、両 backend が共通で使う。`cargo test -p axon-core` で独立したメモリ上の fixture を検証する。
+この境界が実装する契約は [lifecycle](../reference/lifecycle.md)、対応するモデルは [モデル](../../spec/README.md)。[Rust library](../../crates/axon-core/src/lib.rs) の `lifecycle` module は filesystem、外部コマンド評価、Git を呼ばない。`Snapshot` の操作と検査、`encode` / `decode` の byte 列を、保存 adapter と統合が共通で使う。`cargo test -p axon-core` で独立したメモリ上の fixture を検証する。
 
-この境界は Issue / Group の登録、基本遷移、包含・dependency の変更、文面編集、Note、分岐した記録と明示選択を扱う。候補評価は `candidates`、条件設定は `set_condition`、三者比較は `MergePlan` が扱う。file adapter と `axon merge` CLI は [file保存とGit統合](lifecycle-file.md) に接続する。[SQLite CLI](lifecycle-sqlite.md) が保存 adapter と公開入口を提供する。
+この境界は Issue / Group の登録、基本遷移、包含・dependency の変更、文面編集、Note、分岐した記録と明示選択を扱う。候補評価は `candidates`、条件設定は `set_condition`、三者比較は `MergePlan` が扱う。保存 adapter と `axon merge` CLI は [file保存とGit統合](lifecycle-file.md) に接続する。[CLIと保存の接続](lifecycle-cli.md) が公開入口を示す。
 
 ## 通常操作と構造
 
@@ -38,7 +38,7 @@
 
 再統合では、選択済みの先端が相手を包含し、同じ現在値であるか、過去の統合入力に相手の先端と現在値の完全な組が残っていれば、その先端を再利用する。逆向きの取り込みでも記録を増殖させない。文面編集は履歴を作らないため、状態先端の先行関係だけでは過去の選択済み入力と見なさない。直接の `Snapshot::integrate` は引き続き明示的な統合記録を作る低水準入口である。
 
-この engine は条件文字列を保存値として比較するだけで、環境、shell、filesystem、SQLite、Git にアクセスしない。`axon merge prepare|check|apply` の公開 CLI、入力ファイルの保全と変更検知、正本への公開は file adapter 側で接続する。
+この engine は条件文字列を保存値として比較するだけで、環境、shell、filesystem、Git にアクセスしない。`axon merge prepare|check|apply` の公開 CLI、入力ファイルの保全と変更検知、正本への公開は保存 adapter 側で接続する。
 
 ## 検査と canonical codec
 

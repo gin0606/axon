@@ -7,4 +7,3 @@ pub use error::{Error, PREFIX_RULE, Result, validate_prefix};
 pub mod file;
 pub mod file_merge;
 pub mod location;
-pub mod sqlite;
