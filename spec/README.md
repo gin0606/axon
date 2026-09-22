@@ -9,7 +9,7 @@ Axon の lifecycle、包含と dependency、候補一覧の評価、文面・Not
 | [`lifecycle_rules.qnt`](lifecycle_rules.qnt) | Issue と Group が共有する状態5種類・操作7種類と、その前提・遷移先 | 状態変数と遷移の実行、包含、dependency、条件 |
 | [`issue_lifecycle.qnt`](issue_lifecycle.qnt) | 単独 Issue の lifecycle と、抽象化した再浮上条件による浮上の導出 | 包含、dependency、Group、登録操作、declaration による編集、履歴の保存、記録者による権限判定、条件の種類と設定操作、一覧、浮上と着手許可の接続、CLI、永続化 |
 | [`group_lifecycle.qnt`](group_lifecycle.qnt) | 計画と Issue の包含、所属変更、新規登録、Issue・計画間の dependency、判断候補・着手候補・着手中の導出 | 文面と記録、条件の種類・設定と評価失敗、CLI と表示、ID 発行、永続化 |
-| [`lifecycle_reachability.qnt`](lifecycle_reachability.qnt) | `group_lifecycle` の到達性を補う2つの探索入口 | 許可条件・状態更新・検査する性質（`group_lifecycle` のものをそのまま使う） |
+| [`lifecycle_reachability.qnt`](lifecycle_reachability.qnt) | `group_lifecycle` の到達性を補う3つの探索入口 | 許可条件・状態更新・検査する性質（`group_lifecycle` のものをそのまま使う） |
 | [`candidate_evaluation.qnt`](candidate_evaluation.qnt) | `axon proposals`・`axon tasks` の1回の取得における評価範囲、評価回数、結果の共有、判定失敗 | 実コマンドと shell、作業ディレクトリ、終了コードの解釈、timeout と中断、出力の上限と診断、並行実行 |
 | [`lifecycle_information.qnt`](lifecycle_information.qnt) | title・description の編集範囲、Note の追記、状態変更履歴と状態の一致 | 包含・dependency・最終確認による追加の制約、日時・理由・記録者情報、表示順、公開 ID、永続化 |
 
@@ -55,7 +55,9 @@ Quint の `import` の向きは `lifecycle_rules` を起点にした一方向で
 
 ### `lifecycle_reachability`
 
-通常の探索では、依存の追加や取りやめが先行し、複数の仕事を進行中に保った移動や、未登録枠を残した最終確認待ちに到達しにくくなります。`group_lifecycle` と同じ `init` と操作を使い、1 step で選ぶ操作だけを絞る2つの入口を持ちます。`workAndMove` は依存のない状態から採用・着手・移動・登録を選び、進行中の部分木の移動を調べます。`finishAndExtend` は採用・着手・完了・取りやめと計画1の計画0への所属を選び、計画0が最終確認可能になった時点で新規登録を選びます。許可条件・状態更新・到達目標は変えないため、invariant は `group_lifecycle` のものをそのまま指定します。これらの選び方は到達性の確認用であり、製品の workflow を定めるものでも、通常探索の分布を表すものでもありません。
+通常の探索では、依存の追加や取りやめが先行し、複数の仕事を進行中に保った移動、未登録枠を残した最終確認待ち、依存先の完了による後続の解禁に到達しにくくなります。これらは操作の順序が長く噛み合ったときにしか成立せず、通常探索では観測率が0.1%を下回ります。探索を厚くするより、選ぶ操作を絞った入口から狙うほうが、同じ試行数で桁違いに濃く検査できます。
+
+`group_lifecycle` と同じ `init` と操作を使い、1 step で選ぶ操作だけを絞る3つの入口を持ちます。`workAndMove` は依存のない状態から採用・着手・移動・登録を選び、進行中の部分木の移動を調べます。`finishAndExtend` は採用・着手・完了・取りやめと計画1の計画0への所属を選び、計画0が最終確認可能になった時点で新規登録を選びます。`dependAndFinish` は依存の追加と採用・着手・完了だけを選び、依存先の完了によって後続が着手・完了できるようになる瞬間と、全子完了を経た計画の完了を調べます。許可条件・状態更新・到達目標は変えないため、invariant は `group_lifecycle` のものをそのまま指定します。これらの選び方は到達性の確認用であり、製品の workflow を定めるものでも、通常探索の分布を表すものでもありません。
 
 ### `candidate_evaluation`
 
@@ -73,7 +75,9 @@ Quint の `import` の向きは `lifecycle_rules` を起点にした一方向で
 
 ## 再現手順
 
-以下は repository root から実行します。`quint run` は bounded random simulation であり、検査の成功は exit status だけでなく、列挙した全 invariant に反例がなく、列挙した全 witness が出力上1 trace 以上で観測されたことを確認します。
+以下は repository root から実行します。`quint run` は bounded random simulation であり、検査の成功は exit status だけでなく、列挙した全 invariant に反例がなく、列挙した全 witness が出力上1 trace 以上で観測されたことを確認します。通常探索で観測率の低い witness は補助探索が担保するため、`group_lifecycle` と `lifecycle_reachability` は合わせて1つの検査として扱い、全 witness がいずれかの探索で観測されたことを確認します。
+
+seed は固定しません。`quint run` は seed を渡すと再現のために単一スレッドで実行し、渡さないときだけ CPU 数に応じて並列化します。同じ seed を使い続けても、モデルが変わらない限り同じ経路をなぞるだけで新しい情報は得られないため、実行ごとに異なる経路を探索させます。観測される trace 数は実行ごとに変わります。反例が出た場合は `Use --seed=0x… to reproduce.` が出力されるので、その seed を指定すれば同じ反例を再現できます。`--n-threads` は既定で CPU 数になるため指定しません。
 
 ### `issue_lifecycle`
 
@@ -89,7 +93,7 @@ quint run spec/issue_lifecycle.qnt \
     wConditionRose wConditionFell wUndecidedSurfaced wNotStartedSurfaced \
     wInProgressSurfaceFell wCancelledSuppressed wCompletedSuppressed \
     wReconsiderSurfaced wReconsiderWaiting \
-  --max-samples 10000 --max-steps 80 --seed 2026091002 --backend rust --verbosity 1
+  --max-samples 100000 --max-steps 80 --backend rust --verbosity 1
 ```
 
 ### `group_lifecycle`
@@ -145,12 +149,12 @@ quint run spec/group_lifecycle.qnt \
     wNestedIssueWorking wGroupWaitsForParentStart wGroupReleaseBlockedByGroup \
     wUndecidedGroupBlocksClosure wParentCompletesAfterGroup wNestedGroupCancel \
     wIndirectContainmentCycleRejected \
-  --max-samples 10000 --max-steps 200 --seed 2026091010 --backend rust --n-threads 8 --verbosity 1
+  --max-samples 30000 --max-steps 200 --backend rust --verbosity 1
 ```
 
 ### `lifecycle_reachability`
 
-補助探索も上記と同じ全 invariant を指定します。以下はモデルから定義名を読み取って再現します。
+補助探索も上記と同じ全 invariant を指定します。各入口には、通常探索では観測率が低く、実行ごとの偶然で落ちうる witness を割り当てます。以下はモデルから定義名を読み取って再現します。
 
 ```python
 from pathlib import Path
@@ -160,14 +164,18 @@ import subprocess
 model = Path("spec/group_lifecycle.qnt").read_text()
 invariants = re.findall(r"val (inv\w+)\s*=", model)
 for step, witnesses in [
-    ("workAndMove", ["wWorkingSubtreeMove", "wNestedIssueWorking", "wBothChildrenWorking"]),
-    ("finishAndExtend", ["wAddAfterFinalCheckReady", "wParentCompletesAfterGroup", "wCompletedAllChildrenDone"]),
+    ("workAndMove", ["wWorkingSubtreeMove", "wNestedIssueWorking", "wBothChildrenWorking",
+                     "wWorkingMove", "wWorkingDetach", "wStartUnderHiddenParent"]),
+    ("finishAndExtend", ["wAddAfterFinalCheckReady", "wParentCompletesAfterGroup",
+                         "wParentHiddenKeepsWorkingChild"]),
+    ("dependAndFinish", ["wPrerequisiteCompletionUnblocksFinish", "wPrerequisiteCompletionUnblocksStart",
+                         "wCompletedAllChildrenDone"]),
 ]:
     subprocess.run([
         "quint", "run", "spec/lifecycle_reachability.qnt",
         "--step", step, "--invariants", *invariants, "--witnesses", *witnesses,
-        "--max-samples", "100", "--max-steps", "100", "--seed", "2026091011",
-        "--backend", "rust", "--n-threads", "8", "--verbosity", "1",
+        "--max-samples", "2000", "--max-steps", "100",
+        "--backend", "rust", "--verbosity", "1",
     ], check=True)
 ```
 
@@ -189,8 +197,8 @@ subprocess.run([
     "quint", "run", "spec/candidate_evaluation.qnt",
     "--init", "queryInit", "--step", "queryStep",
     "--invariants", *invariants, "--witnesses", *witnesses,
-    "--max-samples", "10000", "--max-steps", "60", "--seed", "2026091102",
-    "--backend", "rust", "--n-threads", "8", "--verbosity", "1",
+    "--max-samples", "30000", "--max-steps", "60",
+    "--backend", "rust", "--verbosity", "1",
 ], check=True)
 ```
 
@@ -211,21 +219,25 @@ witnesses = re.findall(r"val (w\w+)\s*=", source)
 subprocess.run([
     "quint", "run", "spec/lifecycle_information.qnt",
     "--invariants", *invariants, "--witnesses", *witnesses,
-    "--max-samples", "10000", "--max-steps", "60", "--seed", "2026091101",
-    "--backend", "rust", "--n-threads", "8", "--verbosity", "1",
+    "--max-samples", "100000", "--max-steps", "60",
+    "--backend", "rust", "--verbosity", "1",
 ], check=True)
 ```
 
 ## 検証結果
 
-いずれも bounded random simulation の結果であり、全状態の証明でも、必ず完了することの保証でもありません。どのモデルも、完了への到達を強制する公平性は仮定しません。
+いずれも bounded random simulation の結果であり、全状態の証明でも、必ず完了することの保証でもありません。どのモデルも、完了への到達を強制する公平性は仮定しません。seed を固定しないため、観測される trace 数は実行ごとに変わります。ここに残すのは実行条件と判定で、trace 数は witness の到達しやすさの目安として添えます。
 
-- `issue_lifecycle`: 2026-09-10、Quint 0.32.0、Rust backend、10,000 traces、最大80 steps、入力 seed `2026091002`。型検査が成功し、9 invariant に反例はなく、19 witness はすべて1 trace 以上で観測されました。
-- `group_lifecycle`: 2026-09-10、Quint 0.32.0、Rust backend、8 threads、10,000 traces、最大200 steps、入力 seed `2026091010` で通常探索を実行。34 invariant に反例はなく、97 witness 中96 witness が1 trace 以上で観測されました。計画の最終確認待ちは1,144 traces、計画の完了による後続着手の解禁は104 traces、別の枝を経由する循環の拒否は140 traces で観測されました。進行中の部分木移動は通常探索では未到達でした。
-- `lifecycle_reachability`: 2026-09-10、同じ34 invariant、各100 traces、最大100 steps、入力 seed `2026091011`、同じ backend・thread 数で実行し、反例はありませんでした。`workAndMove` で進行中の部分木移動を82 traces、`finishAndExtend` で最終確認待ちからの追加を88 traces、完了した子計画を含む親の完了を78 traces で観測しました。同入口の `wCompletedAllChildrenDone` は未到達でしたが、通常探索では19 traces で観測されています。通常探索と補助探索を合わせ、全97 witness がいずれかの探索で1 trace 以上に到達しました。補助入口は到達性の確認用に操作を選び分けており、通常探索の分布とは区別します。
-- `candidate_evaluation`: 2026-09-11、Quint 0.32.0、Rust backend、8 threads、10,000 traces、最大60 steps、入力 seed `2026091102`。15 invariant に反例はなく、27 witness はすべて1 trace 以上で観測されました。依存未完了の未着手の表示は1,268 traces、親の着手待ちの表示は3,539 traces、条件が未成立でも着手中を含む結果は23 traces、着手中自身の不要な条件評価の省略は164 traces で観測されました。
-- `lifecycle_information`: 2026-09-11、Quint 0.32.0、Rust backend、8 threads、10,000 traces、最大60 steps、入力 seed `2026091101`。7 invariant に反例はなく、18 witness はすべて1 trace 以上で観測されました。着手中の文面編集は2,591 traces、再検討後の編集は6,590 traces、完了後の Note 追加は922 traces で観測されました。
+以下は 2026-09-22、Quint 0.32.0、Rust backend、並列実行、seed 未固定での結果です。5モデルの型検査はいずれも成功しました。
+
+- `issue_lifecycle`: 100,000 traces、最大80 steps。9 invariant に反例はなく、19 witness はすべて観測されました。最も少ない進行中の浮上の消失で28.3%です。
+- `group_lifecycle`: 30,000 traces、最大200 steps。34 invariant に反例はなく、97 witness 中96 witness を観測しました。進行中の部分木移動は通常探索では未到達で、補助探索が担保します。通常探索だけが到達する witness のうち最も少ないのは、計画の完了による後続着手の解禁で291 traces、次いで別の枝を経由する循環の拒否で408 traces です。
+- `lifecycle_reachability`: 同じ34 invariant を指定し、3入口を各2,000 traces、最大100 steps で実行して反例はありませんでした。`workAndMove` は進行中の部分木移動を1,635 traces、`finishAndExtend` は最終確認待ちからの追加を1,798 traces、`dependAndFinish` は依存先の完了による後続の完了解禁を85 traces、全子完了を経た計画の完了を2,000 traces で観測しました。通常探索と補助探索を合わせ、全97 witness がいずれかの探索で1 trace 以上に到達しました。補助入口は到達性の確認用に操作を選び分けており、通常探索の分布とは区別します。
+- `candidate_evaluation`: 30,000 traces、最大60 steps。15 invariant に反例はなく、27 witness はすべて観測されました。最も少ない評価失敗後の着手で50 traces です。
+- `lifecycle_information`: 100,000 traces、最大60 steps。7 invariant に反例はなく、18 witness はすべて観測されました。最も少ない Release で9,248 traces です。
+
+各モデルの traces 数は、補助探索が担保しない witness が偶然に左右されずに観測される水準を下限とし、そのうえで invariant を叩く厚みを加えて決めています。観測率の低い witness を通常探索の traces 数で拾おうとするより、補助入口を足すほうが確実です。
 
 ## 更新するとき
 
-状態・遷移・初期状態・モデルの対象範囲を変えるときは、該当するモデルを更新して再検証し、確定した意味を [lifecycle](../docs/reference/lifecycle.md) や [候補と外部条件](../docs/reference/candidates.md) などの契約文書へ反映してから実装へ進みます。再現条件とその結果はこのファイルの「検証結果」に、時点と条件を明記して残します。手順の全体は [検証方針](../docs/development/verification.md) にあります。
+状態・遷移・初期状態・モデルの対象範囲を変えるときは、該当するモデルを更新して再検証し、確定した意味を [lifecycle](../docs/reference/lifecycle.md) や [候補と外部条件](../docs/reference/candidates.md) などの契約文書へ反映してから実装へ進みます。実行条件とその結果はこのファイルの「検証結果」に、時点と条件を明記して残します。手順の全体は [検証方針](../docs/development/verification.md) にあります。
