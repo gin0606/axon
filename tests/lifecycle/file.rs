@@ -297,7 +297,17 @@ fn tracked_worktrees_are_isolated_and_the_git_driver_merges_notes() {
     }
     git(
         &a.0,
-        &["-c", "core.hooksPath=/dev/null", "merge", "--no-edit", "b"],
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "merge",
+            "--no-edit",
+            "b",
+        ],
     );
     assert_eq!(
         snapshot(&a)
