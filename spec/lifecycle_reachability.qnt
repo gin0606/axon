@@ -43,4 +43,18 @@ module lifecycle_reachability {
       changeGroupCondition(group, satisfied),
     }
   }
+
+  // 依存を張ったうえで採用・着手・完了だけを選び、依存先の完了による後続の解禁と、
+  // 全子完了を経た計画の完了へ到達させる。移動・取りやめ・再検討・最終確認の不合格は選ばない。
+  action dependAndFinish = {
+    nondet group = GROUPS.oneOf()
+    nondet source = ISSUES.oneOf()
+    nondet target = ISSUES.oneOf()
+    nondet op = Set(Accept, Start, Complete).oneOf()
+    any {
+      addDependency(IssueRef(source), IssueRef(target)),
+      performIssue(source, op),
+      performGroup(group, op, true),
+    }
+  }
 }
