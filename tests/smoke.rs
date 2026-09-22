@@ -1,4 +1,4 @@
-use axon::{lifecycle::*, sqlite::Store};
+use axon::{file, lifecycle::*, location::Location};
 use chrono::Utc;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -37,8 +37,14 @@ impl Fixture {
     fn init(&self) {
         self.ok(&["init", "t"]);
     }
-    fn db(&self) -> PathBuf {
-        self.0.join(".axon/axon.db")
+    fn state(&self) -> PathBuf {
+        self.0.join(".axon/state.jsonl")
+    }
+    fn store(&self) -> file::Store {
+        Location::discover(&self.0, false).unwrap().open().unwrap()
+    }
+    fn snapshot(&self) -> Snapshot {
+        self.store().read().unwrap().1
     }
 }
 impl Drop for Fixture {
@@ -71,21 +77,77 @@ fn failure(output: Output) -> String {
     assert!(output.stdout.is_empty());
     String::from_utf8(output.stderr).unwrap()
 }
-fn git(path: &Path, args: &[&str]) {
-    let mut cmd = Command::new("git");
+/// A `git` that ignores the caller's repository selection and configuration.
+fn isolated_git(path: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.current_dir(path);
     for (name, _) in std::env::vars_os() {
         if name.to_string_lossy().starts_with("GIT_") {
-            cmd.env_remove(name);
+            command.env_remove(name);
         }
     }
-    let out = cmd
-        .current_dir(path)
+    command
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .args(args)
-        .output()
-        .unwrap();
-    success(out);
+        .env("GIT_CONFIG_SYSTEM", "/dev/null");
+    command
+}
+fn git_output(path: &Path, args: &[&str]) -> Output {
+    isolated_git(path).args(args).output().unwrap()
+}
+fn git(path: &Path, args: &[&str]) {
+    success(git_output(path, args));
+}
+/// A commit with a fixed identity and no hooks; `args` follows `commit`.
+fn git_commit(path: &Path, args: &[&str]) {
+    let mut all = vec![
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "commit",
+    ];
+    all.extend_from_slice(args);
+    git(path, &all);
+}
+fn merge_driver() -> String {
+    format!("'{}' merge driver %O %A %B", env!("CARGO_BIN_EXE_axon"))
+}
+/// The ignored operation, as `axon init` displays it: the shown line, added to the ignore file
+/// of this repository alone. The isolated template may carry no `info` directory yet.
+fn ignore_store(root: &Path, line: &str) {
+    let shown =
+        String::from_utf8(git_output(root, &["rev-parse", "--git-path", "info/exclude"]).stdout)
+            .unwrap();
+    let exclude = root.join(shown.trim());
+    fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+    let mut rules = fs::read_to_string(&exclude).unwrap_or_default();
+    rules.push_str(line);
+    rules.push('\n');
+    fs::write(&exclude, rules).unwrap();
+}
+/// The tracked operation, whose steps `axon init` prints instead of applying them.
+fn track_store(root: &Path) {
+    fs::write(
+        root.join(".axon/.gitignore"),
+        "*\n!.gitignore\n!state.jsonl\n",
+    )
+    .unwrap();
+    let attributes = root.join(".gitattributes");
+    let mut rules = fs::read_to_string(&attributes).unwrap_or_default();
+    rules.push_str("/.axon/state.jsonl merge=axon\n");
+    fs::write(&attributes, rules).unwrap();
+    git(root, &["config", "merge.axon.driver", &merge_driver()]);
+    git(
+        root,
+        &[
+            "add",
+            ".axon/state.jsonl",
+            ".axon/.gitignore",
+            ".gitattributes",
+        ],
+    );
 }
 fn context() -> Context {
     Context {
@@ -188,9 +250,9 @@ fn registration_to_group_completion_and_records() {
     let list = f.ok(&["list"]);
     assert!(list.find(&group) < list.find(&dependency));
     assert!(list.find(&dependency) < list.find(&issue));
-    let bytes = fs::read(f.db()).unwrap();
+    let bytes = fs::read(f.state()).unwrap();
     failure(f.run(&["reconsider", &issue]));
-    assert_eq!(bytes, fs::read(f.db()).unwrap());
+    assert_eq!(bytes, fs::read(f.state()).unwrap());
 }
 #[test]
 fn lifecycle_and_relation_edits_use_common_guards() {
@@ -323,13 +385,13 @@ fn concurrent_start_has_one_winner_and_other_writes_survive() {
     for child in children {
         success(child.wait_with_output().unwrap());
     }
-    let (_, snapshot) = Store::open(&f.db()).unwrap().read().unwrap();
+    let snapshot = f.snapshot();
     assert_eq!(snapshot.notes(&eid(&id)).unwrap().len(), 12);
     assert_eq!(snapshot.entities().count(), 9);
     assert_eq!(snapshot.history(&eid(&id)).unwrap().len(), 2);
 }
 #[test]
-fn sqlite_roundtrip_preserves_branches_integration_and_failed_changes() {
+fn stored_snapshot_preserves_branches_integration_and_failed_changes() {
     let f = Fixture::new();
     let mut base = Snapshot::new(StoreId::generate());
     base.create(eid("item"), Kind::Issue, current("item"), context())
@@ -357,16 +419,8 @@ fn sqlite_roundtrip_preserves_branches_integration_and_failed_changes() {
         )
         .unwrap();
     fs::create_dir(f.0.join(".axon")).unwrap();
-    let path = f.db();
-    let mut store = Store::create(&path, "branch", &base).unwrap();
-    store
-        .update(|_, snapshot| {
-            *snapshot = merged.clone();
-            Ok(())
-        })
-        .unwrap();
-    drop(store);
-    let mut store = Store::open(&path).unwrap();
+    fs::write(f.state(), file::encode("branch", &merged).unwrap()).unwrap();
+    let mut store = f.store();
     assert_eq!(store.read().unwrap().1, merged);
     let log = f.ok(&["log", "item"]);
     assert!(log.contains("Concurrent branch"));
@@ -386,10 +440,10 @@ fn sqlite_roundtrip_preserves_branches_integration_and_failed_changes() {
     let barrier = Arc::new(Barrier::new(2));
     let handles: Vec<_> = (0..2)
         .map(|_| {
-            let path = path.clone();
+            let root = f.0.clone();
             let barrier = barrier.clone();
             std::thread::spawn(move || {
-                let mut store = Store::open(&path).unwrap();
+                let mut store = Location::discover(&root, false).unwrap().open().unwrap();
                 barrier.wait();
                 store
                     .update(|_, s| {
@@ -409,36 +463,27 @@ fn sqlite_roundtrip_preserves_branches_integration_and_failed_changes() {
     );
 }
 #[test]
-fn unsupported_unknown_corrupt_and_mixed_stores_are_rejected_without_changes() {
-    for kind in ["wrong-version", "unknown", "corrupt", "mixed", "pending"] {
+fn unsupported_corrupt_and_incomplete_stores_are_rejected_without_changes() {
+    for kind in ["wrong-format", "corrupt", "pending"] {
         let f = Fixture::new();
         fs::create_dir(f.0.join(".axon")).unwrap();
         match kind {
-            "wrong-version" => {
-                let c = rusqlite::Connection::open(f.db()).unwrap();
-                c.execute_batch("PRAGMA user_version=99; CREATE TABLE records (id TEXT)")
-                    .unwrap();
+            "wrong-format" => {
+                let valid =
+                    String::from_utf8(file::encode("t", &Snapshot::empty()).unwrap()).unwrap();
+                fs::write(f.state(), valid.replacen("axon-file/v1", "axon-file/v2", 1)).unwrap();
             }
-            "unknown" => {
-                drop(Store::create(&f.db(), "t", &Snapshot::empty()).unwrap());
-                let c = rusqlite::Connection::open(f.db()).unwrap();
-                c.pragma_update(None, "user_version", 999).unwrap();
-            }
-            "corrupt" => fs::write(f.db(), b"invalid database").unwrap(),
-            "mixed" => {
-                drop(Store::create(&f.db(), "t", &Snapshot::empty()).unwrap());
-                fs::write(f.0.join(".axon/state.jsonl"), "invalid file").unwrap();
-            }
+            "corrupt" => fs::write(f.state(), b"invalid snapshot").unwrap(),
             "pending" => {
                 fs::write(f.0.join(".axon/init.pending"), "interrupted").unwrap();
-                fs::write(f.db(), "").unwrap();
+                fs::write(f.state(), "").unwrap();
             }
             _ => unreachable!(),
         }
-        let before = fs::read(f.db()).unwrap();
+        let before = fs::read(f.state()).unwrap();
         failure(f.run(&["list"]));
         failure(f.run(&["init"]));
-        assert_eq!(before, fs::read(f.db()).unwrap(), "{kind}");
+        assert_eq!(before, fs::read(f.state()).unwrap(), "{kind}");
     }
 }
 #[test]
@@ -461,63 +506,6 @@ fn discovery_outside_git_and_git_boundary() {
     assert!(f.ok(&["list"]).contains(&id));
 }
 #[test]
-fn linked_worktrees_share_sqlite_and_init_is_new_only() {
-    let f = Fixture::new();
-    let main = f.0.join("main");
-    let linked = f.0.join("linked");
-    fs::create_dir(&main).unwrap();
-    git(&main, &["init", "--quiet"]);
-    git(
-        &main,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "-c",
-            "core.hooksPath=/dev/null",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "fixture",
-        ],
-    );
-    git(
-        &main,
-        &[
-            "-c",
-            "core.hooksPath=/dev/null",
-            "worktree",
-            "add",
-            "--quiet",
-            "-b",
-            "linked",
-            linked.to_str().unwrap(),
-        ],
-    );
-    success(command(&linked).args(["init", "shared"]).output().unwrap());
-    assert!(main.join(".axon/axon.db").is_file());
-    assert!(!linked.join(".axon/axon.db").exists());
-    let id = success(
-        command(&linked)
-            .args(["capture", "--accept", "--title", "shared"])
-            .output()
-            .unwrap(),
-    )
-    .split_whitespace()
-    .next()
-    .unwrap()
-    .to_string();
-    assert!(success(command(&main).args(["list"]).output().unwrap()).contains(&id));
-    failure(command(&main).args(["init"]).output().unwrap());
-    failure(command(&linked).args(["init"]).output().unwrap());
-    assert!(!main.join(".gitattributes").exists());
-    assert!(!main.join(".axon/.gitignore").exists());
-    fs::create_dir_all(linked.join(".axon")).unwrap();
-    fs::write(linked.join(".axon/state.jsonl"), "").unwrap();
-    assert!(failure(command(&linked).args(["list"]).output().unwrap()).contains("mixed"));
-}
-#[test]
 fn concurrent_initialization_never_replaces_a_store() {
     let f = Fixture::new();
     let children: Vec<_> = (0..4)
@@ -536,7 +524,7 @@ fn concurrent_initialization_never_replaces_a_store() {
         .collect();
     assert_eq!(results.iter().filter(|o| o.status.success()).count(), 1);
     assert!(!f.0.join(".axon/init.pending").exists());
-    Store::open(&f.db()).unwrap();
+    f.store();
 }
 #[test]
 fn broken_pipe_is_success_after_storage_is_applied() {
@@ -574,20 +562,12 @@ fn git_repository_paths_keep_trailing_whitespace() {
     );
     assert!(success(command(&plain).args(["list"]).output().unwrap()).is_empty());
     assert!(success(command(&spaced).args(["list"]).output().unwrap()).contains("only in spaced"));
-    assert_ne!(
-        Store::open(&plain.join(".axon/axon.db"))
-            .unwrap()
-            .read()
-            .unwrap()
-            .1
-            .store(),
-        Store::open(&spaced.join(".axon/axon.db"))
-            .unwrap()
-            .read()
-            .unwrap()
-            .1
-            .store()
-    );
+    let identity = |root: &Path| {
+        let (_, snapshot) =
+            file::decode(&fs::read(root.join(".axon/state.jsonl")).unwrap()).unwrap();
+        snapshot.store().clone()
+    };
+    assert_ne!(identity(&plain), identity(&spaced));
 }
 
 #[cfg(unix)]
@@ -599,7 +579,7 @@ fn broken_git_marker_blocks_ancestor_storage_fallback() {
     let nested = f.0.join("nested");
     fs::create_dir(&nested).unwrap();
     std::os::unix::fs::symlink("missing-git-directory", nested.join(".git")).unwrap();
-    let before = fs::read(f.db()).unwrap();
+    let before = fs::read(f.state()).unwrap();
     for args in [
         vec!["list"],
         vec!["init"],
@@ -609,7 +589,7 @@ fn broken_git_marker_blocks_ancestor_storage_fallback() {
             failure(command(&nested).args(args).output().unwrap()).contains("Git discovery failed")
         );
     }
-    assert_eq!(before, fs::read(f.db()).unwrap());
+    assert_eq!(before, fs::read(f.state()).unwrap());
 }
 #[cfg(unix)]
 #[test]
@@ -624,7 +604,7 @@ fn initialization_path_never_emits_terminal_controls() {
     let out = success(command(&path).args(["init", "repo"]).output().unwrap());
     assert!(!out.contains('\x1b'));
     assert!(out.contains("repo\\x1b[2J"));
-    assert!(path.join(".axon/axon.db").is_file());
+    assert!(path.join(".axon/state.jsonl").is_file());
 }
 
 #[cfg(unix)]
@@ -636,7 +616,7 @@ fn git_cannot_skip_a_broken_inner_marker_to_an_outer_repository() {
     let nested = f.0.join("nested");
     fs::create_dir(&nested).unwrap();
     std::os::unix::fs::symlink("missing", nested.join(".git")).unwrap();
-    let before = fs::read(f.db()).unwrap();
+    let before = fs::read(f.state()).unwrap();
     for args in [
         vec!["list"],
         vec!["init"],
@@ -646,7 +626,7 @@ fn git_cannot_skip_a_broken_inner_marker_to_an_outer_repository() {
             failure(command(&nested).args(args).output().unwrap()).contains("Git discovery failed")
         );
     }
-    assert_eq!(before, fs::read(f.db()).unwrap());
+    assert_eq!(before, fs::read(f.state()).unwrap());
 }
 #[test]
 fn bare_repository_is_a_boundary_without_a_dot_git_entry() {
@@ -655,7 +635,7 @@ fn bare_repository_is_a_boundary_without_a_dot_git_entry() {
     let bare = f.0.join("bare.git");
     fs::create_dir(&bare).unwrap();
     git(&bare, &["init", "--bare", "--quiet"]);
-    let before = fs::read(f.db()).unwrap();
+    let before = fs::read(f.state()).unwrap();
     for args in [
         vec!["list"],
         vec!["init"],
@@ -665,29 +645,9 @@ fn bare_repository_is_a_boundary_without_a_dot_git_entry() {
             failure(command(&bare).args(args).output().unwrap()).contains("Git discovery failed")
         );
     }
-    assert_eq!(before, fs::read(f.db()).unwrap());
+    assert_eq!(before, fs::read(f.state()).unwrap());
 }
 
-#[test]
-fn unknown_trigger_with_sqlite_like_name_cannot_destroy_the_snapshot() {
-    let f = Fixture::new();
-    f.init();
-    f.accepted("retained");
-    let connection = rusqlite::Connection::open(f.db()).unwrap();
-    connection.execute_batch("CREATE TRIGGER sqliteX AFTER UPDATE ON lifecycle_store BEGIN DELETE FROM lifecycle_store; END").unwrap();
-    drop(connection);
-    let before = fs::read(f.db()).unwrap();
-    assert!(
-        failure(f.run(&["capture", "--accept", "--title", "must fail"]))
-            .contains("unexpected SQLite schema")
-    );
-    assert_eq!(before, fs::read(f.db()).unwrap());
-    let connection = rusqlite::Connection::open(f.db()).unwrap();
-    let count: i64 = connection
-        .query_row("SELECT count(*) FROM lifecycle_store", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(count, 1);
-}
 #[test]
 fn inherited_git_overrides_do_not_select_a_foreign_store() {
     let f = Fixture::new();
@@ -695,7 +655,7 @@ fn inherited_git_overrides_do_not_select_a_foreign_store() {
     fs::create_dir(&repo).unwrap();
     git(&repo, &["init", "--quiet"]);
     success(command(&repo).args(["init"]).output().unwrap());
-    let before = fs::read(repo.join(".axon/axon.db")).unwrap();
+    let before = fs::read(repo.join(".axon/state.jsonl")).unwrap();
     let outside = f.0.join("outside");
     fs::create_dir(&outside).unwrap();
     let out = command(&outside)
@@ -706,7 +666,7 @@ fn inherited_git_overrides_do_not_select_a_foreign_store() {
         .output()
         .unwrap();
     assert!(failure(out).contains("not initialized"));
-    assert_eq!(before, fs::read(repo.join(".axon/axon.db")).unwrap());
+    assert_eq!(before, fs::read(repo.join(".axon/state.jsonl")).unwrap());
     success(
         command(&outside)
             .env("GIT_DIR", repo.join(".git"))
@@ -714,8 +674,8 @@ fn inherited_git_overrides_do_not_select_a_foreign_store() {
             .output()
             .unwrap(),
     );
-    assert!(outside.join(".axon/axon.db").is_file());
-    assert_eq!(before, fs::read(repo.join(".axon/axon.db")).unwrap());
+    assert!(outside.join(".axon/state.jsonl").is_file());
+    assert_eq!(before, fs::read(repo.join(".axon/state.jsonl")).unwrap());
 }
 
 fn set_condition(f: &Fixture, id: &str, command: &str) {
@@ -847,13 +807,13 @@ fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
     f.ok(&["condition", "unset", &id]);
     f.ok(&["note", "add", &id, "-m", "supplement"]);
     assert!(!f.0.join("forbidden").exists());
-    let before = Store::open(&f.db()).unwrap().read().unwrap().1;
+    let before = f.snapshot();
     assert!(f.ok(&["tasks"]).is_empty());
     assert!(f.ok(&["proposals"]).is_empty());
     assert!(
         failure(f.run(&["condition", "set", &id, "--command", " "])).contains("empty condition")
     );
-    assert_eq!(Store::open(&f.db()).unwrap().read().unwrap().1, before);
+    assert_eq!(f.snapshot(), before);
 }
 
 #[test]
@@ -868,7 +828,7 @@ fn condition_results_diagnostics_and_repair_do_not_publish_partial_rows() {
         &id,
         "printf '\\033bad\\377'; printf problem >&2; exit 23",
     );
-    let before = Store::open(&f.db()).unwrap().read().unwrap().1;
+    let before = f.snapshot();
     let error = failure(f.run(&["tasks", "--trace-conditions"]));
     for text in [
         &id,
@@ -880,7 +840,7 @@ fn condition_results_diagnostics_and_repair_do_not_publish_partial_rows() {
         assert!(error.contains(text), "{error}");
     }
     assert!(!error.contains("Condition trace:"));
-    assert_eq!(Store::open(&f.db()).unwrap().read().unwrap().1, before);
+    assert_eq!(f.snapshot(), before);
     set_condition(&f, &id, "exit 1");
     let out = f.run(&["tasks", "--trace-conditions"]);
     assert!(!String::from_utf8(out.stdout).unwrap().contains(&id));
@@ -962,7 +922,7 @@ fn condition_timeout_and_ctrl_c_terminate_shell_and_descendants() {
     let id = f.accepted("interrupt");
     let script = "echo $$ > shell-pid; sh -c 'trap \"\" TERM; echo $$ > descendant-pid; while :; do :; done' </dev/null >/dev/null 2>/dev/null & wait";
     set_condition(&f, &id, script);
-    let before = Store::open(&f.db()).unwrap().read().unwrap().1;
+    let before = f.snapshot();
     for interrupt in [false, true] {
         let mut cmd = f.command();
         cmd.args([
@@ -998,7 +958,7 @@ fn condition_timeout_and_ctrl_c_terminate_shell_and_descendants() {
         );
         assert_process_gone(wait_pid(&f.0.join("shell-pid")));
         assert_process_gone(wait_pid(&f.0.join("descendant-pid")));
-        assert_eq!(Store::open(&f.db()).unwrap().read().unwrap().1, before);
+        assert_eq!(f.snapshot(), before);
     }
 }
 
@@ -1198,9 +1158,8 @@ fn recorder_is_automatic_durable_optional_and_not_an_operation_guard() {
     assert!(details.contains("another-worker  data: {}"));
     let notes = f.ok(&["note", "list", id, "--recorder-details"]);
     assert!(notes.contains("codex  data: {}"));
-    let store = Store::open(&f.db()).unwrap();
-    let (_, snapshot) = store.read().unwrap();
-    let history = snapshot.history(&eid(id)).unwrap();
+    let history = f.snapshot();
+    let history = history.history(&eid(id)).unwrap();
     assert_eq!(history.len(), 3);
     assert!(history[1].context.recorder.is_none());
     assert_eq!(
@@ -1294,7 +1253,7 @@ fn recorder_details_preserve_unknown_json_and_escape_terminal_controls() {
     let f = Fixture::new();
     f.init();
     let id = f.accepted("unknown metadata");
-    let mut store = Store::open(&f.db()).unwrap();
+    let mut store = f.store();
     store
         .update(|_, snapshot| {
             let mut ctx = context();
@@ -1324,11 +1283,14 @@ fn recorder_help_is_available_without_a_store() {
     for args in [vec!["log", "--help"], vec!["note", "list", "--help"]] {
         assert!(f.ok(&args).contains("--recorder-details"));
     }
-    assert!(!f.db().exists());
+    assert!(!f.state().exists());
 }
 
 #[path = "lifecycle/file.rs"]
 mod file_lifecycle;
+
+#[path = "lifecycle/location.rs"]
+mod location;
 
 #[path = "lifecycle/workflow.rs"]
 mod workflow;

@@ -34,7 +34,7 @@ Groupの完了前には目的・完了条件、全子孫の終了、成果の統
 
 ## 計画をまとめて登録・編集する
 
-一括操作には `axon-declaration/v1` の YAML を使います。SQLite・file の両方式で手順は同じです。形式の詳細は `axon docs declaration` と [計画全体の取得と一括編集](../reference/declaration.md) を参照してください。
+一括操作には `axon-declaration/v1` の YAML を使います。形式の詳細は `axon docs declaration` と [計画全体の取得と一括編集](../reference/declaration.md) を参照してください。
 
 ### 新規計画を登録する
 
@@ -79,9 +79,9 @@ Groupは自身と終了済みを含む全子孫、Issueは単体を取得しま�
 
 ## 並行作業と引継ぎ
 
-SQLiteを共有するworktreeでは、同じ未着手Entityへの並行`axon start`は一つだけ成功します。失敗側は`axon show`・`axon log`で現在値を読み、実行中のworkerと調整してください。記録者情報を所有権として扱わず、作業終了を確認してから継続・`axon release`を判断します。
+無視する運用では全worktreeがmain worktreeの保存先を共有するため、同じ未着手Entityへの並行`axon start`は一つだけ成功します。失敗側は`axon show`・`axon log`で現在値を読み、実行中のworkerと調整してください。記録者情報を所有権として扱わず、作業終了を確認してから継続・`axon release`を判断します。
 
-fileの別worktreeでは同じEntityに対してそれぞれ`axon start`を実行できます。Gitで取り込むまで互いの作業は見えません。異なる現在値の衝突はEntity全体で選び、両側のNoteと実操作の履歴を保持します。同じworktreeでGit更新とAxon書込みを並行しないでください。統合後は [明示的な統合](../development/lifecycle-file.md#明示的な統合) に従って検査・stageし、`axon show`・Note・logで成果を確認して通常操作へ戻ります。
+追跡する運用ではworktreeごとに正本が分かれるため、同じEntityに対してそれぞれ`axon start`を実行できます。Gitで取り込むまで互いの作業は見えません。異なる現在値の衝突はEntity全体で選び、両側のNoteと実操作の履歴を保持します。同じworktreeでGit更新とAxon書込みを並行しないでください。統合後は [明示的な統合](../development/lifecycle-file.md#明示的な統合) に従って検査・stageし、`axon show`・Note・logで成果を確認して通常操作へ戻ります。
 
 ## 再浮上
 

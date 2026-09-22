@@ -9,10 +9,6 @@ pub enum Error {
     PublicationUnknown(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("SQLite: {0}")]
-    Sql(#[from] rusqlite::Error),
-    #[error("Result unknown: SQLite commit failed: {0}; inspect saved state before retrying")]
-    Commit(rusqlite::Error),
     #[error(transparent)]
     Core(#[from] lifecycle::Error),
 }

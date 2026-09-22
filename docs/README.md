@@ -8,10 +8,10 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 
 | 文書 | 読む目的 |
 | --- | --- |
-| [使い始める](guide/getting-started.md) | 試用手順、保存方式の選択、同梱skill |
+| [使い始める](guide/getting-started.md) | 試用手順、保存先の作り方、同梱skill |
 | [日常の操作](guide/usage.md) | 候補、状態変更、Group最終確認、記録参照、計画の一括登録・編集 |
 | [状態と用語](guide/concepts.md) | lifecycleと関係 |
-| [保存先とworktree](guide/storage.md) | SQLite共有、fileのworktree隔離、探索・初期化の境界 |
+| [保存先とworktree](guide/storage.md) | 無視する運用と追跡する運用、探索・初期化の境界 |
 | [Agentからのアクセス](guide/codex.md) | ホスト権限と保存先 |
 | [記録者連携](development/lifecycle-recorder.md) | 自動取得と詳細参照 |
 
@@ -22,7 +22,7 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 | [lifecycle](reference/lifecycle.md) | 状態と遷移、再浮上条件、計画と包含、dependency、候補集合、文面・Note・状態変更履歴・記録者 |
 | [候補と外部条件](reference/candidates.md) | `axon proposals|tasks`の評価と、条件コマンドの実行 |
 | [CLI入出力](reference/cli.md) | ID・引数・一覧と詳細・英語表示・装飾・保存結果 |
-| [保存と統合](reference/storage.md) | backend、保存先の探索と初期化、分岐した記録の統合 |
+| [保存と統合](reference/storage.md) | 保存形式、保存先の探索と初期化、分岐した記録の統合 |
 | [一括declaration](reference/declaration.md) | 計画全体の取得と一括編集のfile形式、`axon export`・`axon import` |
 
 ## 開発者向け
@@ -33,13 +33,13 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 | [層構造の地図](development/architecture.md) | crate・module の配置、依存方向、各層のテスト入口 |
 | [共通コア](development/lifecycle-core.md) | 通常操作、記録、codec、三者比較 |
 | [Declaration](development/lifecycle-declaration.md) | strict YAML、`axon export`・`axon import`、共通コアとfile書戻しの境界 |
-| [SQLite CLI](development/lifecycle-sqlite.md) | 公開操作とSQLite adapter |
-| [file保存とGit統合](development/lifecycle-file.md) | writer、worktree、`axon merge` CLI・driver |
+| [CLIと保存の接続](development/lifecycle-cli.md) | 公開操作と保存adapterの接続 |
+| [file保存とGit統合](development/lifecycle-file.md) | 初期化と探索、writer、worktree、`axon merge` CLI・driver |
 | [記録者連携](development/lifecycle-recorder.md) | 自動取得と保存済み詳細 |
 | [検証方針](development/verification.md) | CI、declarationを含む独立fixture、モデル検証の分担 |
 | [設計判断](design/decisions.md) | 現在の契約がその形になっている理由と、採らなかった案 |
 
-保存schemaは [SQLite adapter](../src/sqlite.rs) と [file adapter](../src/file.rs)、Usageは [Clap定義](../src/cli/args.rs) を確認します。
+保存形式は [file adapter](../src/file.rs)、保存先の探索と初期化は [location](../src/location.rs)、Usageは [Clap定義](../src/cli/args.rs) を確認します。
 
 ## 更新するとき
 
@@ -59,7 +59,7 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 3. コマンドという手段ではなくlifecycleの遷移概念を指すときは、specの遷移名`Accept`・`Withdraw`・`Start`・`Release`・`Complete`・`Cancel`・`Reconsider`を使う。これらはQuintの型構築子でもあるが、他ツールの識別子としての除外よりこの規則を優先する。
 4. 状態は`Undecided`・`NotStarted`・`InProgress`・`Completed`・`Cancelled`のようにcode表記にする。遷移の動詞形`Complete`と、状態の過去分詞形`Completed`を区別する。
 5. 一般的な意味での作業の中断・完了・統合・リリースは日本語で書き、Axonのコマンド名・遷移名・状態名と同じ英単語を裸で散文に使わない。ただし、次の対象外に該当する場合を除く。
-6. Axon固有の名詞（Issue、Group、Entity、Note、lifecycle、dependency、declaration）、情報モデルのfield名や記録の名詞（actor、log、reason、parent、condition）、declarationや統合のrepairsのoperation種別名（write、parent、dependency、condition）、リポジトリ内のpath・ディレクトリ名、Git・YAML・SQLite・Quint・Rustなど他ツール・他仕様の識別子、一般技術語は対象外。他ツールの識別子は節・表の冒頭または近くの文でツールを示す。その語を主語に操作の挙動を述べる文はコマンド側とみなす。たとえば「`axon condition`は現在の条件だけを編集する」はコマンドの説明、「logのreason」は記録の説明となる。helpも、`axon help`の実行とhelpの出力内容を区別する。
+6. Axon固有の名詞（Issue、Group、Entity、Note、lifecycle、dependency、declaration）、情報モデルのfield名や記録の名詞（actor、log、reason、parent、condition）、declarationや統合のrepairsのoperation種別名（write、parent、dependency、condition）、リポジトリ内のpath・ディレクトリ名、Git・YAML・JSONL・Quint・Rustなど他ツール・他仕様の識別子、一般技術語は対象外。他ツールの識別子は節・表の冒頭または近くの文でツールを示す。その語を主語に操作の挙動を述べる文はコマンド側とみなす。たとえば「`axon condition`は現在の条件だけを編集する」はコマンドの説明、「logのreason」は記録の説明となる。helpも、`axon help`の実行とhelpの出力内容を区別する。
 7. skillのdescriptionは冒頭でAxon対象と分かるようにし、Axonの操作を指す場合は上記のコマンド表記にする。
 
 確認時は、`axon --help`の全subcommand、`axon import`・`axon merge`の下位subcommand、状態5語、遷移7語を対象に、fenced code・inline code span・frontmatterのname行を除いた散文をcase-sensitiveかつ単語境界`[A-Za-z-]`で検索する。残存箇所を全て分類し、Axonの操作・遷移・状態を裸で指す箇所がないことを確認する。対象語で始まるcode spanも列挙し、コマンド引用が`axon`から始まることを確認する。検索は発見の補助であり、意味の判定や文脈の確認を置き換えない。

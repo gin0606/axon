@@ -1,72 +1,6 @@
 use super::*;
 use axon::{file, file_merge, location::Location};
 
-fn init_file(f: &Fixture) {
-    f.ok(&["init", "t", "--backend", "file"]);
-}
-
-fn file_init_output(f: &Fixture, gitignore: &str, attributes: &str) -> String {
-    format!(
-        "Initialized file at {}\n{gitignore}: {}\n{attributes}: {}\n",
-        f.0.join(".axon/state.jsonl").display(),
-        f.0.join(".axon/.gitignore").display(),
-        f.0.join(".gitattributes").display(),
-    )
-}
-
-#[test]
-fn init_reports_git_integration_changes_for_each_backend_and_environment() {
-    let created_in_git = Fixture::new();
-    git(&created_in_git.0, &["init", "-q"]);
-    assert_eq!(
-        created_in_git.ok(&["init", "t", "--backend", "file"]),
-        file_init_output(&created_in_git, "Created", "Created")
-    );
-
-    let appended = Fixture::new();
-    fs::write(appended.0.join(".gitattributes"), "*.txt text\n").unwrap();
-    assert_eq!(
-        appended.ok(&["init", "t", "--backend", "file"]),
-        file_init_output(&appended, "Created", "Appended")
-    );
-    assert_eq!(
-        fs::read_to_string(appended.0.join(".gitattributes")).unwrap(),
-        "*.txt text\n/.axon/state.jsonl merge=axon\n"
-    );
-
-    let unchanged = Fixture::new();
-    fs::create_dir(unchanged.0.join(".axon")).unwrap();
-    let ignore = b"*\n!.gitignore\n!state.jsonl\n";
-    let attributes = b"*.txt text\n/.axon/state.jsonl merge=axon\n";
-    fs::write(unchanged.0.join(".axon/.gitignore"), ignore).unwrap();
-    fs::write(unchanged.0.join(".gitattributes"), attributes).unwrap();
-    assert_eq!(
-        unchanged.ok(&["init", "t", "--backend", "file"]),
-        file_init_output(&unchanged, "Unchanged", "Unchanged")
-    );
-    assert_eq!(
-        fs::read(unchanged.0.join(".axon/.gitignore")).unwrap(),
-        ignore
-    );
-    assert_eq!(
-        fs::read(unchanged.0.join(".gitattributes")).unwrap(),
-        attributes
-    );
-
-    let created_outside_git = Fixture::new();
-    assert_eq!(
-        created_outside_git.ok(&["init", "t", "--backend", "file"]),
-        file_init_output(&created_outside_git, "Created", "Created")
-    );
-
-    let sqlite = Fixture::new();
-    assert_eq!(
-        sqlite.ok(&["init", "t"]),
-        format!("Initialized SQLite at {}\n", sqlite.db().display())
-    );
-    assert!(!sqlite.0.join(".axon/.gitignore").exists());
-    assert!(!sqlite.0.join(".gitattributes").exists());
-}
 fn state(f: &Fixture) -> PathBuf {
     f.0.join(".axon/state.jsonl")
 }
@@ -83,7 +17,7 @@ fn ctx() -> Context {
 #[test]
 fn file_cli_roundtrip_and_atomic_concurrency() {
     let f = Fixture::new();
-    init_file(&f);
+    f.init();
     let group = f
         .ok(&["capture", "--kind", "group", "--accept", "--title", "group"])
         .split_whitespace()
@@ -145,42 +79,9 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
 }
 
 #[test]
-fn file_init_preserves_rules_rejects_conflicts_and_existing_store() {
+fn writer_checks_drift_and_corruption_and_preserves_noop_bytes() {
     let f = Fixture::new();
-    fs::create_dir(f.0.join(".axon")).unwrap();
-    fs::write(f.0.join(".axon/.gitignore"), "# keep\n!state.jsonl\n").unwrap();
-    fs::write(f.0.join(".gitattributes"), "*.txt text\n").unwrap();
-    init_file(&f);
-    assert_eq!(
-        fs::read_to_string(f.0.join(".axon/.gitignore")).unwrap(),
-        "*\n# keep\n!.gitignore\n!state.jsonl\n"
-    );
-    assert_eq!(
-        fs::read_to_string(f.0.join(".gitattributes")).unwrap(),
-        "*.txt text\n/.axon/state.jsonl merge=axon\n"
-    );
-    let before = fs::read(state(&f)).unwrap();
-    failure(f.run(&["init", "--backend", "file"]));
-    assert_eq!(fs::read(state(&f)).unwrap(), before);
-    let broken = Fixture::new();
-    fs::write(
-        broken.0.join(".gitattributes"),
-        "/.axon/state.jsonl merge=other\n",
-    )
-    .unwrap();
-    assert!(failure(broken.run(&["init", "--backend", "file"])).contains("conflicting rule"));
-    assert!(broken.0.join(".axon/init.pending").exists());
-    assert!(failure(broken.run(&["list"])).contains("incomplete initialization"));
-    assert_eq!(
-        fs::read_to_string(broken.0.join(".gitattributes")).unwrap(),
-        "/.axon/state.jsonl merge=other\n"
-    );
-}
-
-#[test]
-fn writer_checks_drift_corruption_backend_and_preserves_noop_bytes() {
-    let f = Fixture::new();
-    init_file(&f);
+    f.init();
     f.accepted("one");
     let mut bytes = fs::read(state(&f)).unwrap();
     let split = bytes.iter().position(|b| *b == b'\n').unwrap();
@@ -201,20 +102,33 @@ fn writer_checks_drift_corruption_backend_and_preserves_noop_bytes() {
     assert_eq!(fs::read(state(&f)).unwrap(), b"foreign");
     failure(f.run(&["list"]));
     fs::write(state(&f), &bytes).unwrap();
+    // A snapshot that disappears mid-change is not recreated by the write.
     let error = store
         .update(|_, s| {
             let id = s.entities().next().unwrap().id.clone();
             s.write(&id, Some("changed".into()), None)?;
-            fs::write(f.db(), b"mixed")?;
+            fs::remove_file(state(&f))?;
             Ok(())
         })
         .unwrap_err();
-    assert!(error.to_string().contains("mixed"));
-    assert_eq!(fs::read(state(&f)).unwrap(), bytes);
+    assert!(error.to_string().contains("not applied"), "{error}");
+    assert!(!state(&f).exists());
+}
+
+#[test]
+fn init_refuses_to_replace_an_existing_store() {
+    let f = Fixture::new();
+    f.init();
+    let id = f.accepted("kept");
+    let before = fs::read(state(&f)).unwrap();
+    assert!(failure(f.run(&["init"])).contains("already initialized"));
+    assert!(failure(f.run(&["init", "other"])).contains("already initialized"));
+    assert_eq!(fs::read(state(&f)).unwrap(), before);
+    assert!(f.ok(&["list"]).contains(&id));
 }
 
 fn branch_inputs(f: &Fixture) -> (PathBuf, PathBuf, PathBuf, EntityId) {
-    init_file(f);
+    f.init();
     let id: EntityId = f.accepted("job").try_into().unwrap();
     let mut base = snapshot(f);
     base.perform(&id, Operation::Start, None, ctx()).unwrap();
@@ -353,32 +267,13 @@ fn merge_cli_and_driver_share_engine() {
 }
 
 #[test]
-fn file_worktrees_are_isolated_and_git_driver_merges_notes() {
+fn tracked_worktrees_are_isolated_and_the_git_driver_merges_notes() {
     let f = Fixture::new();
     git(&f.0, &["init", "-q"]);
-    init_file(&f);
+    f.init();
     let id = f.accepted("job");
-    git(
-        &f.0,
-        &[
-            "add",
-            ".axon/state.jsonl",
-            ".axon/.gitignore",
-            ".gitattributes",
-        ],
-    );
-    git(
-        &f.0,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-qm",
-            "base",
-        ],
-    );
+    track_store(&f.0);
+    git_commit(&f.0, &["-qm", "base"]);
     let a = Fixture::new();
     let b = Fixture::new();
     git(
@@ -398,21 +293,8 @@ fn file_worktrees_are_isolated_and_git_driver_merges_notes() {
     b.ok(&["note", "add", &id, "-m", "B"]);
     for branch in [&a, &b] {
         git(&branch.0, &["add", ".axon/state.jsonl"]);
-        git(
-            &branch.0,
-            &[
-                "-c",
-                "user.name=Test",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "-qm",
-                "branch",
-            ],
-        );
+        git_commit(&branch.0, &["-qm", "branch"]);
     }
-    let driver = format!("'{}' merge driver %O %A %B", env!("CARGO_BIN_EXE_axon"));
-    git(&f.0, &["config", "merge.axon.driver", &driver]);
     git(
         &a.0,
         &[
@@ -420,6 +302,8 @@ fn file_worktrees_are_isolated_and_git_driver_merges_notes() {
             "user.name=Test",
             "-c",
             "user.email=test@example.com",
+            "-c",
+            "core.hooksPath=/dev/null",
             "merge",
             "--no-edit",
             "b",
@@ -440,18 +324,7 @@ fn file_worktrees_are_isolated_and_git_driver_merges_notes() {
     );
     fs::write(state(&a), b"broken fast-forward snapshot").unwrap();
     git(&a.0, &["add", ".axon/state.jsonl"]);
-    git(
-        &a.0,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-qm",
-            "invalid snapshot",
-        ],
-    );
+    git_commit(&a.0, &["-qm", "invalid snapshot"]);
     git(&f.0, &["merge", "--ff-only", "a"]);
     failure(f.run(&["list"]));
     assert_eq!(
@@ -461,53 +334,12 @@ fn file_worktrees_are_isolated_and_git_driver_merges_notes() {
 }
 
 #[test]
-fn init_from_a_linked_worktree_refuses_the_directory_of_an_existing_file_store() {
-    let f = Fixture::new();
-    git(&f.0, &["init", "-q"]);
-    git(
-        &f.0,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "base",
-        ],
-    );
-    git(&f.0, &["branch", "without-store"]);
-    init_file(&f);
-    let id = f.accepted("job");
-    let before = fs::read(state(&f)).unwrap();
-    let linked = Fixture::new();
-    fs::remove_dir(&linked.0).unwrap();
-    git(
-        &f.0,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            linked.0.to_str().unwrap(),
-            "without-store",
-        ],
-    );
-    let error = failure(linked.run(&["init", "demo"]));
-    assert!(error.contains("already holds a store"), "{error}");
-    assert!(!f.0.join(".axon/axon.db").exists());
-    assert_eq!(before, fs::read(state(&f)).unwrap());
-    assert!(f.ok(&["list"]).contains(&id));
-}
-
-#[test]
 fn valid_snapshot_with_unmerged_index_rejects_normal_operations() {
     let f = Fixture::new();
     git(&f.0, &["init", "-q"]);
-    init_file(&f);
+    f.init();
     let id = f.accepted("job");
-    git(&f.0, &["add", ".axon/state.jsonl"]);
+    track_store(&f.0);
     let blob =
         String::from_utf8(git_output(&f.0, &["hash-object", ".axon/state.jsonl"]).stdout).unwrap();
     git(
@@ -536,10 +368,6 @@ fn valid_snapshot_with_unmerged_index_rejects_normal_operations() {
     git(&f.0, &["add", ".axon/state.jsonl"]);
     f.ok(&["start", &id]);
 }
-fn git_output(path: &Path, args: &[&str]) -> Output {
-    isolated_git(path).args(args).output().unwrap()
-}
-
 #[cfg(unix)]
 fn git_on_path() -> PathBuf {
     std::env::split_paths(&std::env::var_os("PATH").unwrap())
@@ -569,20 +397,26 @@ fn git_call_log(shim: &Path) -> PathBuf {
 fn git_worktree_operations_start_few_git_processes() {
     let f = Fixture::new();
     git(&f.0, &["init", "-q"]);
-    init_file(&f);
+    git_commit(&f.0, &["-q", "--allow-empty", "-m", "base"]);
+    f.init();
     let id = f.accepted("counted");
-    let pending = f
-        .ok(&["capture", "--title", "undecided"])
-        .split_whitespace()
-        .next()
-        .unwrap()
-        .to_string();
+    let linked = Fixture::new();
+    git(
+        &f.0,
+        &[
+            "worktree",
+            "add",
+            "-qb",
+            "linked",
+            linked.0.to_str().unwrap(),
+        ],
+    );
     let shim = Fixture::new();
     let log = git_call_log(&shim.0);
-    let calls = |args: &[&str]| -> Vec<String> {
+    let calls = |cwd: &Path, args: &[&str]| -> Vec<String> {
         fs::write(&log, "").unwrap();
         success(
-            f.command()
+            command(cwd)
                 .env(
                     "PATH",
                     format!(
@@ -601,54 +435,40 @@ fn git_worktree_operations_start_few_git_processes() {
             .map(str::to_owned)
             .collect()
     };
-    for args in [
-        vec!["list"],
-        vec!["proposals"],
-        vec!["tasks"],
-        vec!["show", &id],
-    ] {
-        let observed = calls(&args);
-        assert!(observed.len() <= 2, "{args:?}: {observed:?}");
-        assert_eq!(
-            observed
-                .iter()
-                .filter(|call| call.starts_with("rev-parse"))
-                .count(),
-            1,
-            "{args:?}: {observed:?}"
-        );
-        assert_eq!(
-            observed
-                .iter()
-                .filter(|call| call.contains("ls-files --unmerged"))
-                .count(),
-            1,
-            "{args:?}: {observed:?}"
-        );
-    }
-    for args in [
-        vec!["capture", "--title", "written"],
-        vec!["note", "add", &id, "-m", "evidence"],
-        vec!["accept", &pending],
-    ] {
-        let observed = calls(&args);
-        assert!(observed.len() <= 3, "{args:?}: {observed:?}");
-        assert_eq!(
-            observed
-                .iter()
-                .filter(|call| call.starts_with("rev-parse"))
-                .count(),
-            1,
-            "{args:?}: {observed:?}"
-        );
-        assert_eq!(
-            observed
-                .iter()
-                .filter(|call| call.contains("ls-files --unmerged"))
-                .count(),
-            2,
-            "{args:?}: {observed:?}"
-        );
+    // Discovery runs one rev-parse, and one more only from a linked worktree without a store of
+    // its own, which has to look at the main worktree. Reads check the index once, writes twice.
+    for (worktree, rev_parse) in [(&f.0, 1), (&linked.0, 2)] {
+        for (args, unmerged) in [
+            (vec!["list"], 1),
+            (vec!["proposals"], 1),
+            (vec!["tasks"], 1),
+            (vec!["show", &id], 1),
+            (vec!["capture", "--title", "written"], 2),
+            (vec!["note", "add", &id, "-m", "evidence"], 2),
+        ] {
+            let observed = calls(worktree, &args);
+            assert_eq!(
+                observed.len(),
+                rev_parse + unmerged,
+                "{args:?}: {observed:?}"
+            );
+            assert_eq!(
+                observed
+                    .iter()
+                    .filter(|call| call.starts_with("rev-parse"))
+                    .count(),
+                rev_parse,
+                "{args:?}: {observed:?}"
+            );
+            assert_eq!(
+                observed
+                    .iter()
+                    .filter(|call| call.contains("ls-files --unmerged"))
+                    .count(),
+                unmerged,
+                "{args:?}: {observed:?}"
+            );
+        }
     }
 }
 
@@ -659,11 +479,7 @@ fn newline_in_a_git_worktree_path_fails_discovery_explicitly() {
     let repo = f.0.join("repo\nline");
     fs::create_dir(&repo).unwrap();
     git(&repo, &["init", "-q"]);
-    for args in [
-        vec!["init", "t", "--backend", "file"],
-        vec!["init", "t"],
-        vec!["list"],
-    ] {
+    for args in [vec!["init", "t"], vec!["list"]] {
         let error = failure(command(&repo).args(args).output().unwrap());
         assert!(error.contains("newline"), "{error}");
     }
@@ -673,7 +489,7 @@ fn newline_in_a_git_worktree_path_fails_discovery_explicitly() {
 #[test]
 fn corrupt_canonical_rejects_reads_and_writes_without_changing_bytes() {
     let f = Fixture::new();
-    init_file(&f);
+    f.init();
     let id = f.accepted("job");
     fs::write(state(&f), b"not a snapshot\n").unwrap();
     let before = fs::read(state(&f)).unwrap();
@@ -690,56 +506,12 @@ fn corrupt_canonical_rejects_reads_and_writes_without_changing_bytes() {
 }
 
 #[test]
-fn adapters_preserve_identical_snapshot_records_and_failures() {
-    let f = Fixture::new();
-    init_file(&f);
-    let id: EntityId = f.accepted("same").try_into().unwrap();
-    let mut expected = snapshot(&f);
-    let sqlpath = f.0.join("parity.db");
-    let mut sql = Store::create(&sqlpath, "t", &expected).unwrap();
-    let mut local = Location::discover(&f.0, false).unwrap().open().unwrap();
-    for op in [
-        Operation::Start,
-        Operation::Release,
-        Operation::Start,
-        Operation::Complete,
-    ] {
-        expected
-            .perform(&id, op, Some("same reason".into()), ctx())
-            .unwrap();
-        expected.add_note(&id, "same note".into(), ctx()).unwrap();
-        sql.update(|_, s| {
-            *s = expected.clone();
-            Ok(())
-        })
-        .unwrap();
-        local
-            .update(|_, s| {
-                *s = expected.clone();
-                Ok(())
-            })
-            .unwrap();
-        assert_eq!(sql.read().unwrap(), local.read().unwrap());
-    }
-    let sql_error = sql
-        .update(|_, s| Ok(s.perform(&id, Operation::Start, None, ctx())?))
-        .unwrap_err()
-        .to_string();
-    let file_error = local
-        .update(|_, s| Ok(s.perform(&id, Operation::Start, None, ctx())?))
-        .unwrap_err()
-        .to_string();
-    assert_eq!(sql_error, file_error);
-    assert_eq!(sql.read().unwrap(), local.read().unwrap());
-}
-
-#[test]
 fn merge_rejects_foreign_store_unreviewed_destination_and_symlink_directory() {
     for extra_work in [false, true] {
         let f = Fixture::new();
         let (base, ours, theirs, id) = branch_inputs(&f);
         let target = Fixture::new();
-        init_file(&target);
+        target.init();
         if extra_work {
             let mut s = file::decode(&fs::read(&ours).unwrap()).unwrap().1;
             s.add_note(&id, "unreviewed work".into(), ctx()).unwrap();
@@ -778,29 +550,12 @@ fn merge_rejects_foreign_store_unreviewed_destination_and_symlink_directory() {
 }
 
 #[test]
-fn init_honors_final_rules_and_refuses_unmerged_missing_state() {
+fn init_refuses_an_unmerged_index_without_creating_a_store() {
     let f = Fixture::new();
     git(&f.0, &["init", "-q"]);
-    fs::create_dir(f.0.join(".axon")).unwrap();
-    fs::write(
-        f.0.join(".gitattributes"),
-        "/.axon/state.jsonl merge=axon\n*.jsonl merge=other\n",
-    )
-    .unwrap();
-    fs::write(f.0.join(".axon/.gitignore"), "!state.jsonl\n/*\n").unwrap();
-    init_file(&f);
-    assert!(
-        String::from_utf8(
-            git_output(&f.0, &["check-attr", "merge", "--", ".axon/state.jsonl"]).stdout
-        )
-        .unwrap()
-        .contains("merge: axon")
-    );
-    assert!(
-        !git_output(&f.0, &["check-ignore", "-q", ".axon/state.jsonl"])
-            .status
-            .success()
-    );
+    f.init();
+    track_store(&f.0);
+    git_commit(&f.0, &["-qm", "base"]);
     let blob =
         String::from_utf8(git_output(&f.0, &["hash-object", "-w", ".axon/state.jsonl"]).stdout)
             .unwrap();
@@ -814,53 +569,9 @@ fn init_honors_final_rules_and_refuses_unmerged_missing_state() {
     p.stdin.take().unwrap().write_all(line.as_bytes()).unwrap();
     assert!(p.wait().unwrap().success());
     fs::remove_file(state(&f)).unwrap();
-    for backend in ["file", "sqlite"] {
-        assert!(failure(f.run(&["init", "--backend", backend])).contains("unmerged"));
-    }
+    assert!(failure(f.run(&["init"])).contains("unmerged"));
     assert!(!state(&f).exists());
-    assert!(!f.db().exists());
     assert!(!f.0.join(".axon/init.pending").exists());
-}
-
-#[test]
-fn file_init_rejects_higher_precedence_merge_attributes() {
-    for info in [false, true] {
-        let f = Fixture::new();
-        git(&f.0, &["init", "-q"]);
-        fs::create_dir(f.0.join(".axon")).unwrap();
-        let path = if info {
-            f.0.join(".git/info/attributes")
-        } else {
-            f.0.join(".axon/.gitattributes")
-        };
-        let rule = if info {
-            ".axon/state.jsonl merge=other\n"
-        } else {
-            "state.jsonl merge=other\n"
-        };
-        fs::write(&path, rule).unwrap();
-        assert!(
-            failure(f.run(&["init", "--backend", "file"]))
-                .contains("effective Git merge attribute conflicts")
-        );
-        assert_eq!(fs::read_to_string(&path).unwrap(), rule);
-        assert!(f.0.join(".axon/init.pending").exists());
-        assert!(failure(f.run(&["list"])).contains("incomplete initialization"));
-    }
-}
-
-fn isolated_git(path: &Path) -> Command {
-    let mut command = Command::new("git");
-    command.current_dir(path);
-    for (name, _) in std::env::vars_os() {
-        if name.to_string_lossy().starts_with("GIT_") {
-            command.env_remove(name);
-        }
-    }
-    command
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null");
-    command
 }
 
 #[test]
@@ -870,7 +581,7 @@ fn git_index_fixtures_do_not_touch_an_inherited_hook_index() {
     fs::write(&index, b"foreign index must remain untouched").unwrap();
     for test in [
         "file_lifecycle::valid_snapshot_with_unmerged_index_rejects_normal_operations",
-        "file_lifecycle::init_honors_final_rules_and_refuses_unmerged_missing_state",
+        "file_lifecycle::init_refuses_an_unmerged_index_without_creating_a_store",
     ] {
         let output = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", test])
@@ -895,7 +606,7 @@ fn git_index_fixtures_do_not_touch_an_inherited_hook_index() {
 fn worktree_conflict_resolution_preserves_operations_and_finishes_group() {
     let f = Fixture::new();
     git(&f.0, &["init", "-q"]);
-    init_file(&f);
+    f.init();
     let group = f
         .ok(&[
             "capture", "--kind", "group", "--accept", "--title", "delivery",
@@ -912,29 +623,8 @@ fn worktree_conflict_resolution_preserves_operations_and_finishes_group() {
         .to_string();
     f.ok(&["start", &group]);
     f.ok(&["start", &id]);
-    git(
-        &f.0,
-        &[
-            "add",
-            ".axon/state.jsonl",
-            ".axon/.gitignore",
-            ".gitattributes",
-        ],
-    );
-    let commit = |path: &Path, message: &str| {
-        git(
-            path,
-            &[
-                "-c",
-                "user.name=Test",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "-qam",
-                message,
-            ],
-        );
-    };
+    track_store(&f.0);
+    let commit = |path: &Path, message: &str| git_commit(path, &["-qam", message]);
     commit(&f.0, "base");
     let a = Fixture::new();
     let b = Fixture::new();
@@ -952,8 +642,6 @@ fn worktree_conflict_resolution_preserves_operations_and_finishes_group() {
     b.ok(&["note", "add", &id, "-m", "remaining branch evidence"]);
     commit(&a.0, "finish");
     commit(&b.0, "release");
-    let driver = format!("'{}' merge driver %O %A %B", env!("CARGO_BIN_EXE_axon"));
-    git(&f.0, &["config", "merge.axon.driver", &driver]);
     let merge = git_output(
         &a.0,
         &[
@@ -961,6 +649,8 @@ fn worktree_conflict_resolution_preserves_operations_and_finishes_group() {
             "user.name=Test",
             "-c",
             "user.email=test@example.com",
+            "-c",
+            "core.hooksPath=/dev/null",
             "merge",
             "--no-edit",
             "remaining",

@@ -189,8 +189,9 @@ pub fn prepare(
     if output.starts_with(&workspace) {
         return Err(invalid("destination must be outside workspace"));
     }
-    let root = Location::discover(output.parent().unwrap(), false)?.root;
-    if output != root.join(".axon/state.jsonl") {
+    let location = Location::discover(output.parent().unwrap(), false)?;
+    let root = location.root.clone();
+    if output != location.state() {
         return Err(invalid(
             "merge destination must be the active .axon/state.jsonl",
         ));
@@ -324,10 +325,10 @@ pub fn apply(workspace: &Path) -> Result<()> {
     }
     let (prefix, candidate) = file::decode(&bytes)?;
     let location = Location::discover(&manifest.root, false)?;
-    if location.root != manifest.root || !location.is_file()? {
-        return Err(invalid("merge destination backend changed"));
+    if location.root != manifest.root || !location.initialized()? {
+        return Err(invalid("merge destination store changed"));
     }
-    let canonical = location.root.join(".axon/state.jsonl");
+    let canonical = location.state();
     if manifest.output != canonical {
         return Err(invalid(
             "merge apply destination must be the active .axon/state.jsonl",
@@ -347,8 +348,8 @@ pub fn apply(workspace: &Path) -> Result<()> {
             return Err(invalid("manifest changed during apply"));
         }
         let current = Location::discover(&manifest.root, false)?;
-        if !current.is_file()? || current.root != manifest.root {
-            return Err(invalid("backend changed"));
+        if !current.initialized()? || current.root != manifest.root {
+            return Err(invalid("merge destination store changed"));
         }
         if read_regular(&workspace.join("checked.json"))? != checked_bytes
             || read_regular(&workspace.join("candidate.jsonl"))? != bytes

@@ -30,26 +30,27 @@ cd "$AXON_TRIAL_DIR"
 "$AXON_BIN" note list ID --recorder-details
 ```
 
-初期化は新規作成専用です。SQLiteの置き場所とGit worktree共有は [保存先](storage.md) を参照してください。file backendと`axon merge`の利用手順は [file保存とGit統合](../development/lifecycle-file.md) を参照してください。
+初期化は新規作成専用です。`axon init` は管理rootに正本 `.axon/state.jsonl` を作ります。Gitに関するfileは作りません。保存形式は一つ、配置や形式を選ぶoptionはありません。
 
-## 保存方式を選ぶ
+## Git repositoryで使う
 
-| 方式 | 用途と共有の単位 |
-| --- | --- |
-| SQLite（既定） | 同じrepositoryのworktreeで一つの保存先を共有する |
-| file | worktreeごとに分岐して、Gitで計画と記録を取り込む |
-
-fileを試す場合は、上のSQLite試用先と別の空directoryで初期化します。
+Gitが保存先をどう扱うかにAxonは関与しません。Git内での使い方は二つあり、どちらになるかは利用者のGitの運用だけで決まります。
 
 ```sh
-AXON_FILE_TRIAL_DIR="$(mktemp -d)"
-cd "$AXON_FILE_TRIAL_DIR"
+AXON_GIT_TRIAL_DIR="$(mktemp -d)"
+cd "$AXON_GIT_TRIAL_DIR"
 git init
-"$AXON_BIN" init trial --backend file
-"$AXON_BIN" capture --accept --title 'Gitで共有する仕事' -m '目的と完了条件'
+"$AXON_BIN" init trial
+"$AXON_BIN" capture --accept --title 'Gitのrepositoryで管理する仕事' -m '目的と完了条件'
 ```
 
-通常操作は両方式で同じです。fileのGit driver登録・追跡・競合解決は [file保存とGit統合](../development/lifecycle-file.md#git-driver) に従います。backendの変更に`axon init`を使わず、新規保存先を別に選びます。
+作った直後の正本はGitからuntrackedに見え、`git add -A` すればcommitされます。二つの運用のどちらを使うかを決め、一つのrepositoryでは混ぜないでください。
+
+無視する運用は、`.git/info/exclude` やglobalのignore fileに `.axon/` の行を書いて、利用者がGitに無視させて選びます。linked worktreeには `.axon` が現れないため、全worktreeがmain worktreeの保存先を共有します。worktreeごとに `axon init` を繰り返す必要はありません。無視した正本はGitのcheckout・mergeの上書きから保護されなくなり、正本を追跡しているcommitを取り込むと警告なしに置き換わります。
+
+追跡する運用は、`axon init` が表示する手順を実行して選びます。正本だけを追跡対象にする `.axon/.gitignore` を作り、`.gitattributes` にmerge driverを宣言し、driverを登録して、stage・commitします。各worktreeが自分の正本を持ち、branchごとに分岐した計画と記録をGitで取り込めます。`axon init` は手順を表示するだけで、`.gitignore`、`.gitattributes`、Git configを作成も編集もしません。
+
+通常操作はどちらの運用でも同じです。driverの登録・追跡・競合解決は [file保存とGit統合](../development/lifecycle-file.md#git-driver)、保存先の選ばれ方は [保存先とworktree](storage.md) を参照してください。
 
 ## Agent向けskill
 

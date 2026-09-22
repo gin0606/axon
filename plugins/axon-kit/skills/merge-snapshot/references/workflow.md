@@ -18,7 +18,7 @@ repairsはvalidな選択結果への通常編集で、operationはwrite（id/tit
 
 resolution変更のたびに `axon merge check WORKSPACE` を単独実行する。成功したcandidate.jsonl、report.json、checked.jsonを確認する。これらは編集しない。失敗した`axon merge check`は以前のcheckedを無効化する。`axon merge check`再実行は統合記録IDを再生成しうるため、レビューした候補を不用意に再生成しない。
 
-公開直前に固定入力、解決案、候補、backend、store identity、保存先がその検査と一致することを確かめ、許可された `axon merge apply WORKSPACE` を実行する。`axon merge apply`自体もworkspaceと正本をlockしてdriftを拒否する。正本がvalidならours/theirsいずれかに一致する必要がある。conflict markerがある場合も`axon merge prepare`時の元bytesから変わっていてはいけない。driftを手動上書きで回避せず、新入力と判断で別workspaceを用意する。
+公開直前に固定入力、解決案、候補、store identity、保存先がその検査と一致することを確かめ、許可された `axon merge apply WORKSPACE` を実行する。`axon merge apply`自体もworkspaceと正本をlockしてdriftを拒否する。正本がvalidならours/theirsいずれかに一致する必要がある。conflict markerがある場合も`axon merge prepare`時の元bytesから変わっていてはいけない。driftを手動上書きで回避せず、新入力と判断で別workspaceを用意する。
 
 `axon merge apply`後は `axon storage check OUTPUT` で完全性を検証し、index解決後に影響Entityと記録を照合する。`axon merge apply`の再実行は保存先変更として拒否され、一般的なno-op再送ではない。結果不明時はwriter終了後にoutput・保全candidate・digestと記録を照合する。入力やdestinationを変更して再送可能に見せかけない。
 

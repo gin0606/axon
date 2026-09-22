@@ -12,16 +12,16 @@ declaration のために Quint の状態や action を追加しません。`axon
 - `axon export` の selector（Group の全子孫、Issue 単体、和集合、重複除去）と `references` の計算
 - `prepare` の ID 割り当て、`key` 保持、`base` null 保持、再実行の同一性
 - `check` の検証順序、競合の列挙、構造差分の表示、file と保存先の不変
-- `apply` の原子性（共通コアの拒否で保存先が変わらないこと）、両 backend での同じ結果、`base` と `references` の rewrite、`key` の保持
+- `apply` の原子性（共通コアの拒否で保存先が変わらないこと）、`base` と `references` の rewrite、`key` の保持
 - 終了 Entity の固定項目、終了 Group の構成、循環、Issue 親、自己依存の拒否
 - 結果不明・file 更新失敗後の再 `apply` が最終値一致で no-op になること、部分一致で競合になること
 - 再浮上条件の保持と未実行、Note の不変
 - `axon docs declaration` と `--example` が保存先を開かないこと
 
-単体テストは [契約文書](../reference/declaration.md) の canonical example、文字列の完全な往復、拒否入力、並び順、fingerprint の境界を検査します。`tests/lifecycle/declaration.rs` は両 backend の独立 fixture で subtree・Issue・和集合、外部参照、保存先非変更と条件未実行を確認し、壊れた管理 root でも `axon docs` と雛形が取得できることを検査します。
+単体テストは [契約文書](../reference/declaration.md) の canonical example、文字列の完全な往復、拒否入力、並び順、fingerprint の境界を検査します。`tests/lifecycle/declaration.rs` は独立 fixture で subtree・Issue・和集合、外部参照、保存先非変更と条件未実行を確認し、壊れた管理 root でも `axon docs` と雛形が取得できることを検査します。
 
-`crates/axon-core/src/declaration/import.rs` は保存snapshotとのidentity・base照合、適用済み判定、外部参照の再生成、共通コアの通常操作による仮snapshot構築を共有する。親解除・dependency削除、新規作成、文面変更、親設定、dependency追加の順で差分を検査する。`Checked` のsnapshotは保存前の候補であり、SQLやfileを変更しない。`src/declaration_file.rs` は別のI/O境界としてfile backendのpublish手順を再利用し、temporary書込・sync、入力bytes再照合、rename、directory syncを行う。
+`crates/axon-core/src/declaration/import.rs` は保存snapshotとのidentity・base照合、適用済み判定、外部参照の再生成、共通コアの通常操作による仮snapshot構築を共有する。親解除・dependency削除、新規作成、文面変更、親設定、dependency追加の順で差分を検査する。`Checked` のsnapshotは保存前の候補であり、正本を変更しない。`src/declaration_file.rs` は別のI/O境界として正本のpublish手順を再利用し、temporary書込・sync、入力bytes再照合、rename、directory syncを行う。
 
-`src/declaration_file/relationship_tests.rs` の関係変更行列は、両backendで`Cancelled` Groupへの所属拒否、`Cancelled` Entityのdependency差替え、新規Groupへの既存Entityの移動、親子Groupの反転、`InProgress`子孫を持つGroupの`InProgress` Group間移動を検査する。recordの正順・逆順・巡回順で共通コアの適用結果を比較し、`axon import prepare`でcanonical化して各backendへ適用した結果との一致、拒否時の保存先と入力の保持を確認する。
+`src/declaration_file/relationship_tests.rs` の関係変更行列は、`Cancelled` Groupへの所属拒否、`Cancelled` Entityのdependency差替え、新規Groupへの既存Entityの移動、親子Groupの反転、`InProgress`子孫を持つGroupの`InProgress` Group間移動を検査する。recordの正順・逆順・巡回順で共通コアの適用結果を比較し、`axon import prepare`でcanonical化して適用した結果との一致、拒否時の保存先と入力の保持を確認する。
 
-`src/declaration_file.rs` のprocess fixtureはlib test binaryを子processとして起動し、本番と共通の適用経路を実行する。SQLiteのUPDATE後commit前、fileのtemporary作成後rename前、両backendの保存後・declaration書戻し前、書戻し後でbarrierに到達した子を強制終了する。再openした保存先の完全snapshotと入力bytes、同じfileの再度`axon import apply`による通常適用またはno-opへの収束を検査する。停止点はprivateな適用経路からcrate内の保存adapterへ渡し、公開APIと通常操作の意味は変えない。
+`src/declaration_file.rs` のprocess fixtureはlib test binaryを子processとして起動し、本番と共通の適用経路を実行する。正本のtemporary作成後rename前、保存後・declaration書戻し前、書戻し後でbarrierに到達した子を強制終了する。再openした保存先の完全snapshotと入力bytes、同じfileの再度`axon import apply`による通常適用またはno-opへの収束を検査する。停止点はprivateな適用経路からcrate内の保存adapterへ渡し、公開APIと通常操作の意味は変えない。

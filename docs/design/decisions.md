@@ -154,6 +154,50 @@ Issue と Group は同じ ID の namespace を使い、kind を ID に埋め込�
 
 コマンド名や出力は紙の上で詰めず、実装しながら決める。実際に打つと必ず変わるうえ、間違えても保存した情報の作り直しが要らないためである。
 
+## 保存形式を一つにし、配置を Git の運用に委ねる理由
+
+保存形式は JSONL 一つとし、保存先は管理 root の `.axon/state.jsonl` だけにする。契約は [保存と統合の契約](../reference/storage.md#保存先と初期化) にある。
+
+### 保存 adapter を一つにする
+
+保存 adapter は file 一つだけを持つ。SQLite の 1 行の BLOB に同じ共通 codec の byte 列を入れる adapter を併せ持つ構成を、実装して比べたうえで採らなかった (2026-09)。二つの adapter はどちらも操作のたびに snapshot 全体を decode・検査・encode して置き換えるため、保存形式・検査・速度に差がなかった。実際に分かれたのは配置だけで、SQLite は Git に追跡させず linked worktree 間で共有する保存先、file は worktree ごとに Git で追跡して統合する保存先になった。この配置の違いは SQLite でなくても成り立つ。一方で二つ持つ費用は、C のビルドを伴う依存、adapter の dispatch と混在の検出、両方を対にしたテストと文書、保存形式を変えるたびの二重の版上げである。
+
+SQLite を既定として公開した後に廃止すると破壊的変更になるが、JSONL を正本としたまま、破棄できる派生 index を後から足すことは非破壊でできる。このため公開する保存形式を JSONL 一つに絞った。
+
+採らなかった案:
+
+- SQLite に record 単位の schema と index を入れて速くする案。共通コアは操作のたびに snapshot 全体を検査するため、保存側だけを部分読み書きにしても操作の時間は縮まらない。速くするにはコアの検査を差分化する設計変更が要り、共通モデルの構造を SQL の schema へ複製することにもなる。4 MB 程度の保存先で一覧が数十 ms という計測 (2026-09) では、速度の支障は観測されていない。
+- 二つの adapter を併せ持ち、使い分けの理由を文書化する案。SQLite が与えるのは入れ物としての堅牢さだけで、二重の保守費用を公開後も持ち続ける根拠を示せなかった。
+- SQLite を「共有する側の入れ物」としてだけ残す案。共有は下のとおり file と探索順で実現でき、入れ物を二種類にする理由がない。
+
+### Git が保存先をどう扱うかに関与しない
+
+`axon init` は正本 `.axon/state.jsonl` を作り、Git に関する file は作らない。init 直後の正本は Git から untracked に見え、Git に無視させて使うか、追跡して branch ごとに統合するかは、表示した手順に従って利用者が選ぶ。コードは二つの運用を区別せず、`.gitignore`・`.gitattributes`・Git config を作成も編集もしない。
+
+採らなかった案:
+
+- `*` の 1 行だけを持つ `.axon/.gitignore` を `axon init` が作り、設定なしで無視される運用を既定にする案。Git は untracked な file を checkout・merge の上書きから保護するが、無視されている file は保護しない。このため、無視されている正本がある作業 directory で、正本を追跡している commit を checkout・merge すると、警告なしに正本が置き換わる。無視を既定にすると、この戻せない事故が起きうる状態を Axon が黙って作ることになる。生成しなければ、既定は Git の保護を受ける untracked で、無視は利用者が承知して選ぶ操作になる。代わりに既定側に来るのは `git add -A` による意図しない commit だが、これは差分として見え、push 前なら戻せる。`axon init` の出力と skill の文書で、untracked に見えることと二つの運用の手順をはっきり示して補う。利用者が自分で `.axon/` を無視した場合の上書きの危険は残るため、契約と利用ガイドに注意として書く。
+- 無関係な行を保ちながら repository の `.gitignore`・`.gitattributes` を `axon init` が補完し、実効 merge 属性まで検査する案。利用者の file の自動編集は、競合する規則、後続の広い規則による打ち消し、上位の属性 file による上書きといった端の場合を生み続け、そのたびに検出と診断を足すことになる。
+- 配置を選ぶ option を持つ案。無視するか追跡するかは Git 側の事実で決まり、Axon が同じ情報を option や設定として二重に持つと、両者が食い違った状態を定義する必要が生じる。
+
+merge driver の登録が漏れて Git が正本を text として統合しても、その結果は次の読み取りで全体検査を受けるため、conflict marker や不整合を含む正本が使われることはない。離れた Entity への変更どうしは text として統合でき検査も通るので、設定漏れは同じ Entity を両側で変更して衝突するまで表に出ない。実効 merge 属性の検査を持たない代わりに、この範囲を受け入れている。
+
+### 探索順と、許容した副作用
+
+Git 内では、現在の worktree root の `.axon` を先に、次に main worktree の `.axon` を探す。無視する運用では linked worktree に `.axon` が現れないため、この一つの規則で全 worktree が main worktree の保存先を共有する。追跡する運用では各 worktree が checkout した正本を持つため、常に手前が選ばれる。運用の種類を判別せずに両方を扱えることが、この順序の理由である。
+
+追跡する運用で、正本を持たない branch (`axon init` より前に分岐した branch、orphan branch) の linked worktree から操作すると、main worktree の追跡対象の正本を書き換える。これは許容した。変更は main worktree の差分として見え、記録は失われない。防ぐには運用の種類の判別か、正本を持たない worktree での操作の一律な拒否が要るが、前者は上の理由で持たず、後者は無視する運用の共有そのものを止めてしまう。
+
+lock、unmerged index の検査、symlink の拒否は、現在の worktree ではなく確定した保存先の側で行う。lock を現在の worktree 側で取ると、共有する正本への並行 writer が直列化されない。unmerged index の検査を現在の worktree に対して行うと、main worktree の正本を書き換える場合に検査が黙って効かなくなる。
+
+linked worktree での `axon init` は、main worktree に保存先が既にあれば拒否する。無視する運用では、手前に保存先ができて読む先が気づかないまま切り替わる。追跡する運用でも、別の store ID の保存先ができて後で統合できなくなるため、ほぼ常に誤りである。それ以外の取り違えは利用者の運用に委ね、`axon init` は既存の保存先を壊さないことだけを保証する。
+
+### bare repository と submodule で main worktree を探さない
+
+二つ目の探索先は、Git common directory が main worktree 直下の `.git` directory である場合だけ使う。common directory の親は、通常の repository では main worktree だが、bare repository に worktree を付ける構成では bare を置いた directory で、複数の bare を並べると無関係な repository と共有される。submodule では親 repository の `.git/modules` の中を指す。
+
+「常に common directory の親を探し、既知の制約として文書に書く」案は採らなかった。後から bare 構成向けの共有先を足すのは非破壊でできるが、一度許した共有をやめるのは破壊的変更になるため、狭く始める。bare 構成で無視する運用の保存先をどこに置くかは未解決で、現在はその worktree ごとの保存先になる。
+
 ## 一括 declaration の設計判断
 
 契約は [Declaration](../reference/declaration.md) にある。ここには、その設計時に検討した目的・保存境界、個人 workflow の判断境界、採らなかった案を残す。

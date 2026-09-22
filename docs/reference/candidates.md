@@ -56,7 +56,7 @@ axon condition unset ID
 
 条件はシェル文字列として保持し、`/bin/sh -c` で実行する。標準入力は閉じる。呼び出し元の環境変数を継承し、対話・ログイン用の shell 設定は読み込まない。PATH 上のコマンドや認証用の環境変数は利用できるが、普段の対話 shell の alias や独自構文を前提にしない。
 
-作業ディレクトリは、呼び出した Git worktree のルートとし、Git 外では Axon の管理ルートとする。条件を設定したときの worktree には結び付けない。SQLite を共有する別の worktree から実行しても、設定した場所へは戻らない。相対パスを許可するため、同じ条件でも実行する worktree のファイル・ブランチによって観測結果が変わりうる。
+作業ディレクトリは、呼び出した Git worktree のルートとし、Git 外では Axon の管理ルートとする。条件を設定したときの worktree には結び付けない。保存先を共有する別の worktree から実行しても、設定した場所へは戻らない。相対パスを許可するため、同じ条件でも実行する worktree のファイル・ブランチによって観測結果が変わりうる。
 
 実行場所を定め、実際の場所を診断で示すことは Axon の責任とする。使い捨ての worktree に依存しないコマンドを選ぶことは利用者側で扱い、Axon が古い worktree を探索・復元・維持することはしない。相対パスの実行対象がない場合なども、成立判定の代替はせず、上の実行結果の契約に従って失敗を扱う。
 
@@ -76,6 +76,6 @@ axon condition unset ID
 
 ## 実装と検証
 
-`crates/axon-core/src/lifecycle/candidates.rs` が backend に依存しない候補選択と評価順・共有を担い、`src/cli/condition.rs` が外部プロセスの起動と監督を担う。
+`crates/axon-core/src/lifecycle/candidates.rs` が保存から独立した候補選択と評価順・共有を担い、`src/cli/condition.rs` が外部プロセスの起動と監督を担う。
 
 検証は `cargo test`。library では候補集合と評価順・共有を boolean oracle と比較し、独立 fixture の smoke では集合、修復、非実行、worktree・管理ルート、実プロセスの終了コード、30秒の既定値、タイムアウト・Ctrl-C と子プロセスの終了、出力上限、trace の書込失敗を検査する。binary test は起動失敗と trace の flush 失敗も実プロセスで検査する。

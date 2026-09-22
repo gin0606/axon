@@ -69,9 +69,9 @@ fn candidates(options: CandidateOptions, kind: CandidateList) -> Result<Output> 
     let (_, snapshot) = store.read()?;
     let text = {
         let evaluation = if options.trace_conditions {
-            condition::Evaluation::tracing(location.root, options.condition_timeout)
+            condition::Evaluation::tracing(location.worktree, options.condition_timeout)
         } else {
-            condition::Evaluation::with_timeout(location.root, options.condition_timeout)
+            condition::Evaluation::with_timeout(location.worktree, options.condition_timeout)
         };
         read::candidates(
             &snapshot,

@@ -1,15 +1,11 @@
 use super::{
     Output,
-    args::{Backend, Cli, Docs, Merge, Storage},
+    args::{Cli, Docs, Merge, Storage},
     display, output,
-    render::{actor as actor_text, file_init_output},
+    render::{actor as actor_text, init_output},
     store::context,
 };
-use axon::{
-    Result,
-    lifecycle::Snapshot,
-    location::{InitResult, Location},
-};
+use axon::{Result, lifecycle::Snapshot, location::Location};
 use clap::CommandFactory;
 
 pub(super) fn actor() -> Result<Output> {
@@ -35,30 +31,15 @@ pub(super) fn completion(shell: clap_complete::Shell) -> Result<Output> {
         false,
     ))
 }
-pub(super) fn init(prefix: Option<String>, backend: Backend) -> Result<Output> {
+pub(super) fn init(prefix: Option<String>) -> Result<Output> {
     let cwd = std::env::current_dir()?;
     let location = Location::discover(&cwd, true)?;
-    let default_root = if matches!(backend, Backend::File) {
-        &location.root
-    } else {
-        location
-            .sqlite
-            .parent()
-            .and_then(|p| p.parent())
-            .expect("management root")
-    };
     let prefix = match prefix {
         Some(explicit) => explicit,
-        None => default_prefix(default_root)?,
+        None => default_prefix(&location.root)?,
     };
-    let text = match location.init_backend(&prefix, matches!(backend, Backend::File))? {
-        InitResult::Sqlite => format!(
-            "Initialized SQLite at {}\n",
-            display::human_text(location.sqlite.display())
-        ),
-        InitResult::File(files) => file_init_output(&location, &files),
-    };
-    Ok(output(text, true))
+    let initialized = location.init(&prefix)?;
+    Ok(output(init_output(&location, &initialized), true))
 }
 /// The management root directory name, lowercased, when it is a usable ID prefix.
 fn default_prefix(root: &std::path::Path) -> Result<String> {

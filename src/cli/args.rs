@@ -53,15 +53,13 @@ pub(super) enum Command {
         #[command(subcommand)]
         command: Storage,
     },
-    /// Initialize a new management root (default: SQLite)
+    /// Initialize a new management root
     #[command(
-        after_help = "PREFIX uses ASCII lowercase letters, digits and hyphens, and starts and ends with a letter or digit.\nWithout PREFIX, init lowercases the management root directory name and fails if that is not a valid prefix.\nSQLite creates only .axon/axon.db and does not change Git integration files.\nFile creates .axon/state.jsonl and creates or appends .axon/.gitignore and root .gitattributes, preserving unrelated lines.\nInit does not stage or commit any files."
+        after_help = "PREFIX uses ASCII lowercase letters, digits and hyphens, and starts and ends with a letter or digit.\nWithout PREFIX, init lowercases the management root directory name and fails if that is not a valid prefix.\nInit creates .axon/state.jsonl and nothing for Git. Inside Git it prints how to keep the store ignored or to track it; which one applies is your choice.\nInit does not create or edit .gitignore or .gitattributes files or Git config, and does not stage or commit any files."
     )]
     Init {
         /// ID prefix for generated Entity IDs
         prefix: Option<String>,
-        #[arg(long, value_enum, default_value = "sqlite")]
-        backend: Backend,
     },
     /// Register an Issue or Group; --accept registers it as adopted work
     Capture(Create),
@@ -220,11 +218,6 @@ pub(super) enum Condition {
     },
     /// Remove the condition without changing lifecycle
     Unset { id: String },
-}
-#[derive(Clone, Copy, ValueEnum)]
-pub(super) enum Backend {
-    Sqlite,
-    File,
 }
 #[derive(Args)]
 pub(super) struct Body {

@@ -5,88 +5,86 @@ fn created(output: String) -> String {
 }
 
 #[test]
-fn both_backends_support_the_daily_workflow() {
-    for backend in ["sqlite", "file"] {
-        let f = Fixture::new();
-        f.ok(&["init", "trial", "--backend", backend]);
-        let group = created(f.ok(&[
-            "capture",
-            "--kind",
-            "group",
-            "--accept",
-            "--title",
-            "納品",
-            "-m",
-            "全成果を検証",
-        ]));
-        let first = created(f.ok(&["capture", "--title", "調査", "--parent", &group]));
-        let second = created(f.ok(&[
-            "capture", "--accept", "--title", "実装", "--parent", &group, "--needs", &first,
-        ]));
-        assert!(f.ok(&["proposals"]).contains(&first));
-        f.ok(&["accept", &first]);
-        assert!(f.ok(&["proposals"]).is_empty());
-        f.ok(&["condition", "set", &second, "--command", "exit 1"]);
-        assert!(!f.ok(&["tasks"]).contains(&second));
-        assert!(f.ok(&["list"]).contains(&second));
-        f.ok(&["condition", "unset", &second]);
-        assert!(f.ok(&["tasks"]).contains(&second));
-        failure(f.run(&["start", &first]));
-        f.ok(&["start", &group]);
-        let mut attempts = (0..4)
-            .map(|_| {
-                f.command()
-                    .args(["start", &first])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .unwrap()
-            })
-            .collect::<Vec<_>>();
-        let statuses = attempts
-            .drain(..)
-            .map(|p| p.wait_with_output().unwrap().status.success())
-            .collect::<Vec<_>>();
-        assert_eq!(statuses.iter().filter(|s| **s).count(), 1);
-        failure(f.run(&["start", &second]));
-        let notes = (0..4)
-            .map(|n| {
-                f.command()
-                    .args(["note", "add", &first, "-m", &format!("結果 {n}")])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .unwrap()
-            })
-            .collect::<Vec<_>>();
-        for child in notes {
-            success(child.wait_with_output().unwrap());
-        }
-        let saved = f.ok(&["note", "list", &first, "--recorder-details"]);
-        for n in 0..4 {
-            assert!(saved.contains(&format!("結果 {n}")));
-        }
-        f.ok(&["complete", &first]);
-        f.ok(&["start", &second]);
-        failure(f.run(&["complete", &group]));
-        f.ok(&["note", "add", &second, "-m", "成果を統合・検証済み"]);
-        f.ok(&["complete", &second]);
-        let review = f.ok(&["show", &group]);
-        assert!(review.contains("2/2 terminal (2 completed, 0 cancelled)"));
-        assert!(review.contains("Awaiting final confirmation"));
-        assert!(f.ok(&["tasks"]).contains(&group));
-        assert!(
-            f.ok(&["note", "list", &second])
-                .contains("成果を統合・検証済み")
-        );
-        f.ok(&["complete", &group]);
-        assert!(f.ok(&["tasks"]).is_empty());
-        assert!(f.ok(&["log", &group]).contains("InProgress → Completed"));
+fn the_daily_workflow_runs_from_registration_to_group_completion() {
+    let f = Fixture::new();
+    f.ok(&["init", "trial"]);
+    let group = created(f.ok(&[
+        "capture",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        "納品",
+        "-m",
+        "全成果を検証",
+    ]));
+    let first = created(f.ok(&["capture", "--title", "調査", "--parent", &group]));
+    let second = created(f.ok(&[
+        "capture", "--accept", "--title", "実装", "--parent", &group, "--needs", &first,
+    ]));
+    assert!(f.ok(&["proposals"]).contains(&first));
+    f.ok(&["accept", &first]);
+    assert!(f.ok(&["proposals"]).is_empty());
+    f.ok(&["condition", "set", &second, "--command", "exit 1"]);
+    assert!(!f.ok(&["tasks"]).contains(&second));
+    assert!(f.ok(&["list"]).contains(&second));
+    f.ok(&["condition", "unset", &second]);
+    assert!(f.ok(&["tasks"]).contains(&second));
+    failure(f.run(&["start", &first]));
+    f.ok(&["start", &group]);
+    let mut attempts = (0..4)
+        .map(|_| {
+            f.command()
+                .args(["start", &first])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let statuses = attempts
+        .drain(..)
+        .map(|p| p.wait_with_output().unwrap().status.success())
+        .collect::<Vec<_>>();
+    assert_eq!(statuses.iter().filter(|s| **s).count(), 1);
+    failure(f.run(&["start", &second]));
+    let notes = (0..4)
+        .map(|n| {
+            f.command()
+                .args(["note", "add", &first, "-m", &format!("結果 {n}")])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    for child in notes {
+        success(child.wait_with_output().unwrap());
     }
+    let saved = f.ok(&["note", "list", &first, "--recorder-details"]);
+    for n in 0..4 {
+        assert!(saved.contains(&format!("結果 {n}")));
+    }
+    f.ok(&["complete", &first]);
+    f.ok(&["start", &second]);
+    failure(f.run(&["complete", &group]));
+    f.ok(&["note", "add", &second, "-m", "成果を統合・検証済み"]);
+    f.ok(&["complete", &second]);
+    let review = f.ok(&["show", &group]);
+    assert!(review.contains("2/2 terminal (2 completed, 0 cancelled)"));
+    assert!(review.contains("Awaiting final confirmation"));
+    assert!(f.ok(&["tasks"]).contains(&group));
+    assert!(
+        f.ok(&["note", "list", &second])
+            .contains("成果を統合・検証済み")
+    );
+    f.ok(&["complete", &group]);
+    assert!(f.ok(&["tasks"]).is_empty());
+    assert!(f.ok(&["log", &group]).contains("InProgress → Completed"));
 }
 
 #[test]
-fn sqlite_worktrees_share_parallel_work_and_notes() {
+fn linked_worktrees_share_parallel_work_and_notes() {
     let f = Fixture::new();
     git(&f.0, &["init", "-q"]);
     git(
@@ -137,7 +135,7 @@ fn sqlite_worktrees_share_parallel_work_and_notes() {
     );
     f.ok(&["complete", &issue]);
     assert!(linked.ok(&["tasks"]).is_empty());
-    assert!(!linked.db().exists());
+    assert!(!linked.0.join(".axon").exists());
 }
 
 #[test]
@@ -181,14 +179,37 @@ fn help_exposes_lifecycle_commands() {
     }
     let init_help = f.ok(&["init", "--help"]);
     for text in [
-        "SQLite creates only .axon/axon.db",
-        "does not change Git integration files",
-        "File creates .axon/state.jsonl",
-        ".axon/.gitignore",
-        "root .gitattributes",
-        "preserving unrelated lines",
-        "does not stage or commit",
+        "Init creates .axon/state.jsonl and nothing for Git",
+        "prints how to keep the store ignored or to track it",
+        "does not create or edit .gitignore or .gitattributes files or Git config",
+        "does not stage or commit any files",
     ] {
         assert!(init_help.contains(text), "missing from init help: {text}");
+    }
+}
+
+/// The documented text with its line wrapping removed, so the wording is what is asserted.
+fn unwrapped(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[test]
+fn docs_describe_the_one_store_and_the_discovery_order() {
+    let f = Fixture::new();
+    let docs = unwrapped(&f.ok(&["docs"]));
+    for text in [
+        // The store is the only thing init creates, and Git's treatment of it is the reader's.
+        ".axon/state.jsonl and nothing for Git",
+        "never creates or edits .gitignore, .gitattributes or Git config",
+    ] {
+        assert!(docs.contains(text), "missing from docs: {text}");
+    }
+    // The current worktree's store is read before the main worktree's.
+    let current = docs.find("current worktree root's .axon").unwrap();
+    let main = docs.find("main worktree's .axon").unwrap();
+    assert!(current < main, "{docs}");
+    // Neither a second storage format nor a way to choose one is described.
+    for absent in ["--backend", "axon.db"] {
+        assert!(!docs.contains(absent), "{docs}");
     }
 }

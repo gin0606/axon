@@ -1,4 +1,4 @@
-//! Worktree-local snapshots, serialized under a stable OS lock.
+//! The canonical snapshot file, serialized under a stable OS lock beside it.
 use crate::{
     error::{Error, Result, invalid, validate_prefix},
     lifecycle::{self, Snapshot},
@@ -154,33 +154,31 @@ impl Store {
     /// Discovery runs once per invocation; every guard reuses this location.
     pub(crate) fn at(location: Location) -> Result<Self> {
         let store = Self { location };
-        store.backend()?;
+        store.store()?;
         Ok(store)
     }
     fn root(&self) -> &Path {
         &self.location.root
     }
-    fn backend(&self) -> Result<()> {
+    fn store(&self) -> Result<()> {
         if !fs::symlink_metadata(self.root().join(".axon"))?
             .file_type()
             .is_dir()
         {
-            return Err(invalid(
-                "file management directory is not a regular directory",
-            ));
+            return Err(invalid("management directory is not a regular directory"));
         }
-        if !self.location.is_file()? {
-            return Err(invalid("file backend changed"));
+        if !self.location.initialized()? {
+            return Err(invalid("store disappeared"));
         }
         Ok(())
     }
     fn guard(&self) -> Result<()> {
-        self.backend()?;
+        self.store()?;
         self.location.check_index()
     }
     pub fn read(&self) -> Result<(String, Snapshot)> {
         self.guard()?;
-        decode(&read_regular(&self.root().join(".axon/state.jsonl"))?)
+        decode(&read_regular(&self.location.state())?)
     }
     pub fn update<T>(
         &mut self,
@@ -195,7 +193,7 @@ impl Store {
     ) -> Result<T> {
         let _lock = lock(&self.root().join(".axon/state.lock"))?;
         self.guard()?;
-        let path = self.root().join(".axon/state.jsonl");
+        let path = self.location.state();
         let bytes = read_regular(&path)?;
         let (prefix, mut snapshot) = decode(&bytes)?;
         let original = snapshot.clone();
