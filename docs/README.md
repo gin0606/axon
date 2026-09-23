@@ -38,6 +38,7 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 | [記録者連携](development/lifecycle-recorder.md) | 自動取得と保存済み詳細 |
 | [検証方針](development/verification.md) | CI、declarationを含む独立fixture、モデル検証の分担 |
 | [設計判断](design/decisions.md) | 現在の契約がその形になっている理由と、採らなかった案 |
+| [保存層の再設計の前提](design/storage-redesign.md) | 記録の集合と union 統合へ保存層を作り直す判断と、Group の導出状態などコアに加える変更の草案 |
 
 保存形式は [file adapter](../src/file.rs)、保存先の探索と初期化は [location](../src/location.rs)、Usageは [Clap定義](../src/cli/args.rs) を確認します。
 
