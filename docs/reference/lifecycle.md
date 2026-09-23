@@ -50,6 +50,8 @@ Issue・Group とも所属は最大一つで、所属なしも許す。Group も
 
 終了した Group への追加と、そこからの取り外しは不可とする。`Cancelled` の Group は `Reconsider` で `Undecided` へ戻せば構成を変更できる。この終了時の構成固定と Group の再検討は暫定の判断とし、運用上の負担が分かれば見直す。
 
+終了した Group の配下の lifecycle も固定する。`Completed` の Group 配下にある `Cancelled` の Issue は `Reconsider` も取り外しもできない。完了した計画から独立して見直す仕事は、新しい Issue として扱う。理由は [終了した Group の構成と配下の状態を固定する理由](../design/decisions.md#終了した-group-の構成と配下の状態を固定する理由) に記す。
+
 ### 親子のlifecycle
 
 子の `Start` には、子自身が `NotStarted` であることと親の `InProgress` を要求する。`InProgress` の子があれば親を `Release` できない。Group の `Complete`・`Cancel` には直属の Issue・子 Group がすべて終了している必要があり、`Undecided` の子もその妨げになる。子 Group の `Start` にも親の `InProgress` を要求するため、`InProgress` の Entity の祖先はすべて `InProgress` になる。各階層で明示的に着手し、子への `Start` で親を自動変更しない。
