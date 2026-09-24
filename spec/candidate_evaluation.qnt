@@ -350,7 +350,7 @@ module candidate_evaluation {
   val wDependencyBlockedVisible = listingObservation.event == Published and listing.kind == TasksList
     and visible(plan, listing).exists(e => storedOf(plan, e) == NotStarted
       and not(depsComplete(plan, e)))
-  // 祖先に未判断の Group がある未着手も隠さず tasks に出す（状況は Blocked として導出される）。
+  // 祖先に未判断の Group がある未着手も隠さず tasks に出す（状況は Issue と子のある Group で Blocked、子のない Group で Empty）。
   val wUnadoptedAncestorVisible = listingObservation.event == Published and listing.kind == TasksList
     and visible(plan, listing).exists(e => storedOf(plan, e) == NotStarted
       and ancestorsOf(plan, e).exists(a => storedOf(plan, a) == Undecided))

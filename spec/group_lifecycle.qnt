@@ -367,19 +367,30 @@ module group_lifecycle {
     groups(s).filter(g => (storedOf(s, g) == NotStarted and surfaced(s, c, g)) or effective(s, g) == InProgress)
   pure def hasCandidateDescendant(s: PlanState, c: Conditions, g: Id): bool =
     descendants(s, g).exists(id => candidateIssues(s, c).contains(id))
-  // 優先順位: Confirmable（最終確認が通れば完了できる）> Ready（着手候補の子孫がある）
-  // > Working（実効が InProgress）> Blocked（子が一つ以上あり上の三つのどれでもない）> Empty（直属の子がない）。
+  // 優先順位: Empty（直属の子がない。完了できても計画を書くのが次の一手）> Confirmable（最終確認が通れば完了できる）
+  // > Ready（着手候補の子孫がある）> Working（実効が InProgress）> Blocked（子があり上のどれでもない）。
   pure def groupStatus(s: PlanState, c: Conditions, g: Id): TaskStatus =
-    if (canOperate(s, g, Complete, true)) Confirmable
+    if (children(s, g).size() == 0) Empty
+    else if (canOperate(s, g, Complete, true)) Confirmable
     else if (hasCandidateDescendant(s, c, g)) Ready
     else if (effective(s, g) == InProgress) Working
-    else if (children(s, g).size() > 0) Blocked
-    else Empty
+    else Blocked
 
-  // Blocked の理由の内訳。未完了の dependency は、自身・全祖先・未終了の子孫のいずれかの依存先が未完了であること。
+  // 詰まっている Group: 完了できず、着手候補の子孫も着手中（stored が InProgress の Issue）の子孫もない。
+  // 状況が Blocked の行のほか、完了済みの子孫はあるが着手中の子孫がない Working の行と、完了できない Empty の行が該当する。
+  // Confirmable の行と完了できる Empty の行は次の一手が状況から分かるため含めない。
+  // 着手中の Issue に後から足した未完了の dependency は、その Issue 自身の行の問題で、Group を詰まらせない。
+  pure def hasWorkingDescendant(s: PlanState, g: Id): bool =
+    workingIssues(s).exists(d => descendants(s, g).contains(d))
+  pure def stalled(s: PlanState, c: Conditions, g: Id): bool =
+    not(canOperate(s, g, Complete, true)) and not(hasCandidateDescendant(s, c, g)) and not(hasWorkingDescendant(s, g))
+
+  // 詰まっている理由の内訳。未完了の dependency は、自身・全祖先・未終了の子孫のいずれかの依存先が未完了であること。
   // 未判断の子、未終了の子 Group、浮上していない着手可能な子孫の Issue、stored が Undecided の祖先を区別する。
-  type BlockReason = DependencyPending | UndecidedChild | OpenSubgroup | HiddenCandidate | UnadoptedAncestor
-  pure def blockReasons(s: PlanState, c: Conditions, g: Id): Set[BlockReason] = {
+  // 理由は詰まっている行に示す。関数はどの Group にも定義できるが、詰まっていない行（Confirmable、Ready、
+  // 完了できる Empty）は次の一手が状況から分かるため理由を示さない。詰まっている行には少なくとも一つ付く（invStalledHasReason）。
+  type StallReason = DependencyPending | UndecidedChild | OpenSubgroup | HiddenCandidate | UnadoptedAncestor
+  pure def stallReasons(s: PlanState, c: Conditions, g: Id): Set[StallReason] = {
     val dependency = not(depsComplete(s, g)) or not(ancestorDepsComplete(s, g))
       or descendants(s, g).exists(d => not(terminal(storedOf(s, d))) and not(depsComplete(s, d)))
     val undecided = children(s, g).exists(ch => storedOf(s, ch) == Undecided)
@@ -665,21 +676,31 @@ module group_lifecycle {
       and surfaced(plan, conditions, id) and not(startableIssues(plan).contains(id))),
   })
   val invGroupStatusDefinition = groupRows(plan, conditions).forall(g => and {
-    groupStatus(plan, conditions, g) == Confirmable iff canOperate(plan, g, Complete, true),
-    groupStatus(plan, conditions, g) == Ready iff (not(canOperate(plan, g, Complete, true))
-      and hasCandidateDescendant(plan, conditions, g)),
-    groupStatus(plan, conditions, g) == Working iff (not(canOperate(plan, g, Complete, true))
-      and not(hasCandidateDescendant(plan, conditions, g)) and effective(plan, g) == InProgress),
-    groupStatus(plan, conditions, g) == Blocked iff (not(canOperate(plan, g, Complete, true))
-      and not(hasCandidateDescendant(plan, conditions, g)) and effective(plan, g) != InProgress
-      and children(plan, g).size() > 0),
-    groupStatus(plan, conditions, g) == Empty iff (not(canOperate(plan, g, Complete, true))
-      and not(hasCandidateDescendant(plan, conditions, g)) and effective(plan, g) != InProgress
-      and children(plan, g).size() == 0),
+    groupStatus(plan, conditions, g) == Empty iff children(plan, g).size() == 0,
+    groupStatus(plan, conditions, g) == Confirmable iff (children(plan, g).size() > 0
+      and canOperate(plan, g, Complete, true)),
+    groupStatus(plan, conditions, g) == Ready iff (children(plan, g).size() > 0
+      and not(canOperate(plan, g, Complete, true)) and hasCandidateDescendant(plan, conditions, g)),
+    groupStatus(plan, conditions, g) == Working iff (children(plan, g).size() > 0
+      and not(canOperate(plan, g, Complete, true)) and not(hasCandidateDescendant(plan, conditions, g))
+      and effective(plan, g) == InProgress),
+    groupStatus(plan, conditions, g) == Blocked iff (children(plan, g).size() > 0
+      and not(canOperate(plan, g, Complete, true)) and not(hasCandidateDescendant(plan, conditions, g))
+      and effective(plan, g) != InProgress),
   })
-  // Blocked の Group には少なくとも一つ理由がある。
-  val invBlockedHasReason = groupRows(plan, conditions).forall(g =>
-    groupStatus(plan, conditions, g) == Blocked implies blockReasons(plan, conditions, g).size() > 0)
+  // 詰まっている Group の行には少なくとも一つ理由がある。Blocked の行はすべて詰まっており、
+  // Working の行は着手中の子孫がないとき、Empty の行は完了できないときに詰まっている。
+  val invStalledHasReason = groupRows(plan, conditions).forall(g =>
+    stalled(plan, conditions, g) implies stallReasons(plan, conditions, g).size() > 0)
+  // 構成の確認: Blocked の行は詰まっており、Working の行は着手中の子孫がなければ、Empty の行は完了できなければ詰まっている。
+  // Blocked の節は「着手中の Issue の祖先は採用済み」（invWorkingAncestors）に依存し、残る二つは定義から従う。
+  val invStalledRowStatuses = groupRows(plan, conditions).forall(g => and {
+    groupStatus(plan, conditions, g) == Blocked implies stalled(plan, conditions, g),
+    (groupStatus(plan, conditions, g) == Working and not(hasWorkingDescendant(plan, g)))
+      implies stalled(plan, conditions, g),
+    (groupStatus(plan, conditions, g) == Empty and not(canOperate(plan, g, Complete, true)))
+      implies stalled(plan, conditions, g),
+  })
 
   // invariant: 未終了（Completed でない登録済み）の各 Entity について、その近傍のいずれかに
   // 実行可能な lifecycle 操作（最終確認は通るとする）か移動か dependency の編集がある。
@@ -934,6 +955,9 @@ module group_lifecycle {
   val wGroupWorking = sawGroupStatus(Working)
   val wGroupBlocked = sawGroupStatus(Blocked)
   val wGroupEmpty = sawGroupStatus(Empty)
+  // 空の採用済み Group は完了できても Empty になる。
+  val wEmptyOverConfirmable = groupRows(plan, conditions).exists(g =>
+    groupStatus(plan, conditions, g) == Empty and canOperate(plan, g, Complete, true))
   val wReadyOverWorking = groupRows(plan, conditions).exists(g =>
     groupStatus(plan, conditions, g) == Ready and effective(plan, g) == InProgress)
   val wConfirmableOverWorking = groupRows(plan, conditions).exists(g =>
@@ -954,17 +978,26 @@ module group_lifecycle {
     | _ => false
   }
 
-  // witness: Blocked の理由の内訳ごとの観測。
-  def sawBlockedBy(reason: BlockReason): bool = groupRows(plan, conditions).exists(g =>
-    groupStatus(plan, conditions, g) == Blocked and blockReasons(plan, conditions, g).contains(reason))
-  val wBlockedByUndecidedChildren = sawBlockedBy(UndecidedChild)
-  val wBlockedByDependency = sawBlockedBy(DependencyPending)
-  val wBlockedBySubgroup = sawBlockedBy(OpenSubgroup)
-  val wBlockedByHiddenCandidate = sawBlockedBy(HiddenCandidate)
-  val wBlockedByUnadoptedAncestor = sawBlockedBy(UnadoptedAncestor)
-  // 理由のどれもない Blocked の Group（invBlockedHasReason の反例）。観測されないことを確かめる。
-  val wBlockedWithoutListedReason = groupRows(plan, conditions).exists(g =>
-    groupStatus(plan, conditions, g) == Blocked and blockReasons(plan, conditions, g).size() == 0)
+  // witness: 詰まっている理由の内訳ごとの観測と、理由が付く行の状況ごとの観測。
+  // 理由の内訳は子のある行（Blocked と Working）で観測する。Empty の行は理由が 2 種類に限られ、
+  // 到達しやすいため、含めると子のある行での各理由の到達を隠す。
+  def sawStalledBy(reason: StallReason): bool = groupRows(plan, conditions).exists(g =>
+    stalled(plan, conditions, g) and children(plan, g).size() > 0
+      and stallReasons(plan, conditions, g).contains(reason))
+  val wStalledByUndecidedChildren = sawStalledBy(UndecidedChild)
+  val wStalledByDependency = sawStalledBy(DependencyPending)
+  val wStalledBySubgroup = sawStalledBy(OpenSubgroup)
+  val wStalledByHiddenCandidate = sawStalledBy(HiddenCandidate)
+  val wStalledByUnadoptedAncestor = sawStalledBy(UnadoptedAncestor)
+  def sawStalledStatus(status: TaskStatus): bool = groupRows(plan, conditions).exists(g =>
+    stalled(plan, conditions, g) and groupStatus(plan, conditions, g) == status)
+  // 完了済みの子孫はあるが着手中の子孫がない実効 InProgress の行に理由が付く。
+  val wStalledWorking = sawStalledStatus(Working)
+  val wStalledBlocked = sawStalledStatus(Blocked)
+  val wStalledEmpty = sawStalledStatus(Empty)
+  // 理由のどれもない詰まっている Group（invStalledHasReason の反例）。観測されないことを確かめる。
+  val wStalledWithoutListedReason = groupRows(plan, conditions).exists(g =>
+    stalled(plan, conditions, g) and stallReasons(plan, conditions, g).size() == 0)
 
   // witness: 実効が InProgress の Group が、stored が NotStarted でない祖先を持つ状態
   // （invEffectiveWorkingAncestors の反例）と、そこへ至る経路。Group の完了、完了済みの Entity の移動、

@@ -45,7 +45,7 @@ Quint の `import` の向きは `lifecycle_rules` を起点にした一方向で
 - 終了した Group の構成固定は維持し、`Completed` の Group は `Reopen`、`Cancelled` の Group は `Reconsider` で戻してから構成を変える。
 - `InProgress` の Entity にも未完了の dependency を追加できる（完了時の検査で止まる）。Issue・Group から Group への dependency は依存先 Group の `Complete` まで待つ。
 - 再浮上条件は候補の表示だけに使い、ID を明示した操作は縛らない。
-- `axon tasks` は平らな一覧で、Issue の行は未着手で自身と全祖先が浮上しているものと浮上に関係なく進行中のもの、Group の行は stored が `NotStarted` で浮上しているものと浮上に関係なく実効 `InProgress` のもの。Group の行の状況は配下から `Confirmable` > `Ready` > `InProgress` > `Blocked` > `Empty` の優先順位で導出し、`Blocked` の理由（未完了の dependency、`Undecided` の子、未終了の子 Group、浮上していない着手可能な子孫、`Undecided` の祖先）を区別する。
+- `axon tasks` は平らな一覧で、Issue の行は未着手で自身と全祖先が浮上しているものと浮上に関係なく進行中のもの、Group の行は stored が `NotStarted` で浮上しているものと浮上に関係なく実効 `InProgress` のもの。Group の行の状況は配下から `Empty` > `Confirmable` > `Ready` > `InProgress` > `Blocked` の優先順位で導出する。直属の子がない Group は完了できても `Empty` で、次の一手は計画を書くこと（`axon complete` の可否は変えない）。詰まっている理由（未完了の dependency、`Undecided` の子、未終了の子 Group、浮上していない着手可能な子孫、`Undecided` の祖先）は、完了できず、着手候補の子孫も着手中（stored が `InProgress`）の Issue の子孫もない Group の行に示し、`Blocked` の行に限らず、完了済みの子孫はあるが着手中の子孫がない実効 `InProgress` の行と、完了できない `Empty` の行にも付く。`Confirmable` の行、`Ready` の行、完了できる `Empty` の行は次の一手が状況から分かるため理由を示さない。
 
 ### 反例と review から足した規則
 
@@ -53,14 +53,15 @@ Quint の `import` の向きは `lifecycle_rules` を起点にした一方向で
 
 - **守る性質は「実効 `InProgress` の Group の全祖先が採用済み」。** `InProgress` の Issue についての同じ性質を Group の実効 lifecycle へ広げたもの。この性質を保つために、Issue・Group の `Complete` と `Reopen`、着手・完了した子孫を持つ Group の `Accept` は全祖先が採用済みであることを要求し、実効が `InProgress` か `Completed` の Entity の移動先は、移動先の Group 自身を含む全祖先が採用済みであることを要求する。Group の `Withdraw` は実効が `NotStarted` のときだけ許す。実効は `NotStarted` の子 Group を通じて上へ伝播するので、孫が着手中なら祖父も `Withdraw` できない（直属の子の保存だけを見ると、子 Group の保存は `InProgress` にならないため、この穴が反例として出た）。
 - **`Undecided` の Group の下に完了済みの子孫があることは許す。** 完了済みの子を持つ Group を `Cancel` してから `Reconsider` すると、この状態になる。取りやめた子 Group の下に完了済みの子孫があるときの親の `Withdraw` も同じ理由で禁じない。その Group を再び `Accept` するには全祖先が採用済みであることが要る。
-- **`Blocked` は残余として定義する。** Group の行の状況は、`Confirmable`、`Ready`、`InProgress`、`Blocked`（子があり、上の三つのどれでもない）、`Empty` の順で決める。当初の「未着手の Issue の子孫はあるが着手候補がない」という定義では、採用直後で子がすべて `Undecided` の Group や、子が空の子 Group しか持たない Group がどの状況にも入らなかった。`Blocked` の理由は、未完了の dependency、`Undecided` の子、未終了の子 Group、浮上していない着手可能な子孫、`Undecided` の祖先の 5 種類で尽きる。
+- **`Blocked` は残余として定義する。** Group の行の状況は、`Empty`（直属の子がない）、`Confirmable`、`Ready`、`InProgress`、`Blocked`（子があり、上のどれでもない）の順で決める。当初の「未着手の Issue の子孫はあるが着手候補がない」という定義では、採用直後で子がすべて `Undecided` の Group や、子が空の子 Group しか持たない Group がどの状況にも入らなかった。詰まっている理由は、未完了の dependency、`Undecided` の子、未終了の子 Group、浮上していない着手可能な子孫、`Undecided` の祖先の 5 種類で尽きる。
+- **空の Group は `Confirmable` より先に `Empty` にし、詰まっている理由は `Blocked` の行に限らない。** 取り込み後の独立 review で、採用済みで dependency のない空の Group が `Confirmable` になり、完了済みの子孫はあるが着手中の子孫がない Group が理由のない `InProgress` の行になることが分かった。どちらも定義どおりで反例ではないが、空の Group の次の一手は完了ではなく計画を書くことなので `Empty` を先に判定し、`InProgress` の行は「配下の仕事が始まっている」という実効 lifecycle と同じ概念のまま維持して（`Blocked` へ落とす案と複合表示は採らない）、理由の導出を「完了できず、着手候補の子孫も着手中の Issue の子孫もない Group の行」全般へ広げた。`Confirmable` の行と完了できる `Empty` の行は次の一手が状況から分かるため、理由を要求しない。着手中の Issue に後から足した未完了の dependency はその Issue の行の問題として扱い、Group を詰まっているとは見なさない。
 
 規則を直す前の実行で出た反例は、五つの状況で尽くせない Group の行、`Undecided` の祖先の下の実効 `InProgress`（空の Group の完了、完了済み Entity の移動、取りやめ・見送り・再検討・採用の組合せ）、理由のない `Blocked`、近傍が狭すぎた行き止まり検査の偽陽性の 4 件。独立 review からは、空虚な invariant と名前とずれた witness を取り込みました。
 
 ### モデリングで見えた edge case
 
 - **再開は依存元と祖先の側から順に行う。** `Completed` の依存元がある Entity は `Reopen` できず、依存元を `Reopen` するにはその祖先が採用済みである必要がある。数段の `Reopen` を要する場合がある。行き止まりの検査はこのため、完了済みの依存元とその祖先を近傍に加えている。
-- **`Undecided` の祖先の下の採用済み Group は `Blocked` として一覧に出る。** 祖先そのものは `Undecided` なので一覧に出ない。同じ理由で、`Undecided` の祖先の下の未着手 Issue も浮上していれば `Blocked` の行として出る。
+- **`Undecided` の祖先の下の採用済み Group は、子があれば `Blocked`、なければ `Empty` として一覧に出て、理由に `Undecided` の祖先が付く。** 祖先そのものは `Undecided` なので一覧に出ない。同じ理由で、`Undecided` の祖先の下の未着手 Issue も浮上していれば `Blocked` の行として出る。
 - **実効 `InProgress` の Group は浮上していなくても一覧に出る。** 着手中の仕事を見失わないため、Issue の `InProgress` と同じ扱いにしている。その Group に着手候補の子孫があれば状況は `Ready` になる。
 
 ## 各モデルの探索と検証する性質
@@ -81,9 +82,9 @@ Quint の `import` の向きは `lifecycle_rules` を起点にした一方向で
 
 Entity は固定 ID 5件。0 は Group、1 と 2 は 0 の子 Issue、3 は所属なしの Group、4 は未登録の枠で、全員 `Undecided`、条件入力はすべて不成立から始めます。未登録の枠は探索領域を有限にする仕組みであって、新しい lifecycle ではありません。これは探索の開始点であり、製品の再浮上条件の初期値ではありません。`step` は Group の操作、Issue の操作、それ以外（移動、登録、変換、dependency の編集、条件入力の変化）の三枝から選びます。ID は固定集合から選び、未登録 ID の再利用と削除は扱いません。
 
-39の invariant は、Group の保存が `InProgress` にならないこと、実効 lifecycle が導出の不動点であること、実効 `InProgress` の Group が着手・完了した子孫を持ちその全祖先が採用済みであること、着手・完了の前提、Group の `Completed` への到達が最終確認を伴う `Complete` だけであること、`Completed` から抜けるのが `Reopen` だけで他を変えないこと、包含（所属の妥当性、Issue が子を持たないこと、非循環、終了した Group の子孫がすべて終了し構成が変わらないこと）、各操作の影響範囲、変換が種類だけを変えること、登録が採否を反映し自動で着手しないこと、dependency（参照の妥当性、通常完了経路の非循環、`Completed` の dependency がすべて `Completed` で固定されること、自己依存と祖先・子孫間の依存の不在）、候補（判断候補と着手候補の定義、Group が着手候補にならないこと、判断候補と着手候補・着手中の非重複、条件入力が着手可否を変えないこと）、一覧の状況の定義と優先順位、`Blocked` に理由があること、未終了の各 Entity について自身・祖先・子孫・依存先とその完了済みの依存元の閉包のどこかで操作できることを検査します。前提と更新の定義から直接従う性質は「構成の確認」として file 内で区別しています。
+40の invariant は、Group の保存が `InProgress` にならないこと、実効 lifecycle が導出の不動点であること、実効 `InProgress` の Group が着手・完了した子孫を持ちその全祖先が採用済みであること、着手・完了の前提、Group の `Completed` への到達が最終確認を伴う `Complete` だけであること、`Completed` から抜けるのが `Reopen` だけで他を変えないこと、包含（所属の妥当性、Issue が子を持たないこと、非循環、終了した Group の子孫がすべて終了し構成が変わらないこと）、各操作の影響範囲、変換が種類だけを変えること、登録が採否を反映し自動で着手しないこと、dependency（参照の妥当性、通常完了経路の非循環、`Completed` の dependency がすべて `Completed` で固定されること、自己依存と祖先・子孫間の依存の不在）、候補（判断候補と着手候補の定義、Group が着手候補にならないこと、判断候補と着手候補・着手中の非重複、条件入力が着手可否を変えないこと）、一覧の状況の定義と優先順位、詰まっている Group（完了できず、着手候補の子孫も着手中の Issue の子孫もない）の行に理由があること、`Blocked` の行、着手中の子孫がない `InProgress` の行、完了できない `Empty` の行が詰まっていること、未終了の各 Entity について自身・祖先・子孫・依存先とその完了済みの依存元の閉包のどこかで操作できることを検査します。前提と更新の定義から直接従う性質は「構成の確認」として file 内で区別しています。
 
-88の witness は各操作の到達に加えて、`Reopen` 後の再着手、完了済みの子を持つ Group の `Reopen`、`Completed` の依存元による `Reopen` の拒否、空の Group と全子 `Cancelled` の Group の完了、祖先の dependency による着手の阻害と解禁、浮上していない Issue への ID を明示した着手、三階層での実効 `InProgress` の伝播、孫が着手中の祖父の `Withdraw` の拒否、変換と変換後の登録、実効 `InProgress` の Entity の移動、直接・間接の循環の拒否、着手中に足した未完了の dependency による完了の阻止、五つの状況と優先順位、`Blocked` の 5 つの理由を観測します。理由のない `Blocked`（`wBlockedWithoutListedReason`）と、実効 `InProgress` が `Undecided` の祖先の下にできる状態とそこへ至る経路（`wEffectiveWorkingUnderUnadopted`・`wUnadoptedViaComplete`・`wUnadoptedViaMove`・`wUnadoptedViaAcceptOrReopen`）の 5 つは、規則で塞いだことを 0 trace で確かめる対象として残しています。
+92の witness は各操作の到達に加えて、`Reopen` 後の再着手、完了済みの子を持つ Group の `Reopen`、`Completed` の依存元による `Reopen` の拒否、空の Group と全子 `Cancelled` の Group の完了、祖先の dependency による着手の阻害と解禁、浮上していない Issue への ID を明示した着手、三階層での実効 `InProgress` の伝播、孫が着手中の祖父の `Withdraw` の拒否、変換と変換後の登録、実効 `InProgress` の Entity の移動、直接・間接の循環の拒否、着手中に足した未完了の dependency による完了の阻止、五つの状況と優先順位、完了できる空の Group の `Empty`、子のある詰まっている行での 5 つの理由、理由が付く `InProgress`・`Blocked`・`Empty` の各行を観測します。理由のない詰まっている Group（`wStalledWithoutListedReason`）と、実効 `InProgress` が `Undecided` の祖先の下にできる状態とそこへ至る経路（`wEffectiveWorkingUnderUnadopted`・`wUnadoptedViaComplete`・`wUnadoptedViaMove`・`wUnadoptedViaAcceptOrReopen`）の 5 つは、規則で塞いだことを 0 trace で確かめる対象として残しています。
 
 行き止まりがないという性質は整理・再判断・`Reopen` の操作も含み、当初の計画どおり必ず完了できることを意味しません。同じ所属の再指定はモデルでは無効な操作として探索から外しますが、CLI では同値の指定は成功した no-op です。前提の循環検査と包含の検査はこの固定範囲を対象とし、四階層以上の木や、より多い Entity を含む具体的なグラフは探索していません。追加できる Entity が1件という探索上の上限があり、新規登録が無効になることは製品が追加件数を制限するという意味ではありません。最終確認が通るかは抽象入力で、確認工程の実装や不合格の理由は扱いません。
 
@@ -153,19 +154,19 @@ run(candidate, 30000, 60, invariants, witnesses, "--init", "queryInit", "--step"
 run(candidate, 3000, 60, invariants, witnesses, "--init", "queryInit", "--step", "workAndList")
 ```
 
-`group_lifecycle` の witness のうち `wBlockedWithoutListedReason`・`wEffectiveWorkingUnderUnadopted`・`wUnadoptedViaComplete`・`wUnadoptedViaMove`・`wUnadoptedViaAcceptOrReopen` の 5 つは 0 trace が期待で、通常探索と補助探索のいずれでも観測されないことを確認します。
+`group_lifecycle` の witness のうち `wStalledWithoutListedReason`・`wEffectiveWorkingUnderUnadopted`・`wUnadoptedViaComplete`・`wUnadoptedViaMove`・`wUnadoptedViaAcceptOrReopen` の 5 つは 0 trace が期待で、通常探索と補助探索のいずれでも観測されないことを確認します。
 
 ## 検証結果
 
 いずれも bounded random simulation の結果であり、全状態の証明でも、必ず完了することの保証でもありません。どのモデルも、完了への到達を強制する公平性は仮定しません。seed を固定しないため、観測される trace 数は実行ごとに変わります。ここに残すのは実行条件と判定で、trace 数は witness の到達しやすさの目安として添えます。
 
-以下は 2026-09-25、Quint 0.32.0、Rust backend、並列実行、seed 未固定での、再設計モデルを取り込んで独立 review を反映した後の結果です。6モデルの型検査はいずれも成功しました。
+以下は 2026-09-25、Quint 0.32.0、Rust backend、並列実行、seed 未固定での、一覧の Group の行の規則（`Empty` の優先、詰まっている理由の導出範囲）を直した後の結果です。6モデルの型検査はいずれも成功しました。
 
-- `issue_lifecycle`: 100,000 traces、最大80 steps（約10秒）。9 invariant に反例はなく、23 witness はすべて観測されました。最も少ない完了後の非浮上で38.0%です。
-- `group_lifecycle`: 5,000 traces、最大150 steps（約3.5分）。39 invariant に反例はなく、88 witness のうち規則で塞いだ経路と理由のない `Blocked` を観測する5つが期待どおり0で、残り83をすべて観測しました。最も少ないのは祖先の dependency の完了による着手の解禁で12 traces、次いで完了済みの子を持つ Group の `Reopen` で13 traces、子 Group の完了を経た完了で14 traces です。
-- `lifecycle_reachability`: 同じ39 invariant を指定して反例なし。`workAndReopen`・`dependAndStart`・`listAndWork` は各300 traces、最大100 steps、`readoptAfterClose` は5,000 traces、最大60 steps。`workAndReopen` は `Reopen` 後の再着手を296、完了済みの子を持つ Group の `Reopen` を48、`Completed` の依存元による `Reopen` の拒否を298 traces で観測しました。`dependAndStart` は祖先の dependency の完了による着手の解禁を41、自身の依存先の完了による解禁を245 traces で観測しました。`listAndWork` は `Ready` と実効 `InProgress` が重なる Group を264、実効 `InProgress` の Group の移動を300 traces で観測しました。`readoptAfterClose` では規則で塞いだ経路の witness は0のままでした。通常探索と補助探索を合わせ、0が期待の5つを除く83 witness がいずれかの探索で1 trace 以上に到達しました。
-- `candidate_evaluation`: `queryStep` は30,000 traces、最大60 steps（約1.7分）。15 invariant に反例はなく、29 witness 中28を観測しました。`Reopen` した Issue の再表示は通常探索では未到達で、補助入口が担保します。通常探索で最も少ないのは評価失敗後の着手と未成立の結果を持つ進行中の Group の表示で各6 traces です。`workAndList` は3,000 traces、最大60 steps で反例なし、`Reopen` した Issue の再表示を30、評価失敗後の着手を37、未成立の結果を持つ進行中の Group の表示を271、進行中の Group の評価を631 traces で観測しました。両方を合わせ、29 witness はすべて1 trace 以上で観測されました。
-- `lifecycle_information`: 100,000 traces、最大60 steps（約21秒）。9 invariant に反例はなく、21 witness はすべて観測されました。最も少ない `Release` で4.0%、次いで `Reopen` 後の文面編集で7.5%です。
+- `issue_lifecycle`: 100,000 traces、最大80 steps（約7秒）。9 invariant に反例はなく、23 witness はすべて観測されました。最も少ない完了後の非浮上で37.8%です。
+- `group_lifecycle`: 5,000 traces、最大150 steps（約3.5分）。40 invariant に反例はなく、92 witness のうち規則で塞いだ経路と理由のない詰まっている Group を観測する5つが期待どおり0で、残り87をすべて観測しました。最も少ないのは三階層での孫の着手による祖父の実効 `InProgress` で8 traces、次いで祖先の dependency の完了による着手の解禁で9 traces、`Reopen` 後の再着手で13 traces です。完了できる空の Group の `Empty` は3,453、着手中の子孫がない実効 `InProgress` の行に理由が付く状態は254、完了できない `Empty` の行に理由が付く状態は4,320 traces で観測しました。
+- `lifecycle_reachability`: 同じ40 invariant を指定して反例なし。`workAndReopen`・`dependAndStart`・`listAndWork` は各300 traces、最大100 steps、`readoptAfterClose` は5,000 traces、最大60 steps。`workAndReopen` は `Reopen` 後の再着手を293、完了済みの子を持つ Group の `Reopen` を62、`Completed` の依存元による `Reopen` の拒否を296 traces で観測しました。`dependAndStart` は祖先の dependency の完了による着手の解禁を46、自身の依存先の完了による解禁を245 traces で観測しました。`listAndWork` は `Ready` と実効 `InProgress` が重なる Group を257、実効 `InProgress` の Group の移動を300、完了できる空の Group の `Empty` を300 traces で観測しました。`readoptAfterClose` では規則で塞いだ経路の witness は0のままで、着手中の子孫がない実効 `InProgress` の行に理由が付く状態を1,193 traces で観測しました。通常探索と補助探索を合わせ、0が期待の5つを除く87 witness がいずれかの探索で1 trace 以上に到達しました。
+- `candidate_evaluation`: `queryStep` は30,000 traces、最大60 steps（約1.5分）。15 invariant に反例はなく、29 witness 中28を観測しました。`Reopen` した Issue の再表示は通常探索では未到達で、補助入口が担保します。通常探索で最も少ないのは評価失敗後の着手で4 traces、次いで未成立の結果を持つ進行中の Group の表示で15 traces です。`workAndList` は3,000 traces、最大60 steps で反例なし、`Reopen` した Issue の再表示を35、評価失敗後の着手を38、未成立の結果を持つ進行中の Group の表示を245、進行中の Group の評価を581 traces で観測しました。両方を合わせ、29 witness はすべて1 trace 以上で観測されました。
+- `lifecycle_information`: 100,000 traces、最大60 steps（約17秒）。9 invariant に反例はなく、21 witness はすべて観測されました。最も少ない `Release` で4.1%、次いで `Reopen` 後の文面編集で7.6%です。
 
 各モデルの traces 数は、補助探索が担保しない witness が偶然に左右されずに観測される水準を下限とし、そのうえで invariant を叩く厚みを加えて決めています。観測率の低い witness を通常探索の traces 数で拾おうとするより、補助入口を足すほうが確実です。取り込み前の再設計モデルの反例と review の経緯は「反例と review から足した規則」にまとめています。
 
