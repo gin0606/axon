@@ -1,6 +1,8 @@
 # 再設計モデル
 
-保存層のやり直しと、それに伴うコアの意味論の変更を、実装と契約文書の前に Quint で固めるためのモデル群です。`spec/` 直下の既存モデルは現行の契約を表し、この directory のモデルは再設計後の案を表します。案が確定したら、既存モデル・契約文書・実装へ反映し、この directory は役目を終えます。
+保存層のやり直しと、それに伴うコアの意味論の変更を、実装と契約文書の前に Quint で固めるためのモデル群です。案が確定したら、`spec/` 直下の正式なモデル・契約文書・実装へ反映し、この directory は役目を終えます。
+
+コア側のモデル（`lifecycle_rules`・`plan_lifecycle`・`plan_reachability`）は `spec/` 直下の正式版（`lifecycle_rules.qnt`・`group_lifecycle.qnt`・`lifecycle_reachability.qnt`）へ取り込み済みで、コアの規則・探索・検証結果は [spec/README.md](../README.md) を参照します。この directory に残るのは保存層の統合側（`record_integration*.qnt`）で、その正式版への取り込みまで再設計後の案として置きます。
 
 ## 前提とした設計
 
@@ -13,36 +15,22 @@
 - 記録 ID は内容から決まる hash で、同じ ID なら同じ内容。Entity ID は乱数 8 桁で、同じ ID の作成記録が二つあれば作成記録が二つとも head になるので、通常の衝突として見える。
 - cherry-pick や revert で記録の一部だけが branch に入ると、親の欠けた記録が古い記録と並んで head になり、偽の衝突として見える。これは受け入れ、CLI が「片方は親記録が欠けていて新しい可能性が高い」と示す。祖先集合を記録に持たせて偽の衝突をなくす案は、困ったときに後から足す。
 
-コアの意味論の変更:
-
-- `Reopen` を足す。`Completed` から `NotStarted` へ戻す。
-- Group は `Start`・`Release` を持たず、保存される lifecycle は `InProgress` にならない。実効 lifecycle は「保存が `NotStarted` で、直属の子に実効 `InProgress` か `Completed` があれば `InProgress`」と導出する。
-- Group の `Complete` は保存が `NotStarted` のとき許す。空の Group と子がすべて `Cancelled` の Group もこの経路で完了する。
-- Issue の `Start` は親の `InProgress` ではなく、全祖先が採用済み（保存が `NotStarted`）で、自身と全祖先の dependency が `Completed` であることを要求する。
-- kind は現在値で、`Undecided`・`NotStarted` の Issue を Group に、子のない `Undecided`・`NotStarted` の Group を Issue に変換できる。
-- 終了した Group の構成固定は維持し、`Completed` の Group は `Reopen`、`Cancelled` の Group は `Reconsider` で戻してから構成を変える。
-- `axon tasks` は平らな一覧のまま、Group の行の状況を配下から `Confirmable`・`Ready`・`InProgress`・`Blocked`・`Empty` の優先順位で導出する。
+コアの意味論の変更（`Reopen`、Group の実効 lifecycle、Issue の `Start` の前提、kind の変換、一覧の状況）は [spec/README.md](../README.md) の「モデルが表す規則」を正とし、統合モデルはその規則のうち統合の検査に要る範囲を持つ。
 
 ## モデル一覧
 
 | ファイル | 対象 | 対象外 |
 | --- | --- | --- |
-| [`lifecycle_rules.qnt`](lifecycle_rules.qnt) | 状態 5 種類・操作 8 種類と、Issue と Group それぞれの基本遷移の前提 | 包含、dependency、実効 lifecycle |
-| [`plan_lifecycle.qnt`](plan_lifecycle.qnt) | Group の実効 lifecycle、`Reopen`、変換、包含と dependency、候補と一覧の状況 | 記録、統合、文面と Note、CLI、永続化 |
-| [`plan_reachability.qnt`](plan_reachability.qnt) | `plan_lifecycle` の到達しにくい経路を狙う 4 つの入口 | 許可条件・状態更新・検査する性質（`plan_lifecycle` のものを使う） |
 | [`record_integration.qnt`](record_integration.qnt) | 2 replica が記録の集合を任意の部分集合で持ち寄る統合、衝突の検出と解決、構造の違反の検出と修復 | file の bytes と行の統合、lock、探索、変換、再浮上条件と一覧 |
 | [`record_integration_paths.qnt`](record_integration_paths.qnt) | `record_integration` の到達しにくい経路を狙う 5 つの入口 | 同上 |
 | [`record_integration_test.qnt`](record_integration_test.qnt) | 固定した順序で特定の経路を再現する `run` テスト 6 本 | 探索 |
 
-`record_integration` の lifecycle 操作の前提は、統合の検査に要る範囲へ簡略化した部分集合です（変換、再浮上条件、Group の `Cancel` の細部を持たない）。lifecycle・包含・dependency の規則の正本は `plan_lifecycle` とし、両者で異なる部分は `plan_lifecycle` を優先します。下の「モデリングで確定した規則」は両方のモデルに入れています。
+`record_integration` の lifecycle 操作の前提は、統合の検査に要る範囲へ簡略化した部分集合です（変換、再浮上条件、Group の `Cancel` の細部を持たない）。lifecycle・包含・dependency の規則の正本は `spec/group_lifecycle.qnt` とし、両者で異なる部分は `group_lifecycle` を優先します。下の「モデリングで確定した規則」は両方のモデルに入れています。
 
 ## モデリングで確定した規則
 
-書き始めた時点の案では足りず、反例と独立 review から足した規則です。いずれも invariant を弱めずに規則側を直しました。
+書き始めた時点の案では足りず、反例と独立 review から足した規則です。いずれも invariant を弱めずに規則側を直しました。コア側の 3 件（守る性質、`Undecided` の Group の下の完了済み子孫、`Blocked` の残余定義）は [spec/README.md](../README.md) の「反例と review から足した規則」を正とし、統合モデルにも同じ規則を入れています。以下は統合側の規則です。
 
-- **守る性質は「実効 `InProgress` の Group の全祖先が採用済み」。** `InProgress` の Issue についての同じ性質を Group の実効 lifecycle へ広げたもの。この性質を保つために、Issue・Group の `Complete` と `Reopen`、着手・完了した子孫を持つ Group の `Accept` は全祖先が採用済みであることを要求し、実効が `InProgress` か `Completed` の Entity の移動先は、移動先の Group 自身を含む全祖先が採用済みであることを要求する。Group の `Withdraw` は実効が `NotStarted` のときだけ許す。実効は `NotStarted` の子 Group を通じて上へ伝播するので、孫が着手中なら祖父も `Withdraw` できない（直属の子の保存だけを見ると、子 Group の保存は `InProgress` にならないため、この穴が両方のモデルで反例として出た）。
-- **`Undecided` の Group の下に完了済みの子孫があることは許す。** 完了済みの子を持つ Group を `Cancel` してから `Reconsider` すると、この状態になる。取りやめた子 Group の下に完了済みの子孫があるときの親の `Withdraw` も同じ理由で禁じない。その Group を再び `Accept` するには全祖先が採用済みであることが要る。
-- **`Blocked` は残余として定義する。** Group の行の状況は、`Confirmable`、`Ready`、`InProgress`、`Blocked`（子があり、上の三つのどれでもない）、`Empty` の順で決める。当初の「未着手の Issue の子孫はあるが着手候補がない」という定義では、採用直後で子がすべて `Undecided` の Group や、子が空の子 Group しか持たない Group がどの状況にも入らなかった。`Blocked` の理由は、未完了の dependency、`Undecided` の子、未終了の子 Group、浮上していない着手可能な子孫、`Undecided` の祖先の 5 種類で尽きる。
 - **複数 head はすべて衝突にする。** 当初は値の等しい並行 head を次の記録が畳む規則を置いていたが、それが要った場面（両側の worktree が親 Group を `axon start` する）は Group の `Start` を導出に変えて消えた。残るのは同じ actor が二つの worktree で同じ Issue を `axon start` した、両側で同じ提案を `axon accept` した、といった稀な場合で、衝突として見えた方が二重作業に気づける。畳む規則をやめると、現在値の導出が「head が一つならその値、複数なら衝突」の二分岐になり、二重登録の特別扱いも消える。
 - **Issue の `Start` の排他性は現在値で表す。** 統合モデルでは `InProgress` の現在値に着手した actor を含め、着手の記録が誰のものかを現在値で読める。特別な規則を足さずに、通常の衝突判定で済む。
 - **衝突があれば通常操作を止める。** 衝突中の Entity が一つでもある replica では、解決と Note 以外の操作を拒否する。
@@ -53,17 +41,7 @@
 
 ## 各モデルの探索と検証する性質
 
-### `plan_lifecycle`
-
-Entity は固定 ID 5 件。0 は Group、1 と 2 は 0 の子 Issue、3 は所属なしの Group、4 は未登録の枠で、全員 `Undecided`、条件入力はすべて不成立から始める。`step` は Group の操作、Issue の操作、それ以外（移動、登録、変換、dependency の編集、条件入力の変化）の三枝から選ぶ。
-
-39 の invariant は、Group の保存が `InProgress` にならないこと、実効 `InProgress` の Group が着手・完了した子孫を持ちその全祖先が採用済みであること、終了した Group の子孫がすべて終了し構成が変わらないこと、`Completed` の Entity の dependency がすべて `Completed` であること、通常完了経路と包含の非循環、Group の `Completed` への到達が最終確認を伴う `Complete` だけであること、`Reopen` と変換が他を変えないこと、Issue が子を持たないこと、一覧の状況の定義と優先順位、`Blocked` に理由があること、未終了の各 Entity について自身・祖先・子孫・依存先とその完了済みの依存元の閉包のどこかで操作できることを検査する。前提と更新の定義から直接従う性質は「構成の確認」として file 内で区別している。
-
-85 の witness は各操作の到達に加えて、`Reopen` 後の再着手、完了済みの子を持つ Group の `Reopen`、`Completed` の依存元による `Reopen` の拒否、空の Group と全子 `Cancelled` の Group の完了、祖先の dependency による着手の阻害と解禁、三階層での実効 `InProgress` の伝播、孫が着手中の祖父の `Withdraw` の拒否、変換と変換後の登録、五つの状況と優先順位、`Blocked` の 5 つの理由を観測する。取りやめ・見送り・再検討・採用が噛み合う経路と、実効 `InProgress` が `Undecided` の祖先の下にできる経路は、規則で塞いだことを 0 trace で確かめる対象として残している。
-
-### `plan_reachability`
-
-`workAndReopen`、`dependAndStart`、`listAndWork`、`readoptAfterClose` の 4 入口。`readoptAfterClose` は 8 つの lifecycle 操作と 2 つの固定の移動だけを選び、規則で塞いだ経路が再び開いていないことを確かめる。
+コア側（`group_lifecycle`・`lifecycle_reachability`）の探索と性質は [spec/README.md](../README.md) にあります。
 
 ### `record_integration`
 
@@ -114,14 +92,6 @@ import subprocess
 def names(path, prefix):
     return re.findall(rf"val ({prefix}\w+)\s*=", Path(path).read_text())
 
-plan = "spec/redesign/plan_lifecycle.qnt"
-subprocess.run(["quint", "run", plan, "--invariants", *names(plan, "inv"), "--witnesses", *names(plan, "w"),
-                "--max-samples", "5000", "--max-steps", "150", "--backend", "rust", "--verbosity", "1"], check=True)
-for step in ["workAndReopen", "dependAndStart", "listAndWork", "readoptAfterClose"]:
-    subprocess.run(["quint", "run", "spec/redesign/plan_reachability.qnt", "--step", step,
-                    "--invariants", *names(plan, "inv"), "--witnesses", *names(plan, "w"),
-                    "--max-samples", "300", "--max-steps", "100", "--backend", "rust", "--verbosity", "1"], check=True)
-
 ri = "spec/redesign/record_integration.qnt"
 main_witnesses = ["wResolved", "wGap", "wGapFilled", "wSpuriousGapConflict", "wPrefixSync", "wSingleSync",
                   "wConverged", "wCompleteVsRelease", "wCancelVsStart", "wTextConflict", "wNotesFromBoth",
@@ -145,15 +115,13 @@ for step, samples, steps in [("divergeAndResolve", 400, 40), ("breakAndRepair", 
 
 いずれも bounded random simulation の結果で、全状態の証明ではありません。seed は固定していないので、観測される trace 数は実行ごとに変わります。
 
-以下は 2026-09-24、Quint 0.32.0、Rust backend、並列実行、seed 未固定での、独立 review の finding を反映した後の結果です。6 file の型検査と `record_integration_test` の 6 本の `run` はいずれも成功しました。
+以下は 2026-09-24、Quint 0.32.0、Rust backend、並列実行、seed 未固定での、独立 review の finding を反映した後の結果です（コア側の取り込み前、6 file 構成での実行）。6 file の型検査と `record_integration_test` の 6 本の `run` はいずれも成功しました。コア側の取り込み後の結果は [spec/README.md](../README.md) にあります。
 
-- `plan_lifecycle`: 5,000 traces、最大 150 steps（約 6.5 分）。39 invariant に反例はなく、85 witness のうち、規則で塞いだ経路と理由のない `Blocked` を観測する 5 つが期待どおり 0 で、残り 80 をすべて観測しました。最も少ないのは祖先の dependency の完了による着手の解禁、孫の着手による祖父の実効 `InProgress`、完了済みの子を持つ Group の `Reopen` で各 10 traces です。
-- `plan_reachability`: 同じ 39 invariant を指定して反例なし。`workAndReopen`・`dependAndStart`・`listAndWork` は各 300 traces、最大 100 steps、`readoptAfterClose` は 5,000 traces、最大 60 steps で、規則を足す前に違反を出していた経路の witness は 0 のままでした。
 - `record_integration` の本実行: 1,000 traces、最大 40 steps（約 8 分）。16 invariant に反例はなく、本実行に指定した 33 witness のうち 30 を観測しました。未観測の 3 つ（完了と解放の衝突、未採用の祖先、免除を使った修復）は補助探索で観測しています。最も少ないのは取りやめと着手の衝突で 5 traces です。値の等しい並行記録の衝突は 145、その解決は 27、二重登録の衝突は 392、その解決は 28、gap による偽の衝突は 87 で観測しました。
 - `record_integration` の補助探索: 16 invariant を指定して反例なし。`divergeAndResolve` は 400 traces、最大 40 steps で、別 actor の並行 `Start` の衝突 6、値の等しい並行記録の衝突 345 とその解決 340、完了と解放の衝突 2、未完了側の選択 10、解決後の再着手 63、解決記録どうしの並行が同値 58・異値 38、解決の解決 88。`crossMoves` は 200 traces、最大 12 steps で包含の循環 86。`reopenUnderDependent` は 300 traces、最大 30 steps で完了済みへの未完了 dependency の流入 33、修復 16。`reopenAfterInflow` は 300 traces、最大 20 steps で終了 Group への子の流入と `Reopen` による修復 6、完了済みの子を持つ Group の `Reopen` 5。`breakAndRepair` は 100 traces、最大 40 steps（約 11 分）で、通常完了経路の循環 60、免除を使った修復 11、包含の循環 5、未採用の祖先 3。
 - 本実行と補助探索を合わせ、43 witness はすべて 1 trace 以上で観測しました。
 
-規則や検査を直す前の実行で出た反例は、上の「モデリングで確定した規則」と「edge case」に取り込みました。`plan_lifecycle` では、五つの状況で尽くせない Group の行、`Undecided` の祖先の下の実効 `InProgress`（空の Group の完了、完了済み Entity の移動、取りやめ・見送り・再検討・採用の組合せ）、理由のない `Blocked`、近傍が狭すぎた行き止まり検査の偽陽性の 4 件。`record_integration` では、孫が着手中の祖父 Group の `Withdraw`、親より先に届いた解決記録を親の値と照合していた検査、二重に絡んだ循環で一手では違反が減らない修復可能性の検査の 3 件。独立 review からは、実効 `InProgress` の Group の祖先を統合モデルの全体検査が見ていなかったこと、Issue の `Complete` で不整合を正常化できたこと、構造の不整合が無関係な操作を止めていたこと、終了した Group どうしの循環と完了済みの相互依存が直せなかったこと、二重登録で replica が凍ること、空虚な invariant と名前とずれた witness を取り込みました。
+規則や検査を直す前の実行で出た反例は、上の「モデリングで確定した規則」と「edge case」に取り込みました。コア側のモデル（現在の `spec/group_lifecycle.qnt`）では、五つの状況で尽くせない Group の行、`Undecided` の祖先の下の実効 `InProgress`（空の Group の完了、完了済み Entity の移動、取りやめ・見送り・再検討・採用の組合せ）、理由のない `Blocked`、近傍が狭すぎた行き止まり検査の偽陽性の 4 件。`record_integration` では、孫が着手中の祖父 Group の `Withdraw`、親より先に届いた解決記録を親の値と照合していた検査、二重に絡んだ循環で一手では違反が減らない修復可能性の検査の 3 件。独立 review からは、実効 `InProgress` の Group の祖先を統合モデルの全体検査が見ていなかったこと、Issue の `Complete` で不整合を正常化できたこと、構造の不整合が無関係な操作を止めていたこと、終了した Group どうしの循環と完了済みの相互依存が直せなかったこと、二重登録で replica が凍ること、空虚な invariant と名前とずれた witness を取り込みました。
 
 ## 対象外と限界
 
@@ -161,4 +129,4 @@ for step, samples, steps in [("divergeAndResolve", 400, 40), ("breakAndRepair", 
 - `record_integration` は file の bytes、Git の union 属性が行をどう残すか、途中で切れた行、lock、探索を扱わない。これらは Rust の fixture で検査する。GitHub の web merge が union 属性を尊重するかは実験で確かめる。
 - `record_integration` は Entity 5 件・replica 2 つ・最大 40 step の範囲で、3 replica 以上や長い分岐は探索していない。未登録の枠は 1 つで、登録は 1 trace に 1 回。
 - `record_integration` の修復可能性の invariant は「修復を進める操作が一つはある」ことだけを見る。有効な状態まで戻れることは、進み具合が有限で単調に減ることから従うが、テストの経路以外で直接は確かめていない。
-- 変換操作と再浮上条件・一覧の状況は `plan_lifecycle` だけが扱い、統合との組合せは探索していない。
+- 変換操作と再浮上条件・一覧の状況は `spec/group_lifecycle.qnt` だけが扱い、統合との組合せは探索していない。

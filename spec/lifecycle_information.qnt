@@ -1,9 +1,9 @@
-// title・description の編集範囲、Note の追記、状態変更履歴を固定2 Entity で扱うモデル。
+// title・description の編集範囲、Note の追記、状態変更履歴を固定2 Entity（Issue 1件と Group 1件）で扱うモデル。
 // Issue と Group に共通するローカルな情報操作だけを対象にする。
 // 文面の内容は不透明な整数で更新と保持だけを区別し、履歴は変更前後の状態の追記列へ抽象化する。
-// 対象外: 包含・dependency・Group の最終確認による追加の制約（group_lifecycle が扱う）、
+// 対象外: 包含・dependency・Group の実効 lifecycle と最終確認による追加の制約（group_lifecycle が扱う）、
 // 日時・任意の理由・記録者情報、表示順、公開 ID、永続化と保存失敗。
-// 基本遷移は lifecycle_rules を import するため、このモデルが許す遷移だけで
+// 基本遷移は lifecycle_rules の種類ごとの規則を import するため、このモデルが許す遷移だけで
 // 実際の Group や依存を持つ Issue の操作が許可されるわけではない。
 // 対応する契約: ../docs/reference/lifecycle.md
 module lifecycle_information {
@@ -11,10 +11,12 @@ module lifecycle_information {
 
   type Id = int
 
-  // Entity ごとに現在の文面、追記列の Note、状態変更履歴を保持する。
+  // Entity ごとに種類、保存される現在の lifecycle、文面、追記列の Note、状態変更履歴を保持する。
+  // Group の lifecycle は保存値で、子から導出する実効値はこのモデルの外。
   // Event は検証用の観測が区別するイベントの種類。
   type TransitionRecord = { before: Lifecycle, after: Lifecycle }
   type EntityInformation = {
+    kind: Kind,
     lifecycle: Lifecycle,
     title: int,
     description: int,
@@ -25,15 +27,15 @@ module lifecycle_information {
     | Transitioned({ id: Id, op: Operation })
   type Observation = { before: Id -> EntityInformation, event: Event }
 
-  // 固定2 Entity、文面の値は3種類。登録操作と初期状態の記録は扱わない。
+  // 固定2 Entity（0 は Issue、1 は Group）、文面の値は3種類。登録操作と初期状態の記録は扱わない。
   pure val IDS = Set(0, 1)
   pure val TEXTS = Set(0, 1, 2)
-  pure val OPERATIONS = Set(Accept, Withdraw, Start, Release, Complete, Cancel, Reconsider)
   var information: Id -> EntityInformation
   var observation: Observation
 
   // 未判断の登録済み Entity から始める。
-  pure val initialInformation: Id -> EntityInformation = IDS.mapBy(_ => {
+  pure val initialInformation: Id -> EntityInformation = IDS.mapBy(id => {
+    kind: if (id == 0) Issue else Group,
     lifecycle: Undecided, title: 0, description: 0, notes: List(), history: List(),
   })
   action init = all {
@@ -42,7 +44,7 @@ module lifecycle_information {
   }
 
   // 文面を編集できるのは Undecided・NotStarted・InProgress だけ。Completed・Cancelled では固定し、
-  // 取りやめた Entity は Reconsider で未判断へ戻れば再び編集できる。
+  // 取りやめた Entity は Reconsider で未判断へ、完了した Entity は Reopen で未着手へ戻れば再び編集できる。
   pure def editable(e: EntityInformation): bool =
     Set(Undecided, NotStarted, InProgress).contains(e.lifecycle)
   pure def canEditTitle(e: EntityInformation, value: int): bool = editable(e) and e.title != value
@@ -53,7 +55,9 @@ module lifecycle_information {
   // Note は追記だけで、既存の記録を書き換えない。同じ内容も別の記録として残る。
   pure def applyNote(e: EntityInformation, body: int): EntityInformation = { ...e, notes: e.notes.append(body) }
 
-  // 状態変更と履歴追加は一つの更新として確定し、片方だけを残さない。
+  // 状態変更と履歴追加は一つの更新として確定し、片方だけを残さない。前提は種類ごとの基本遷移で、
+  // Group は Start・Release を持たず NotStarted から完了する。
+  pure def canTransition(e: EntityInformation, op: Operation): bool = canPerformAs(e.kind, e.lifecycle, op)
   pure def applyTransition(e: EntityInformation, op: Operation): EntityInformation = {
     val targetState = applyOperation(e.lifecycle, op)
     { ...e, lifecycle: targetState,
@@ -76,7 +80,7 @@ module lifecycle_information {
     observation' = { before: information, event: NoteAdded({ id: id, body: body }) },
   }
   action transition(id: Id, op: Operation): bool = all {
-    canPerform(information.get(id).lifecycle, op),
+    canTransition(information.get(id), op),
     information' = information.set(id, applyTransition(information.get(id), op)),
     observation' = { before: information, event: Transitioned({ id: id, op: op }) },
   }
@@ -98,7 +102,8 @@ module lifecycle_information {
 
   // invariant: 操作が対象以外の Entity を変えないこと、編集が編集可能状態に限ること、
   // 終了後の文面が固定されること、Note が追記専用であること、
-  // 状態変更と履歴が一体で確定し、履歴を再生すると現在の状態になること、完了が戻らないこと。
+  // 状態変更と履歴が一体で確定し、履歴を再生すると現在の状態になること、
+  // 完了から抜けるのは Reopen だけで未着手へ戻ること、種類が変わらないこと。
   val invOtherEntitiesUnchanged = IDS.exclude(affected(observation.event)).forall(id =>
     information.get(id) == observation.before.get(id))
   val invTextEditScope = match observation.event {
@@ -123,7 +128,7 @@ module lifecycle_information {
         val before = observation.before.get(change.id)
         val after = information.get(change.id)
         and {
-          canPerform(before.lifecycle, change.op),
+          canTransition(before, change.op),
           after.lifecycle == applyOperation(before.lifecycle, change.op),
           after.history == before.history.append({
             before: before.lifecycle, after: after.lifecycle,
@@ -138,16 +143,22 @@ module lifecycle_information {
     val e = information.get(id)
     val replay = e.history.foldl({ valid: true, current: Undecided }, (acc, entry) => {
       valid: acc.valid and acc.current == entry.before and OPERATIONS.exists(op =>
-        canPerform(entry.before, op) and applyOperation(entry.before, op) == entry.after),
+        canPerformAs(e.kind, entry.before, op) and applyOperation(entry.before, op) == entry.after),
       current: entry.after,
     })
     replay.valid and replay.current == e.lifecycle
   })
-  val invCompletedStaysCompleted = IDS.forall(id =>
-    observation.before.get(id).lifecycle == Completed implies information.get(id).lifecycle == Completed)
+  val invCompletedLeavesOnlyByReopen = IDS.forall(id =>
+    (observation.before.get(id).lifecycle == Completed and information.get(id).lifecycle != Completed)
+      implies (observation.event == Transitioned({ id: id, op: Reopen })
+        and information.get(id).lifecycle == NotStarted))
+  // 構成の確認: どの操作も種類を変えない定義から直接従う性質で、書き誤りを検出するために置く。
+  val invKindFixed = IDS.forall(id => information.get(id).kind == observation.before.get(id).kind)
+  val invGroupNeverStoredInProgress = IDS.forall(id =>
+    information.get(id).kind == Group implies information.get(id).lifecycle != InProgress)
 
-  // witness: 7遷移それぞれの到達、採用後・着手中・再検討後の文面編集、
-  // 各状態での Note 追加、同じ内容の追記が別の記録になること。
+  // witness: 8遷移それぞれの到達（Start・Release は Issue だけ）、Group の NotStarted からの完了、
+  // 採用後・着手中・再検討後・Reopen 後の文面編集、各状態での Note 追加、同じ内容の追記が別の記録になること。
   pure def isTransition(event: Event, op: Operation): bool = match event {
     | Transitioned(change) => change.op == op
     | _ => false
@@ -159,6 +170,12 @@ module lifecycle_information {
   val wComplete = isTransition(observation.event, Complete)
   val wCancel = isTransition(observation.event, Cancel)
   val wReconsider = isTransition(observation.event, Reconsider)
+  val wReopen = isTransition(observation.event, Reopen)
+  val wGroupComplete = match observation.event {
+    | Transitioned(change) => change.op == Complete and information.get(change.id).kind == Group
+      and observation.before.get(change.id).lifecycle == NotStarted
+    | _ => false
+  }
   val wTitleEdit = match observation.event { | TitleEdited(_) => true | _ => false }
   val wDescriptionEdit = match observation.event { | DescriptionEdited(_) => true | _ => false }
   val wEditAfterAcceptance = affected(observation.event).exists(id =>
@@ -170,6 +187,12 @@ module lifecycle_information {
     if (h.length() == 0) false else
       (wTitleEdit or wDescriptionEdit) and h.nth(h.length() - 1).before == Cancelled
         and h.nth(h.length() - 1).after == Undecided
+  })
+  val wEditAfterReopen = affected(observation.event).exists(id => {
+    val h = information.get(id).history
+    if (h.length() == 0) false else
+      (wTitleEdit or wDescriptionEdit) and h.nth(h.length() - 1).before == Completed
+        and h.nth(h.length() - 1).after == NotStarted
   })
   val wNoteUndecided = match observation.event {
     | NoteAdded(change) => information.get(change.id).lifecycle == Undecided
