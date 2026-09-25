@@ -1,7 +1,8 @@
 //! Tests of the record set. `scenarios` replays the six `run` tests of
 //! `spec/record_integration_test.qnt`, `witnesses` the main witnesses of
 //! `spec/record_integration.qnt`, and the rest cover conversion across kinds, the rejection
-//! rules of ordinary operations, the codec and order independence.
+//! rules of ordinary operations, the lifecycle, relation, text and Note rules on a single
+//! store, the codec and order independence.
 use super::*;
 use chrono::{TimeZone, Utc};
 use std::cell::Cell;
@@ -11,6 +12,7 @@ mod codec;
 mod conversion;
 mod operations;
 mod ordering;
+mod rules;
 mod scenarios;
 mod witnesses;
 

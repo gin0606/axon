@@ -183,6 +183,14 @@ fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
         .contains("owner")
     );
     assert!(error(with("\"title\":\"task\"", "\"title\":\"\"")).contains("empty title"));
+    assert!(
+        error(with("\"title\":\"task\"", "\"title\":\"two\\nlines\""))
+            .contains("title contains a line break")
+    );
+    assert!(
+        error(with("\"reason\":null", "\"reason\":\"two\\nlines\""))
+            .contains("reason contains a line break")
+    );
     assert!(error(with("\"entity\":\"i3\"", "\"entity\":\"I3\"")).contains("EntityId"));
     assert!(error(with("\"parents\":[\"", "\"parents\":[\"zz")).contains("record ID"));
     assert!(error(with("\"parents\":[\"", "\"parents\":[],\"x\":[\"")).contains("unknown field"));
