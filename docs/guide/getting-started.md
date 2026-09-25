@@ -58,4 +58,6 @@ git init
 
 binaryを指定した場合はその指定を、未指定なら対象環境で発見した `axon` を使います。skillは`axon --version`・`axon --help`で対応を照合して実行ファイルとrootを固定します。対象環境のCLIとsessionに読み込まれたskillのversionが一致しない場合は、その不一致を解決してから操作します。開発版の試用では上記の絶対パスを渡す方法も使えます。
 
+同梱skillは、Groupを直接着手せず配下から実効lifecycleを導出する規則（[Group の実効 lifecycle](../reference/lifecycle.md#group-の実効-lifecycle)）と、`axon reopen` を前提にします。
+
 例えば「このrepositoryの懸念をAxonに未判断として記録して」と依頼できます。対象と任せる範囲は依頼が決め、登録から実装・commitの権限を推測しません。
