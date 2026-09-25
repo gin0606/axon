@@ -1209,6 +1209,139 @@ fn reopen_returns_completed_work_and_groups_are_never_started_or_released() {
 }
 
 #[test]
+fn group_dependencies_gate_starts_below_and_the_group_itself_but_not_completion_below() {
+    let f = Fixture::new();
+    f.ok(&["init", "t"]);
+    let group_needing = |title: &str, dep: &str| -> String {
+        let out = f.ok(&[
+            "capture", "--kind", "group", "--accept", "--title", title, "--needs", dep,
+        ]);
+        created(&out).to_owned()
+    };
+    let child = |title: &str, parent: &str, kind: &str| -> String {
+        let out = f.ok(&[
+            "capture", "--kind", kind, "--accept", "--title", title, "--parent", parent,
+        ]);
+        created(&out).to_owned()
+    };
+    let own_row = |id: &str| f.ok(&["show", id]).lines().next().unwrap().to_owned();
+    let completed = |id: &str| {
+        let row = own_row(id);
+        assert!(row.contains("  Completed  "), "{row}");
+    };
+    let group_rejected_by_its_dependency = |group: &str| {
+        let rejected = failure(f.run(&["complete", group]));
+        assert!(
+            rejected.contains("dependencies must be Completed"),
+            "{rejected}"
+        );
+        assert!(
+            !own_row(group).contains("  Completed  "),
+            "{}",
+            own_row(group)
+        );
+    };
+
+    // 1. Empty child Groups and child Groups whose children are all Cancelled complete
+    //    without any Start below the Group, so the Group's dependency never sees them.
+    let dep = f.accepted("Prerequisite 1");
+    let plan = group_needing("Plan 1", &dep);
+    let empty = child("Empty", &plan, "group");
+    let cancelled = child("Cancelled", &plan, "group");
+    let dropped = child("Dropped", &cancelled, "issue");
+    f.ok(&["cancel", &dropped]);
+    f.ok(&["complete", &empty]);
+    f.ok(&["complete", &cancelled]);
+    completed(&empty);
+    completed(&cancelled);
+    group_rejected_by_its_dependency(&plan);
+
+    // 2. Work started outside the Group, or moved out to start, completes after moving in.
+    let dep = f.accepted("Prerequisite 2");
+    let plan = group_needing("Plan 2", &dep);
+    let outside = f.accepted("Outside");
+    f.ok(&["start", &outside]);
+    f.ok(&["parent", "set", &outside, "--parent", &plan]);
+    f.ok(&["complete", &outside]);
+    completed(&outside);
+    let inside = child("Inside", &plan, "issue");
+    let rejected = failure(f.run(&["start", &inside]));
+    assert!(
+        rejected.contains(&format!(
+            "dependencies of ancestor {plan} must be Completed"
+        )),
+        "{rejected}"
+    );
+    f.ok(&["parent", "unset", &inside]);
+    f.ok(&["start", &inside]);
+    f.ok(&["parent", "set", &inside, "--parent", &plan]);
+    f.ok(&["complete", &inside]);
+    completed(&inside);
+    assert!(
+        f.ok(&["show", &inside])
+            .contains(&format!("Parent: {plan}"))
+    );
+    group_rejected_by_its_dependency(&plan);
+
+    // 3. A dependency added after work began blocks new starts below the Group, not the
+    //    completion of started Issues or of child Groups whose children have all ended.
+    let dep = f.accepted("Prerequisite 3");
+    let plan = f.ok(&[
+        "capture", "--kind", "group", "--accept", "--title", "Plan 3",
+    ]);
+    let plan = created(&plan).to_owned();
+    let work = child("Work", &plan, "issue");
+    let sub = child("Sub", &plan, "group");
+    let done = child("Done", &sub, "issue");
+    f.ok(&["start", &work]);
+    f.ok(&["start", &done]);
+    f.ok(&["complete", &done]);
+    f.ok(&["dep", "add", &plan, "--needs", &dep]);
+    let next = child("Next", &plan, "issue");
+    let rejected = failure(f.run(&["start", &next]));
+    assert!(
+        rejected.contains(&format!(
+            "dependencies of ancestor {plan} must be Completed"
+        )),
+        "{rejected}"
+    );
+    f.ok(&["complete", &work]);
+    f.ok(&["complete", &sub]);
+    completed(&work);
+    completed(&sub);
+    f.ok(&["cancel", &next]);
+    group_rejected_by_its_dependency(&plan);
+
+    // 4. Reopening the Group and then its dependency leaves the Completed work below the
+    //    Group as it is; so does reopening only the dependency of a Group never completed.
+    let dep = f.accepted("Prerequisite 4");
+    let plan = group_needing("Plan 4", &dep);
+    let work = child("Work 4", &plan, "issue");
+    f.ok(&["start", &dep]);
+    f.ok(&["complete", &dep]);
+    f.ok(&["start", &work]);
+    f.ok(&["complete", &work]);
+    f.ok(&["complete", &plan]);
+    completed(&plan);
+    f.ok(&["reopen", &plan]);
+    f.ok(&["reopen", &dep]);
+    assert!(!own_row(&dep).contains("  Completed  "));
+    completed(&work);
+    group_rejected_by_its_dependency(&plan);
+
+    let dep = f.accepted("Prerequisite 4b");
+    let plan = group_needing("Plan 4b", &dep);
+    let work = child("Work 4b", &plan, "issue");
+    f.ok(&["start", &dep]);
+    f.ok(&["complete", &dep]);
+    f.ok(&["start", &work]);
+    f.ok(&["complete", &work]);
+    f.ok(&["reopen", &dep]);
+    completed(&work);
+    group_rejected_by_its_dependency(&plan);
+}
+
+#[test]
 fn list_and_skip_conditions_ignore_conditions_while_tasks_and_show_evaluate_them() {
     let f = Fixture::new();
     f.ok(&["init", "t"]);
