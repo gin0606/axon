@@ -150,14 +150,14 @@ fn choose(left: &Snapshot, right: &Snapshot, side: Side) -> Snapshot {
 }
 
 #[test]
-fn lifecycle_matrix_matches_the_seven_spec_operations() {
+fn lifecycle_matrix_matches_the_eight_spec_operations_per_kind() {
     use Lifecycle::*;
     use Operation::*;
     let states = [Undecided, NotStarted, InProgress, Completed, Cancelled];
     let operations = [
-        Accept, Withdraw, Start, Release, Complete, Cancel, Reconsider,
+        Accept, Withdraw, Start, Release, Complete, Cancel, Reconsider, Reopen,
     ];
-    let allowed = [
+    let issue = [
         (Undecided, Accept, NotStarted),
         (NotStarted, Withdraw, Undecided),
         (NotStarted, Start, InProgress),
@@ -167,18 +167,35 @@ fn lifecycle_matrix_matches_the_seven_spec_operations() {
         (NotStarted, Cancel, Cancelled),
         (InProgress, Cancel, Cancelled),
         (Cancelled, Reconsider, Undecided),
+        (Completed, Reopen, NotStarted),
     ];
-    for state in states {
-        for operation in operations {
-            let expected = allowed
-                .iter()
-                .find(|(s, o, _)| *s == state && *o == operation)
-                .map(|(_, _, s)| *s);
-            assert_eq!(
-                operation.apply(state).ok(),
-                expected,
-                "{operation:?} from {state:?}"
-            );
+    // A Group is never started or released, completes from NotStarted and is cancelled
+    // only from Undecided or NotStarted.
+    let group = [
+        (Undecided, Accept, NotStarted),
+        (NotStarted, Withdraw, Undecided),
+        (NotStarted, Complete, Completed),
+        (Undecided, Cancel, Cancelled),
+        (NotStarted, Cancel, Cancelled),
+        (Cancelled, Reconsider, Undecided),
+        (Completed, Reopen, NotStarted),
+    ];
+    for (kind, allowed) in [(Kind::Issue, &issue[..]), (Kind::Group, &group[..])] {
+        for state in states {
+            for operation in operations {
+                let expected = allowed
+                    .iter()
+                    .find(|(s, o, _)| *s == state && *o == operation)
+                    .map(|(_, _, s)| *s);
+                assert_eq!(
+                    operation.apply_as(kind, state).ok(),
+                    expected,
+                    "{operation:?} on {kind:?} from {state:?}"
+                );
+                if kind == Kind::Issue {
+                    assert_eq!(operation.apply(state).ok(), expected);
+                }
+            }
         }
     }
 }
@@ -202,6 +219,9 @@ fn operation_and_history_are_atomic_and_other_entities_unchanged() {
         Operation::Cancel,
         Operation::Reconsider,
         Operation::Accept,
+        Operation::Start,
+        Operation::Complete,
+        Operation::Reopen,
         Operation::Start,
         Operation::Complete,
     ] {
@@ -254,18 +274,32 @@ fn operation_and_history_are_atomic_and_other_entities_unchanged() {
 }
 #[test]
 fn text_edit_contract_and_notes_hold_for_issues_and_groups() {
-    for kind in [Kind::Issue, Kind::Group] {
+    let issue = [
+        None,
+        Some(Operation::Accept),
+        Some(Operation::Start),
+        Some(Operation::Cancel),
+        Some(Operation::Reconsider),
+        Some(Operation::Accept),
+        Some(Operation::Start),
+        Some(Operation::Complete),
+        Some(Operation::Reopen),
+        Some(Operation::Start),
+        Some(Operation::Complete),
+    ];
+    let group = [
+        None,
+        Some(Operation::Accept),
+        Some(Operation::Cancel),
+        Some(Operation::Reconsider),
+        Some(Operation::Accept),
+        Some(Operation::Complete),
+        Some(Operation::Reopen),
+        Some(Operation::Complete),
+    ];
+    for (kind, operations) in [(Kind::Issue, &issue[..]), (Kind::Group, &group[..])] {
         let mut snapshot = fixture(kind, Lifecycle::Undecided);
-        for operation in [
-            None,
-            Some(Operation::Accept),
-            Some(Operation::Start),
-            Some(Operation::Cancel),
-            Some(Operation::Reconsider),
-            Some(Operation::Accept),
-            Some(Operation::Start),
-            Some(Operation::Complete),
-        ] {
+        for operation in operations.iter().copied() {
             if let Some(operation) = operation {
                 snapshot
                     .perform(&id("item"), operation, None, context(1))
@@ -949,18 +983,23 @@ fn rejected(s: &mut Snapshot, action: impl FnOnce(&mut Snapshot) -> Result<()>) 
     roundtrip(s);
 }
 
+fn effective(s: &Snapshot, name: &str) -> Lifecycle {
+    s.effective_lifecycle(s.entity(&id(name)).unwrap())
+}
+
 #[test]
-fn nested_group_work_requires_explicit_start_and_final_confirmation() {
+fn nested_group_work_is_derived_from_issues_and_needs_final_confirmation() {
     let mut s = Snapshot::new(StoreId::generate());
     register(&mut s, "root", Kind::Group, None);
     register(&mut s, "nested", Kind::Group, Some("root"));
     register(&mut s, "child", Kind::Issue, Some("nested"));
-    rejected(&mut s, |s| {
-        s.perform(&id("child"), Operation::Start, None, context(1))
-            .map(|_| ())
-    });
-    perform(&mut s, "root", Operation::Start);
-    perform(&mut s, "nested", Operation::Start);
+    for name in ["root", "nested"] {
+        for op in [Operation::Start, Operation::Release] {
+            rejected(&mut s, |s| {
+                s.perform(&id(name), op, None, context(1)).map(|_| ())
+            });
+        }
+    }
     perform(&mut s, "child", Operation::Withdraw);
     for op in [Operation::Complete, Operation::Cancel] {
         rejected(&mut s, |s| {
@@ -968,18 +1007,24 @@ fn nested_group_work_requires_explicit_start_and_final_confirmation() {
         });
     }
     perform(&mut s, "child", Operation::Accept);
+    assert_eq!(effective(&s, "root"), Lifecycle::NotStarted);
     perform(&mut s, "child", Operation::Start);
+    // Three levels: the grandchild's start makes the grandparent InProgress through a
+    // NotStarted child Group, without changing either Group's saved lifecycle.
     for name in ["root", "nested"] {
+        assert_eq!(effective(&s, name), Lifecycle::InProgress);
+        assert_eq!(
+            s.entity(&id(name)).unwrap().current.lifecycle,
+            Lifecycle::NotStarted
+        );
+        assert_eq!(s.history(&id(name)).unwrap().len(), 1);
         rejected(&mut s, |s| {
-            s.perform(&id(name), Operation::Release, None, context(1))
+            s.perform(&id(name), Operation::Withdraw, None, context(1))
                 .map(|_| ())
         });
     }
     perform(&mut s, "child", Operation::Cancel);
-    assert_eq!(
-        s.entity(&id("nested")).unwrap().current.lifecycle,
-        Lifecycle::InProgress
-    );
+    assert_eq!(effective(&s, "nested"), Lifecycle::NotStarted);
     assert!(
         s.check_operation(&id("nested"), Operation::Complete)
             .is_ok()
@@ -989,12 +1034,181 @@ fn nested_group_work_requires_explicit_start_and_final_confirmation() {
             .map(|_| ())
     });
     perform(&mut s, "nested", Operation::Complete);
+    assert_eq!(effective(&s, "root"), Lifecycle::InProgress);
     perform(&mut s, "root", Operation::Complete);
     rejected(&mut s, |s| {
         s.perform(&id("child"), Operation::Reconsider, None, context(1))
             .map(|_| ())
     });
+    rejected(&mut s, |s| {
+        s.perform(&id("nested"), Operation::Reopen, None, context(1))
+            .map(|_| ())
+    });
     rejected(&mut s, |s| s.set_parent(&id("nested"), None));
+    // Reopening the root allows composition edits again and derives InProgress again.
+    perform(&mut s, "root", Operation::Reopen);
+    assert_eq!(effective(&s, "root"), Lifecycle::InProgress);
+    s.set_parent(&id("nested"), None).unwrap();
+    roundtrip(&s);
+}
+
+#[test]
+fn empty_and_all_cancelled_groups_complete_from_not_started() {
+    let mut s = Snapshot::new(StoreId::generate());
+    register(&mut s, "empty", Kind::Group, None);
+    register(&mut s, "cancelled", Kind::Group, None);
+    register(&mut s, "a", Kind::Issue, Some("cancelled"));
+    register(&mut s, "b", Kind::Issue, Some("cancelled"));
+    perform(&mut s, "a", Operation::Cancel);
+    rejected(&mut s, |s| {
+        s.perform(&id("cancelled"), Operation::Complete, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "b", Operation::Cancel);
+    for name in ["empty", "cancelled"] {
+        assert_eq!(effective(&s, name), Lifecycle::NotStarted);
+        let record = s
+            .perform(&id(name), Operation::Complete, None, context(1))
+            .unwrap();
+        assert_eq!(
+            s.state_record(&record).unwrap().event,
+            StateEvent::Transition {
+                operation: Operation::Complete,
+                before: Lifecycle::NotStarted,
+                after: Lifecycle::Completed,
+                reason: None,
+            }
+        );
+    }
+    roundtrip(&s);
+}
+
+#[test]
+fn reopen_returns_to_not_started_and_waits_for_completed_dependents() {
+    let mut s = Snapshot::new(StoreId::generate());
+    register(&mut s, "base", Kind::Issue, None);
+    register(&mut s, "user", Kind::Issue, None);
+    s.add_dependency(&id("user"), &id("base")).unwrap();
+    perform(&mut s, "base", Operation::Start);
+    perform(&mut s, "base", Operation::Complete);
+    perform(&mut s, "user", Operation::Start);
+    perform(&mut s, "user", Operation::Complete);
+    let error = s
+        .check_operation(&id("base"), Operation::Reopen)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("user"), "{error}");
+    rejected(&mut s, |s| {
+        s.perform(&id("base"), Operation::Reopen, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "user", Operation::Reopen);
+    perform(&mut s, "base", Operation::Reopen);
+    assert_eq!(
+        s.entity(&id("base")).unwrap().current.lifecycle,
+        Lifecycle::NotStarted
+    );
+    // Reopened work is editable, keeps its dependencies and starts again.
+    s.write(&id("base"), Some("revised".into()), None).unwrap();
+    s.remove_dependency(&id("user"), &id("base")).unwrap();
+    rejected(&mut s, |s| {
+        s.perform(&id("base"), Operation::Complete, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "base", Operation::Start);
+    perform(&mut s, "base", Operation::Complete);
+    // A Group with a Completed child reopens into effective InProgress.
+    register(&mut s, "plan", Kind::Group, None);
+    register(&mut s, "done", Kind::Issue, Some("plan"));
+    perform(&mut s, "done", Operation::Start);
+    perform(&mut s, "done", Operation::Complete);
+    perform(&mut s, "plan", Operation::Complete);
+    perform(&mut s, "plan", Operation::Reopen);
+    assert_eq!(
+        s.entity(&id("done")).unwrap().current.lifecycle,
+        Lifecycle::Completed
+    );
+    assert_eq!(effective(&s, "plan"), Lifecycle::InProgress);
+    // A reopened child keeps its parent from being withdrawn.
+    register(&mut s, "outer", Kind::Group, None);
+    s.set_parent(&id("plan"), Some(id("outer"))).unwrap();
+    perform(&mut s, "plan", Operation::Complete);
+    perform(&mut s, "outer", Operation::Complete);
+    rejected(&mut s, |s| {
+        s.perform(&id("plan"), Operation::Reopen, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "outer", Operation::Reopen);
+    perform(&mut s, "plan", Operation::Reopen);
+    rejected(&mut s, |s| {
+        s.perform(&id("outer"), Operation::Withdraw, None, context(1))
+            .map(|_| ())
+    });
+    roundtrip(&s);
+}
+
+#[test]
+fn ancestor_dependencies_gate_the_start_of_descendant_issues() {
+    let mut s = Snapshot::new(StoreId::generate());
+    register(&mut s, "gate", Kind::Issue, None);
+    register(&mut s, "outer", Kind::Group, None);
+    register(&mut s, "inner", Kind::Group, Some("outer"));
+    register(&mut s, "leaf", Kind::Issue, Some("inner"));
+    s.add_dependency(&id("outer"), &id("gate")).unwrap();
+    let error = s
+        .check_operation(&id("leaf"), Operation::Start)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("outer"), "{error}");
+    rejected(&mut s, |s| {
+        s.perform(&id("leaf"), Operation::Start, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "gate", Operation::Start);
+    perform(&mut s, "gate", Operation::Complete);
+    perform(&mut s, "leaf", Operation::Start);
+    // An Undecided ancestor also blocks the start, even with a NotStarted parent.
+    perform(&mut s, "leaf", Operation::Release);
+    perform(&mut s, "outer", Operation::Withdraw);
+    rejected(&mut s, |s| {
+        s.perform(&id("leaf"), Operation::Start, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "outer", Operation::Accept);
+    perform(&mut s, "leaf", Operation::Start);
+    roundtrip(&s);
+}
+
+#[test]
+fn working_groups_move_only_under_adopted_groups_and_accept_needs_adopted_ancestors() {
+    let mut s = Snapshot::new(StoreId::generate());
+    register(&mut s, "plan", Kind::Group, None);
+    register(&mut s, "work", Kind::Issue, Some("plan"));
+    register(&mut s, "adopted", Kind::Group, None);
+    register(&mut s, "pending", Kind::Group, None);
+    perform(&mut s, "pending", Operation::Withdraw);
+    register(&mut s, "under-pending", Kind::Group, Some("pending"));
+    perform(&mut s, "work", Operation::Start);
+    rejected(&mut s, |s| s.set_parent(&id("plan"), Some(id("pending"))));
+    rejected(&mut s, |s| {
+        s.set_parent(&id("plan"), Some(id("under-pending")))
+    });
+    rejected(&mut s, |s| s.set_parent(&id("work"), Some(id("pending"))));
+    s.set_parent(&id("plan"), Some(id("adopted"))).unwrap();
+    assert_eq!(effective(&s, "adopted"), Lifecycle::InProgress);
+    s.set_parent(&id("plan"), None).unwrap();
+    // A Group with work below it is accepted only under adopted ancestors.
+    perform(&mut s, "work", Operation::Complete);
+    perform(&mut s, "plan", Operation::Cancel);
+    perform(&mut s, "plan", Operation::Reconsider);
+    s.set_parent(&id("plan"), Some(id("pending"))).unwrap();
+    rejected(&mut s, |s| {
+        s.perform(&id("plan"), Operation::Accept, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "pending", Operation::Accept);
+    perform(&mut s, "plan", Operation::Accept);
+    assert_eq!(effective(&s, "pending"), Lifecycle::InProgress);
     roundtrip(&s);
 }
 
@@ -1023,7 +1237,6 @@ fn dependency_added_during_work_blocks_completion_without_releasing() {
     });
     perform(&mut s, "needs", Operation::Reconsider);
     perform(&mut s, "needs", Operation::Accept);
-    perform(&mut s, "needs", Operation::Start);
     rejected(&mut s, |s| {
         s.perform(&id("work"), Operation::Start, None, context(1))
             .map(|_| ())
@@ -1076,9 +1289,8 @@ fn terminal_group_composition_and_working_subtree_moves() {
     }
     register(&mut s, "child", Kind::Group, Some("a"));
     register(&mut s, "leaf", Kind::Issue, Some("child"));
-    for name in ["a", "b", "child", "leaf"] {
-        perform(&mut s, name, Operation::Start);
-    }
+    perform(&mut s, "leaf", Operation::Start);
+    perform(&mut s, "c", Operation::Withdraw);
     rejected(&mut s, |s| s.set_parent(&id("child"), Some(id("c"))));
     s.set_parent(&id("child"), Some(id("b"))).unwrap();
     assert_eq!(
@@ -1177,10 +1389,15 @@ fn candidate_evaluation_matches_boolean_oracle_for_all_three_level_conditions() 
         .unwrap();
     for phase in 0..3 {
         if phase > 0 {
+            // Starting and completing the leaf makes both Groups effectively InProgress.
             snapshot
                 .perform(
-                    &id(if phase == 1 { "item" } else { "nested" }),
-                    Operation::Start,
+                    &id("leaf"),
+                    if phase == 1 {
+                        Operation::Start
+                    } else {
+                        Operation::Complete
+                    },
                     None,
                     context(20 + phase),
                 )
@@ -1207,7 +1424,9 @@ fn candidate_evaluation_matches_boolean_oracle_for_all_three_level_conditions() 
                     .entities()
                     .filter(|entity| {
                         let state = entity.current.lifecycle;
-                        if matches!(kind, CandidateList::Tasks) && state == Lifecycle::InProgress {
+                        if matches!(kind, CandidateList::Tasks)
+                            && snapshot.effective_lifecycle(entity) == Lifecycle::InProgress
+                        {
                             return true;
                         }
                         if state
@@ -1459,8 +1678,6 @@ fn three_way_detects_combined_cycles_and_can_override_automatic_choices() {
 fn three_way_terminal_group_composition_cannot_take_new_or_moved_children() {
     for terminal in [Operation::Complete, Operation::Cancel] {
         let mut base = fixture(Kind::Group, Lifecycle::NotStarted);
-        base.perform(&id("item"), Operation::Start, None, context(1))
-            .unwrap();
         base.create(
             id("child"),
             Kind::Issue,
@@ -1504,7 +1721,7 @@ fn three_way_terminal_group_composition_cannot_take_new_or_moved_children() {
                 .unwrap();
             assert_eq!(
                 result.entity(&id("item")).unwrap().current.lifecycle,
-                Lifecycle::InProgress
+                Lifecycle::NotStarted
             );
         }
     }
@@ -1599,17 +1816,11 @@ fn three_way_does_not_confuse_same_head_text_with_an_observed_candidate() {
 #[test]
 fn three_way_terminal_group_selection_fixes_descendant_lifecycles_and_nested_membership() {
     let mut base = fixture(Kind::Group, Lifecycle::NotStarted);
-    base.perform(&id("item"), Operation::Start, None, context(1))
-        .unwrap();
     let mut child = current(Lifecycle::NotStarted);
     child.parent = Some(id("item"));
     base.create(id("child"), Kind::Group, child.clone(), context(1))
         .unwrap();
     base.create(id("sibling"), Kind::Group, child, context(1))
-        .unwrap();
-    base.perform(&id("child"), Operation::Start, None, context(1))
-        .unwrap();
-    base.perform(&id("sibling"), Operation::Start, None, context(1))
         .unwrap();
     let mut grandchild = current(Lifecycle::NotStarted);
     grandchild.parent = Some(id("child"));
@@ -1739,4 +1950,203 @@ fn parent_whose_id_duplicates_another_entry_is_rejected_without_panicking() {
         .unwrap();
     snapshot.entities.get_mut(&id("item")).unwrap().id = id("other");
     assert!(snapshot.validate().is_err());
+}
+
+#[test]
+fn codec_rejects_groups_that_store_or_ever_stored_in_progress() {
+    let mut s = Snapshot::new(StoreId::generate());
+    register(&mut s, "plan", Kind::Group, None);
+    register(&mut s, "work", Kind::Issue, Some("plan"));
+    perform(&mut s, "work", Operation::Start);
+    let valid = String::from_utf8(encode(&s).unwrap()).unwrap();
+    let mut current = s.clone();
+    current
+        .entities
+        .get_mut(&id("plan"))
+        .unwrap()
+        .current
+        .lifecycle = Lifecycle::InProgress;
+    let error = current.validate().unwrap_err().to_string();
+    assert!(error.contains("never stores InProgress"), "{error}");
+    // A Start transition of a Group is invalid history even when the current value is fine.
+    let head = s.entity(&id("plan")).unwrap().head.clone();
+    let mut history = s.clone();
+    let started = RecordId::generate();
+    history.states.insert(
+        started.clone(),
+        StateRecord {
+            id: started.clone(),
+            entity: id("plan"),
+            parents: BTreeSet::from([head]),
+            context: context(30),
+            event: StateEvent::Transition {
+                operation: Operation::Start,
+                before: Lifecycle::NotStarted,
+                after: Lifecycle::InProgress,
+                reason: None,
+            },
+        },
+    );
+    let error = history.validate().unwrap_err().to_string();
+    assert!(error.contains("not started directly"), "{error}");
+    let tampered = valid.replace(
+        "\"lifecycle\":\"NotStarted\",\"condition\":\"exit 1\",\"parent\":null",
+        "\"lifecycle\":\"InProgress\",\"condition\":\"exit 1\",\"parent\":null",
+    );
+    assert_ne!(tampered, valid);
+    assert!(decode(tampered.as_bytes()).is_err());
+    assert_eq!(decode(valid.as_bytes()).unwrap(), s);
+}
+
+#[test]
+fn completed_work_moves_only_under_adopted_groups() {
+    let mut s = Snapshot::new(StoreId::generate());
+    register(&mut s, "done", Kind::Issue, None);
+    register(&mut s, "closed", Kind::Group, None);
+    register(&mut s, "adopted", Kind::Group, None);
+    register(&mut s, "pending", Kind::Group, None);
+    perform(&mut s, "pending", Operation::Withdraw);
+    perform(&mut s, "done", Operation::Start);
+    perform(&mut s, "done", Operation::Complete);
+    perform(&mut s, "closed", Operation::Complete);
+    for name in ["done", "closed"] {
+        rejected(&mut s, |s| s.set_parent(&id(name), Some(id("pending"))));
+        s.set_parent(&id(name), Some(id("adopted"))).unwrap();
+        s.set_parent(&id(name), None).unwrap();
+    }
+    // A NotStarted Entity may still be placed under an unadopted Group.
+    register(&mut s, "fresh", Kind::Issue, None);
+    s.set_parent(&id("fresh"), Some(id("pending"))).unwrap();
+    roundtrip(&s);
+}
+
+#[test]
+fn a_cancelled_subgroup_with_completed_work_does_not_make_its_parent_working() {
+    let mut s = Snapshot::new(StoreId::generate());
+    register(&mut s, "parent", Kind::Group, None);
+    register(&mut s, "sub", Kind::Group, Some("parent"));
+    register(&mut s, "work", Kind::Issue, Some("sub"));
+    perform(&mut s, "work", Operation::Start);
+    perform(&mut s, "work", Operation::Complete);
+    assert_eq!(effective(&s, "parent"), Lifecycle::InProgress);
+    perform(&mut s, "sub", Operation::Cancel);
+    assert_eq!(effective(&s, "parent"), Lifecycle::NotStarted);
+    assert!(!s.working_groups().contains(&id("parent")));
+    perform(&mut s, "parent", Operation::Withdraw);
+    // Reconsidering leaves Completed work under an Undecided Group, which is allowed.
+    perform(&mut s, "sub", Operation::Reconsider);
+    assert_eq!(effective(&s, "sub"), Lifecycle::Undecided);
+    roundtrip(&s);
+}
+
+#[test]
+fn three_way_automatic_choices_cannot_leave_work_under_unadopted_groups() {
+    let mut base = Snapshot::new(StoreId::generate());
+    register(&mut base, "outer", Kind::Group, None);
+    register(&mut base, "plan", Kind::Group, Some("outer"));
+    register(&mut base, "work", Kind::Issue, Some("plan"));
+    for (withdrawn, finish) in [("plan", false), ("outer", true)] {
+        let mut left = base.clone();
+        let mut right = base.clone();
+        perform(&mut left, withdrawn, Operation::Withdraw);
+        perform(&mut right, "work", Operation::Start);
+        if finish {
+            perform(&mut right, "work", Operation::Complete);
+        }
+        let plan = MergePlan::prepare(&base, &left, &right).unwrap();
+        assert!(plan.conflicts().is_empty());
+        let error = plan
+            .resolve(&BTreeMap::new(), None, context(1))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("adopted ancestors"), "{error}");
+        assert!(
+            error.contains(if finish { "plan" } else { "work" }),
+            "{error}"
+        );
+        let merged = plan
+            .resolve(
+                &BTreeMap::from([(id(withdrawn), Side::Right)]),
+                None,
+                context(1),
+            )
+            .unwrap();
+        assert_eq!(
+            merged.entity(&id(withdrawn)).unwrap().current.lifecycle,
+            Lifecycle::NotStarted
+        );
+        assert_eq!(effective(&merged, "outer"), Lifecycle::InProgress);
+        roundtrip(&merged);
+    }
+}
+
+#[test]
+fn reopen_requires_adopted_ancestors_even_when_the_parent_is_open() {
+    let mut s = Snapshot::new(StoreId::generate());
+    register(&mut s, "g", Kind::Group, None);
+    register(&mut s, "x", Kind::Issue, Some("g"));
+    perform(&mut s, "x", Operation::Start);
+    perform(&mut s, "x", Operation::Complete);
+    perform(&mut s, "g", Operation::Cancel);
+    perform(&mut s, "g", Operation::Reconsider);
+    rejected(&mut s, |s| {
+        s.perform(&id("x"), Operation::Reopen, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "g", Operation::Accept);
+    perform(&mut s, "x", Operation::Reopen);
+    roundtrip(&s);
+}
+
+#[test]
+fn complete_checks_only_the_entity_s_own_dependencies() {
+    let mut s = Snapshot::new(StoreId::generate());
+    register(&mut s, "late", Kind::Issue, None);
+    register(&mut s, "g", Kind::Group, None);
+    register(&mut s, "work", Kind::Issue, Some("g"));
+    register(&mut s, "sub", Kind::Group, Some("g"));
+    register(&mut s, "done", Kind::Issue, Some("sub"));
+    perform(&mut s, "work", Operation::Start);
+    perform(&mut s, "done", Operation::Start);
+    perform(&mut s, "done", Operation::Complete);
+    // A dependency added to the parent afterwards blocks new starts, not completion below it.
+    s.add_dependency(&id("g"), &id("late")).unwrap();
+    register(&mut s, "next", Kind::Issue, Some("g"));
+    rejected(&mut s, |s| {
+        s.perform(&id("next"), Operation::Start, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "work", Operation::Complete);
+    perform(&mut s, "sub", Operation::Complete);
+    rejected(&mut s, |s| {
+        s.perform(&id("g"), Operation::Complete, None, context(1))
+            .map(|_| ())
+    });
+    roundtrip(&s);
+}
+
+#[test]
+fn accept_looks_at_every_descendant_for_started_work() {
+    let mut s = Snapshot::new(StoreId::generate());
+    register(&mut s, "pending", Kind::Group, None);
+    perform(&mut s, "pending", Operation::Withdraw);
+    register(&mut s, "plan", Kind::Group, None);
+    register(&mut s, "sub", Kind::Group, Some("plan"));
+    register(&mut s, "deep", Kind::Issue, Some("sub"));
+    perform(&mut s, "deep", Operation::Start);
+    perform(&mut s, "deep", Operation::Complete);
+    // The Completed grandchild counts even under a Cancelled child Group, which does not
+    // make `plan` working; the check is about started descendants, not the derived value.
+    perform(&mut s, "sub", Operation::Cancel);
+    perform(&mut s, "plan", Operation::Cancel);
+    perform(&mut s, "plan", Operation::Reconsider);
+    s.set_parent(&id("plan"), Some(id("pending"))).unwrap();
+    rejected(&mut s, |s| {
+        s.perform(&id("plan"), Operation::Accept, None, context(1))
+            .map(|_| ())
+    });
+    perform(&mut s, "pending", Operation::Accept);
+    perform(&mut s, "plan", Operation::Accept);
+    assert_eq!(effective(&s, "plan"), Lifecycle::NotStarted);
+    roundtrip(&s);
 }

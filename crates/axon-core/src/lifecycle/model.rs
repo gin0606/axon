@@ -94,9 +94,12 @@ pub enum Operation {
     Complete,
     Cancel,
     Reconsider,
+    Reopen,
 }
 impl Operation {
-    pub fn apply(self, before: Lifecycle) -> Result<Lifecycle> {
+    /// The basic transition of an Issue. Groups share the states but not every operation;
+    /// `apply_as` adds the kind-specific rules and is the entry point for callers.
+    pub(crate) fn apply(self, before: Lifecycle) -> Result<Lifecycle> {
         use Lifecycle::*;
         match (self, before) {
             (Self::Accept, Undecided) => Ok(NotStarted),
@@ -106,7 +109,27 @@ impl Operation {
             (Self::Complete, InProgress) => Ok(Completed),
             (Self::Cancel, Undecided | NotStarted | InProgress) => Ok(Cancelled),
             (Self::Reconsider, Cancelled) => Ok(Undecided),
+            (Self::Reopen, Completed) => Ok(NotStarted),
             _ => Err(invalid(format!("cannot {self:?} from {before:?}"))),
+        }
+    }
+    /// A Group is never started or released: its InProgress is derived from the Issues below
+    /// it, so it completes from NotStarted and is cancelled from Undecided or NotStarted.
+    pub fn apply_as(self, kind: Kind, before: Lifecycle) -> Result<Lifecycle> {
+        use Lifecycle::*;
+        match (kind, self, before) {
+            (Kind::Issue, _, _) => self.apply(before),
+            (Kind::Group, Self::Start, _) => Err(invalid(
+                "a Group is not started directly: it is InProgress while a direct child is InProgress or Completed, and its saved lifecycle does not change",
+            )),
+            (Kind::Group, Self::Release, _) => Err(invalid(
+                "a Group is not released directly: it stops being InProgress when no direct child is InProgress or Completed, and its saved lifecycle does not change",
+            )),
+            (Kind::Group, Self::Complete, NotStarted) => Ok(Completed),
+            (Kind::Group, Self::Complete | Self::Cancel, InProgress) => {
+                Err(invalid(format!("cannot {self:?} a Group from {before:?}")))
+            }
+            (Kind::Group, _, _) => self.apply(before),
         }
     }
 }

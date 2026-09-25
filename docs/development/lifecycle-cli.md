@@ -12,7 +12,6 @@ cd "$FIXTURE_DIR"
 "$AXON_BIN" init demo
 "$AXON_BIN" capture --kind group --accept --title '画面を実装する' -m '完了条件を記載する'
 "$AXON_BIN" capture --accept --title 'フォームを作る' --parent GROUP_ID --file body.md
-"$AXON_BIN" start GROUP_ID
 "$AXON_BIN" start ISSUE_ID
 "$AXON_BIN" note add ISSUE_ID -m '成果と検証結果'
 "$AXON_BIN" complete ISSUE_ID
@@ -27,9 +26,9 @@ cd "$FIXTURE_DIR"
 
 登録は `axon capture` の一つで、`--kind issue|group` が種別、`--accept` が初期 lifecycle を選ぶ。`--kind` の既定は `issue`、`--accept` 省略時は `Undecided`、指定時は `NotStarted`。タイトルは `--title`、本文は `-m/--description` または `-F/--file`、`axon write ID` も同じ本文 option を使う。Note は `axon note add ID -m/--message` または `-F/--file`。ファイル引数 `-` は UTF-8 の標準入力を一度読む。本文 option 同士は排他。位置引数は対象 ID、親は `--parent`、依存先は繰り返し可能な `--needs`。入力や操作の拒否は非ゼロで終了する。
 
-`axon accept|withdraw|start|release|complete|cancel|reconsider ID` は `-r/--reason` を履歴へ保存する。`axon parent set ID --parent G` / `axon parent unset ID` と `axon dep add|rm ID --needs B` は共通コアの関係制約を使う。
+`axon accept|withdraw|start|release|complete|cancel|reconsider|reopen ID` は `-r/--reason` を履歴へ保存する。Group への `axon start`・`axon release` は共通コアが拒否し、配下の Issue の着手で実効値が `InProgress` になることを診断で示す。`axon parent set ID --parent G` / `axon parent unset ID` と `axon dep add|rm ID --needs B` は共通コアの関係制約を使う。
 
-`axon list` と `axon show` は保存情報だけを読む。行は ID・種別・状況・タイトル、作成日時順（同時刻は ID 順）。`axon show` は本文、Note 件数、所属、直接の未充足前提と Group の全子孫のツリー・終了数（Group・Issue を含み、対象自身を除く）を表示する。Note 本文は `axon note list`、状態変更の前後・理由・統合結果は `axon log` で読む。記録は共通コアの因果順、並行記録のみ ID 順であり、時刻順への並べ替えはしない。直前の記録と先後関係がない箇所には`Concurrent branch` と表示し、逐次操作と区別する。通常表示では端末制御文字をエスケープする。
+`axon list` と `axon show` は保存情報だけを読む。行は ID・種別・状況・タイトル、作成日時順（同時刻は ID 順）。`axon show` は本文、Note 件数、所属、直接の未充足前提（詰まっている Group では `Stalled` の理由）と Group の全子孫のツリー・終了数（Group・Issue を含み、対象自身を除く）を表示する。一覧と詳細の状況欄は `axon::read::View` が保存値と構造から導出し、`axon tasks` だけが評価した再浮上条件を Group の `Ready` に使う。Note 本文は `axon note list`、状態変更の前後・理由・統合結果は `axon log` で読む。記録は共通コアの因果順、並行記録のみ ID 順であり、時刻順への並べ替えはしない。直前の記録と先後関係がない箇所には`Concurrent branch` と表示し、逐次操作と区別する。通常表示では端末制御文字をエスケープする。
 
 候補の `axon proposals|tasks` と `axon condition` の設定・評価は [候補と外部条件](../reference/candidates.md) を参照する。記録者は独立crateから取得できた任意情報を添える。`axon merge` と Git driver は [file保存とGit統合](lifecycle-file.md#明示的な統合) を参照する。
 

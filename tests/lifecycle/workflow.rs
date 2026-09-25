@@ -30,8 +30,8 @@ fn the_daily_workflow_runs_from_registration_to_group_completion() {
     assert!(f.ok(&["list"]).contains(&second));
     f.ok(&["condition", "unset", &second]);
     assert!(f.ok(&["tasks"]).contains(&second));
-    failure(f.run(&["start", &first]));
-    f.ok(&["start", &group]);
+    let rejected = failure(f.run(&["start", &group]));
+    assert!(rejected.contains("not started directly"), "{rejected}");
     let mut attempts = (0..4)
         .map(|_| {
             f.command()
@@ -73,14 +73,17 @@ fn the_daily_workflow_runs_from_registration_to_group_completion() {
     let review = f.ok(&["show", &group]);
     assert!(review.contains("2/2 terminal (2 completed, 0 cancelled)"));
     assert!(review.contains("Awaiting final confirmation"));
-    assert!(f.ok(&["tasks"]).contains(&group));
+    assert!(
+        f.ok(&["tasks"])
+            .contains(&format!("{group}  Group  Confirmable  納品"))
+    );
     assert!(
         f.ok(&["note", "list", &second])
             .contains("成果を統合・検証済み")
     );
     f.ok(&["complete", &group]);
     assert!(f.ok(&["tasks"]).is_empty());
-    assert!(f.ok(&["log", &group]).contains("InProgress → Completed"));
+    assert!(f.ok(&["log", &group]).contains("NotStarted → Completed"));
 }
 
 #[test]

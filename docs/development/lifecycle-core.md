@@ -8,11 +8,11 @@
 
 `Current` は最大一つの親 Group と outgoing dependency 集合を保持する。`create`、`set_parent`、`add_dependency` / `remove_dependency` は候補 snapshot の全体検査後に確定し、拒否時は記録も現在値も変えない。同値の関係指定は成功した no-op とする。状態変更は `check_operation` と同じ前提を検査し、成功時だけ履歴を加える。外部条件は評価しない。
 
-子の着手には親の `InProgress`、着手・完了には直接依存先すべての `Completed` が必要になる。Group の解放は進行中の子がいると拒否し、完了・取りやめは未終了の子がいると拒否する。`perform(..., Operation::Complete, ...)` 自体を Group 全体の最終確認済みという明示入力とする。`check_operation` や子の終了は最終確認を記録せず、親を自動変更しない。
+操作の前提は `Operation::apply_as` の種類別の基本遷移と `check_operation` が検査する。Group は `Start`・`Release` を受け付けず、保存値が `InProgress` になることはない。実効 lifecycle は `working_groups` / `effective_lifecycle` が子から導出する。Issue の `Start` は全祖先の保存値が `NotStarted` で、自身と全祖先の直接依存先がすべて `Completed` であること、`Complete` は自身の依存先の `Completed` と全祖先の採用、Group ではさらに直属の子がすべて終了していること、`Reopen` は全祖先の採用と `Completed` の依存元がないこと、Group の `Withdraw` は実効値が `NotStarted` であること、着手・完了した子孫を持つ Group の `Accept` は全祖先の採用を要求する。`perform(..., Operation::Complete, ...)` 自体を Group 全体の最終確認済みという明示入力とする。`check_operation` や子の終了は最終確認を記録せず、親を自動変更しない。
 
-終了した親の構成と配下の lifecycle は固定する。終了した Entity 自体の所属は、元と先の親が終了していなければ変更できる。`InProgress` の部分木は `InProgress` の親へ、または所属なしへ移動できる。`Completed` の outgoing dependency は固定し、`Cancelled` の依存編集は許す。
+終了した親の構成と配下の lifecycle は固定する。終了した Entity 自体の所属は、元と先の親が終了していなければ変更できる。実効値が `InProgress` か `Completed` の Entity は、移動先自身を含む全祖先の保存値が `NotStarted` の Group の下へ、または所属なしへ移動できる。`Completed` の outgoing dependency は固定し、`Cancelled` の依存編集は許す。
 
-全体検査は包含の参照・循環と、進行中の祖先、終了した Group の子孫、`Completed` の依存先を検査する。通常完了の前提を「直属の子、自身と全祖先の依存先」へ縮約し、動的な Entity 集合に Kahn 法を適用する。`Completed` / `Cancelled` もグラフに含む。codec と明示統合もこの検査を使い、統合では選択した終了済み Group の全子孫の集合・所属・lifecycle も選択元と照合する。
+全体検査は包含の参照・循環と、Group が `InProgress` を保存しないこと、`InProgress` の Issue と実効 `InProgress` の Group の祖先がすべて採用済みであること、終了した Group の子孫、`Completed` の依存先を検査する。通常完了の前提を「直属の子、自身と全祖先の依存先」へ縮約し、動的な Entity 集合に Kahn 法を適用する。`Completed` / `Cancelled` もグラフに含む。codec と明示統合もこの検査を使い、統合では選択した終了済み Group の全子孫の集合・所属・lifecycle も選択元と照合する。
 
 ## 現在値と不変な記録
 
@@ -26,7 +26,7 @@
 
 `Snapshot::integrate` は入力と出力を別 snapshot にし、同じ store の両入力にある不変記録を和集合にする。同じ ID の同じ記録は共有し、異なる内容なら拒否する。すべての Entity について左右どちらの現在値を採るかを呼び出し元が明示する。入力にない現在値の作成や、文面と完了の項目別合成はしない。三者比較・自動解決・保存先への適用を行う merge engine ではない。
 
-統合記録は入力の状態先端と現在値、それらのうち採用した入力、日時・記録者・任意の理由を保持する。両側が同じ状態先端でも、履歴を作らない文面編集の違いを入力値として残せる。統合後の状態先端はこの記録となる。統合記録の ID は、store・Entity・入力の先端・日時と記録者・採用結果と理由から決まる。同じ入力を同じ context で統合し直すと同じ記録になり、乱数による別の記録は増えない。実際に起きた状態遷移を統合に代えて捏造せず、完了分岐と解放分岐を残したまま未完了側を選べる。続く `Start` は選択された `NotStarted` から始まる通常遷移であり、`Completed` 自体の再開経路ではない。
+統合記録は入力の状態先端と現在値、それらのうち採用した入力、日時・記録者・任意の理由を保持する。両側が同じ状態先端でも、履歴を作らない文面編集の違いを入力値として残せる。統合後の状態先端はこの記録となる。統合記録の ID は、store・Entity・入力の先端・日時と記録者・採用結果と理由から決まる。同じ入力を同じ context で統合し直すと同じ記録になり、乱数による別の記録は増えない。実際に起きた状態遷移を統合に代えて捏造せず、完了分岐と解放分岐を残したまま未完了側を選べる。続く `Start` は選択された `NotStarted` から始まる通常遷移であり、`Completed` 自体の再開経路ではない。`Completed` を戻す経路は通常操作の `Reopen` だけである。
 
 ## 三者比較の統合 engine
 
@@ -48,7 +48,8 @@ JSONL の header は `format: "axon-lifecycle/v1"` と store ID を持ち、Enti
 
 ## 検証の対応
 
-- 基本遷移: [`spec/lifecycle_rules.qnt`](../../spec/lifecycle_rules.qnt) と [`spec/issue_lifecycle.qnt`](../../spec/issue_lifecycle.qnt) の七操作、`Completed` の固定。Rust は全状態 × 全操作の行列と失敗時の原子性を検査する。
+- 基本遷移: [`spec/lifecycle_rules.qnt`](../../spec/lifecycle_rules.qnt) と [`spec/issue_lifecycle.qnt`](../../spec/issue_lifecycle.qnt) の八操作と種類別の前提。Rust は種類ごとの全状態 × 全操作の行列と失敗時の原子性を検査する。
+- 包含と実効 lifecycle: [`spec/group_lifecycle.qnt`](../../spec/group_lifecycle.qnt) の witness に対応する Rust テストが、`Reopen` 後の再着手、完了済みの子を持つ Group の `Reopen`、`Completed` の依存元による `Reopen` の拒否、空の Group と全子 `Cancelled` の Group の完了、祖先の dependency による着手の阻害と解禁、三階層の実効 `InProgress`、孫が着手中の祖父の `Withdraw` の拒否、一覧の五つの状況と優先順位、詰まっている理由を検査する。
 - 情報操作: [`spec/lifecycle_information.qnt`](../../spec/lifecycle_information.qnt) の編集制約・他 Entity 不変・Note 追記・状態と履歴の一体性。Rust は Issue / Group、全 lifecycle、同内容の独立 Note、任意の記録者情報を検査する。
 - 分岐と保存: [保存と統合](../reference/storage.md) が定める実装範囲を Rust の縦断テストで検査する。日時逆転、並行履歴、明示選択後の通常操作、不正な参照・ID 衝突、canonical bytes 往復を含む。通常操作モデルの一本の履歴へ統合を押し込めない。
 

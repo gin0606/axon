@@ -50,7 +50,7 @@ pub(super) fn list(options: ListOptions) -> Result<Output> {
     let (_, snapshot) = store.read()?;
     let text = read::list(
         &snapshot,
-        |e| options.matches(e),
+        |view, e| options.matches(view, e),
         options.selection.search.as_deref(),
     )
     .into_iter()

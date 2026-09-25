@@ -10,7 +10,7 @@ mod model;
 mod relations;
 mod snapshot;
 
-pub use candidates::{CandidateList, candidates, candidates_filtered};
+pub use candidates::{CandidateList, Surfacing, candidates, candidates_filtered, list_candidates};
 pub use codec::{decode, encode};
 pub use merge::MergePlan;
 pub use model::*;

@@ -178,7 +178,6 @@ fn registration_to_group_completion_and_records() {
             "capture",
             "--kind",
             "group",
-            "--accept",
             "--title",
             "計画",
             "-m",
@@ -208,11 +207,15 @@ fn registration_to_group_completion_and_records() {
     assert!(f.ok(&["show", &issue]).contains("Undecided"));
     f.ok(&["accept", &issue]);
     let wait = f.ok(&["show", &issue]);
-    assert!(wait.contains("Parent must start:"));
+    assert!(wait.contains("Required to start"));
+    assert!(wait.contains(&format!("Ancestor must be adopted: {group}")));
     assert!(wait.contains("Dependency must complete:"));
     assert!(!wait.contains("Parent:"));
     failure(f.run(&["start", &issue]));
-    f.ok(&["start", &group]);
+    f.ok(&["accept", &group]);
+    assert!(f.ok(&["show", &issue]).contains("Parent:"));
+    failure(f.run(&["start", &issue]));
+    failure(f.run(&["start", &group]));
     f.ok(&["start", &dependency]);
     f.ok(&["complete", &dependency]);
     f.ok(&[
@@ -224,6 +227,8 @@ fn registration_to_group_completion_and_records() {
         "編集本文",
     ]);
     f.ok(&["start", &issue]);
+    assert!(f.ok(&["show", &group]).contains("Group  InProgress  計画"));
+    failure(f.run(&["release", &group]));
     f.ok(&["note", "add", &issue, "-m", "検証結果"]);
     failure(f.run(&["complete", &group]));
     let show = f.ok(&["show", &issue]);
@@ -247,6 +252,9 @@ fn registration_to_group_completion_and_records() {
     assert!(log.contains("InProgress → Completed"));
     assert!(log.contains("検証完了"));
     assert!(!log.contains("record-"));
+    let log = f.ok(&["log", &group]);
+    assert!(log.contains("NotStarted → Completed"));
+    assert!(!log.contains("InProgress"));
     let list = f.ok(&["list"]);
     assert!(list.find(&group) < list.find(&dependency));
     assert!(list.find(&dependency) < list.find(&issue));
@@ -748,22 +756,29 @@ fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation
         fs::read_to_string(f.0.join("observations")).unwrap(),
         "root\nnested\ndraft\n"
     );
-    f.ok(&["start", &root]);
-    f.ok(&["start", &nested]);
+    f.ok(&["start", &dep]);
+    f.ok(&["complete", &dep]);
+    f.ok(&["start", &child]);
     fs::remove_file(f.0.join("open")).unwrap();
-    let rows = f.ok(&["tasks"]);
-    assert!(rows.contains(&root) && rows.contains(&nested));
-    assert!(!rows.contains(&child));
-    f.ok(&["cancel", &child]);
-    set_condition(&f, &root, "exit 23");
     fs::write(f.0.join("observations"), "").unwrap();
+    // Working Groups are listed although they do not surface, and only the root is
+    // evaluated because nothing below an unsurfaced ancestor is.
     let rows = f.ok(&["tasks"]);
-    assert!(rows.contains(&root) && rows.contains(&nested));
+    for id in [&root, &nested, &child] {
+        assert!(rows.contains(id));
+    }
     assert!(
-        fs::read_to_string(f.0.join("observations"))
-            .unwrap()
-            .is_empty()
+        rows.lines()
+            .filter(|s| s.starts_with(&root) || s.starts_with(&nested))
+            .all(|s| s.contains("Group  InProgress  "))
     );
+    assert_eq!(
+        fs::read_to_string(f.0.join("observations")).unwrap(),
+        "root\n"
+    );
+    // A working Group's own condition is still evaluated, so its failure fails the list.
+    set_condition(&f, &root, "exit 23");
+    assert!(failure(f.run(&["tasks"])).contains("exit status: 23"));
     assert!(failure(f.run(&["proposals"])).contains("exit status: 23"));
 }
 
@@ -790,7 +805,6 @@ fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
     f.ok(&["accept", &id]);
     f.ok(&["withdraw", &id]);
     f.ok(&["accept", &id]);
-    f.ok(&["start", &root]);
     f.ok(&["start", &id]);
     f.ok(&["release", &id]);
     f.ok(&["cancel", &id]);
@@ -802,6 +816,11 @@ fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
     f.ok(&["accept", &id]);
     f.ok(&["start", &id]);
     f.ok(&["complete", &id]);
+    f.ok(&["reopen", &id]);
+    f.ok(&["start", &id]);
+    f.ok(&["complete", &id]);
+    f.ok(&["complete", &root]);
+    f.ok(&["reopen", &root]);
     f.ok(&["complete", &root]);
     set_condition(&f, &id, "exit 2");
     f.ok(&["condition", "unset", &id]);

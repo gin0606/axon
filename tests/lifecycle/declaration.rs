@@ -49,8 +49,6 @@ fn declaration_export_selectors_and_references_are_read_only() {
         "--command",
         "touch executed",
     ]));
-    f.ok(&["start", &outer]);
-    f.ok(&["start", &group]);
     f.ok(&["start", &done]);
     f.ok(&["complete", &done]);
     f.ok(&["cancel", &cancelled]);
@@ -63,6 +61,12 @@ fn declaration_export_selectors_and_references_are_read_only() {
     assert_eq!(d.serialize(&before).unwrap(), yaml);
     assert_eq!(d.groups.len(), 2);
     assert_eq!(d.issues.len(), 3);
+    // Groups export their saved lifecycle, not the derived InProgress.
+    assert!(d.groups.iter().all(|r| r.lifecycle == "not-started"));
+    assert!(
+        f.ok(&["list", "--lifecycle", "in-progress"])
+            .contains(&group)
+    );
     assert_eq!(
         d.issues
             .iter()
@@ -383,10 +387,12 @@ fn declaration_check_rejects_local_and_core_guards() {
     d.groups[1].parent = Some(Reference::id(&group));
     reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
     f.ok(&["start", &a]);
+    f.ok(&["withdraw", &group]);
     let mut d = declaration::parse(&f.ok(&["export", &a])).unwrap();
     d.issues[0].parent = Some(Reference::id(&group));
     d.refresh_references(&snapshot(&f)).unwrap();
     reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
+    f.ok(&["accept", &group]);
     f.ok(&["complete", &a]);
     f.ok(&["cancel", &b]);
     for item in [&a, &b] {
@@ -405,7 +411,6 @@ fn declaration_check_rejects_local_and_core_guards() {
     d.refresh_references(&snapshot(&f)).unwrap();
     reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
     f.ok(&["parent", "set", &a, "--parent", &group]);
-    f.ok(&["start", &group]);
     f.ok(&["complete", &group]);
     let mut d = declaration::parse(&f.ok(&["export", &a])).unwrap();
     d.issues[0].parent = None;

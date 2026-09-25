@@ -11,13 +11,20 @@ Lifecycle
   registers it as already adopted, in NotStarted instead of Undecided.
   withdraw returns NotStarted to Undecided; release returns InProgress to NotStarted.
   cancel terminates unfinished work; reconsider returns Cancelled to Undecided.
-  Completed work cannot reopen. Notes can be appended even after work is terminal.
+  reopen returns Completed to NotStarted unless a Completed dependent remains.
+  Notes can be appended even after work is terminal.
 
-A child starts only while its parent Group is InProgress. Explicit dependencies
-must be Completed before work starts or completes. Cancelled is terminal but does
-not satisfy a dependency. Group completion also requires all direct children to
-be terminal. Running complete on a Group explicitly confirms final review of
-the entire plan, including the outcomes and Notes of its descendants.
+A Group is never started or released. A NotStarted Group is InProgress while a direct
+child is InProgress or Completed (a NotStarted child Group passes this up from its own
+children); its saved lifecycle stays NotStarted until it completes.
+An Issue starts only when every ancestor Group is adopted (NotStarted) and the
+explicit dependencies of the Issue and of its ancestors are Completed. Dependencies
+must also be Completed before work completes. Cancelled is terminal but does not
+satisfy a dependency. Group completion requires all direct children to be terminal;
+an empty Group completes as well. Running complete on a Group explicitly confirms
+final review of the entire plan, including the outcomes and Notes of its descendants.
+tasks shows a Group as Empty, Confirmable, Ready, InProgress or Blocked, and show
+explains a stalled Group under Stalled.
 parent set ID --parent G sets or moves the parent Group and parent unset ID
 removes it; neither changes lifecycle.
 

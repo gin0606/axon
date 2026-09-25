@@ -94,11 +94,9 @@ fn relationship_changes_are_order_independent() {
             "active-subtree" => {
                 before.set_parent(&id("j"), Some(id("g"))).unwrap();
                 before.set_parent(&id("a"), Some(id("j"))).unwrap();
-                for name in ["g", "h", "j", "a"] {
-                    before
-                        .perform(&id(name), Operation::Start, None, context())
-                        .unwrap();
-                }
+                before
+                    .perform(&id("a"), Operation::Start, None, context())
+                    .unwrap();
             }
             _ => {}
         }
@@ -172,9 +170,14 @@ fn relationship_changes_are_order_independent() {
                 "active-subtree" => {
                     assert_eq!(state("j").parent, Some(id("h")));
                     assert_eq!(state("a").parent, Some(id("j")));
-                    for name in ["g", "h", "j", "a"] {
-                        assert_eq!(state(name).lifecycle, Lifecycle::InProgress);
+                    assert_eq!(state("a").lifecycle, Lifecycle::InProgress);
+                    for name in ["g", "h", "j"] {
+                        assert_eq!(state(name).lifecycle, Lifecycle::NotStarted);
                     }
+                    assert_eq!(
+                        after.effective_lifecycle(after.entity(&id("h")).unwrap()),
+                        Lifecycle::InProgress
+                    );
                 }
                 _ => unreachable!(),
             }

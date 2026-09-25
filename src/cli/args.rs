@@ -97,9 +97,9 @@ pub(super) enum Command {
     Accept(Change),
     /// Withdraw adoption of a NotStarted Entity
     Withdraw(Change),
-    /// Start work after checking parent and dependency prerequisites
+    /// Start an Issue after checking ancestor adoption and dependency prerequisites
     Start(Change),
-    /// Release InProgress work back to NotStarted
+    /// Release an InProgress Issue back to NotStarted
     Release(Change),
     /// Complete work; for a Group, explicitly confirm final review of the entire plan
     Complete(Change),
@@ -107,6 +107,8 @@ pub(super) enum Command {
     Cancel(Change),
     /// Return a Cancelled Entity to Undecided
     Reconsider(Change),
+    /// Return a Completed Entity to NotStarted; rejected while Completed dependents remain
+    Reopen(Change),
     /// Edit title or description without changing lifecycle
     Write {
         id: String,
@@ -258,7 +260,7 @@ pub(super) struct Create {
     pub(super) command: Option<String>,
     #[command(flatten)]
     pub(super) body: Body,
-    /// Containing Group; the new Entity starts only while that Group is InProgress
+    /// Containing Group; an Issue starts only after every ancestor Group is adopted
     #[arg(long)]
     pub(super) parent: Option<String>,
     /// Dependency that must be Completed first; repeat for several
@@ -388,7 +390,7 @@ impl Selection {
 pub struct ListOptions {
     #[command(flatten)]
     pub selection: Selection,
-    /// Restrict the saved lifecycle (independent of surfacing and blocking)
+    /// Restrict the lifecycle; a Group matches by its effective value (independent of surfacing and blocking)
     #[arg(long)]
     pub(super) lifecycle: Option<LifecycleFilter>,
     /// Select terminal (true) or non-terminal (false) Entities; omit for both
@@ -396,11 +398,11 @@ pub struct ListOptions {
     pub(super) terminal: Option<bool>,
 }
 impl ListOptions {
-    pub fn matches(&self, entity: &Entity) -> bool {
+    pub fn matches(&self, view: &read::View<'_>, entity: &Entity) -> bool {
         self.selection.matches(entity)
             && self
                 .lifecycle
-                .is_none_or(|l| l.state() == entity.current.lifecycle)
+                .is_none_or(|l| l.state() == view.effective(entity))
             && self
                 .terminal
                 .is_none_or(|terminal| terminal != entity.current.lifecycle.editable())
@@ -443,6 +445,7 @@ pub fn operation_label(command: &Command) -> String {
         Command::Complete(c) => ("complete", Some(&c.id)),
         Command::Cancel(c) => ("cancel", Some(&c.id)),
         Command::Reconsider(c) => ("reconsider", Some(&c.id)),
+        Command::Reopen(c) => ("reopen", Some(&c.id)),
         Command::Condition {
             command: Condition::Set { id, .. },
         } => ("condition set", Some(id)),

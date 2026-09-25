@@ -32,8 +32,7 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
         .next()
         .unwrap()
         .to_string();
-    failure(f.run(&["start", &issue]));
-    f.ok(&["start", &group]);
+    failure(f.run(&["start", &group]));
     let mut processes = (0..6)
         .map(|_| f.command().args(["start", &issue]).spawn().unwrap())
         .collect::<Vec<_>>();
@@ -621,7 +620,6 @@ fn worktree_conflict_resolution_preserves_operations_and_finishes_group() {
         .next()
         .unwrap()
         .to_string();
-    f.ok(&["start", &group]);
     f.ok(&["start", &id]);
     track_store(&f.0);
     let commit = |path: &Path, message: &str| git_commit(path, &["-qam", message]);

@@ -85,6 +85,7 @@ fn run(command: Command) -> Result<Output> {
         Command::Complete(args) => write::transition(args, Operation::Complete),
         Command::Cancel(args) => write::transition(args, Operation::Cancel),
         Command::Reconsider(args) => write::transition(args, Operation::Reconsider),
+        Command::Reopen(args) => write::transition(args, Operation::Reopen),
     }
 }
 

@@ -381,10 +381,15 @@ fn check_core_constraints_and_references() {
     reject(&d, &s, "parent");
     s.perform(&id("a"), Operation::Start, None, context())
         .unwrap();
+    // InProgress work moves only under adopted Groups.
+    s.perform(&id("g"), Operation::Withdraw, None, context())
+        .unwrap();
     let mut d = export(&s, &[id("a")]).unwrap();
     d.issues[0].parent = Some(Reference::id("g"));
     d.refresh_references(&s).unwrap();
     reject(&d, &s, "parent");
+    s.perform(&id("g"), Operation::Accept, None, context())
+        .unwrap();
     s.perform(&id("a"), Operation::Complete, None, context())
         .unwrap();
     for field in ["title", "description", "needs"] {
@@ -398,8 +403,6 @@ fn check_core_constraints_and_references() {
         reject(&d, &s, field);
     }
     s.set_parent(&id("a"), Some(id("g"))).unwrap();
-    s.perform(&id("g"), Operation::Start, None, context())
-        .unwrap();
     s.perform(&id("g"), Operation::Complete, None, context())
         .unwrap();
     let mut d = export(&s, &[id("a")]).unwrap();

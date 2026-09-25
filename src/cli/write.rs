@@ -270,6 +270,7 @@ pub(super) fn transition(args: Change, operation: Operation) -> Result<Output> {
             Operation::Complete => "Completed",
             Operation::Cancel => "Cancelled",
             Operation::Reconsider => "Reconsidered  Undecided",
+            Operation::Reopen => "Reopened  NotStarted",
         };
         Ok(confirmation(&id, effect))
     })?;

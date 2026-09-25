@@ -1,7 +1,7 @@
 use super::{args::Cli, display};
 use axon::{
     Result,
-    lifecycle::{Context, EntityId, Note, Snapshot},
+    lifecycle::{Context, EntityId, Kind, Note, Snapshot},
     location::{Initialized, Location},
     read,
 };
@@ -16,6 +16,8 @@ pub(super) fn status_label(status: read::Status) -> &'static str {
         read::Status::InProgress => "InProgress",
         read::Status::Completed => "Completed",
         read::Status::Cancelled => "Cancelled",
+        read::Status::Empty => "Empty",
+        read::Status::Confirmable => "Confirmable",
     }
 }
 pub(super) fn row(value: &read::Row<'_>) -> String {
@@ -35,12 +37,20 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
     if notes > 0 {
         out.push_str(&format!("{notes} notes\n"));
     }
-    let parent_wait = !details
-        && value
-            .prerequisites
-            .as_ref()
-            .is_some_and(|p| p.parent.is_some());
-    if let Some(parent) = value.parent.filter(|_| !parent_wait) {
+    // The parent line is omitted when the wait section below already names the parent.
+    let parent_named_below = !details
+        && value.parent.is_some_and(|parent| {
+            let named = |rows: &[read::Row<'_>]| rows.iter().any(|r| r.entity.id == parent.id);
+            value
+                .prerequisites
+                .as_ref()
+                .is_some_and(|p| named(&p.ancestors))
+                || value
+                    .stall
+                    .as_ref()
+                    .is_some_and(|s| named(&s.undecided_ancestors))
+        });
+    if let Some(parent) = value.parent.filter(|_| !parent_named_below) {
         out.push_str(&format!(
             "Parent: {}  {}\n",
             display::identity(&parent.id),
@@ -55,17 +65,63 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
                 read::PrerequisiteOperation::Complete => "Required to complete",
             })
         ));
-        if let Some(parent) = &prerequisites.parent {
-            out.push_str(&format!("Parent must start: {}", row(parent)));
+        for ancestor in &prerequisites.ancestors {
+            out.push_str(&format!("Ancestor must be adopted: {}", row(ancestor)));
         }
         for dependency in &prerequisites.dependencies {
             out.push_str(&format!("Dependency must complete: {}", row(dependency)));
         }
+        for dependency in &prerequisites.ancestor_dependencies {
+            out.push_str(&format!(
+                "Ancestor dependency must complete: {}",
+                row(dependency)
+            ));
+        }
+    }
+    if !details && let Some(stall) = &value.stall {
+        out.push_str(&format!("\n{}\n", display::heading("Stalled")));
+        for dependency in &stall.dependencies {
+            out.push_str(&format!("Dependency must complete: {}", row(dependency)));
+        }
+        for dependency in &stall.ancestor_dependencies {
+            out.push_str(&format!(
+                "Ancestor dependency must complete: {}",
+                row(dependency)
+            ));
+        }
+        for (descendant, dependency) in &stall.descendant_dependencies {
+            let descendant = row(descendant);
+            out.push_str(&format!(
+                "Descendant dependency must complete: {}  needs  {}",
+                descendant.strip_suffix('\n').unwrap_or(&descendant),
+                row(dependency)
+            ));
+        }
+        for child in &stall.undecided_children {
+            out.push_str(&format!("Undecided child: {}", row(child)));
+        }
+        for subgroup in &stall.open_subgroups {
+            out.push_str(&format!("Open subgroup: {}", row(subgroup)));
+        }
+        for ancestor in &stall.undecided_ancestors {
+            out.push_str(&format!("Undecided ancestor: {}", row(ancestor)));
+        }
     }
     if details {
-        let lifecycle = format!("{:?}", entity.current.lifecycle);
-        if status_label(value.row.status) != lifecycle {
-            out.push_str(&format!("{} {lifecycle}\n", display::muted("Lifecycle:")));
+        let stored = format!("{:?}", entity.current.lifecycle);
+        let effective = format!("{:?}", value.effective);
+        if entity.kind == Kind::Group {
+            out.push_str(&format!(
+                "{} {effective}{}\n",
+                display::muted("Lifecycle:"),
+                if effective == stored {
+                    String::new()
+                } else {
+                    format!(" (stored {stored})")
+                }
+            ));
+        } else if status_label(value.row.status) != stored {
+            out.push_str(&format!("{} {stored}\n", display::muted("Lifecycle:")));
         }
         if value.parent.is_none() {
             out.push_str("Parent: (none)\n");
@@ -215,6 +271,7 @@ pub(super) fn declaration_changes(
     if applied {
         out.push_str("Already applied.\n");
     }
+    let view = read::View::new(after);
     for r in declaration.records() {
         let id: EntityId = r.id.clone().expect("checked ID").try_into()?;
         let entity = after.entity(&id)?;
@@ -273,7 +330,7 @@ pub(super) fn declaration_changes(
         }
         out.push_str(&format!(
             "  Situation after: {} (conditions not evaluated)\n",
-            status_label(read::status(after, entity))
+            status_label(view.status(entity))
         ));
     }
     if declaration.records().next().is_none() {
@@ -343,6 +400,7 @@ pub fn render_root_help() -> String {
                 "complete",
                 "cancel",
                 "reconsider",
+                "reopen",
             ],
         ),
         (

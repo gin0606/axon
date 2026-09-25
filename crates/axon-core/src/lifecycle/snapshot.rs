@@ -99,7 +99,7 @@ impl Snapshot {
         validate_reason(&reason)?;
         let entity = self.entity(id)?;
         let before = entity.current.lifecycle;
-        let after = operation.apply(before)?;
+        let after = operation.apply_as(entity.kind, before)?;
         let record_id = self.fresh_record_id();
         let record = StateRecord {
             id: record_id.clone(),
@@ -113,10 +113,15 @@ impl Snapshot {
                 reason,
             },
         };
-        self.states.insert(record_id.clone(), record);
-        let entity = self.entities.get_mut(id).expect("checked Entity");
+        // The prerequisites above keep the structural invariants; validating the result as
+        // well means a missed guard is rejected here instead of at the next read.
+        let mut candidate = self.clone();
+        candidate.states.insert(record_id.clone(), record);
+        let entity = candidate.entities.get_mut(id).expect("checked Entity");
         entity.current.lifecycle = after;
         entity.head = record_id.clone();
+        candidate.validate_relations()?;
+        *self = candidate;
         Ok(record_id)
     }
     pub fn write(
@@ -416,7 +421,7 @@ impl Snapshot {
             if head.entity != *id || head.event.result()? != entity.current.lifecycle {
                 return Err(invalid("current lifecycle proof mismatch"));
             }
-            self.validate_current_proof(&entity.current, head)?;
+            self.validate_current_proof(entity.kind, &entity.current, head)?;
         }
         for record in state_order {
             if self.states.get(&record.id) != Some(record) {
@@ -442,8 +447,17 @@ impl Snapshot {
                     reason,
                 } => {
                     validate_reason(reason)?;
-                    if record.parents.len() != 1 || operation.apply(*before)? != *after {
-                        return Err(invalid("invalid lifecycle transition"));
+                    let transition = operation.apply_as(entity.kind, *before).map_err(|error| {
+                        invalid(format!(
+                            "record {} of {}: {error}",
+                            record.id, record.entity
+                        ))
+                    })?;
+                    if record.parents.len() != 1 || transition != *after {
+                        return Err(invalid(format!(
+                            "record {} of {}: invalid lifecycle transition",
+                            record.id, record.entity
+                        )));
                     }
                     let parent = self.state_record(record.parents.first().expect("one parent"))?;
                     if parent.event.result()? != *before {
@@ -465,6 +479,7 @@ impl Snapshot {
                     for input in inputs {
                         input.current.validate()?;
                         self.validate_current_proof(
+                            entity.kind,
                             &input.current,
                             self.state_record(&input.head)?,
                         )?;
@@ -489,9 +504,20 @@ impl Snapshot {
         }
         Ok(())
     }
-    fn validate_current_proof(&self, current: &Current, head: &StateRecord) -> Result<()> {
+    fn validate_current_proof(
+        &self,
+        kind: Kind,
+        current: &Current,
+        head: &StateRecord,
+    ) -> Result<()> {
         if head.event.result()? != current.lifecycle {
             return Err(invalid("current lifecycle proof mismatch"));
+        }
+        if kind == Kind::Group && current.lifecycle == Lifecycle::InProgress {
+            return Err(invalid(format!(
+                "record {} stores InProgress for a Group",
+                head.id
+            )));
         }
         if !current.lifecycle.editable()
             && let StateEvent::Integration {

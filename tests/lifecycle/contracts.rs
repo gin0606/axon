@@ -63,7 +63,6 @@ fn short_ids_and_suffixes_work_across_mutations() {
     let short = suffix(id);
     assert!(f.ok(&["show", short]).starts_with(id));
     f.ok(&["accept", short]);
-    f.ok(&["start", suffix(group)]);
     f.ok(&["start", suffix(&dep)]);
     f.ok(&["complete", suffix(&dep)]);
     f.ok(&[
@@ -103,7 +102,12 @@ fn short_ids_and_suffixes_work_across_mutations() {
     f.ok(&["accept", short]);
     f.ok(&["start", short]);
     f.ok(&["complete", short]);
-    assert!(f.ok(&["log", short]).contains("InProgress → Completed"));
+    f.ok(&["reopen", short]);
+    f.ok(&["start", short]);
+    f.ok(&["complete", short]);
+    let log = f.ok(&["log", short]);
+    assert!(log.contains("InProgress → Completed"));
+    assert!(log.contains("Completed → NotStarted"));
     assert!(!f.0.join("observed").exists());
     seed(&f, "project-0000zz");
     seed(&f, "project-1111zz");
@@ -241,7 +245,7 @@ fn one_registration_command_selects_kind_and_adoption_independently() {
 fn details_show_saved_relationships_once_without_running_conditions() {
     let f = Fixture::new();
     f.init();
-    let parent = f.ok(&["capture", "--kind", "group", "--accept", "--title", "Plan"]);
+    let parent = f.ok(&["capture", "--kind", "group", "--title", "Plan"]);
     let parent = created(&parent);
     let dep = f.accepted("Dependency");
     f.ok(&["start", &dep]);
@@ -381,6 +385,7 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
                 "complete",
                 "cancel",
                 "reconsider",
+                "reopen",
             ],
         ),
         (
@@ -837,9 +842,7 @@ fn show_group_displays_all_descendants_in_tree_order_and_counts_terminal_entitie
     let cancelled = created(&cancelled);
     let unrelated = f.accepted("Unrelated");
     f.ok(&["cancel", cancelled]);
-    for id in [root, group, nested, leaf] {
-        f.ok(&["start", id]);
-    }
+    f.ok(&["start", leaf]);
     f.ok(&["complete", leaf]);
     f.ok(&["complete", nested]);
     for args in [vec!["show", root], vec!["show", root, "--details"]] {
@@ -1035,4 +1038,239 @@ fn proposals_search_excludes_note_only_candidates_before_conditions() {
     );
     assert_eq!(f.run(&["proposals", "--search="]).status.code(), Some(2));
     assert_eq!(f.run(&["tasks", "--search="]).status.code(), Some(2));
+}
+
+#[test]
+fn group_rows_show_derived_situations_and_show_explains_stalled_groups() {
+    let f = Fixture::new();
+    f.ok(&["init", "t"]);
+    let gate = f.accepted("Gate");
+    let outer = f.ok(&["capture", "--kind", "group", "--title", "Outer"]);
+    let outer = created(&outer).to_owned();
+    let plan = f.ok(&[
+        "capture", "--kind", "group", "--accept", "--title", "Plan", "--parent", &outer, "--needs",
+        &gate,
+    ]);
+    let plan = created(&plan).to_owned();
+    let draft = f.ok(&["capture", "--title", "Draft", "--parent", &plan]);
+    let draft = created(&draft).to_owned();
+    let sub = f.ok(&[
+        "capture", "--kind", "group", "--accept", "--title", "Sub", "--parent", &plan,
+    ]);
+    let sub = created(&sub).to_owned();
+    let leaf = f.ok(&[
+        "capture", "--accept", "--title", "Leaf", "--parent", &sub, "--needs", &gate,
+    ]);
+    let leaf = created(&leaf).to_owned();
+    let hollow = f.ok(&[
+        "capture", "--kind", "group", "--accept", "--title", "Hollow",
+    ]);
+    let hollow = created(&hollow).to_owned();
+    let rows = f.ok(&["tasks"]);
+    let row = |id: &str| rows.lines().find(|l| l.starts_with(id)).unwrap().to_owned();
+    assert!(row(&plan).contains("Group  Blocked  Plan"), "{rows}");
+    assert!(row(&sub).contains("Group  Blocked  Sub"), "{rows}");
+    assert!(row(&hollow).contains("Group  Empty  Hollow"), "{rows}");
+    assert!(row(&leaf).contains("Issue  Blocked  Leaf"), "{rows}");
+    assert!(!rows.contains(&outer) && !rows.contains(&draft), "{rows}");
+    // The stalled Plan lists every applicable reason with the Entity rows.
+    let show = f.ok(&["show", &plan]);
+    let stalled = show.split("Stalled\n").nth(1).unwrap();
+    for line in [
+        format!("Dependency must complete: {gate}  Issue  Ready  Gate"),
+        format!(
+            "Descendant dependency must complete: {leaf}  Issue  Blocked  Leaf  needs  {gate}  Issue  Ready  Gate"
+        ),
+        format!("Undecided child: {draft}  Issue  Undecided  Draft"),
+        format!("Open subgroup: {sub}  Group  Blocked  Sub"),
+        format!("Undecided ancestor: {outer}  Group  Undecided  Outer"),
+    ] {
+        assert!(stalled.contains(&line), "{line}\n{show}");
+    }
+    assert!(!show.contains("Required to complete") && !show.contains("Parent:"));
+    let sub_show = f.ok(&["show", &sub]);
+    assert!(sub_show.contains(&format!("Ancestor dependency must complete: {gate}")));
+    assert!(sub_show.contains(&format!("Undecided ancestor: {outer}")));
+    assert!(sub_show.contains(&format!("Parent: {plan}")));
+    // A completable empty Group is not stalled; an Issue lists its start prerequisites.
+    let hollow_show = f.ok(&["show", &hollow]);
+    assert!(!hollow_show.contains("Stalled") && !hollow_show.contains("Awaiting"));
+    let leaf_show = f.ok(&["show", &leaf]);
+    assert!(leaf_show.contains("Required to start"));
+    assert!(leaf_show.contains(&format!("Ancestor must be adopted: {outer}")));
+    // Only the parent itself named as a reason replaces the parent line.
+    assert!(leaf_show.contains(&format!("Parent: {sub}")), "{leaf_show}");
+    assert!(leaf_show.contains(&format!("Dependency must complete: {gate}")));
+    assert!(leaf_show.contains(&format!("Ancestor dependency must complete: {gate}")));
+    // Details show the effective lifecycle of a Group with its saved value when they differ.
+    f.ok(&["accept", &outer]);
+    f.ok(&["start", &gate]);
+    f.ok(&["complete", &gate]);
+    let rows = f.ok(&["tasks"]);
+    let row = |id: &str| rows.lines().find(|l| l.starts_with(id)).unwrap().to_owned();
+    assert!(row(&plan).contains("Group  Ready  Plan"), "{rows}");
+    assert!(row(&leaf).contains("Issue  Ready  Leaf"), "{rows}");
+    let ready = f.ok(&["show", &plan]);
+    assert!(
+        ready.contains("Group  Ready  Plan") && !ready.contains("Stalled"),
+        "{ready}"
+    );
+    assert!(
+        f.ok(&["show", &plan, "--details"])
+            .contains("Lifecycle: NotStarted\n")
+    );
+    f.ok(&["start", &leaf]);
+    f.ok(&["complete", &leaf]);
+    f.ok(&["cancel", &draft]);
+    let rows = f.ok(&["tasks"]);
+    let row = |id: &str| rows.lines().find(|l| l.starts_with(id)).unwrap().to_owned();
+    assert!(row(&outer).contains("Group  InProgress  Outer"), "{rows}");
+    assert!(row(&plan).contains("Group  InProgress  Plan"), "{rows}");
+    assert!(row(&sub).contains("Group  Confirmable  Sub"), "{rows}");
+    let details = f.ok(&["show", &plan, "--details"]);
+    assert!(
+        details.contains("Lifecycle: InProgress (stored NotStarted)\n"),
+        "{details}"
+    );
+    assert!(
+        f.ok(&["show", &plan])
+            .contains(&format!("Open subgroup: {sub}"))
+    );
+    assert!(
+        f.ok(&["show", &sub])
+            .contains("Awaiting final confirmation")
+    );
+    assert!(!f.ok(&["show", &sub]).contains("Stalled"));
+    f.ok(&["complete", &sub]);
+    assert!(
+        f.ok(&["tasks"])
+            .contains(&format!("{plan}  Group  Confirmable  Plan"))
+    );
+    assert!(
+        f.ok(&["list", "--lifecycle", "in-progress"])
+            .contains(&outer)
+    );
+    assert!(
+        !f.ok(&["list", "--lifecycle", "not-started"])
+            .contains(&outer)
+    );
+    assert!(
+        f.ok(&["show", &sub, "--details"])
+            .contains("Lifecycle: Completed\n")
+    );
+}
+
+#[test]
+fn reopen_returns_completed_work_and_groups_are_never_started_or_released() {
+    let f = Fixture::new();
+    f.ok(&["init", "t"]);
+    let base = f.accepted("Base");
+    let user = f.ok(&["capture", "--accept", "--title", "User", "--needs", &base]);
+    let user = created(&user).to_owned();
+    let group = f.ok(&["capture", "--kind", "group", "--accept", "--title", "Plan"]);
+    let group = created(&group).to_owned();
+    for id in [&base, &user] {
+        f.ok(&["start", id]);
+        f.ok(&["complete", id]);
+    }
+    let before = snapshot(&f);
+    let rejected = failure(f.run(&["reopen", &base]));
+    assert!(rejected.contains(&user), "{rejected}");
+    assert_eq!(snapshot(&f), before);
+    let reopened = f.ok(&["reopen", &user, "-r", "more work"]);
+    assert_eq!(reopened, format!("{user}  Reopened  NotStarted\n"));
+    f.ok(&["reopen", &base]);
+    assert!(f.ok(&["log", &base]).contains("Completed → NotStarted"));
+    assert!(
+        f.ok(&["tasks"])
+            .contains(&format!("{base}  Issue  Ready  Base"))
+    );
+    failure(f.run(&["reopen", &base]));
+    f.ok(&["write", &base, "--title", "Base again"]);
+    f.ok(&["start", &base]);
+    for args in [vec!["start", &group], vec!["release", &group]] {
+        let rejected = failure(f.run(&args));
+        assert!(
+            rejected.contains("saved lifecycle does not change"),
+            "{rejected}"
+        );
+    }
+    f.ok(&["complete", &group]);
+    assert!(f.ok(&["reopen", &group]).contains("Reopened  NotStarted"));
+    assert!(f.ok(&["show", &group]).contains("Group  Empty  Plan"));
+    let docs = f.ok(&["docs"]);
+    assert!(docs.contains("reopen returns Completed to NotStarted"));
+    assert!(docs.contains("A Group is never started or released"));
+    assert!(f.ok(&["reopen", "--help"]).contains("Completed dependents"));
+}
+
+#[test]
+fn list_shows_group_situations_without_conditions_while_tasks_evaluates_them() {
+    let f = Fixture::new();
+    f.ok(&["init", "t"]);
+    let group = f.ok(&["capture", "--kind", "group", "--accept", "--title", "Plan"]);
+    let group = created(&group).to_owned();
+    let sub = f.ok(&[
+        "capture",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        "Sub",
+        "--parent",
+        &group,
+        "--command",
+        "exit 1",
+    ]);
+    let sub = created(&sub).to_owned();
+    let issue = f.ok(&["capture", "--accept", "--title", "Work", "--parent", &sub]);
+    let issue = created(&issue).to_owned();
+    let empty = f.ok(&["capture", "--kind", "group", "--accept", "--title", "Empty"]);
+    let empty = created(&empty).to_owned();
+    let confirmable = f.ok(&["capture", "--kind", "group", "--accept", "--title", "Done"]);
+    let confirmable = created(&confirmable).to_owned();
+    let finished = f.ok(&[
+        "capture",
+        "--accept",
+        "--title",
+        "Finished",
+        "--parent",
+        &confirmable,
+    ]);
+    let finished = created(&finished).to_owned();
+    f.ok(&["start", &finished]);
+    f.ok(&["complete", &finished]);
+    // The Issue is startable but hidden by the intermediate Group's condition.
+    let tasks = f.ok(&["tasks"]);
+    assert!(
+        tasks.contains(&format!("{group}  Group  Blocked  Plan")),
+        "{tasks}"
+    );
+    assert!(!tasks.contains(&sub) && !tasks.contains(&issue), "{tasks}");
+    for output in [f.ok(&["list"]), f.ok(&["show", &group])] {
+        assert!(
+            output.contains(&format!("{group}  Group  Ready  Plan")),
+            "{output}"
+        );
+        assert!(!output.contains("Stalled"), "{output}");
+    }
+    let list = f.ok(&["list"]);
+    for line in [
+        format!("{sub}  Group  Ready  Sub"),
+        format!("{issue}  Issue  Ready  Work"),
+        format!("{empty}  Group  Empty  Empty"),
+        format!("{confirmable}  Group  Confirmable  Done"),
+        format!("{finished}  Issue  Completed  Finished"),
+    ] {
+        assert!(list.contains(&line), "{line}\n{list}");
+    }
+    assert!(
+        f.ok(&["list", "--kind", "group"])
+            .contains(&format!("{group}  Group  Ready  Plan"))
+    );
+    f.ok(&["condition", "unset", &sub]);
+    assert!(
+        f.ok(&["tasks"])
+            .contains(&format!("{group}  Group  Ready  Plan"))
+    );
 }
