@@ -38,13 +38,13 @@ header file `.axon/header.json` は 1 行の JSON で、`{"format":"axon-records
 | `parents` | 親記録の ID の list。`created` と `note` は `[]`、`resolve` は全 head、それ以外は一つ |
 | `nonce` | `note` だけ。乱数の小文字 16 進 32 文字。同じ本文・日時・記録者の Note を別の記録にする |
 | `chosen` | `resolve` だけ。採った head の記録 ID |
-| `at` | UTC の RFC 3339 日時。小数秒を保持し、入力表記の offset は正規化する |
+| `at` | UTC の RFC 3339 日時（`Z`。小数秒は 0 なら省き、それ以外は 3・6・9 桁のうち値を表せる最短の桁数）。writer が入力表記の offset を UTC に正規化してから書く |
 | `recorder` | `{"actor":"…","data":{…}}` または null |
 | `reason` | 任意の理由の文字列または null |
-| `after` | `note` 以外。操作後の現在値 `{"kind","lifecycle","owner","title","description","condition","parent","needs"}`。`import` は `axon import apply` が既存 Entity に書く記録で、title・description・parent・needs の変更をまとめて一つの現在値で持つ。`owner` は `InProgress` の Issue の着手した actor（取得できなければ null）で、それ以外の状態では null。`condition` と `parent` は未設定なら null、`needs` は Entity ID の昇順の list |
+| `after` | `note` 以外。操作後の現在値 `{"kind","lifecycle","owner","title","description","condition","parent","needs"}`。`kind` は `issue`・`group`、`lifecycle` は `undecided`・`not-started`・`in-progress`・`completed`・`cancelled`（declaration と同じ綴り）。`import` は `axon import apply` が既存 Entity に書く記録で、title・description・parent・needs の変更をまとめて一つの現在値で持つ。`owner` は `InProgress` の Issue の着手した actor（取得できなければ null）で、それ以外の状態では null。`condition` と `parent` は未設定なら null、`needs` は Entity ID の昇順の list |
 | `body` | `note` だけ。Note の本文 |
 
-decode は未知の key、欠けた key、種類と合わない key、規則外の値（title・reason の長さと文字種、ID の文字種、`InProgress` の Group）を拒否する。遷移元を要する検査（その時点の種類の規則に反する遷移）は記録の集合の導出で親記録の現在値と照合して行い、親記録が欠けていれば行わない。いずれの違反も破損として扱う。記録 ID は内容に含めず、bytes から計算する。途中で切れた file、空の file、名前と hash が一致しない file、名前が記録 ID の形でない file は保存先の破損として [保存と統合の契約](../reference/storage.md#保存先の破損) に従って報告し、読取を止める。名前が `.tmp` で終わる file は無視する。
+decode は未知の key、欠けた key、種類と合わない key、規則外の値（title・reason の長さと文字種、ID の文字種、`InProgress` の Group、`InProgress` 以外の owner、`start` の記録者と異なる owner、その種類にありえない遷移）と、内容を encode した結果と一致しない bytes（空白、キーの順、日時や数値の綴りが違う file）を拒否する。記録 ID は bytes の hash なので、canonical でない bytes を受け入れると同じ内容が別の ID を持つことになる。遷移元を要する検査（その時点の種類の規則に反する遷移、その種類が変えてよい項目以外の変更。[記録の集合と導出](lifecycle-core.md#記録の集合と導出)）は記録の集合の導出で親記録の現在値と照合して行い、親記録が欠けていれば行わない。いずれの違反も破損として扱う。記録 ID は内容に含めず、bytes から計算する。途中で切れた file、空の file、名前と hash が一致しない file、名前が記録 ID の形でない file は保存先の破損として [保存と統合の契約](../reference/storage.md#保存先の破損) に従って報告し、読取を止める。名前が `.tmp` で終わる file は無視する。
 
 記録の集合からの導出（head、衝突、settled、現在値、実効 lifecycle、gap、違反）は共通コアの [記録の集合](lifecycle-core.md#記録の集合と導出) が行い、file の列挙順に依存しない。同じ日時の Note の表示順など同順位の並びは記録 ID で固定する。
 

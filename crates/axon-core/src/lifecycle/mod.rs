@@ -7,6 +7,7 @@ mod candidates;
 mod codec;
 mod merge;
 mod model;
+pub mod record;
 mod relations;
 mod snapshot;
 

@@ -6,7 +6,7 @@
 
 ## 通常操作と構造
 
-現在値は最大一つの親 Group と outgoing dependency 集合を保持する。`create`、`set_parent`、`add_dependency` は操作後の view の全体検査で「違反が操作前の部分集合である」ことを確認して確定し、`remove_dependency` は自身の前提（`Completed` でないか、違反に含まれる）で確定する。拒否時は記録を作らない。同値の関係指定は成功した no-op とする。状態変更は `check_operation` と同じ前提を検査し、成功時だけ記録を加える。外部条件は評価しない。衝突中の Entity が一つでもある store では、解決と Note 以外の操作を拒否する。
+現在値は最大一つの親 Group と outgoing dependency 集合を保持する。`create`、`set_parent`、`add_dependency`、`convert` は操作後の view の全体検査で「違反が操作前の部分集合である」ことを確認して確定し、`remove_dependency` は自身の前提（`Completed` でないか、違反に含まれる）で確定する。拒否時は記録を作らない。同値の関係指定は成功した no-op とする。状態変更は `check_operation` と同じ前提を検査し、成功時だけ記録を加える。外部条件は評価しない。衝突中の Entity が一つでもある store では、解決と Note 以外の操作を拒否する。
 
 操作の前提は `Operation::apply_as` の種類別の基本遷移と `check_operation` が検査する。Group は `Start`・`Release` を受け付けず、保存値が `InProgress` になることはない。実効 lifecycle は `working_groups` / `effective_lifecycle` が子から導出する。Issue の `Start` は全祖先の保存値が `NotStarted` で、自身と全祖先の直接依存先がすべて `Completed` であること、`Complete` は自身の依存先の `Completed` と全祖先の採用、Group ではさらに直属の子がすべて終了していること、`Reopen` は全祖先の採用と `Completed` の依存元がないこと、Group の `Withdraw` は実効値が `NotStarted` であること、着手・完了した子孫を持つ Group の `Accept` は全祖先の採用を要求する。`perform(..., Operation::Complete, ...)` 自体を Group 全体の最終確認済みという明示入力とする。`check_operation` や子の終了は最終確認を記録せず、親を自動変更しない。衝突中の Entity は現在値を持たないため、祖先や依存先が衝突中ならこれらの前提を満たさない。
 
@@ -22,9 +22,9 @@
 
 作成は `Undecided` または `NotStarted` の初期記録を作り、架空の採用履歴を作らない。成功した lifecycle 操作は操作名と操作後の現在値を持つ一件の記録を追加し、変更前の状態は親記録の現在値として読める。文面編集、所属変更、dependency の追加と削除、条件の設定と解除、種類の変換もそれぞれ一件の記録で、操作後の現在値を持つ。declaration の一括反映は Entity ごとに最終値を持つ一件の記録を作る。Note は状態と独立した追記専用の記録であり、乱数の nonce を内容に含めて同じ本文・日時・記録者の Note も別 ID にする。記録者の任意の JSON object は保存するだけで、操作の権限として使わない。
 
-`history` は Entity の Note 以外の記録を因果順で返し、並行記録の表示順だけを ID で決める。並行か先行かの判定は親をたどる `precedes` を使う。日時の大小や同一時刻は先行関係を作らない。`notes` は日時順、同時刻は ID 順で返す。日時は UTC の瞬間と小数秒を保持し、入力表記の offset は正規化する。
+`history` は Entity の Note 以外の記録を因果順で返し、並行記録の表示順だけを ID で決める。並行か先行かの判定は親をたどる `precedes` を使う。日時の大小や同一時刻は先行関係を作らない。`notes` は日時順、同時刻は ID 順で返す。日時は UTC の瞬間と小数秒を保持し、writer が入力表記の offset を UTC に正規化してから記録にする。
 
-lifecycle 遷移の記録の妥当性は、その遷移の時点の種類（直前の記録の現在値の種類）の規則で判定する。遷移は種類を変えないので、その記録自身の現在値の種類がその時点の種類である。遷移元は親記録の現在値から取り、親記録が欠けている記録ではこの検査を行わない。Issue として `Start`・`Release` してから Group に変換した履歴は妥当で、現在の種類で判定すると不正になる。変換の記録は操作後の種類を持ち、変換前の種類はその反対なので、記録だけから両方が読める。
+lifecycle 遷移の記録の妥当性は、その遷移の時点の種類（直前の記録の現在値の種類）の規則で判定する。遷移は種類を変えないので、その記録自身の現在値の種類がその時点の種類である。遷移元は親記録の現在値から取り、親記録が欠けている記録ではこの検査を行わない。親記録がある記録は、その種類が変えてよい項目（遷移は lifecycle と owner、文面編集は title と description、所属変更は parent、dependency の増減は needs、条件は condition、変換は kind、declaration の適用は title・description・parent・needs、解決は採った head と同じ値）以外を親記録の現在値から変えていないことも検査し、変えていれば破損とする。Issue として `Start`・`Release` してから Group に変換した履歴は妥当で、現在の種類で判定すると不正になる。変換の記録は操作後の種類を持ち、変換前の種類はその反対なので、記録だけから両方が読める。
 
 ## 衝突と解決
 
@@ -34,7 +34,7 @@ Issue の `Start` は現在値に着手した actor を owner として持つ。
 
 ## 検査と codec
 
-`decode` は記録 1 件の bytes を検査し、未知 field、欠けた field、種類と合わない field、規則外の値を拒否する。`encode` は canonical bytes を返し、decode 後の encode で同じ bytes に収束する。記録 ID は bytes から計算し、記録の内容に含まない。file の列挙、hash と file 名の照合、途中で切れた file と空の file の検出は保存 adapter が行い、コアは記録の集合を受け取る。
+`decode` は記録 1 件の bytes を検査し、未知 field、欠けた field、種類と合わない field、規則外の値、canonical でない bytes を拒否する。`encode` は canonical bytes を返し、decode に成功した bytes は encode の結果そのものである。記録 ID は bytes から計算し、記録の内容に含まない。file の列挙、hash と file 名の照合、途中で切れた file と空の file の検出は保存 adapter が行い、コアは記録の集合を受け取る。
 
 view の導出は参照切れ（親記録の欠け）を gap として保持し、拒否しない。同じ Entity の複数の作成記録は二重登録の衝突として head に残し、拒否しない。親の循環は記録 ID が内容の hash であることから起きないが、集合の検査で拒否する。
 
