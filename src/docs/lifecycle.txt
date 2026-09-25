@@ -25,8 +25,9 @@ are not a prerequisite of its completion. Cancelled is terminal but does not sat
 a dependency. Group completion requires all direct children to be terminal; an empty
 Group completes as well. Running complete on a Group explicitly confirms final
 review of the entire plan, including the outcomes and Notes of its descendants.
-tasks and show show a Group as Empty, Confirmable, Ready, InProgress or Blocked, and
-show explains a stalled Group under Stalled, including candidates that do not surface.
+list, tasks and show show a Group as Empty, Confirmable, Ready, InProgress or
+Blocked, and show explains a stalled Group under Stalled, including candidates
+that do not surface.
 parent set ID --parent G sets or moves the parent Group and parent unset ID
 removes it; neither changes lifecycle.
 

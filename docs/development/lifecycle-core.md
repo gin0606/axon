@@ -53,6 +53,6 @@ JSONL の header は `format: "axon-lifecycle/v1"` と store ID を持ち、Enti
 - 情報操作: [`spec/lifecycle_information.qnt`](../../spec/lifecycle_information.qnt) の編集制約・他 Entity 不変・Note 追記・状態と履歴の一体性。Rust は Issue / Group、全 lifecycle、同内容の独立 Note、任意の記録者情報を検査する。
 - 分岐と保存: [保存と統合](../reference/storage.md) が定める実装範囲を Rust の縦断テストで検査する。日時逆転、並行履歴、明示選択後の通常操作、不正な参照・ID 衝突、canonical bytes 往復を含む。通常操作モデルの一本の履歴へ統合を押し込めない。
 
-2026-09-11 のこの境界の検証では、Quint 0.32.0 / Rust backend / 8 threads / 各 10,000 traces を実行した。`issue_lifecycle` は最大 80 steps、seed `2026091002`、9 invariant に反例なし・全19 witness 到達。`lifecycle_information` は最大 60 steps、seed `2026091101`、7 invariant に反例なし・全18 witness 到達。bounded random simulation の結果であり、Rust の証明や全状態の証明ではない。再現 command は [モデル](../../spec/README.md) を参照する。
+各モデルの探索結果と再現手順は [モデル](../../spec/README.md) の「検証結果」と「再現手順」にある。
 
 三者比較の検証は Rust の全値比較行列と分岐 fixture で行う。独立 Entity/Note、同値の並行状態先端、本文と完了の衝突、未完了側選択後の通常操作、双方向の再統合、base 記録欠落・改変、ID 衝突、全体循環、終了 Group の子流入・子孫状態差・入れ子移動を含む。通常 lifecycle モデルの意味は変更しておらず、単線履歴モデルへの merge action の追加は行わない。

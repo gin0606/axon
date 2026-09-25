@@ -1,6 +1,6 @@
 # モデルと参照
 
-EntityはIssueまたはGroup。同じID namespaceを使い、`Start`・`Release`がIssueだけである点を除いて同じ操作を使う。lifecycleは `Undecided` / `NotStarted` / `InProgress` / `Completed` / `Cancelled` の一つ。`Completed`と`Cancelled`はterminalだが、明示dependencyを満たすのは`Completed`だけ。IDはprefix＋ランダム6文字で、完全IDまたは一意なsuffixを参照できる。保存済みの長いIDも有効。内部のNote・状態記録IDは別の安定識別子で、順序や優先度を表さない。
+EntityはIssueまたはGroup。同じID namespaceを使い、`Start`・`Release`がIssueだけである点と、`Complete`・`Cancel`の遷移元がIssueとGroupで異なる点（下の表）を除いて同じ操作を使う。lifecycleは `Undecided` / `NotStarted` / `InProgress` / `Completed` / `Cancelled` の一つ。`Completed`と`Cancelled`はterminalだが、明示dependencyを満たすのは`Completed`だけ。IDはprefix＋ランダム6文字で、完全IDまたは一意なsuffixを参照できる。保存済みの長いIDも有効。内部のNote・状態記録IDは別の安定識別子で、順序や優先度を表さない。
 
 lifecycleには保存値と実効値がある。Issueの実効値は保存値と同じ。Groupの保存値は`InProgress`にならず、実効値は「保存値が`NotStarted`で、直属の子に実効値が`InProgress`か`Completed`のものがあれば`InProgress`、それ以外は保存値」と導出される。子Groupを通じて上へ伝わるため、孫のIssueの`Start`で祖父のGroupも実効`InProgress`になる。`Cancelled`の子だけでは`InProgress`にならない。以下で「採用済み」は保存値が`NotStarted`であることを指す。
 
