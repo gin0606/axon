@@ -76,7 +76,7 @@ pub(super) enum Command {
     },
     /// Show text, the situation from evaluated conditions, unmet prerequisites and all Group descendants
     #[command(
-        after_help = "Like tasks, show runs the resurfacing conditions that decide the situation of a NotStarted Entity: the ancestors, the Entity itself and, for a Group, its startable descendants. Undecided, InProgress and terminal Entities run nothing. An unsurfaced Issue is shown as Unsurfaced, and a stalled Group lists unsurfaced candidates and an unsurfaced ancestor under Stalled.
+        after_help = "Like tasks, show runs the resurfacing conditions that decide the situation of a NotStarted Entity: the ancestors, the Entity itself and, for a Group, its startable descendants. Undecided, InProgress and terminal Entities run nothing. An unsurfaced Issue is shown as Unsurfaced, and a stalled Group lists unsurfaced candidates, its own unsatisfied condition and an unsurfaced ancestor under Stalled.
 Conditions run through /bin/sh -c: exit 0 is satisfied, 1 is unsatisfied, other exits fail the whole command.
 To read saved information without running any condition, add --skip-conditions; the situation is then derived as if every condition were satisfied."
     )]

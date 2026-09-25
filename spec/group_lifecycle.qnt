@@ -387,15 +387,17 @@ module group_lifecycle {
 
   // 詰まっている理由の内訳。未完了の dependency は、自身・全祖先・未終了の子孫のいずれかの依存先が未完了であること。
   // 未判断の子、未終了の子 Group、浮上していない着手可能な子孫の Issue、stored が Undecided の祖先、
-  // 浮上していない祖先（祖先のいずれかの条件が未成立）を区別する。
+  // 浮上していない祖先（祖先のいずれかの条件が未成立）、自身の条件が未成立を区別する。
+  // 自身の条件は全祖先が浮上しているときだけ評価される（axon show は未成立の祖先より下を評価しない）ため、
+  // 浮上していない祖先がある Group には自身の条件が未成立という理由は付かない。
   // 理由は詰まっている行に示す。関数はどの Group にも定義できるが、詰まっていない行（Confirmable、Ready、
   // 完了できる Empty）は次の一手が状況から分かるため理由を示さない。
   // axon show は tasks の行でない stored が NotStarted の Group にも同じ導出を使うため、
   // 詰まっている Group には行に出るかに関係なく少なくとも一つ付く（invStalledHasReason）。
-  // 浮上していない祖先は、tasks の行になる Group では実効 InProgress の行にだけ当たり（浮上して行になる Group は
-  // 全祖先も浮上している）、行に出ない Group にも show が示す。
+  // 浮上していない祖先と自身の条件が未成立は、tasks の行になる Group では実効 InProgress の行にだけ当たり
+  // （浮上して行になる Group は自身と全祖先が浮上している）、行に出ない Group にも show が示す。
   type StallReason = DependencyPending | UndecidedChild | OpenSubgroup | HiddenCandidate | UnadoptedAncestor
-    | UnsurfacedAncestor
+    | UnsurfacedAncestor | OwnConditionUnsatisfied
   pure def stallReasons(s: PlanState, c: Conditions, g: Id): Set[StallReason] = {
     val dependency = not(depsComplete(s, g)) or not(ancestorDepsComplete(s, g))
       or descendants(s, g).exists(d => not(terminal(storedOf(s, d))) and not(depsComplete(s, d)))
@@ -404,7 +406,10 @@ module group_lifecycle {
     val hidden = descendants(s, g).exists(d => startableIssues(s).contains(d) and not(surfaced(s, c, d)))
     val unadopted = ancestorsOf(s, g).exists(a => storedOf(s, a) == Undecided)
     val unsurfacedAncestor = not(ancestorsSurfaced(s, c, g))
-    Set(DependencyPending, UndecidedChild, OpenSubgroup, HiddenCandidate, UnadoptedAncestor, UnsurfacedAncestor)
+    val ownCondition = storedOf(s, g) == NotStarted and ancestorsSurfaced(s, c, g)
+      and conditionResult(s, c, g) != Evaluated(true)
+    Set(DependencyPending, UndecidedChild, OpenSubgroup, HiddenCandidate, UnadoptedAncestor, UnsurfacedAncestor,
+        OwnConditionUnsatisfied)
       .filter(r => match r {
         | DependencyPending => dependency
         | UndecidedChild => undecided
@@ -412,6 +417,7 @@ module group_lifecycle {
         | HiddenCandidate => hidden
         | UnadoptedAncestor => unadopted
         | UnsurfacedAncestor => unsurfacedAncestor
+        | OwnConditionUnsatisfied => ownCondition
       })
   }
   // axon show が対象にする Group: stored が NotStarted のもの（tasks の行を含む）。
@@ -704,10 +710,18 @@ module group_lifecycle {
   // Working の行は着手中の子孫がないとき、Empty の行は完了できないときに詰まっている。
   val invStalledHasReason = shownGroups(plan).forall(g =>
     stalled(plan, conditions, g) implies stallReasons(plan, conditions, g).size() > 0)
+  // 条件に由来する理由（浮上していない祖先、自身の条件が未成立）は条件入力が不成立ならほぼ常に付くため、
+  // それらを除いても、条件に依らない 5 種類のいずれかが詰まっている Group に付くことを別に検査する。
+  pure val CONDITION_REASONS = Set(UnsurfacedAncestor, OwnConditionUnsatisfied)
+  val invStalledHasStructuralReason = shownGroups(plan).forall(g =>
+    stalled(plan, conditions, g) implies stallReasons(plan, conditions, g).exclude(CONDITION_REASONS).size() > 0)
   // 構成の確認: 浮上していない祖先の理由は tasks の行には現れない。行になる Group は自身と全祖先が浮上しているか、
   // 実効 InProgress で祖先が採用済みだが、後者は祖先の条件を問わないので、実効 InProgress の行にだけ現れうる。
   val invUnsurfacedAncestorOnlyOnWorkingRows = groupRows(plan, conditions).forall(g =>
     stallReasons(plan, conditions, g).contains(UnsurfacedAncestor) implies effective(plan, g) == InProgress)
+  // 構成の確認: 自身の条件が未成立の理由も同じく、tasks の行では実効 InProgress の行にだけ現れる。
+  val invOwnConditionOnlyOnWorkingRows = groupRows(plan, conditions).forall(g =>
+    stallReasons(plan, conditions, g).contains(OwnConditionUnsatisfied) implies effective(plan, g) == InProgress)
   // 構成の確認: Blocked の行は詰まっており、Working の行は着手中の子孫がなければ、Empty の行は完了できなければ詰まっている。
   // Blocked の節は「着手中の Issue の祖先は採用済み」（invWorkingAncestors）に依存し、残る二つは定義から従う。
   val invStalledRowStatuses = groupRows(plan, conditions).forall(g => and {
@@ -1013,15 +1027,29 @@ module group_lifecycle {
       and not(groupRows(plan, conditions).contains(g)))
   val wStalledByUnsurfacedAncestorOnWorkingRow = groupRows(plan, conditions).exists(g =>
     stalled(plan, conditions, g) and stallReasons(plan, conditions, g).contains(UnsurfacedAncestor))
+  // 自身の条件が未成立の理由も、行に出ない Group と、行に出る実効 InProgress の Group の両方で観測する。
+  // 行に出ない Group では、着手可能な子孫が隠れている場合（Unsurfaced candidate と重なる）も観測する。
+  val wStalledByOwnConditionOffRows = shownGroups(plan).exists(g =>
+    stalled(plan, conditions, g) and children(plan, g).size() > 0
+      and stallReasons(plan, conditions, g).contains(OwnConditionUnsatisfied)
+      and not(groupRows(plan, conditions).contains(g)))
+  val wStalledByOwnConditionHidingCandidates = shownGroups(plan).exists(g =>
+    stalled(plan, conditions, g)
+      and stallReasons(plan, conditions, g).contains(OwnConditionUnsatisfied)
+      and stallReasons(plan, conditions, g).contains(HiddenCandidate)
+      and not(groupRows(plan, conditions).contains(g)))
+  val wStalledByOwnConditionOnWorkingRow = groupRows(plan, conditions).exists(g =>
+    stalled(plan, conditions, g) and stallReasons(plan, conditions, g).contains(OwnConditionUnsatisfied))
   def sawStalledStatus(status: TaskStatus): bool = groupRows(plan, conditions).exists(g =>
     stalled(plan, conditions, g) and groupStatus(plan, conditions, g) == status)
   // 完了済みの子孫はあるが着手中の子孫がない実効 InProgress の行に理由が付く。
   val wStalledWorking = sawStalledStatus(Working)
   val wStalledBlocked = sawStalledStatus(Blocked)
   val wStalledEmpty = sawStalledStatus(Empty)
-  // 理由のどれもない詰まっている Group（invStalledHasReason の反例）。axon show の対象全体で観測されないことを確かめる。
+  // 条件に依らない理由のどれもない詰まっている Group（invStalledHasStructuralReason の反例）。
+  // axon show の対象全体で観測されないことを確かめる。
   val wStalledWithoutListedReason = shownGroups(plan).exists(g =>
-    stalled(plan, conditions, g) and stallReasons(plan, conditions, g).size() == 0)
+    stalled(plan, conditions, g) and stallReasons(plan, conditions, g).exclude(CONDITION_REASONS).size() == 0)
 
   // witness: 実効が InProgress の Group が、stored が NotStarted でない祖先を持つ状態
   // （invEffectiveWorkingAncestors の反例）と、そこへ至る経路。Group の完了、完了済みの Entity の移動、

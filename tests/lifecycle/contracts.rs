@@ -1407,11 +1407,46 @@ fn list_and_skip_conditions_ignore_conditions_while_tasks_and_show_evaluate_them
         show.contains(&format!("└── {issue}  Issue  Unsurfaced  Work")),
         "{show}"
     );
+    // The intermediate Group names its own unsatisfied condition as itself, after the
+    // candidates it hides, and no ancestor.
     let show_sub = f.ok(&["show", &sub]);
     assert!(
-        show_sub.contains(&format!("Unsurfaced candidate: {issue}"))
-            && !show_sub.contains("Unsurfaced ancestor"),
+        show_sub.contains(&format!(
+            "Stalled\nUnsurfaced candidate: {issue}  Issue  Unsurfaced  Work\nOwn condition unsatisfied: {sub}  Group  Blocked  Sub\n"
+        )) && !show_sub.contains("Unsurfaced ancestor"),
         "{show_sub}"
+    );
+    assert!(
+        !f.ok(&["show", &sub, "--skip-conditions"])
+            .contains("Own condition"),
+        "{show_sub}"
+    );
+    // With only an Undecided child, the own condition is the one reason that explains why
+    // adopting the child would not surface the Group.
+    let quiet = f.ok(&[
+        "capture",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        "Quiet",
+        "--command",
+        "exit 1",
+    ]);
+    let quiet = created(&quiet).to_owned();
+    let idea = f.ok(&["capture", "--title", "Idea", "--parent", &quiet]);
+    let idea = created(&idea).to_owned();
+    let show_quiet = f.ok(&["show", &quiet]);
+    assert!(
+        show_quiet.contains(&format!(
+            "Stalled\nUndecided child: {idea}  Issue  Undecided  Idea\nOwn condition unsatisfied: {quiet}  Group  Blocked  Quiet\n"
+        )),
+        "{show_quiet}"
+    );
+    assert!(
+        !f.ok(&["show", &quiet, "--skip-conditions"])
+            .contains("Own condition"),
+        "{show_quiet}"
     );
     let show_issue = f.ok(&["show", &issue]);
     assert!(
@@ -1451,7 +1486,7 @@ fn list_and_skip_conditions_ignore_conditions_while_tasks_and_show_evaluate_them
     assert!(
         show_nested.contains(&format!(
             "Stalled\nUnsurfaced candidate: {leaf}  Issue  Unsurfaced  Leaf\nUnsurfaced ancestor: {root}  Group  Blocked  Root\n"
-        )),
+        )) && !show_nested.contains("Own condition"),
         "{show_nested}"
     );
     assert!(!show_nested.contains("Parent:"), "{show_nested}");
@@ -1460,6 +1495,90 @@ fn list_and_skip_conditions_ignore_conditions_while_tasks_and_show_evaluate_them
         skipped.contains(&format!("{nested}  Group  Ready  Nested\nParent: {root}"))
             && !skipped.contains("Unsurfaced"),
         "{skipped}"
+    );
+    // A Group with its own unsatisfied condition below an unsurfaced ancestor names only the
+    // ancestor: its own condition is not evaluated.
+    let guarded = f.ok(&[
+        "capture",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        "Guarded",
+        "--parent",
+        &root,
+        "--command",
+        "exit 1",
+    ]);
+    let guarded = created(&guarded).to_owned();
+    f.ok(&[
+        "capture",
+        "--accept",
+        "--title",
+        "Guarded work",
+        "--parent",
+        &guarded,
+    ]);
+    let show_guarded = f.ok(&["show", &guarded]);
+    assert!(
+        show_guarded.contains(&format!("Unsurfaced ancestor: {root}"))
+            && !show_guarded.contains("Own condition"),
+        "{show_guarded}"
+    );
+    // A Group that is not stalled shows no reason for its own condition: an Empty one that
+    // can complete, and one whose descendant is InProgress.
+    let hollow = f.ok(&[
+        "capture",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        "Hollow",
+        "--command",
+        "exit 1",
+    ]);
+    let hollow = created(&hollow).to_owned();
+    let show_hollow = f.ok(&["show", &hollow]);
+    assert!(
+        show_hollow.starts_with(&format!("{hollow}  Group  Empty  Hollow\n"))
+            && !show_hollow.contains("Stalled"),
+        "{show_hollow}"
+    );
+    let paused = f.ok(&[
+        "capture",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        "Paused",
+        "--command",
+        "exit 1",
+    ]);
+    let paused = created(&paused).to_owned();
+    let running = f.ok(&[
+        "capture", "--accept", "--title", "Running", "--parent", &paused,
+    ]);
+    let running = created(&running).to_owned();
+    f.ok(&["start", &running]);
+    assert!(!f.ok(&["show", &paused]).contains("Stalled"));
+    // Once the started work is done and the rest waits for a dependency, the Group is
+    // effectively InProgress, stalled, and names its own condition as itself.
+    f.ok(&["complete", &running]);
+    let gate = f.accepted("Gate");
+    let held = f.ok(&[
+        "capture", "--accept", "--title", "Held", "--parent", &paused, "--needs", &gate,
+    ]);
+    let held = created(&held).to_owned();
+    let show_paused = f.ok(&["show", &paused]);
+    assert!(
+        show_paused.starts_with(&format!("{paused}  Group  InProgress  Paused\n"))
+            && show_paused.contains(&format!(
+                "Descendant dependency must complete: {held}  Issue  Unsurfaced  Held  needs  {gate}"
+            ))
+            && show_paused.contains(&format!(
+                "Own condition unsatisfied: {paused}  Group  InProgress  Paused\n"
+            )),
+        "{show_paused}"
     );
     for output in [
         f.ok(&["list"]),

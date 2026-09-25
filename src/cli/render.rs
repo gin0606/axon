@@ -109,6 +109,9 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
         for candidate in &stall.unsurfaced_candidates {
             out.push_str(&format!("Unsurfaced candidate: {}", row(candidate)));
         }
+        for group in &stall.own_condition_unsatisfied {
+            out.push_str(&format!("Own condition unsatisfied: {}", row(group)));
+        }
         for ancestor in &stall.undecided_ancestors {
             out.push_str(&format!("Undecided ancestor: {}", row(ancestor)));
         }

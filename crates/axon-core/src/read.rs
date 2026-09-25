@@ -269,6 +269,9 @@ impl<'a> View<'a> {
         let ancestors = self.ancestors(group);
         let ancestor_dependencies = self.ancestor_dependencies(&ancestors);
         let unsurfaced_ancestor = self.unsurfaced_ancestor(&ancestors, &mut surfaced)?;
+        // Below an unsurfaced ancestor the Group's own condition is not evaluated, so only
+        // with every ancestor surfaced does the Group not surfacing mean its own condition.
+        let own_condition_unsatisfied = unsurfaced_ancestor.is_none() && !surfaced(group)?;
         let rows = |entities: Vec<&'a Entity>| {
             entities
                 .into_iter()
@@ -306,6 +309,12 @@ impl<'a> View<'a> {
                     .collect(),
             )?,
             unsurfaced_candidates: rows(unsurfaced_candidates)?,
+            own_condition_unsatisfied: rows(
+                own_condition_unsatisfied
+                    .then_some(group)
+                    .into_iter()
+                    .collect(),
+            )?,
             undecided_ancestors: rows(
                 ancestors
                     .into_iter()
@@ -392,6 +401,8 @@ pub struct Stall<'a> {
     pub open_subgroups: Vec<Row<'a>>,
     /// Startable Issues below the Group that do not surface.
     pub unsurfaced_candidates: Vec<Row<'a>>,
+    /// The Group itself, when its own condition was evaluated and is unsatisfied.
+    pub own_condition_unsatisfied: Vec<Row<'a>>,
     pub undecided_ancestors: Vec<Row<'a>>,
     /// The ancestor whose unsatisfied condition keeps the Group from surfacing.
     pub unsurfaced_ancestors: Vec<Row<'a>>,
@@ -1124,6 +1135,51 @@ mod tests {
             .unwrap();
         create(&mut snapshot, "idea", Kind::Issue, Some("vacant"), &[], 11);
         perform(&mut snapshot, "idea", Operation::Withdraw);
+        create(&mut snapshot, "gated", Kind::Group, Some("outer"), &[], 12);
+        snapshot
+            .set_condition(&id("gated"), Some("gated".into()))
+            .unwrap();
+        create(
+            &mut snapshot,
+            "gated-work",
+            Kind::Issue,
+            Some("gated"),
+            &[],
+            13,
+        );
+        create(&mut snapshot, "bare", Kind::Group, None, &[], 14);
+        snapshot
+            .set_condition(&id("bare"), Some("bare".into()))
+            .unwrap();
+        create(&mut snapshot, "closing", Kind::Group, None, &[], 15);
+        snapshot
+            .set_condition(&id("closing"), Some("closing".into()))
+            .unwrap();
+        create(&mut snapshot, "done", Kind::Issue, Some("closing"), &[], 16);
+        perform(&mut snapshot, "done", Operation::Start);
+        perform(&mut snapshot, "done", Operation::Complete);
+        create(&mut snapshot, "paused", Kind::Group, None, &[], 17);
+        snapshot
+            .set_condition(&id("paused"), Some("paused".into()))
+            .unwrap();
+        create(
+            &mut snapshot,
+            "finished",
+            Kind::Issue,
+            Some("paused"),
+            &[],
+            18,
+        );
+        perform(&mut snapshot, "finished", Operation::Start);
+        perform(&mut snapshot, "finished", Operation::Complete);
+        create(
+            &mut snapshot,
+            "held",
+            Kind::Issue,
+            Some("paused"),
+            &["gate"],
+            19,
+        );
         fn inspect<'a>(
             snapshot: &'a Snapshot,
             name: &str,
@@ -1151,6 +1207,7 @@ mod tests {
         assert_eq!(ids(&stall.unsurfaced_candidates), ["hidden"]);
         assert_eq!(stall.unsurfaced_candidates[0].status, Status::Unsurfaced);
         assert!(stall.unsurfaced_ancestors.is_empty());
+        assert!(stall.own_condition_unsatisfied.is_empty());
         assert_eq!(ids(&stall.undecided_children), ["draft"]);
         assert_eq!(
             stall
@@ -1181,6 +1238,7 @@ mod tests {
         let stall = plan.stall.unwrap();
         assert_eq!(ids(&stall.unsurfaced_candidates), ["hidden"]);
         assert_eq!(ids(&stall.unsurfaced_ancestors), ["outer"]);
+        assert!(stall.own_condition_unsatisfied.is_empty());
         let (hidden, calls) = inspect(&snapshot, "hidden", &[("outer", false)]);
         assert_eq!(calls, ["outer"]);
         assert_eq!(hidden.row.status, Status::Unsurfaced);
@@ -1217,7 +1275,13 @@ mod tests {
         let (hollow, calls) = inspect(&snapshot, "vacant", &[("vacant", false)]);
         assert_eq!(calls, ["vacant"]);
         assert_eq!(hollow.row.status, Status::Blocked);
-        assert_eq!(ids(&hollow.stall.unwrap().undecided_children), ["idea"]);
+        let stall = hollow.stall.unwrap();
+        assert_eq!(ids(&stall.undecided_children), ["idea"]);
+        // Its own unsatisfied condition is a reason of its own, as the Group itself.
+        assert_eq!(ids(&stall.own_condition_unsatisfied), ["vacant"]);
+        assert_eq!(stall.own_condition_unsatisfied[0].status, Status::Blocked);
+        let (hollow, _) = inspect(&snapshot, "vacant", &[]);
+        assert!(hollow.stall.unwrap().own_condition_unsatisfied.is_empty());
         let error = detail_with::<Error>(&snapshot, &id("vacant"), |entity, _| {
             Err(Error(format!("{} failed", entity.id)))
         })
@@ -1230,6 +1294,51 @@ mod tests {
         let stall = other.stall.unwrap();
         assert_eq!(ids(&stall.unsurfaced_candidates), ["elsewhere"]);
         assert!(stall.unsurfaced_ancestors.is_empty());
+        assert_eq!(ids(&stall.own_condition_unsatisfied), ["other"]);
+        // Below an unsurfaced ancestor the Group's own condition is not evaluated, so an
+        // unsatisfied one is not a reason; with the ancestor surfaced it is.
+        let (gated, calls) = inspect(&snapshot, "gated", &[("outer", false), ("gated", false)]);
+        assert_eq!(calls, ["outer"]);
+        let stall = gated.stall.unwrap();
+        assert_eq!(ids(&stall.unsurfaced_candidates), ["gated-work"]);
+        assert_eq!(ids(&stall.unsurfaced_ancestors), ["outer"]);
+        assert!(stall.own_condition_unsatisfied.is_empty());
+        let (gated, calls) = inspect(&snapshot, "gated", &[("gated", false)]);
+        assert_eq!(calls, ["outer", "gated"]);
+        let stall = gated.stall.unwrap();
+        assert!(stall.unsurfaced_ancestors.is_empty());
+        assert_eq!(ids(&stall.own_condition_unsatisfied), ["gated"]);
+        // Groups that are not stalled get no reason from their own unsatisfied condition:
+        // an Empty Group that can complete, a Confirmable Group, and one with a candidate.
+        let (bare, calls) = inspect(&snapshot, "bare", &[("bare", false)]);
+        assert_eq!(calls, ["bare"]);
+        assert_eq!(bare.row.status, Status::Empty);
+        assert!(bare.stall.is_none());
+        let (closing, calls) = inspect(&snapshot, "closing", &[("closing", false)]);
+        assert_eq!(calls, ["closing"]);
+        assert_eq!(closing.row.status, Status::Confirmable);
+        assert!(closing.stall.is_none());
+        let (plan, _) = inspect(&snapshot, "plan", &[("outer", true)]);
+        assert_eq!(plan.row.status, Status::Ready);
+        assert!(plan.stall.is_none());
+        // A stalled Group that is effectively InProgress names its own condition as itself.
+        let (paused, calls) = inspect(&snapshot, "paused", &[("paused", false)]);
+        assert_eq!(calls, ["paused"]);
+        assert_eq!(paused.row.status, Status::InProgress);
+        let stall = paused.stall.unwrap();
+        assert_eq!(ids(&stall.own_condition_unsatisfied), ["paused"]);
+        assert_eq!(
+            stall.own_condition_unsatisfied[0].status,
+            Status::InProgress
+        );
+        assert_eq!(
+            stall
+                .descendant_dependencies
+                .iter()
+                .map(|(d, dep)| (d.entity.id.to_string(), dep.entity.id.to_string()))
+                .collect::<Vec<_>>(),
+            [("held".to_owned(), "gate".to_owned())]
+        );
         // Undecided and InProgress targets evaluate nothing.
         let (draft, calls) = inspect(&snapshot, "draft", &[("draft", false)]);
         assert!(calls.is_empty());
@@ -1238,6 +1347,11 @@ mod tests {
         let (elsewhere, calls) = inspect(&snapshot, "elsewhere", &[("other", false)]);
         assert!(calls.is_empty());
         assert_eq!(elsewhere.row.status, Status::InProgress);
+        // With a descendant InProgress the Group is not stalled, whatever its own condition.
+        let (other, calls) = inspect(&snapshot, "other", &[("other", false)]);
+        assert_eq!(calls, ["other"]);
+        assert_eq!(other.row.status, Status::InProgress);
+        assert!(other.stall.is_none());
         // A failing evaluation fails the whole read, and skipping conditions never evaluates.
         let error = detail_with::<Error>(&snapshot, &id("plan"), |entity, _| {
             Err(Error(format!("{} failed", entity.id)))
@@ -1247,6 +1361,8 @@ mod tests {
         let plan = detail(&snapshot, &id("plan")).unwrap();
         assert_eq!(plan.row.status, Status::Ready);
         assert!(plan.stall.is_none());
+        let hollow = detail(&snapshot, &id("vacant")).unwrap();
+        assert!(hollow.stall.unwrap().own_condition_unsatisfied.is_empty());
     }
 
     #[test]

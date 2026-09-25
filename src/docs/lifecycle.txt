@@ -27,7 +27,7 @@ Group completes as well. Running complete on a Group explicitly confirms final
 review of the entire plan, including the outcomes and Notes of its descendants.
 list, tasks and show show a Group as Empty, Confirmable, Ready, InProgress or
 Blocked, and show explains a stalled Group under Stalled, including candidates
-that do not surface.
+that do not surface and the Group's own unsatisfied condition.
 parent set ID --parent G sets or moves the parent Group and parent unset ID
 removes it; neither changes lifecycle.
 
