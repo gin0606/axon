@@ -18,11 +18,13 @@ A Group is never started or released. A NotStarted Group is InProgress while a d
 child is InProgress or Completed (a NotStarted child Group passes this up from its own
 children); its saved lifecycle stays NotStarted until it completes.
 An Issue starts only when every ancestor Group is adopted (NotStarted) and the
-explicit dependencies of the Issue and of its ancestors are Completed. Dependencies
-must also be Completed before work completes. Cancelled is terminal but does not
-satisfy a dependency. Group completion requires all direct children to be terminal;
-an empty Group completes as well. Running complete on a Group explicitly confirms
-final review of the entire plan, including the outcomes and Notes of its descendants.
+explicit dependencies of the Issue and of its ancestors are Completed. Completing an
+Issue or Group requires the explicit dependencies of that Issue or Group itself to be
+Completed and every ancestor Group to be adopted; explicit dependencies of ancestors
+are not a prerequisite of its completion. Cancelled is terminal but does not satisfy
+a dependency. Group completion requires all direct children to be terminal; an empty
+Group completes as well. Running complete on a Group explicitly confirms final
+review of the entire plan, including the outcomes and Notes of its descendants.
 tasks and show show a Group as Empty, Confirmable, Ready, InProgress or Blocked, and
 show explains a stalled Group under Stalled, including candidates that do not surface.
 parent set ID --parent G sets or moves the parent Group and parent unset ID
