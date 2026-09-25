@@ -65,7 +65,7 @@ Issue・Group とも所属は最大一つで、所属なしも許す。Group も
 
 ### 親子のlifecycle
 
-Issue の `Start` には、Issue 自身が `NotStarted` であることに加え、全祖先が採用済みであることと、自身と全祖先の依存先がすべて `Completed` であることを要求する。親 Group の実効値が `InProgress` であることは要求しない。Group の dependency は Group 自身の着手ではなく配下の Issue の `Start` で検査されるため、Group に置いた前提は配下のすべての Issue の着手を待たせる。子 Group の `Complete` は自身の依存先だけを検査し、祖先の依存先を検査しない。子への `Start` で親の保存値を変えない。
+Issue の `Start` には、Issue 自身が `NotStarted` であることに加え、全祖先が採用済みであることと、自身と全祖先の依存先がすべて `Completed` であることを要求する。親 Group の実効値が `InProgress` であることは要求しない。子への `Start` で親の保存値を変えない。Group の dependency は Group 自身の着手ではなく配下の Issue の `Start` で検査されるため、Group に置いた前提は配下の Issue の着手を待たせる。Issue・子 Group の `Complete` は自身の依存先だけを検査し、祖先の依存先を検査しないため、Group の dependency は Group 自身の `Complete` の前提になるが、配下の `Complete` の前提にはならない。理由は [Group の dependency を配下の完了の前提にしない理由](../design/decisions.md#group-の-dependency-を配下の完了の前提にしない理由) に記す。
 
 Group の `Complete`・`Cancel` には直属の Issue・子 Group がすべて終了している必要があり、`Undecided` の子もその妨げになる。子の終了は `Completed`・`Cancelled` のどちらでも満たす。直属の子がない Group と、子がすべて `Cancelled` の Group も `Complete` できる。
 
@@ -116,7 +116,7 @@ Group の移動は、その Group の親だけを付け替える。配下の所�
 
 依存先がすべて `Completed` になるまで、依存元は `Complete` できず、Issue は `Start` できない。依存先の `Cancelled` は前提を満たさない。依存先が `Cancelled` になっても依存元の `Cancel` を強制せず、依存関係の見直しや再検討は明示操作に残す。
 
-`InProgress` の Entity にも未完了の依存先を追加でき、追加は lifecycle を変えない。着手の前提は着手時点で確認済みで、追加した依存先は `Complete` の前提として完了時に検査されるため、未完了のまま完了することはない。着手中に見つかった前提を記録するために `Release` を挟ませない。
+`InProgress` の Entity にも未完了の依存先を追加でき、追加は lifecycle を変えない。着手の前提は着手時に検査し、着手中に再検査しない。追加した依存先はその Entity 自身の `Complete` の前提として完了時に検査されるため、その Entity が未完了の依存先を残したまま完了することはない。Group に追加した依存先が配下の `Complete` の前提にならないことは [親子のlifecycle](#親子のlifecycle) に定める。着手中に見つかった前提を記録するために `Release` を挟ませない。
 
 `Completed` の Entity 自身の dependency は固定する。`Reopen` で `NotStarted` へ戻せば編集できる。`Completed` の Entity を、別の Entity が前提として参照することは許す。未完了の Entity の前提は、判断に応じて追加・削除する。所属変更と変換は dependency を保持し、Group をまたぐ依存と、所属なしの Entity への依存を許す。
 

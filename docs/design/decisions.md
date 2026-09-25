@@ -59,7 +59,7 @@ Note は編集・削除せず、訂正は新しい Note で行う。今の運用
 
 ## Group を計画 Entity にした理由
 
-Issue 間の dependency だけでは、計画に含まれる子タスクと、その計画全体が待つ外部の前提を区別できない。Group は Issue・Group を計画範囲として包含し、Group に置いた dependency と判断の frontier を配下へ効かせる独立した Entity とする。
+Issue 間の dependency だけでは、計画に含まれる子タスクと、その計画全体が待つ外部の前提を区別できない。Group は Issue・Group を計画範囲として包含し、Group に置いた dependency を配下の着手と Group 自身の完了へ、判断の frontier を配下へ効かせる独立した Entity とする。
 
 Group は単なる分類ではない。計画単位の着手は配下の Issue の着手から導出し、完了は子孫を確認してから明示的に `Complete` する。子孫の集計は観測事実、Group の `Completed` は計画単位についての宣言であり、両者を同じ値にしない。
 
@@ -69,7 +69,7 @@ Group は `Start`・`Release` を持たず、保存値として `InProgress` を
 
 以前は子の `Start` に親の `InProgress` を要求し、各階層で明示的に `Start` していた。この規則は、子に着手するたびに親を先に着手させる儀式になり、workflow は親を自動で `Start` する手順を持っていた。Git で追跡した保存先では、別々の worktree が同じ親 Group を `Start` し、統合時に同じ値の並行記録を生む原因にもなった。Group の着手は「配下の仕事が始まった」という観測事実であり、利用者の宣言である `Complete` と違って、別に記録する情報を持たない。
 
-Group の `Start` が担っていた検査は Issue の `Start` へ移した。Issue の `Start` は全祖先が採用済みであることと、自身と全祖先の依存先が `Completed` であることを要求する。Group に置いた dependency は配下の Issue の着手を待たせ続け、Group の着手を経由しなくても効く。
+Group の `Start` が担っていた検査は Issue の `Start` へ移した。Issue の `Start` は全祖先が採用済みであることと、自身と全祖先の依存先が `Completed` であることを要求する。Group に置いた dependency は配下の Issue の着手を待たせ続け、Group の着手を経由しなくても効く。祖先の依存先の検査は `Complete` と移動へは移していない。その扱いは [Group の dependency を配下の完了の前提にしない理由](#group-の-dependency-を配下の完了の前提にしない理由) に記す。
 
 以前の「`InProgress` の Entity の祖先はすべて `InProgress`」は、「実効値が `InProgress` の Group と `InProgress` の Issue の全祖先は採用済み」に置き換えた。Group の着手が導出になると、`Complete`・`Reopen`・`Accept`・移動が祖先を見ないまま、`Undecided` の祖先の下に着手済みの計画ができる経路がモデルの反例として出た（[反例と review から足した規則](../../spec/README.md#反例と-review-から足した規則)）。`Complete`・`Reopen`、着手・完了した子孫を持つ Group の `Accept`、着手・完了した Entity の移動に全祖先の採用を要求し、Group の `Withdraw` を実効値が `NotStarted` のときだけ許して塞いだ。実効値は `NotStarted` の子 Group を通じて上へ伝わるため、直属の子の保存値だけを見る検査では孫の着手を見落とす。一方、完了済みの子を持つ Group を `Cancel` してから `Reconsider` すると、`Undecided` の Group の下に完了済みの子孫が残る。この状態は取りやめと再検討の組合せで自然に生じ、着手中の仕事を含まないため許す。
 
@@ -87,6 +87,33 @@ Group の `Complete` は保存値が `NotStarted` のときに許す。直属の
 `Reopen` は `Completed` の依存元がある Entity に使えない。守る性質を「`Completed` は永久」から「`Completed` の Entity の依存先はすべて `Completed`」へ言い換えたためで、依存元が先に `Reopen` されていれば依存先も戻せる。全祖先が採用済みであることも要求し、`Undecided` の祖先の下に着手済みの計画を作らない。`Reopen` は子の lifecycle を変えない。完了済みの子を持つ Group を `Reopen` すると実効値は `InProgress` になり、構成を変えてから再び最終確認する。
 
 `Reopen` の後は title・description と dependency を編集できる。終了中の文面を固定する規則は変えず、完了した結果を保ったままの訂正は Note で行う。
+
+## Group の dependency を配下の完了の前提にしない理由
+
+Group に置いた dependency は、配下の Issue の `Start` と Group 自身の `Complete` の前提であり、配下の Entity の `Complete` の前提ではない。Issue の `Start` は自身と全祖先の依存先の完了を要求するが、`Complete` は Issue・Group とも自身の依存先だけを検査する。移動は移動先とその祖先の依存先を検査せず、依存先の追加は依存元の配下を検査しない（どちらも循環の検査を除く）。種類の変換は依存先を検査しない。依存先の `Reopen` は、dependency については `Completed` の依存元がないことだけを検査し、依存元の配下を検査しない。契約は [親子のlifecycle](../reference/lifecycle.md#親子のlifecycle)、[所属変更と新規登録](../reference/lifecycle.md#所属変更と新規登録)、[種類の変換](../reference/lifecycle.md#種類の変換)、[dependency](../reference/lifecycle.md#dependency) にある。
+
+このため、Group P の依存先 D が未完了のままでも、P の配下の Entity が `Completed` になる、または `Completed` のまま残る経路がある。代表的なものは次の四つである。
+
+1. 空の子 Group と、子がすべて `Cancelled` の子 Group は、配下の `Start` を経ずに `Complete` できる。
+2. P の外で着手した Issue を P の下へ移し、そのまま `Complete` できる。P の下の未着手の Issue を一度外へ出して着手し、戻した場合も同じである。
+3. 配下の仕事が始まった P に後から未完了の依存先を足しても、配下の着手済み Issue や、子がすべて終了した子 Group は `Complete` できる。
+4. `Completed` の P とその依存先を順に `Reopen` しても、P の配下の `Completed` の Entity は `Completed` のまま残る。P が完了していなければ、依存先だけを `Reopen` しても同じである。
+
+`Completed` の Entity の P への移し入れ、完了済みの子孫を持つ P への依存先の追加、P の下の未着手の Issue を Group へ変換して `Complete` することも、同じ状態を生む。
+
+Group の dependency が保証するのは、P 自身が D より先に `Completed` にならないことである。これは P 自身の `Complete` が検査し、上の経路はどれも破らない。P の下の未着手の Issue は `Start` の検査で D を待つが、所属の付け替えや種類の変換で迂回できるため、これは P の下で着手する通常の経路での検査であり、保証ではない。Group の dependency は計画の前提として、計画の仕事を通常の経路で始めるときと計画を閉じるときに検査し、配下の個々の完了が D より先か後かは問わない。配下の完了は P の最終確認で計画全体として確かめる。配下の `Complete` まで D を待たせた場合の制約は、下の採らなかった案に記す。
+
+経路 3 では、Issue 自身に後から足した依存先はその Issue の `Complete` を止め、祖先に足した依存先は止めない。この非対称は意図した扱いである。Issue 自身に足した依存先は、その Issue の作業を完了する前に必要と判断した前提である。祖先に足した依存先は計画全体の前提で、すでに始まっている配下の仕事の完了まで待たせると、進行中の作業が祖先への dependency の追加だけで閉じられなくなる。
+
+以前は子の `Start` が親の `InProgress` を要求し、親の `Start` が親の依存先の完了を要求し、着手中の Entity を `InProgress` の Group の下へだけ移せた。このため、P の着手より前から置いた依存先について、経路 1・2 は生じなかった。経路 3、`Completed` の Entity の移し入れ、完了済みの子を持つ P への依存先の追加は、以前の規則でも生じた。種類の変換による経路は、変換とともに加わった。Group の `Start` をなくしたとき、依存先の検査は Issue の `Start` へ移し（[Group の着手を子から導出する理由](#group-の着手を子から導出する理由)）、`Complete` と移動へは移さなかった。経路 4 は `Reopen` とともに加わった（[`Completed` を `Reopen` で戻せるようにした理由](#completed-を-reopen-で戻せるようにした理由)）。
+
+構造の循環検査に使う「完了の前提」は全祖先の依存先を含み、Group の完了や、祖先の依存先の完了を待たずに着手した Issue の完了については、操作の前提より厳しい近似になる。この近似は構造の検査で循環とみなす範囲を広げるが、lifecycle 操作の前提は変えない。
+
+採らなかった案:
+
+- Issue・Group の `Complete` に全祖先の依存先の完了を要求する案。P の下での完了として経路 1〜3 は止まるが、経路 4 と、`Completed` の Entity の移し入れ、完了済みの子を持つ P への依存先の追加は残る。着手中の Issue が祖先への dependency の追加で完了できなくなり、一覧で祖先の依存先を Issue の行の問題として示す規則も要る。
+- Group の `Complete` にだけ要求する案。経路 1 と、経路 3 のうち子 Group の完了を止めるが、Issue の完了は止めず、Issue と Group で `Complete` の前提が非対称になる。
+- 一つ目の案に加え「`Completed` の Entity の全祖先の依存先は `Completed`」を守る性質にする案。移動・dependency の追加・`Reopen` にも制約が要り、完了済みの子を持つ Group に後から未完了の前提を足せなくなる。計画のやり直しを妨げる制約が増える。
 
 ## 種類を変換できる現在値にした理由
 
@@ -119,7 +146,7 @@ Group 配下の Issue は、その計画を前提とした仕事である。Grou
 次の四つの規則は、運用上の負担が分かれば見直す前提で置いていたが、Group の着手の導出と `Reopen` を加えた再設計の際に見直し、いずれも現行のまま確定した。
 
 - **終了した Group の構成を固定する。** 最終確認は固定した子の集合について行う。`Reopen` と `Reconsider` で戻す経路があるため、計画を見直す手段は残る。`Completed` の依存元や採用済みでない祖先がある場合は、それらから順に戻す手間がかかる。
-- **`InProgress` の Entity にも未完了の dependency を追加できる。** 追加した依存先は `Complete` の前提として完了時に検査されるため、未完了のまま完了することはない。着手中に見つかった前提を記録するために、作業の解放を挟ませる必要がない。
+- **`InProgress` の Entity にも未完了の dependency を追加できる。** 追加した依存先はその Entity 自身の `Complete` の前提として完了時に検査されるため、その Entity が未完了の依存先を残したまま完了することはない。Group に足した依存先が配下の `Complete` の前提にならないことは [Group の dependency を配下の完了の前提にしない理由](#group-の-dependency-を配下の完了の前提にしない理由) に記す。着手中に見つかった前提を記録するために、作業の解放を挟ませる必要がない。
 - **Issue・Group から Group への dependency を許す。** 依存元は依存先の Group の `Complete` まで待つ。配下がすべて終了しただけでは満たさず、計画全体の最終確認を待つことが Group への依存の意味になる。
 - **再浮上条件は候補の表示だけに使い、ID を明示した操作を縛らない。** 条件の判定が失敗すると一覧の取得は失敗するが、明示操作と条件の修復は条件を評価しないため、壊れた条件で Entity が操作できなくなることはない。
 
