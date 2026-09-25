@@ -1,12 +1,12 @@
 # lifecycleと構造の契約
 
-この文書は、Issue・Group が持つ lifecycle の状態と遷移、再浮上条件、計画としての包含、dependency、候補集合、文面・Note・状態変更履歴の契約を定める。候補一覧の評価順と外部コマンドの実行は [候補と外部条件](candidates.md)、識別子・引数・表示・保存結果は [CLIと表示の契約](cli.md)、計画全体の一括編集は [Declaration](declaration.md)、保存先と統合は [保存と統合の契約](storage.md) に定める。
+この文書は、Issue・Group が持つ lifecycle の状態と遷移、Group の実効 lifecycle、再浮上条件、計画としての包含、種類の変換、dependency、候補集合、文面・Note・状態変更履歴の契約を定める。一覧の行と状況、候補一覧の評価順と外部コマンドの実行は [候補と外部条件](candidates.md)、識別子・引数・表示・保存結果は [CLIと表示の契約](cli.md)、計画全体の一括編集は [Declaration](declaration.md)、保存先と統合は [保存と統合の契約](storage.md) に定める。
 
-対応する実行可能なモデルは [`spec/lifecycle_rules.qnt`](../../spec/lifecycle_rules.qnt)、[`spec/issue_lifecycle.qnt`](../../spec/issue_lifecycle.qnt)、[`spec/group_lifecycle.qnt`](../../spec/group_lifecycle.qnt)、[`spec/lifecycle_reachability.qnt`](../../spec/lifecycle_reachability.qnt)、[`spec/candidate_evaluation.qnt`](../../spec/candidate_evaluation.qnt)、[`spec/lifecycle_information.qnt`](../../spec/lifecycle_information.qnt) にある。各モデルの対象範囲・検証する性質・再現手順は [モデルの読み方](../../spec/README.md) を参照する。
+対応する実行可能なモデルは [`spec/lifecycle_rules.qnt`](../../spec/lifecycle_rules.qnt)、[`spec/issue_lifecycle.qnt`](../../spec/issue_lifecycle.qnt)、[`spec/group_lifecycle.qnt`](../../spec/group_lifecycle.qnt)、[`spec/lifecycle_reachability.qnt`](../../spec/lifecycle_reachability.qnt)、[`spec/candidate_evaluation.qnt`](../../spec/candidate_evaluation.qnt)、[`spec/lifecycle_information.qnt`](../../spec/lifecycle_information.qnt) にある。モデルが前提とする規則の一覧、各モデルの対象範囲・検証する性質・再現手順は [モデルの読み方](../../spec/README.md#モデルが表す規則) を参照する。
 
 ## 状態
 
-Issue・Group は一つの lifecycle を持つ。状態の種類と基本遷移は Issue と Group で共有する。
+Issue・Group は一つの lifecycle を持つ。状態の種類は Issue と Group で共有する。
 
 | 状態 | 意味 |
 | --- | --- |
@@ -18,81 +18,109 @@ Issue・Group は一つの lifecycle を持つ。状態の種類と基本遷移�
 
 `Completed` と `Cancelled` を終了とする。登録直後は `Undecided` または `NotStarted` から始まる。`Undecided` は記録済みの提案であり、実施の約束を意味しない。`Accept` によって `NotStarted` へ進む。
 
+保存される lifecycle（保存値）と、表示や前提の判定に使う lifecycle（実効値）を区別する。Issue の実効値は保存値と同じである。Group は保存値として `InProgress` を持たず、実効値を子から導出する（[Group の実効 lifecycle](#group-の実効-lifecycle)）。この文書で「採用済み」は保存値が `NotStarted` であることを指し、`Undecided` と終了した Entity を含まない。
+
 採否を決めるためのまとまった調査は、別の Issue として採用・着手する。元の改善案は `Undecided` のままにできる。この使い分けのために状態を増やさず、複数 Entity の関係は包含と dependency で扱う。
 
 ## 遷移
 
-| 操作 | 遷移元 | 遷移先 |
-| --- | --- | --- |
-| `Accept`：採用 | `Undecided` | `NotStarted` |
-| `Withdraw`：採用撤回 | `NotStarted` | `Undecided` |
-| `Start`：着手 | `NotStarted` | `InProgress` |
-| `Release`：作業を解放 | `InProgress` | `NotStarted` |
-| `Complete`：完了 | `InProgress` | `Completed` |
-| `Cancel`：見送り・取りやめ | `Undecided`・`NotStarted`・`InProgress` | `Cancelled` |
-| `Reconsider`：再検討 | `Cancelled` | `Undecided` |
+| 操作 | 遷移元（保存値） | 遷移先 | 対象 |
+| --- | --- | --- | --- |
+| `Accept`：採用 | `Undecided` | `NotStarted` | Issue・Group |
+| `Withdraw`：採用撤回 | `NotStarted` | `Undecided` | Issue・Group |
+| `Start`：着手 | `NotStarted` | `InProgress` | Issue だけ |
+| `Release`：作業を解放 | `InProgress` | `NotStarted` | Issue だけ |
+| `Complete`：完了 | Issue は `InProgress`、Group は `NotStarted` | `Completed` | Issue・Group |
+| `Cancel`：見送り・取りやめ | Issue は `Undecided`・`NotStarted`・`InProgress`、Group は `Undecided`・`NotStarted` | `Cancelled` | Issue・Group |
+| `Reconsider`：再検討 | `Cancelled` | `Undecided` | Issue・Group |
+| `Reopen`：再開 | `Completed` | `NotStarted` | Issue・Group |
 
-`Completed` は戻さない。`Cancelled` は `Reconsider` できるが、再び着手するには `Accept` が必要になる。`InProgress` から採用を撤回する場合は `Release`、`Withdraw` の順に操作する。完了後の追加作業は新しい Issue で扱う。
+Group は `Start`・`Release` を持たない。Group の着手は配下の Issue の `Start` から導出し、Group 自身へ着手や解放を記録しない。Group の `Complete`・`Cancel` は保存値が `NotStarted`（Group の `Cancel` は `Undecided` も）のときに行い、実効値が `InProgress` でもよい。
 
-各操作は原子的に実行され、前提を満たさない操作は無効となる。`Completed` ではすべての lifecycle 操作が無効になる。再浮上条件の成立状況はその後も変化するが、`Completed` を取り消さない。
+`Completed` から抜ける経路は `Reopen` だけで、`NotStarted` へ戻る。`Cancelled` は `Reconsider` できるが、再び着手するには `Accept` が必要になる。`InProgress` の Issue の採用を撤回する場合は `Release`、`Withdraw` の順に操作する。
+
+各操作は原子的に実行され、前提を満たさない操作は無効となる。遷移表の遷移元に加え、包含と dependency からの前提を [親子のlifecycle](#親子のlifecycle) に定める。`Completed` で受け付ける lifecycle 操作は `Reopen` だけである。再浮上条件の成立状況は終了後も変化するが、`Completed` を取り消さない。
+
+## Group の実効 lifecycle
+
+Group の実効値は、保存値が `NotStarted` で、直属の子のうち実効値が `InProgress` か `Completed` のものがあれば `InProgress`、それ以外は保存値と同じとする。子 Group の実効値も同じ規則で決まるため、孫の Issue の `Start` は `NotStarted` の子 Group を通じて祖父の Group まで `InProgress` にする。`Cancelled` の子だけでは `InProgress` にならない。
+
+実効値は保存せず、子の変化に応じて導出が変わるだけである。配下の Issue を `Start` しても、Group の保存値と履歴は変わらない。一覧と詳細の状況欄と `axon list --lifecycle` の絞り込みは Group の実効値に基づき、保存値は詳細で読める。表記は [CLIと表示の契約](cli.md) に定める。
 
 ## 再浮上条件
 
 再浮上条件は、Entity ごとに未設定または一つの外部コマンドとして保持する。条件の種類と評価の契約は [候補と外部条件](candidates.md) に定める。
 
-`Undecided`・`NotStarted`・`InProgress` を評価対象とし、`Cancelled`・`Completed` では条件を評価しない。評価しなかったことと不成立は区別し、評価対象外の Entity は条件の内容にかかわらず浮上しない。判定は保存状態を書き換えない。
+保存値が `Undecided`・`NotStarted`・`InProgress` の Entity を評価対象とし、`Cancelled`・`Completed` では条件を評価しない。実効値が `InProgress` の Group も保存値は `NotStarted` なので評価対象になる。評価しなかったことと不成立は区別し、評価対象外の Entity は条件の内容にかかわらず浮上しない。判定は保存状態を書き換えない。
 
-「後で考える」は `Undecided` のまま条件で浮上を制御し、「取りやめ」は `Reconsider` するまで浮上対象外にする。`Cancelled` から `Undecided` へ戻すと、同じ条件が再び評価対象になる。条件が成立しているならその時点で浮上し、不成立なら `Undecided` のまま浮上しない。
+「後で考える」は `Undecided` のまま条件で浮上を制御し、「取りやめ」は `Reconsider` するまで浮上対象外にする。`Cancelled` から `Undecided` へ戻すと、同じ条件が再び評価対象になる。条件が成立しているならその時点で浮上し、不成立なら `Undecided` のまま浮上しない。`Reopen` で `Completed` から `NotStarted` へ戻した Entity も、同じ条件が再び評価対象になる。
 
 ## 計画と包含
 
-Issue・Group とも所属は最大一つで、所属なしも許す。Group も最大一つの親 Group を持ち、Issue と子 Group を同じ階層に置ける。Group の自己包含と、子孫の下への移動による循環を禁止する。所属変更は既存の親子の制約を壊さない限り許可し、lifecycle を変えない。
+Issue・Group とも所属は最大一つで、所属なしも許す。Group も最大一つの親 Group を持ち、Issue と子 Group を同じ階層に置ける。所属先は Group に限り、Issue は子を持たない。Group の自己包含と、子孫の下への移動による循環を禁止する。所属変更は既存の親子の制約を壊さない限り許可し、lifecycle を変えない。
 
-終了した Group への追加と、そこからの取り外しは不可とする。`Cancelled` の Group は `Reconsider` で `Undecided` へ戻せば構成を変更できる。この終了時の構成固定と Group の再検討は暫定の判断とし、運用上の負担が分かれば見直す。
+終了した Group への追加と、そこからの取り外しは不可とする。Group の最終確認は完了の時点で固定した子の集合について行うため、終了後に構成が変わると、確認した計画と現在の計画が食い違う。構成を変えるには、`Completed` の Group は `Reopen`、`Cancelled` の Group は `Reconsider` で戻してから操作する。どちらの戻しも、その Group の親が終了していれば行えない。
 
-終了した Group の配下の lifecycle も固定する。`Completed` の Group 配下にある `Cancelled` の Issue は `Reconsider` も取り外しもできない。完了した計画から独立して見直す仕事は、新しい Issue として扱う。理由は [終了した Group の構成と配下の状態を固定する理由](../design/decisions.md#終了した-group-の構成と配下の状態を固定する理由) に記す。
+終了した Group の配下の lifecycle も固定する。終了した Group の配下にある Entity の lifecycle 操作は、`Reopen`・`Reconsider` を含めてすべて無効になる。`Completed` の Group 配下にある `Cancelled` の Issue は、Group を `Reopen` するまで `Reconsider` も取り外しもできない。理由は [終了した Group の構成と配下の状態を固定する理由](../design/decisions.md#終了した-group-の構成と配下の状態を固定する理由) に記す。
 
 ### 親子のlifecycle
 
-子の `Start` には、子自身が `NotStarted` であることと親の `InProgress` を要求する。`InProgress` の子があれば親を `Release` できない。Group の `Complete`・`Cancel` には直属の Issue・子 Group がすべて終了している必要があり、`Undecided` の子もその妨げになる。子 Group の `Start` にも親の `InProgress` を要求するため、`InProgress` の Entity の祖先はすべて `InProgress` になる。各階層で明示的に着手し、子への `Start` で親を自動変更しない。
+Issue の `Start` には、Issue 自身が `NotStarted` であることに加え、全祖先が採用済みであることと、自身と全祖先の依存先がすべて `Completed` であることを要求する。親 Group の実効値が `InProgress` であることは要求しない。Group の dependency は Group 自身の着手ではなく配下の Issue の `Start` で検査されるため、Group に置いた前提は配下のすべての Issue の着手を待たせる。子 Group の `Complete` は自身の依存先だけを検査し、祖先の依存先を検査しない。子への `Start` で親の保存値を変えない。
+
+Group の `Complete`・`Cancel` には直属の Issue・子 Group がすべて終了している必要があり、`Undecided` の子もその妨げになる。子の終了は `Completed`・`Cancelled` のどちらでも満たす。直属の子がない Group と、子がすべて `Cancelled` の Group も `Complete` できる。
 
 Group の `Complete` にはさらに、その計画全体の最終確認が通ったという入力を要求する。画面単位の子 Group にも、機能全体の親 Group にも、それぞれ独立した最終確認がある。Group に対する `axon complete ID` の実行自体を最終確認済みの明示入力とし、別のレビュー済み状態や必須フラグを設けない。確認手順は呼び出し側の skill・運用で扱う。空の Group でもこの確認を省略しない。子の終了だけで親を自動的に終了しない。
 
-着手・完了・取りやめが要求する前提は次のとおりとする。
+包含と dependency から各操作が要求する前提は次のとおりとする。すべての lifecycle 操作は、これに加えて親が終了していないことを要求する。
 
 | 操作 | 包含からの前提 | dependency からの前提 |
 | --- | --- | --- |
-| `Start` | 親があれば、現在 `InProgress` である | 全依存先が `Completed` |
-| `Complete` | Group なら、直属の子が全員終了している | 全依存先が `Completed` |
+| `Start`（Issue） | 全祖先が採用済み | 自身と全祖先の依存先がすべて `Completed` |
+| `Complete` | 全祖先が採用済み。Group なら、直属の子が全員終了している | 自身の依存先がすべて `Completed` |
 | `Cancel` | Group なら、直属の子が全員終了している | 要求しない |
+| `Withdraw` | Group なら、実効値が `NotStarted` | 要求しない |
+| `Accept` | Group で、着手・完了した子孫（保存値が `InProgress` か `Completed`）があるなら、全祖先が採用済み | 要求しない |
+| `Reopen` | 全祖先が採用済み | 自身を依存先に持つ `Completed` の Entity がない |
 
-子の終了は `Completed`・`Cancelled` のどちらでも満たす。Group の最終確認と、終了した親の配下を変更しない制約は、この前提に加えて適用する。親の前提は過去の着手履歴ではなく現在の `InProgress` を要求する。
+`Release`・`Reconsider` と、子孫に着手・完了した Entity のない Group や Issue の `Accept` は、親が終了していないこと以外に包含と dependency からの前提を持たない。未判断の Group の下で子を先に採用でき、登録した子も採用済みになれる。ただし全祖先が採用済みになるまで、その子は着手できない。
 
-循環の検査には「全員が通常どおり完了する経路」を使う。各 Entity の着手から完了への辺、親の着手から子の着手への辺、子の完了から親の完了への辺、依存先の完了から依存元の着手・完了への辺を導出する。`Cancel` による回避はこの経路に加えない。着手の節点を縮約すると、各 Entity の完了に先行するものは次の集合になる。
+`Reopen` は対象の lifecycle だけを `NotStarted` へ戻し、子や依存元の lifecycle を変えない。`Completed` の依存元がある Entity は `Reopen` できないため、依存元から順に `Reopen` する。依存元を `Reopen` するにはその祖先が採用済みである必要があり、数段の `Reopen` を要する場合がある。完了済みの子を持つ Group を `Reopen` すると、その Group の実効値は `InProgress` になる。
+
+守る性質は「実効値が `InProgress` の Group と `InProgress` の Issue の全祖先が採用済み」である。上表で `Complete`・`Reopen` と着手・完了した子孫を持つ Group の `Accept` が全祖先の採用を要求し、Group の `Withdraw` が実効値の `NotStarted` を要求するのはこの性質を保つためである。実効値は `NotStarted` の子 Group を通じて上へ伝わるので、孫が着手中なら祖父も `Withdraw` できない。一方、`Undecided` の Group の下に完了済みの子孫があることは許す。完了済みの子を持つ Group を `Cancel` してから `Reconsider` するとこの状態になり、取りやめた子 Group の下に完了済みの子孫があるときの親の `Withdraw` も同じ理由で禁じない。その Group を再び `Accept` するには全祖先が採用済みであることが要る。
+
+循環の検査には「全員が通常どおり完了する経路」を使う。各 Entity の完了に先行するものを次の集合とする。
 
 ```text
 完了の前提 = 直属の子 ∪ 自身の依存先 ∪ 全祖先の依存先
 ```
 
-着手の前提を親へさかのぼると祖先の依存先へ到達し、子の終了は通常完了経路では子の完了に対応する。この縮約で得たグラフから、前提の残っていない節点を順に除去し、全節点を除去できるかを検査する。これは構造の循環判定用の導出であり、実際の操作可否には上表の現在状態を使う。保存する関係は包含と明示的な dependency だけである。
+Issue の着手は全祖先の依存先を待ち、子の終了は通常完了経路では子の完了に対応する。`Cancel` による回避はこの経路に加えない。この前提のグラフから、前提の残っていない節点を順に除去し、全節点を除去できるかを検査する。これは構造の循環判定用の導出であり、実際の操作可否には上表の現在状態を使う。保存する関係は包含と明示的な dependency だけである。
 
 ### 所属変更と新規登録
 
-`InProgress` の Issue・Group は、所属なしにするか、`InProgress` の別 Group へ移せる。移動元・移動先に Group がある場合は、どちらも終了していないことを検査する。移動のためだけに `Release` と `Start` を挟む必要はなく、移動によって採否や進行の状態は変わらない。変更後の通常完了経路が循環する所属変更も拒否する。例えば A が B の完了に依存している場合、B を A の配下へ移すことはできない。
+所属変更では、移動元・移動先に Group がある場合、どちらも終了していないことを検査する。実効値が `InProgress` か `Completed` の Entity は、所属なしにするか、移動先の Group 自身を含む全祖先が採用済みである Group の下へ移せる。それ以外の Entity は、終了していない Group の下へ移せる。移動のためだけに `Release` や `Reopen` を挟む必要はなく、移動によって採否や進行の状態は変わらない。移動は移動先とその祖先の依存先を検査しないため、着手済みの Issue を移し入れた場合、その Issue は移動先の Group の依存先を待たずに着手済みのまま残る。変更後の通常完了経路が循環する所属変更も拒否する。例えば A が B の完了に依存している場合、B を A の配下へ移すことはできない。
 
 Group の移動は、その Group の親だけを付け替える。配下の所属・lifecycle・dependency は保持され、部分木全体が移る。終了した Group でも、自身の親が終了していなければ、その内部構成を変えずに移せる。これは終了した Issue の移動と同じ制約である。
 
-新しい Entity は Group 内または Group 外へ登録する。提案の記録は `Undecided`、採用済みの仕事の登録は `NotStarted` とする。登録操作は与えられた採否を反映し、採用判断そのものは代行しない。
+新しい Entity は Group 内または Group 外へ登録する。所属先は終了していない Group で、採用済みである必要はない。提案の記録は `Undecided`、採用済みの仕事の登録は `NotStarted` とする。登録操作は与えられた採否を反映し、採用判断そのものは代行しない。
 
-どちらの経路も、登録だけでは `InProgress` にならない。`NotStarted` で登録した後も、`Start` には親 Group と dependency の前提を要求する。最終確認待ちの Group に不足していた Issue を追加した場合、どちらの経路でも未終了の子が増えるため、その Group は再び `Complete` できなくなる。
+どちらの経路も、登録だけでは `InProgress` にならない。`NotStarted` で登録した後も、`Start` には祖先と dependency の前提を要求する。最終確認待ちの Group に不足していた Issue を追加した場合、どちらの経路でも未終了の子が増えるため、その Group は再び `Complete` できなくなる。
+
+## 種類の変換
+
+種類（Issue・Group）は Entity の現在値であり、変換で変わる。保存値が `Undecided`・`NotStarted` の Issue は Group に、保存値が `Undecided`・`NotStarted` で子のない Group は Issue に変換できる。`InProgress` の Issue は先に `Release` する。終了した Entity と子を持つ Group は変換できない。
+
+変換は lifecycle・所属・dependency・文面・再浮上条件・Note・ID を変えない。変換した Entity を参照する所属と dependency はそのまま残る。変換は lifecycle 遷移ではない。Issue から変換した Group は子を持たないため、実効値は保存値と同じになる。
 
 ## dependency
 
-依存先がすべて `Completed` になるまで、依存元は `Start`・`Complete` できない。依存先の `Cancelled` は前提を満たさない。依存先が `Cancelled` になっても依存元の `Cancel` を強制せず、依存関係の見直しや再検討は明示操作に残す。`InProgress` でも未完了の依存先を追加でき、追加は lifecycle を変えない。この着手後の追加は暫定の判断とする。
+依存先がすべて `Completed` になるまで、依存元は `Complete` できず、Issue は `Start` できない。依存先の `Cancelled` は前提を満たさない。依存先が `Cancelled` になっても依存元の `Cancel` を強制せず、依存関係の見直しや再検討は明示操作に残す。
 
-`Completed` の Entity 自身の dependency は固定する。`Completed` の Entity を、別の Entity が前提として参照することは許す。未完了の Entity の前提は、判断に応じて追加・削除する。所属変更は dependency を保持し、Group をまたぐ依存と、所属なしの Entity への依存を許す。
+`InProgress` の Entity にも未完了の依存先を追加でき、追加は lifecycle を変えない。着手の前提は着手時点で確認済みで、追加した依存先は `Complete` の前提として完了時に検査されるため、未完了のまま完了することはない。着手中に見つかった前提を記録するために `Release` を挟ませない。
 
-Group から Issue への依存を許す。Issue・Group から別の Group への依存も暫定の判断として許し、依存先の Group 自身が最終確認を経て `Completed` になるまで待つ。配下がすべて終了しただけでは、依存先の完了の前提を満たさない。
+`Completed` の Entity 自身の dependency は固定する。`Reopen` で `NotStarted` へ戻せば編集できる。`Completed` の Entity を、別の Entity が前提として参照することは許す。未完了の Entity の前提は、判断に応じて追加・削除する。所属変更と変換は dependency を保持し、Group をまたぐ依存と、所属なしの Entity への依存を許す。
+
+Group から Issue への依存を許す。Issue・Group から別の Group への依存も許し、依存先の Group 自身が最終確認を経て `Completed` になるまで待つ。配下がすべて終了しただけでは、依存先の完了の前提を満たさない。依存先の計画全体の最終確認を待つことが、Group への依存の意味だからである。
 
 自己依存と、包含を合わせた通常完了経路の循環を、追加時に拒否する。親・祖先と子孫の間の明示的な dependency はどちら向きも禁止される。兄弟や別の Group に属する Entity どうしでも、他の包含・依存を経由して循環する場合は拒否する。終了した Entity も構造のグラフから除外しない。拒否された操作は無効となり、状態・所属・dependency を自動調整しない。
 
@@ -102,17 +130,19 @@ Group から Issue への依存を許す。Issue・Group から別の Group へ�
 
 | 集合 | 条件 |
 | --- | --- |
-| 判断候補 | `Undecided` で、自身とすべての祖先が浮上している。親の `InProgress` と依存先の完了は要求しない |
-| 浮上した未着手 | `NotStarted` で、自身とすべての祖先が浮上している。親の `InProgress` と依存先の完了は要求しない |
-| 着手可能 | `NotStarted`、親があればその親が `InProgress`、全依存先が `Completed` |
-| 着手候補 | 着手可能で、自身とすべての祖先が浮上している |
-| 着手中 | `InProgress`。自身・祖先の浮上状態や、追加された未完了の依存に関係なく含む |
+| 判断候補 | 保存値が `Undecided` の Issue・Group で、自身とすべての祖先が浮上している。祖先の採用と依存先の完了は要求しない |
+| 浮上した未着手 | 保存値が `NotStarted` の Issue・Group で、自身とすべての祖先が浮上している。祖先の採用と依存先の完了は要求しない |
+| 着手可能 | `Start` の前提を満たす Issue |
+| 着手候補 | 着手可能で、自身とすべての祖先が浮上している Issue |
+| 着手中 | `InProgress` の Issue と、実効値が `InProgress` の Group。自身・祖先の浮上状態や、追加された未完了の依存に関係なく含む |
 
-`axon proposals` は判断候補を返す。`axon tasks` は着手候補に限定せず、浮上した未着手と着手中を合わせて返すため、依存先の完了待ちや親の着手待ちも含む。着手可能かどうかは一覧の状況として表示し、その表記は [CLIと表示の契約](cli.md) に定める。
+`axon proposals` は判断候補を返す。`axon tasks` は着手候補に限定せず、浮上した未着手と着手中を合わせた平らな一覧を返すため、依存先の完了待ちや祖先の採用待ちも含む。実効値が `InProgress` の Group は浮上した未着手と着手中の両方に当たりうるが、一覧には一行だけ出る。一覧の行の状況と詰まっている理由は [候補と外部条件](candidates.md#一覧の行と状況)、その表記は [CLIと表示の契約](cli.md) に定める。
 
-判断候補は採否を検討するための集合であり、候補への出入りで採否や進行状態を変えない。dependency は着手・完了の前提であり、採否を先に決めることを妨げない。Group 自身も上表と同じ条件で着手可能・着手候補になり、`InProgress` の Group は非浮上でも着手中に含む。
+Group は `Start` を持たないため、着手可能・着手候補にならない。Group に置いた dependency と祖先の採否は、配下の Issue の着手可能性を通じて効く。
 
-再浮上は候補の表示だけを制御し、明示的な採否判断、`Start` や `Complete`、所属・依存の変更の可否には加えない。この表示と明示操作の分離は暫定の判断とする。
+判断候補は採否を検討するための集合であり、候補への出入りで採否や進行状態を変えない。dependency は着手・完了の前提であり、採否を先に決めることを妨げない。
+
+再浮上は候補の表示だけを制御し、明示的な採否判断、`Start` や `Complete`、所属・依存の変更の可否には加えない。ID を明示した操作は、浮上していない Entity にも候補と同じ前提で行える。条件が壊れていても、条件の修復や明示操作ができなくなることはない。
 
 終了した Entity は条件を評価せず、浮上しない。祖先のいずれかが非浮上なら、その子孫を判断候補・着手候補から外すが、子の状態や条件は変えない。再浮上条件の成立状況が変化しても、保存する lifecycle・所属・dependency は変わらない。終了している間にも外界は変化するが、その Entity の条件を評価するという意味ではない。
 
@@ -120,7 +150,7 @@ Group から Issue への依存を許す。Issue・Group から別の Group へ�
 
 ### 情報の役割と編集範囲
 
-Issue・Group とも、title・description は現在の内容を保持する。`Undecided`・`NotStarted`・`InProgress` は状態を変えずに編集でき、終了後は固定する。`Cancelled` の Entity は `Reconsider` で `Undecided` へ戻せば編集できる。`Completed` には再開経路がないため、後からの訂正・補足は Note に追記する。この規則は title・description の規則であり、所属・dependency は上に定めた変更条件に従う。
+Issue・Group とも、title・description は現在の内容を保持する。`Undecided`・`NotStarted`・`InProgress` は状態を変えずに編集でき、終了後は固定する。`Cancelled` の Entity は `Reconsider` で `Undecided` へ、`Completed` の Entity は `Reopen` で `NotStarted` へ戻せば編集できる。完了した結果を保ったままの訂正・補足は Note に追記する。この規則は title・description の規則であり、所属・dependency は上に定めた変更条件に従う。
 
 文面の編集履歴は持たず、採用した時点の文面も保存しない。着手中の計画の具体化・修正のために、作業の解放や採用撤回を要求しない。完了条件をエージェントが都合よく緩和・削除することへの対処は、skill による運用とセッションログでの確認に任せる。Axon 単独では、完了前の文面の書き換えや、採用時からの差分を検証できない。残したい変更理由は Note で補足する。
 

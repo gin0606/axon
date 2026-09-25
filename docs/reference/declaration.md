@@ -8,7 +8,7 @@
 
 満たす安全性は、計画全体と変更差分を保存前に検査できること、取得後に編集の前提が変わっていたら競合として止めること、部分適用を作らないこと、障害後の再実行で新規 Entity を重複作成しないことである。
 
-この機能は lifecycle・包含・dependency・終了構成の制約を迂回せず、通常操作と同じ共通コアの検査を通す。再浮上条件と Note は扱わない。既存 Entity の lifecycle 遷移も扱わず、`axon accept|start|complete|cancel` などの通常コマンドに任せる。
+この機能は lifecycle・包含・dependency・終了構成の制約を迂回せず、通常操作と同じ共通コアの検査を通す。再浮上条件と Note は扱わない。既存 Entity の lifecycle 遷移と種類の変換も扱わず、`axon accept|start|complete|cancel|reopen`・`axon convert` などの通常コマンドに任せる。
 
 ## 対象範囲と編集集合
 
@@ -26,7 +26,7 @@ groups:
   - id: demo-k3m7pq
     key: null
     base: "blake3:1111111111111111111111111111111111111111111111111111111111111111"
-    lifecycle: in-progress
+    lifecycle: not-started
     title: 検索画面を実装する
     description: |-
       ## 目的
@@ -78,13 +78,13 @@ root は `schema`、`groups`、`issues`、`references` の 4 field だけをこ�
 | `id` | string または null | identity | 既存 Entity と `prepare` 済みの新規 Entity では公開 ID。`prepare` 前の新規 Entity だけ null。ASCII 小文字英数字とハイフン以外を含む値は拒否する |
 | `key` | string または null | file 内のみ | file-local の別名。`^[a-z][a-z0-9-]{0,63}$` に一致し、`groups`・`issues` を通じて file 内で一意。保存先には保存しない |
 | `base` | fingerprint または null | 読み取り専用 | `axon export` 時点の値の fingerprint。未適用の新規 Entity だけ null |
-| `lifecycle` | `undecided` / `not-started` / `in-progress` / `completed` / `cancelled` | 既存は読み取り専用 | 保存された lifecycle。新規 Entity は `undecided` か `not-started` のどちらかを書く |
+| `lifecycle` | `undecided` / `not-started` / `in-progress` / `completed` / `cancelled` | 既存は読み取り専用 | 保存された lifecycle（保存値）。Group の実効値は書かないため、Group は `in-progress` にならない。新規 Entity は `undecided` か `not-started` のどちらかを書く |
 | `title` | string | 編集可 | 空または空白だけの値、改行や制御文字を含む値、200 文字を超える値を拒否する。それ以外は保存値をそのまま扱う |
 | `description` | string | 編集可 | Markdown 本文。空文字は本文なし。trim・正規化をしない |
 | `parent` | 参照 または null | 編集可 | 親 Group。Issue を親にする参照は拒否する |
 | `needs` | 参照の list | 編集可 | outgoing dependency。空なら `[]` |
 
-`base` が null の record を新規 Entity、non-null の record を既存 Entity とみなす。`id` が null なら `base` も null でなければならない。新規 Entity の record は `key` を持たなければならず、`prepare` 後に `id` を得ても `key` を消してはならない。既存 Entity に `key` を付けて別名で参照してもよい。同じ Entity を二度宣言してはならない。既存 Entity の kind は保存値で固定であり、record を `issues` と `groups` の間で移しても kind の変更にはならず、拒否する。lifecycle の綴りは`axon list --lifecycle`と同じにする。
+`base` が null の record を新規 Entity、non-null の record を既存 Entity とみなす。`id` が null なら `base` も null でなければならない。新規 Entity の record は `key` を持たなければならず、`prepare` 後に `id` を得ても `key` を消してはならない。既存 Entity に `key` を付けて別名で参照してもよい。同じ Entity を二度宣言してはならない。既存 Entity の kind は`axon export`時点の現在値である。kind は`axon convert`で変わるが、declaration は変換を扱わず、record を `issues` と `groups` の間で移すことは kind の書き換えとして拒否する。`axon export` の後に変換された Entity は保存先の kind と一致しないため拒否され、再度`axon export`が必要になる。この拒否は record を移した場合と同じ kind の不一致として診断され、保存先側の変換とは区別しない。lifecycle の綴りは`axon list --lifecycle`と同じにするが、値は `axon list` が示す実効値ではなく保存値である。例の Group は完了済みの子を持つため実効値が `InProgress` で、`axon list --lifecycle in-progress` に当たるが、declaration には保存値の `not-started` を書く。
 
 参照は `{ id: demo-8bxw2r }` または `{ key: results }` のどちらか一方だけを持つ mapping とする。一つの参照 mapping への両方の併記、どちらもない mapping、未解決の ID・key はエラーである。素の文字列は使わない。解決後に同じ Entity を指す重複した `needs` はエラーとし、自己依存も拒否する。
 
@@ -94,7 +94,7 @@ root は `schema`、`groups`、`issues`、`references` の 4 field だけをこ�
 
 `references` には、編集集合の `parent`・`needs` が指す編集集合外の Entity を、`id`、`kind`（`issue` / `group`）、`lifecycle`、`title` の順で一件ずつ読み取り専用として載せる。description、key、関係は持たない。レビュー側が subtree 外の依存先を ID の突き合わせなしに読めるようにするための context である。
 
-`references` は `prepare` と `apply` 後の canonical rewrite で保存先の現在値から再生成する。`check`・`apply` は `references` について、要素の集合が編集集合の `parent`・`needs` が指す編集集合外の Entity の集合と一致すること、および file に書かれた値どうしの形式と ID 順が canonical であることを検査し、kind は保存先の不変な値との一致を要求し、不一致は読み取り専用項目の書き換えとして拒否する。title や lifecycle の値が保存先の現在値と一致することは要求しない。過不足があれば `prepare` で再生成する。参照先の title や lifecycle が`axon export`の後に変わっても競合にせず、参照先が存在しない場合、kind が一致しない場合、および共通コアが拒否する状態（終了した Group を親に指定する、進行中の Entity の祖先に進行中でない Group を置く、外部を経由して循環を作るなど）だけを止める。`Cancelled` の Entity への依存は共通コアが通常操作で許すため、declaration でも拒否しない。編集者はそれらの値を見て編集したのではなく、参照先の値の変化まで競合にすると、大きな計画ほど無関係な変更で止まるためである。
+`references` は `prepare` と `apply` 後の canonical rewrite で保存先の現在値から再生成する。`check`・`apply` は `references` について、要素の集合が編集集合の `parent`・`needs` が指す編集集合外の Entity の集合と一致すること、および file に書かれた値どうしの形式と ID 順が canonical であることを検査し、kind は保存先の現在値との一致を要求する。不一致は、file の書き換えと`axon export`後の保存先での変換を区別できないため、参照先の kind が保存先と一致しないことを対象 ID とともに診断して拒否し、`prepare` での再生成を案内する。`references` の `lifecycle` も保存値である。title や lifecycle の値が保存先の現在値と一致することは要求しない。過不足があれば `prepare` で再生成する。参照先の title や lifecycle が`axon export`の後に変わっても競合にせず、参照先が存在しない場合、kind が一致しない場合（参照先が`axon export`の後に変換された場合を含む）、および共通コアが拒否する状態（終了した Group を親に指定する、着手済み・完了済みの Entity を、自身か祖先が採用済みでない Group の下へ移す、外部を経由して循環を作るなど）だけを止める。`Cancelled` の Entity への依存は共通コアが通常操作で許すため、declaration でも拒否しない。編集者はそれらの値を見て編集したのではなく、参照先の値の変化まで競合にすると、大きな計画ほど無関係な変更で止まるためである。
 
 ## canonical 形式
 
@@ -168,9 +168,9 @@ description の全文差分は file 自体の git diff に任せ、CLI では変
 - ASCII 小文字英数字とハイフン以外を含む `id`、一つの参照 mapping での id と key の併記、`id` が null で `base` が non-null の record、`base` が null の record の `key` 欠落、未解決の ID・key、同じ Entity の二重宣言、解決後の重複した `needs`、自己依存、Issue を親にする参照、新規 Entity の `lifecycle` が `undecided`・`not-started` 以外
 - 既存 Entity の `lifecycle` の書き換え、既存 Entity の record を `issues` と `groups` の間で移す kind の変更
 - `base` の不一致、または新規 Entity の割り当て済み ID が保存先に存在すること（再試行の適用済み判定に該当する場合を除く）。保存先の変更と入力側の `base` の改変・null 化は区別せず、いずれも競合として扱う
-- `Completed`・`Cancelled` の title・description の差分、`Completed` の `needs` の差分、終了した Group の構成を変える所属変更、終了した Group を親にする作成・所属変更、進行中の Entity の祖先に進行中でない Group を置く変更、包含の循環、dependency の循環など、共通コアが通常操作でも拒否する変更。新規作成の親は終了していない Group であればよく、進行中である必要はない
+- `Completed`・`Cancelled` の title・description の差分、`Completed` の `needs` の差分、終了した Group の構成を変える所属変更、終了した Group を親にする作成・所属変更、実効値が `InProgress` か `Completed` の Entity を、移動先の Group 自身かその祖先に採用済みでないものがある場合に、その下へ移す変更、包含の循環、dependency の循環など、共通コアが通常操作でも拒否する変更。新規作成の親は終了していない Group であればよく、採用済みや着手済みである必要はない
 
-終了した Entity を別の読み取り専用セクションに分けない。共通コアは`Cancelled`の dependency 編集を許し、`Completed`・`Cancelled` とも終了していない Group の間での所属変更を許すため、終了 Entity にも編集できる項目が残る。同じ list に置き、項目単位で拒否する。
+終了した Entity を別の読み取り専用セクションに分けない。共通コアは`Cancelled`の dependency 編集を許し、終了していない Group の間での終了 Entity の所属変更を許す（`Completed` の Entity の移動先は、所属なしか、自身と全祖先が採用済みの Group に限る）ため、終了 Entity にも編集できる項目が残る。同じ list に置き、項目単位で拒否する。
 
 保存境界の失敗は [CLIと表示の契約](cli.md#mutationの結果) と同じく Applied、Not applied、Result unknown を区別する。参照先の存在しない ID は保存先の不存在として、file 内で未解決の key とは別の診断にする。
 

@@ -8,11 +8,11 @@ Axon が Entity ごとに保存するものは、性質の違う三種類に分�
 
 | 種類 | 保存されるもの | 例 |
 | --- | --- | --- |
-| 利用者が明示的に遷移させる状態 | 一つの lifecycle と、その変更履歴 | `Undecided`・`NotStarted`・`InProgress`・`Completed`・`Cancelled` |
+| 利用者が明示的に遷移させる状態 | 一つの lifecycle と、その変更履歴 | `Undecided`・`NotStarted`・`InProgress`・`Completed`・`Cancelled`（Group は `InProgress` を保存しない） |
 | Entity 間の関係 | 親 Group の ID、outgoing dependency の ID 集合 | 包含、dependency |
 | 機械が判定する属性 | 外部コマンドの文字列 | 再浮上条件 |
 
-一覧の状況 (Ready、Blocked) と候補集合は、これらから完全に導出する。優先度と表示上の強調は保存しない。
+Group の実効 lifecycle、一覧の状況 (Ready、Blocked など) と候補集合は、これらから完全に導出する。優先度と表示上の強調は保存しない。
 
 この分け方は、性質の違う値を一つのフィールドへ畳むと操作どうしが互いを壊すことへの対処である。Axon は、個人向けの issue tracker である beads_rust を長く使ってきたところから始まっている。長く使うほど自分の手に合わせたい部分がはっきりし、その要求を形にしたものが Axon の出発点になった。
 
@@ -61,13 +61,67 @@ Note は編集・削除せず、訂正は新しい Note で行う。今の運用
 
 Issue 間の dependency だけでは、計画に含まれる子タスクと、その計画全体が待つ外部の前提を区別できない。Group は Issue・Group を計画範囲として包含し、Group に置いた dependency と判断の frontier を配下へ効かせる独立した Entity とする。
 
-Group は単なる分類ではない。利用者またはエージェントが計画単位を明示的に `Start` し、子孫を確認してから明示的に `Complete` する。子孫の集計は観測事実、Group の `Completed` は計画単位についての宣言であり、両者を同じ値にしない。
+Group は単なる分類ではない。計画単位の着手は配下の Issue の着手から導出し、完了は子孫を確認してから明示的に `Complete` する。子孫の集計は観測事実、Group の `Completed` は計画単位についての宣言であり、両者を同じ値にしない。
+
+## Group の着手を子から導出する理由
+
+Group は `Start`・`Release` を持たず、保存値として `InProgress` を持たない。直属の子に実効値が `InProgress` か `Completed` のものがあれば、Group の実効値を `InProgress` と導出する。契約は [Group の実効 lifecycle](../reference/lifecycle.md#group-の実効-lifecycle) にある。
+
+以前は子の `Start` に親の `InProgress` を要求し、各階層で明示的に `Start` していた。この規則は、子に着手するたびに親を先に着手させる儀式になり、workflow は親を自動で `Start` する手順を持っていた。Git で追跡した保存先では、別々の worktree が同じ親 Group を `Start` し、統合時に同じ値の並行記録を生む原因にもなった。Group の着手は「配下の仕事が始まった」という観測事実であり、利用者の宣言である `Complete` と違って、別に記録する情報を持たない。
+
+Group の `Start` が担っていた検査は Issue の `Start` へ移した。Issue の `Start` は全祖先が採用済みであることと、自身と全祖先の依存先が `Completed` であることを要求する。Group に置いた dependency は配下の Issue の着手を待たせ続け、Group の着手を経由しなくても効く。
+
+以前の「`InProgress` の Entity の祖先はすべて `InProgress`」は、「実効値が `InProgress` の Group と `InProgress` の Issue の全祖先は採用済み」に置き換えた。Group の着手が導出になると、`Complete`・`Reopen`・`Accept`・移動が祖先を見ないまま、`Undecided` の祖先の下に着手済みの計画ができる経路がモデルの反例として出た（[反例と review から足した規則](../../spec/README.md#反例と-review-から足した規則)）。`Complete`・`Reopen`、着手・完了した子孫を持つ Group の `Accept`、着手・完了した Entity の移動に全祖先の採用を要求し、Group の `Withdraw` を実効値が `NotStarted` のときだけ許して塞いだ。実効値は `NotStarted` の子 Group を通じて上へ伝わるため、直属の子の保存値だけを見る検査では孫の着手を見落とす。一方、完了済みの子を持つ Group を `Cancel` してから `Reconsider` すると、`Undecided` の Group の下に完了済みの子孫が残る。この状態は取りやめと再検討の組合せで自然に生じ、着手中の仕事を含まないため許す。
+
+Group の `Complete` は保存値が `NotStarted` のときに許す。直属の子がない Group と子がすべて `Cancelled` の Group は実効値が `InProgress` にならないため、`InProgress` を要求するとこれらを終える経路がなくなる。最終確認の明示入力は残す。
+
+採らなかった案:
+
+- Group の `Start` を残し、子の `Start` で親を自動的に `Start` する案。自動の遷移が履歴と統合の衝突を生む点は変わらず、明示の `Start` との区別も要る。
+- Group の保存値に `InProgress` を残して、子の変化に合わせて書き換える案。導出できる値を保存すると、子の記録と Group の記録の統合が食い違ったときにどちらを正とするかを決める必要がある。
+
+## `Completed` を `Reopen` で戻せるようにした理由
+
+`Reopen` は `Completed` を `NotStarted` へ戻す。以前は `Completed` を永久とし、完了後の追加作業を新しい Issue で扱っていた。新しい Issue で済む場面は今も多いが、完了した Group の構成を直す、Git の統合で完了済みの Group に子が流入した状態を直す、完了済みの Entity の dependency を直す、といった修復には、完了を取り消す経路が要る。
+
+`Reopen` は `Completed` の依存元がある Entity に使えない。守る性質を「`Completed` は永久」から「`Completed` の Entity の依存先はすべて `Completed`」へ言い換えたためで、依存元が先に `Reopen` されていれば依存先も戻せる。全祖先が採用済みであることも要求し、`Undecided` の祖先の下に着手済みの計画を作らない。`Reopen` は子の lifecycle を変えない。完了済みの子を持つ Group を `Reopen` すると実効値は `InProgress` になり、構成を変えてから再び最終確認する。
+
+`Reopen` の後は title・description と dependency を編集できる。終了中の文面を固定する規則は変えず、完了した結果を保ったままの訂正は Note で行う。
+
+## 種類を変換できる現在値にした理由
+
+種類（Issue・Group）は Entity の同一性ではなく現在値とし、変換を許す。Issue として登録した仕事が調べるうちに複数の単位へ分かれることはよくあり、作り直すと ID・Note・dependency の参照が切れる。変換はそれらを保ったまま種類だけを変える。
+
+変換できるのは保存値が `Undecided`・`NotStarted` の Issue と、同じ状態で子のない Group に限る。`InProgress` の Issue を Group にすると、保存値として `InProgress` を持たない Group の規則と合わないため、先に `Release` させる。子を持つ Group を Issue にすると、Issue が子を持たないという包含の規則が崩れる。終了した Entity は計画を閉じた時点の判断を保つため変換しない。
+
+## 一覧の Group の行の状況と詰まっている理由
+
+`axon tasks` は Issue と Group を平らに並べ、Group の行には配下から導出した状況を示す。契約は [一覧の行と状況](../reference/candidates.md#一覧の行と状況) にある。Group が着手候補にならなくなったため、一覧で Group の行が次に何をすべきかを示す必要がある。
+
+状況は `Empty`・`Confirmable`・`Ready`・`InProgress`・`Blocked` の優先順位で一つに決める。`Blocked` は残余として定義する。当初の「未着手の Issue の子孫はあるが着手候補がない」という定義では、採用直後で子がすべて `Undecided` の Group や、空の子 Group しか持たない Group がどの状況にも入らなかった。残余にすると五つの状況で Group の行を必ず分類できる。
+
+`Empty` は `Confirmable` より先に判定する。直属の子がない Group は最終確認を通れば完了できるが、空の計画の次の一手はたいてい計画を書くことであり、`Confirmable` と示すと中身のない完了を促す。`axon complete` の可否は変えない。
+
+Group の `InProgress` は、実効 lifecycle と同じく「配下の仕事が始まっている」を表す。完了済みの子孫はあるが着手中の子孫がない Group も `InProgress` のままにし、`Blocked` へ落とす案と `InProgress+Blocked` の複合表示は採らなかった。前者は実効 lifecycle と一覧で同じ Group の状態が食い違い、後者は Issue の表示と同じ語で別の条件を表すことになる。
+
+その代わり、詰まっている理由を `Blocked` の行に限らず、完了できず、着手候補の子孫も着手中の Issue の子孫もない Group の行全般に示す。着手が始まった後に止まった計画や、完了できない空の Group も次の一手が状況から読めないためである。`Confirmable` の行、`Ready` の行、完了できる `Empty` の行は次の一手が状況から分かるため理由を求めない。着手中の Issue に後から足した未完了の依存先はその Issue の行の問題とし、Group を詰まっているとは見なさない。理由は未完了の dependency、`Undecided` の子、未終了の子 Group、浮上していない着手可能な子孫、`Undecided` の祖先の五種類で、詰まっている行には少なくとも一つ付くことをモデルで検査している。
+
+Group を見出しにした木の一覧は採らなかった。表示の改善として導出の規則と独立に扱える。
 
 ## 終了した Group の構成と配下の状態を固定する理由
 
 Group 配下の Issue は、その計画を前提とした仕事である。Group が `Completed` になった後に、配下の `Cancelled` の Issue だけを `Reconsider` すると、完了した計画の一部を再び未判断に戻すことになる。単独の Issue の再検討とは前提が異なるため、元の計画から独立して見直す仕事は、目的や完了条件を改めて定義した新しい Issue として扱う。
 
-終了した Group の構成と配下の lifecycle を固定することで、計画を閉じた時点の判断を保つ。この規則は、子だけを再検討・取り外しする例外や、それに伴う親の状態の扱いを増やさず、実装を単純に保つことにもつながる。`Cancelled` の Group は、親の制約を満たせば `Reconsider` によって計画自体を見直せるが、`Completed` の Group にはその経路を設けない。具体的な制約は [計画と包含](../reference/lifecycle.md#計画と包含) に定める。
+終了した Group の構成と配下の lifecycle を固定することで、計画を閉じた時点の判断を保つ。Group の最終確認は完了の時点で固定した子の集合について行うものであり、終了後に子を足したり外したりすると、確認した計画と現在の計画が食い違う。この規則は、子だけを再検討・取り外しする例外や、それに伴う親の状態の扱いを増やさず、実装を単純に保つことにもつながる。計画自体を見直すには、親の制約を満たせば、`Cancelled` の Group は `Reconsider`、`Completed` の Group は `Reopen` で戻してから構成を変え、`Completed` へ戻すときは改めて最終確認を経る。具体的な制約は [計画と包含](../reference/lifecycle.md#計画と包含) に定める。
+
+## 見直しを前提に置いていた規則を現行のまま確定した理由
+
+次の四つの規則は、運用上の負担が分かれば見直す前提で置いていたが、Group の着手の導出と `Reopen` を加えた再設計の際に見直し、いずれも現行のまま確定した。
+
+- **終了した Group の構成を固定する。** 最終確認は固定した子の集合について行う。`Reopen` と `Reconsider` で戻す経路があるため、計画を見直す手段は残る。`Completed` の依存元や採用済みでない祖先がある場合は、それらから順に戻す手間がかかる。
+- **`InProgress` の Entity にも未完了の dependency を追加できる。** 追加した依存先は `Complete` の前提として完了時に検査されるため、未完了のまま完了することはない。着手中に見つかった前提を記録するために、作業の解放を挟ませる必要がない。
+- **Issue・Group から Group への dependency を許す。** 依存元は依存先の Group の `Complete` まで待つ。配下がすべて終了しただけでは満たさず、計画全体の最終確認を待つことが Group への依存の意味になる。
+- **再浮上条件は候補の表示だけに使い、ID を明示した操作を縛らない。** 条件の判定が失敗すると一覧の取得は失敗するが、明示操作と条件の修復は条件を評価しないため、壊れた条件で Entity が操作できなくなることはない。
 
 ## 親 Group を一つに限る理由
 

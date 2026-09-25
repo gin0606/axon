@@ -1,6 +1,6 @@
 # 候補一覧と外部条件
 
-この文書は、`axon proposals`・`axon tasks` が再浮上条件を評価する範囲と失敗の扱い、および再浮上条件の外部コマンドの実行契約を定める。候補集合そのものの定義は [lifecycleと構造の契約](lifecycle.md#候補集合)、option の表記と一覧の表示は [CLIと表示の契約](cli.md) に定める。
+この文書は、`axon tasks` の一覧の行と状況、詰まっている Group の理由、`axon proposals`・`axon tasks` が再浮上条件を評価する範囲と失敗の扱い、および再浮上条件の外部コマンドの実行契約を定める。候補集合そのものの定義は [lifecycleと構造の契約](lifecycle.md#候補集合)、option の表記と一覧・詳細の表示は [CLIと表示の契約](cli.md) に定める。行と状況の定義は [`spec/group_lifecycle.qnt`](../../spec/group_lifecycle.qnt)、評価範囲は [`spec/candidate_evaluation.qnt`](../../spec/candidate_evaluation.qnt) がモデルとして検査し、その範囲は [モデルの読み方](../../spec/README.md) にある。
 
 ```sh
 axon proposals
@@ -10,6 +10,57 @@ axon condition set ID --command 'test -f ready.txt'
 axon tasks --condition-timeout 5s --trace-conditions
 axon condition unset ID
 ```
+
+## 一覧の行と状況
+
+`axon tasks` は Issue と Group の行を同じ並びに置く平らな一覧で、Group を見出しにした木にはしない。行は [候補集合](lifecycle.md#候補集合) の浮上した未着手と着手中を合わせたものである。
+
+| 行 | 条件 |
+| --- | --- |
+| Issue | 保存値が `NotStarted` で自身と全祖先が浮上しているもの、または浮上に関係なく `InProgress` のもの |
+| Group | 保存値が `NotStarted` で自身と全祖先が浮上しているもの、または浮上に関係なく実効値が `InProgress` のもの |
+
+実効値が `InProgress` の Group は、着手中の仕事を見失わないため、`InProgress` の Issue と同じく浮上していなくても一覧に出る。祖先が `Undecided` でも、採用済みで浮上している Issue・Group は一覧に出る。祖先そのものは `Undecided` なので一覧に出ない。
+
+### Issue の行の状況
+
+| 状況 | 条件 |
+| --- | --- |
+| `Ready` | 着手候補 |
+| `InProgress` | `InProgress` |
+| `Blocked` | 上のどちらでもない。祖先の採用、または自身・祖先の依存先の完了を待つ |
+
+着手中に追加した未完了の依存先は、その Issue の行の問題として表示する。表記は [CLIと表示の契約](cli.md#一覧) に定める。
+
+### Group の行の状況
+
+Group の行の状況は配下から導出し、次の表を上から順に見て最初に当たるものを一つ示す。`Ready`・`InProgress`・`Blocked` の語は Issue と共有するが、Group の `Ready` は Group 自身への操作ではなく、配下に着手できる Issue があることを示す。
+
+| 状況 | 条件 | 次の一手 |
+| --- | --- | --- |
+| `Empty` | 直属の子がない | 計画を書く。最終確認が通れば完了できる場合も `Empty` で、`axon complete` の可否は変えない |
+| `Confirmable` | 最終確認が通れば `Complete` できる | 計画全体を最終確認し、`axon complete` する |
+| `Ready` | 着手候補の Issue を子孫に持つ | 子孫の Issue に着手する |
+| `InProgress` | 実効値が `InProgress` | 配下の仕事が始まっている |
+| `Blocked` | 直属の子があり、上のどれにも当たらない | 詰まっている理由を解く |
+
+`Blocked` は残余として定義し、五つの状況で Group の行を必ず分類する。Group の `InProgress` は実効 lifecycle と同じく「配下の仕事が始まっている」を表し、完了済みの子孫だけを持ち着手中の子孫がない場合も `InProgress` のままにする。
+
+### 詰まっている Group と理由
+
+完了できず、着手候補の子孫も着手中（`InProgress`）の Issue の子孫もない Group の行を、詰まっている Group とする。`Blocked` の行はすべて該当し、完了済みの子孫はあるが着手中の子孫がない `InProgress` の行と、完了できない `Empty` の行も該当する。`Confirmable` の行、`Ready` の行、完了できる `Empty` の行は、次の一手が状況から分かるため該当しない。着手中の Issue に後から追加した未完了の依存先はその Issue の行の問題とし、その Issue の祖先を詰まっているとは見なさない。
+
+詰まっている Group の行には、次の理由を導出する。詰まっている行には少なくとも一つの理由が当たる。`axon show` が示す範囲は [CLIと表示の契約](cli.md#axon-show-と待ち理由) に定める。
+
+| 理由 | 条件 |
+| --- | --- |
+| 未完了の dependency | 自身、全祖先、または終了していない子孫のいずれかの依存先が `Completed` でない |
+| `Undecided` の子 | 直属の子に `Undecided` がある |
+| 未終了の子 Group | 直属の子 Group に終了していないものがある |
+| 浮上していない着手可能な子孫 | 着手可能だが浮上していない Issue を子孫に持つ |
+| `Undecided` の祖先 | 祖先に `Undecided` がある |
+
+再浮上条件を評価しない `axon list`・`axon show` は、状況と理由を再浮上条件に関係なく導出する。着手候補の代わりに着手可能な Issue を使うため、Group の `Ready` は着手可能な Issue を子孫に持つことを指し、浮上していない着手可能な子孫という理由は現れない。表記は [CLIと表示の契約](cli.md) に定める。
 
 ## 条件の種類
 
@@ -32,8 +83,10 @@ axon condition unset ID
 
 評価する範囲は次のとおりとする。
 
-- `axon proposals` は `Undecided`、`axon tasks` の浮上判定は `NotStarted` を対象とし、どちらも dependency の完了や親の着手を要求しない。終了した Entity と対象外の状態は、自身の表示のためには評価しない。`axon tasks` は `InProgress` を浮上に関係なく加えるため、`InProgress` の条件は、自身の表示のためには評価せず、子孫の候補判定に必要な祖先としてのみ評価する。候補自身ではない `InProgress` の親も、子の候補判定に必要なら評価する。
-- `--kind`・`--search` の絞り込み後に残る候補とその祖先だけを評価する。除外された候補の条件は評価しないが、残った候補の祖先なら kind が異なっても評価する。
+- `axon proposals` は保存値が `Undecided`、`axon tasks` の浮上判定は保存値が `NotStarted` の Issue・Group を対象とし、どちらも dependency の完了や祖先の採用を要求しない。終了した Entity と対象外の状態は、自身の表示のためには評価しない。
+- 実効値が `InProgress` の Group も保存値は `NotStarted` なので、`axon tasks` は自身の浮上判定として評価し、判定に失敗すれば一覧の取得を失敗させる。浮上していなくても行には出るが、その配下は浮上しないため着手候補にならない。
+- `InProgress` の Issue は浮上に関係なく `axon tasks` に加え、条件を評価しない。Issue は子を持たないため、祖先としても評価しない。
+- `--kind`・`--search` の絞り込みでは、残った候補とその祖先を評価し、除外された候補は自身の表示のためには評価しない。残った候補の祖先は kind が異なっても評価する。例外として `axon tasks` は、残った Group の行の状況を導出するため、その子孫の着手可能な Issue と、それらと残った Group の間にある Group を、絞り込みで除外されていても上から評価する。
 - 残った候補の祖先を上から評価し、祖先が非浮上ならその配下を評価しない。終了した祖先は評価せず、その配下を非浮上として扱う。
 - 一回の一覧取得で各 Entity を最大一回評価し、子や別の参照から同じ結果を共有する。次の取得では結果を引き継がない。
 - 取得開始時の保存 snapshot を使い、評価中は書込み transaction を保持しない。

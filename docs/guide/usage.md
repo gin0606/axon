@@ -18,17 +18,17 @@
 | 状態変更の経緯 | `axon log ID` |
 | 記録者の詳細 | `axon log ID --recorder-details` / `axon note list ID --recorder-details` |
 
-`axon tasks` には依存や親の着手待ちも含まれます。表示の状況を読み、着手できると決めつけないでください。候補に出ないことは操作禁止やEntityの不存在を意味しません。
+`axon tasks` にはIssueとGroupが平らに並び、依存や祖先の採用待ちも含まれます。表示の状況を読み、着手できると決めつけないでください。Groupの状況は配下から導出され、`Empty` は計画を書く段階、`Confirmable` は最終確認して完了できる段階、`Ready` は配下に着手できる浮上したIssueがある段階です（再浮上条件を評価しない `axon list`・`axon show` では浮上を問いません）。`InProgress` は配下の仕事が始まっていること、`Blocked` はそれ以外を示します。完了できず、配下に着手できるIssueも着手中のIssueもないGroupは、`axon show` の `Stalled` 節で理由を確認できます。候補に出ないことは操作禁止やEntityの不存在を意味しません。
 
 ## 登録と状態変更
 
 登録は `axon capture` だけです。`axon capture --title '懸念' -m '内容'` は未判断のIssue、`axon capture --accept --title '仕事' -m '目的と完了条件'` は未着手の採用済みIssueを登録します。`--kind group` を足すとGroupになり、`--kind` と `--accept` は自由に組み合わせられます。作成時の `--parent G` と繰り返せる `--needs B` で関係を付けられます。
 
-未判断を採用するには `axon accept ID`、未着手の採用を撤回するには `axon withdraw ID`。作業は `axon start ID`、中断は `axon release ID -r '理由'`、完了は `axon complete ID`、取りやめは `axon cancel ID -r '理由'`、取りやめの再検討は `axon reconsider ID`。完了したEntityは再開しません。結果は `axon note add ID -m '結果'` へ残し、本文変更は `axon write ID --title '題名' -m '本文'` で行います。
+未判断を採用するには `axon accept ID`、未着手の採用を撤回するには `axon withdraw ID`。Issueの作業は `axon start ID`、中断は `axon release ID -r '理由'`、完了は `axon complete ID`、取りやめは `axon cancel ID -r '理由'`、取りやめの再検討は `axon reconsider ID`、完了の取消は `axon reopen ID -r '理由'`。`axon reopen` は完了したEntityを未着手へ戻します。完了済みの依存元がある場合は拒否されるため、先に依存元を`axon reopen`してください。IssueとGroupの種類は `axon convert ID --kind group` / `axon convert ID --kind issue` で変換します。結果は `axon note add ID -m '結果'` へ残し、本文変更は `axon write ID --title '題名' -m '本文'` で行います。
 
 ## Groupと関係
 
-`axon parent set A --parent G` / `axon parent unset A` で所属を変更し、`axon dep add A --needs B` / `axon dep rm A --needs B` で依存を変更します。親や依存先の状態、循環、終了した構成の制約はCLIが検査します。Groupを`Start`しても子は`Start`されません。
+`axon parent set A --parent G` / `axon parent unset A` で所属を変更し、`axon dep add A --needs B` / `axon dep rm A --needs B` で依存を変更します。祖先や依存先の状態、循環、終了した構成の制約はCLIが検査します。Groupには`axon start`・`axon release`を使わず、配下のIssueに着手します。Groupに置いた依存は、配下のIssueの`Start`の前提になります。
 
 Groupの完了前には目的・完了条件、全子孫の終了、成果の統合と必要な検証を確認します。`axon show`の全子孫ツリーを確認し、必要な本文・Note・logを読んで不足を確認します。全子孫Noteの一括取得は必須ではありません。子の終了だけで親を自動完了せず、Groupに対する `axon complete` 自体を計画全体の最終確認済みという入力にします。
 

@@ -35,7 +35,7 @@ Quint の `import` の向きは `lifecycle_rules` を起点にした一方向で
 
 ## モデルが表す規則
 
-コアの意味論のうち、モデルが前提として置く規則です。実装と契約文書はこの規則に合わせます。
+コアの意味論のうち、モデルが前提として置く規則です。実装と契約文書はこの規則に合わせます。契約としての定義は [lifecycle](../docs/reference/lifecycle.md)（遷移、実効 lifecycle、前提、種類の変換、候補集合）、[候補と外部条件](../docs/reference/candidates.md#一覧の行と状況)（一覧の行と状況、詰まっている理由）、[CLIと表示の契約](../docs/reference/cli.md)（表記と `axon reopen`・`axon convert` の入出力）、[Declaration](../docs/reference/declaration.md)（保存値と種類の扱い）にあり、規則がその形になった理由は [設計判断](../docs/design/decisions.md#group-の着手を子から導出する理由) にあります。
 
 - Issue は `Accept`・`Withdraw`・`Start`・`Release`・`Complete`・`Cancel`・`Reconsider`・`Reopen` の8操作を持つ。`Reopen` は `Completed` から `NotStarted` へ戻し、`Completed` から抜ける唯一の経路になる。
 - Group は `Start`・`Release` を持たず、保存される lifecycle（stored）は `InProgress` にならない。実効 lifecycle は「stored が `NotStarted` で、直属の子に実効 `InProgress` か `Completed` があれば `InProgress`」と導出し、`NotStarted` の子 Group を通じて上へ伝わる。

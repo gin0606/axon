@@ -1,6 +1,6 @@
 # CLIと表示の契約
 
-この文書は、公開コマンドが受け取る入力と、何をどう表示し、保存結果をどう伝えるかの契約を定める。状態・遷移・包含・dependency・候補集合の意味は [lifecycleと構造の契約](lifecycle.md)、候補一覧の条件評価は [候補と外部条件](candidates.md)、declarationの形式は [計画全体の取得と一括編集](declaration.md) に従う。
+この文書は、公開コマンドが受け取る入力と、何をどう表示し、保存結果をどう伝えるかの契約を定める。状態・遷移・包含・種類の変換・dependency・候補集合の意味は [lifecycleと構造の契約](lifecycle.md)、一覧の行と状況の導出と候補一覧の条件評価は [候補と外部条件](candidates.md)、declarationの形式は [計画全体の取得と一括編集](declaration.md) に従う。
 
 ## 情報を見る目的
 
@@ -23,36 +23,39 @@ option値の先頭hyphenは `--description='--text'` のように渡す。構文
 | コマンド | 表示対象・役割 |
 | --- | --- |
 | `axon proposals` | 判断候補のIssue・Group |
-| `axon tasks` | 浮上した未着手と着手中のIssue・Group |
+| `axon tasks` | 浮上した未着手と着手中のIssue・Groupを並べた平らな一覧 |
 | `axon list` | 非浮上・完了・取りやめも含む保存済みEntityを、必要な条件で絞り込む汎用一覧 |
 
-`axon tasks` は依存先の完了待ちや親の着手待ちの未着手も含み、着手できるものだけには限定しない。着手中だけを見るには `axon list --lifecycle in-progress` を使う。
+`axon tasks` は依存先の完了待ちや祖先の採用待ちの未着手も含み、着手できるものだけには限定しない。行の集合と状況の導出は [候補と外部条件](candidates.md#一覧の行と状況) に従う。着手中だけを見るには `axon list --lifecycle in-progress` を使う。
 
-`axon list`は保存済み全件を作成日時の昇順、同時刻はID順で表示する。`--kind issue|group`、`--lifecycle undecided|not-started|in-progress|completed|cancelled`、`--terminal=true|false` はANDで組み合わせる。terminalは`Completed`または`Cancelled`で、着手できることや浮上とは別。`--search` は現在title・本文だけのcase-sensitiveなliteral一致。Unicode正規化やtrimをせず、空文字は構文エラー。%、_、正規表現記号に特殊な意味はない。検索時だけMatchedに該当field（Title、Description）を付記する。
+`axon list`は保存済み全件を作成日時の昇順、同時刻はID順で表示する。`--kind issue|group`、`--lifecycle undecided|not-started|in-progress|completed|cancelled`、`--terminal=true|false` はANDで組み合わせる。kindは現在値、`--lifecycle` は実効値で絞り込むため、配下の仕事が始まったGroupは `in-progress` に当たり `not-started` に当たらない。terminalは`Completed`または`Cancelled`で、着手できることや浮上とは別。`--search` は現在title・本文だけのcase-sensitiveなliteral一致。Unicode正規化やtrimをせず、空文字は構文エラー。%、_、正規表現記号に特殊な意味はない。検索時だけMatchedに該当field（Title、Description）を付記する。
 
-`axon proposals|tasks`はkind/searchで候補を絞ってから、必要な祖先を含め条件を評価する。一回の呼出しで同じ条件を重複評価しない。除外候補の条件は評価しないが、残った候補の祖先ならkindが異なっても評価する。評価失敗時に部分一覧をstdoutへ出さない。時間制限は正整数とms/s/m/hで、既定30s。詳細は [候補と外部条件](candidates.md)。`axon list`と保存情報を読む`axon show`は外部条件コマンドを実行しない。
+`axon proposals|tasks`はkind/searchで候補を絞ってから、必要な祖先を含め条件を評価する。一回の呼出しで同じ条件を重複評価しない。除外候補の条件は評価しないが、残った候補の祖先ならkindが異なっても評価し、`axon tasks` は残ったGroupの行の状況を導出するためにその子孫の着手可能なIssueと途中のGroupも評価する。評価失敗時に部分一覧をstdoutへ出さない。時間制限は正整数とms/s/m/hで、既定30s。詳細は [候補と外部条件](candidates.md)。`axon list`と保存情報を読む`axon show`は外部条件コマンドを実行しない。
 
 一覧とGroupの子一覧は、状態ごとに区切らず作成日時の古い順へ統一する。作成日時そのものを通常の各行へ表示する必要はない。同時刻はID順で安定させる。
 
-通常行は `ID  Kind  Situation  Title`。状況欄は保存された lifecycle だけの表示ではなく、保存状態と構造から導出する短い表現とする。再浮上条件の成立はこの欄での着手可能性の判定に使わない。
+通常行は `ID  Kind  Situation  Title`。Kindは現在の種類を示す。状況欄は保存された lifecycle だけの表示ではなく、保存状態と構造から導出する短い表現とする。状況の定義は [候補と外部条件](candidates.md#一覧の行と状況) に従い、Issueは次の表記を使う。
 
 | 状況 | 保存状態・前提 | 意味 |
 | --- | --- | --- |
 | `Undecided` | `Undecided` | 未判断 |
-| `Ready` | `NotStarted` で親・dependencyの着手前提を満たす | 着手できる |
-| `Blocked` | `NotStarted` で着手前提が不足 | 親の着手待ちまたは依存先の完了待ち |
+| `Ready` | `NotStarted` で `Start` の前提を満たす | 着手できる |
+| `Blocked` | `NotStarted` で `Start` の前提が不足 | 祖先の採用待ちまたは依存先の完了待ち |
 | `InProgress` | `InProgress` でdependencyが充足 | 着手中 |
 | `InProgress+Blocked` | `InProgress` で未完了の依存先がある | 着手中で、完了に必要な依存先が残る |
 | `Completed` | `Completed` | 完了 |
 | `Cancelled` | `Cancelled` | 取りやめ |
 
-親の着手待ちも`Blocked`に含める。これは表示上のまとめ方で、保存する包含と明示dependencyの区別は維持する。Groupの未終了の子は最終確認前の進捗として子一覧へ示し、明示dependencyと混ぜない。一行の中に表示する値（タイトル、理由、actor、条件コマンド、親のタイトル）に含まれる改行は `\n` として表示し、保存された文字列が記録の行や節の見出しを装えないようにする。
+Groupは、保存値が `Undecided`・`Completed`・`Cancelled` ならその状態名を示し、保存値が `NotStarted` なら配下から導出した `Empty`・`Confirmable`・`Ready`・`InProgress`・`Blocked` のいずれかを示す。GroupにはIssueの `InProgress+Blocked` に当たる複合表示を設けない。`axon tasks` は評価した再浮上条件を使って着手候補の子孫から `Ready` を決め、条件を評価しない `axon list` と `axon show` は着手可能な子孫から決める。このため、浮上していない着手可能なIssueだけを配下に持つGroupは、`axon tasks` では `Blocked`、`axon list`・`axon show` では `Ready` になる。Issueの状況欄の判定には再浮上条件を使わない。
+
+祖先の採用待ちも`Blocked`に含める。これは表示上のまとめ方で、保存する包含と明示dependencyの区別は維持する。Groupの未終了の子は最終確認前の進捗として子一覧へ示し、明示dependencyと混ぜない。一行の中に表示する値（タイトル、理由、actor、条件コマンド、親のタイトル）に含まれる改行は `\n` として表示し、保存された文字列が記録の行や節の見出しを装えないようにする。
 
 ```text
-demo-k3m7pq  Group  InProgress  検索画面を実装する
+demo-k3m7pq  Group  Ready  検索画面を実装する
 demo-8bxw2r  Issue  InProgress+Blocked  検索APIを実装する
 demo-c9d4ts  Issue  Ready  検索フォームを実装する
 demo-9f2hjx  Issue  Blocked  検索結果を表示する
+demo-r5w8kn  Group  Empty  検索の運用手順を整える
 ```
 
 例は架空の内容である。列の間隔やグルーピングは実装が決め、固定列や機械向けの出力形式は保証しない。
@@ -61,13 +64,15 @@ demo-9f2hjx  Issue  Blocked  検索結果を表示する
 
 `axon show ID`は、ID・種別・状況・タイトル、Note件数、所属計画のID・タイトル、本文を基本とする。本文は保存された内容を、各行を2 spaceで字下げして表示する。IDや節の見出しなど構造を表す行は行頭から始まり、利用者の複数行の文章は行頭から始まらないので、本文が節や記録の行を装うことはない。Note本文、履歴、内部のcausal情報、不要な設定・件数の羅列、操作コマンドの案内は通常表示から外す。Noteがあれば `5 notes` のように存在を示し、0件ならその表示を省略する。
 
-未充足の前提がある場合だけ、本文の前へ `Required to start` または `Required to complete` の節を置く。満たされていない直接の前提を `Parent must start:`・`Dependency must complete:` として、ID・種別・現在の状況・タイトルの行で示す。満たされた依存や依存先の先のツリーは常時展開しない。親の所属表示と待ち理由が同じ情報になる場合は、重複を避けて配置する。
+未充足の前提がある場合だけ、本文の前へ `Required to start` または `Required to complete` の節を置く。`Required to start` はIssueだけに置く。満たされていない前提を `Ancestor must be adopted:`（保存値が `NotStarted` でない祖先）・`Dependency must complete:`（自身の未完了の依存先）・`Ancestor dependency must complete:`（祖先の未完了の依存先）として、ID・種別・現在の状況・タイトルの行で示す。`Required to complete` は同じ語で、全祖先の採用と自身の依存先を示す。Groupの未終了の子は全子孫のツリーで読めるため、この節に再列挙しない。満たされた依存や依存先の先のツリーは常時展開しない。親の所属表示と待ち理由が同じ情報になる場合は、重複を避けて配置する。
 
 Groupの場合は、この共通表示の末尾へ短い集計と全子孫のツリーをこの順で加える。`Completed`・`Cancelled`も含めて全階層を展開する。各行は一覧と同じID・種別・状況・タイトルとし、兄弟を作成日時順（同時刻はID順）で揃え、別のDependencies節へ同じ情報を再列挙しない。
 
-集計は `Descendants: 2/4 terminal (1 completed, 1 cancelled)` のように、全子孫の終了数と完了・取りやめの違いが読める形とする。集計はGroup・Issueの両方を含み、対象自身を除く。全状態の内訳は羅列しない。進行中のGroupで、子が全員終了し自身の依存先も完了していれば `Awaiting final confirmation` を示す。これは導出される案内であり、保存状態やレビュー済み状態を追加しない。
+集計は `Descendants: 2/4 terminal (1 completed, 1 cancelled)` のように、全子孫の終了数と完了・取りやめの違いが読める形とする。集計はGroup・Issueの両方を含み、対象自身を除く。全状態の内訳は羅列しない。Groupの状況が `Confirmable` なら `Awaiting final confirmation` を示す。これは導出される案内であり、保存状態やレビュー済み状態を追加しない。
 
-`axon show ID --details` は保存情報の明示的な詳細入口。通常の待ち理由節を保存情報の詳細へ置き換え、親・条件・全直接dependency・直接dependentを取得する。同じ関係を複数の節へ重複して列挙しない。状況と異なる場合だけ保存lifecycleを `Lifecycle:` として別記する。条件未設定、親なし、空の依存集合も `(none)` と明示する。Groupの全子孫ツリーは通常表示と同様に表示する。
+保存値が `NotStarted` のGroupが詰まっている場合は、本文の前へ `Stalled` の節を置き、[詰まっている理由](candidates.md#詰まっている-group-と理由) を、該当するEntityの行とともに示す。未完了のdependencyは、Group自身の依存先を `Dependency must complete:`、祖先の依存先を `Ancestor dependency must complete:`、終了していない子孫の依存先を `Descendant dependency must complete:` とし、最後のものは依存先を待つ子孫の行と依存先の行を並べる。`Undecided` の子は `Undecided child:`、未終了の子Groupは `Open subgroup:`、`Undecided` の祖先は `Undecided ancestor:` とする。いずれもID・種別・現在の状況・タイトルの行で示す。`axon show` は再浮上条件を評価しないため、浮上していない着手可能な子孫という理由は示さない。`Stalled` の節を置くGroupには `Required to complete` の節を置かない。自身の依存先と `Undecided` の祖先は `Stalled` の中で示す。詰まっているGroupの `Stalled` には理由が一つ以上ある。
+
+`axon show ID --details` は保存情報の明示的な詳細入口。通常の待ち理由節を保存情報の詳細へ置き換え、親・条件・全直接dependency・直接dependentを取得する。同じ関係を複数の節へ重複して列挙しない。Issueでは状況と異なる場合だけ保存lifecycleを `Lifecycle:` として別記する。Groupでは `Lifecycle:` に実効値を示し、保存値と異なれば `Lifecycle: InProgress (stored NotStarted)` のように保存値を併記する。条件未設定、親なし、空の依存集合も `(none)` と明示する。Groupの全子孫ツリーは通常表示と同様に表示する。
 
 ## Noteと履歴
 
@@ -99,11 +104,13 @@ Groupの場合は、この共通表示の末尾へ短い集計と全子孫のツ
 | 採用済みのIssue / Groupを登録 | `axon capture --accept …` / `axon capture --kind group --accept …` |
 | 採用 | `axon accept A` |
 | 採用撤回 | `axon withdraw A` |
-| 着手 | `axon start A` |
-| 作業を解放 | `axon release A` |
+| 着手（Issueのみ） | `axon start A` |
+| 作業を解放（Issueのみ） | `axon release A` |
 | 完了 | `axon complete A` |
 | 取りやめ | `axon cancel A` |
 | 再検討 | `axon reconsider A` |
+| 完了の取消・再開 | `axon reopen A` |
+| 種類を変換 | `axon convert A --kind group` / `axon convert A --kind issue` |
 | タイトル・本文を編集 | `axon write A …` |
 | 親Groupを設定・変更 / 解除 | `axon parent set A --parent G` / `axon parent unset A` |
 | 依存先を追加 / 解除 | `axon dep add A --needs B` / `axon dep rm A --needs B` |
@@ -113,7 +120,11 @@ Groupの場合は、この共通表示の末尾へ短い集計と全子孫のツ
 
 登録titleは `--title`。タイトルは一行の値で、改行や制御文字を含む値と200文字を超える値を拒否する。本文は `-m/--description` または `-F/--file`。Noteは `-m/--message` または `-F/--file`。本文option同士は排他で、`-F -` はUTF-8のstdinを一度読む。本文・Noteをtrimして保存しない。初期の `--parent`、反復可能な `--needs`、`--command` は作成と同時に検査・保存する。作成中に条件を実行しない。通常の`axon write`はtitleと本文を一transactionで編集し、lifecycleを変えない。長い本文は登録時と同じ本文optionでファイルから渡せる。
 
-`axon accept|withdraw|start|release|complete|cancel|reconsider A` は `-r/--reason` を履歴へ保存する。理由も一行の値で、空白だけの値、改行や制御文字を含む値、500文字を超える値を拒否する。文字数はUnicodeの文字単位で数える。この検証は保存先の読取でも行う。複数行の説明や長い内容は本文かNoteに書く。Groupへの`axon complete`の実行自体を「計画全体の最終確認が通った」という明示入力とする。Axonは子・依存・状態を検査し、確認作業は呼び出す人・エージェントのskillと運用で担う。必須のレビュー確認フラグや独立したレビュー済み状態は設けない。どの変更コマンドも、状態・包含・dependencyの制約を迂回しない。
+`axon accept|withdraw|start|release|complete|cancel|reconsider|reopen A` は `-r/--reason` を履歴へ保存する。理由も一行の値で、空白だけの値、改行や制御文字を含む値、500文字を超える値を拒否する。文字数はUnicodeの文字単位で数える。この検証は保存先の読取でも行う。複数行の説明や長い内容は本文かNoteに書く。Groupへの`axon complete`の実行自体を「計画全体の最終確認が通った」という明示入力とする。Axonは子・依存・状態を検査し、確認作業は呼び出す人・エージェントのskillと運用で担う。必須のレビュー確認フラグや独立したレビュー済み状態は設けない。どの変更コマンドも、状態・包含・dependencyの制約を迂回しない。
+
+Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへの`axon start`で着手済みになること、保存値を変える操作がないことを診断で示す。`axon reopen A` は `Completed` のIssue・Groupを `NotStarted` へ戻し、子や依存元のlifecycleを変えない。`Completed` の依存元が残る場合は、その依存元を示して拒否する。
+
+`axon convert A --kind issue|group` はEntityの種類を変換し、lifecycle・所属・dependency・文面・条件・Noteを変えない。前提は [種類の変換](lifecycle.md#種類の変換) に従い、子を持つGroupのIssueへの変換は子を示して、`InProgress` のIssueのGroupへの変換は先に`axon release`が必要であることを示して拒否する。lifecycle遷移ではないため `-r/--reason` を受け付けない。
 
 ## 計画全体の取得と一括編集
 
@@ -144,7 +155,7 @@ CLIが生成するhelp・ラベル・診断は英語。利用者のタイトル�
 
 ## mutationの結果
 
-成功確認は完全IDが先頭。Created、Note ID recorded、状態遷移の結果、実際に変わったtitle/本文/parent/dependency/conditionを短く示す。保存処理が返した結果を使い、lock前の読取から更新を推定しない。`axon write`・関係・条件の同値操作はNo changesの成功で、保存状態・履歴を変えない。同値lifecycle遷移は拒否される。
+成功確認は完全IDが先頭。Created、Note ID recorded、状態遷移の結果、実際に変わったtitle/本文/parent/dependency/conditionを短く示す。保存処理が返した結果を使い、lock前の読取から更新を推定しない。`axon write`・関係・条件・種類の変換の同値操作はNo changesの成功で、保存状態・履歴を変えない。現在と同じ種類への `axon convert` は、変換の前提を検査せずNo changesとする。同値lifecycle遷移は拒否される。
 
 成功はstdout/終了0、アプリケーションの拒否・失敗はError:を含むstderr/終了1。Clapの構文エラーは既定のerror:/Usage構造と終了2。原因、判明している対象・操作を示し、曖昧なFailedだけで済ませない。
 
