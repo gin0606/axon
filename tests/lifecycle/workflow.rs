@@ -201,9 +201,9 @@ fn docs_describe_the_one_store_and_the_discovery_order() {
     let f = Fixture::new();
     let docs = unwrapped(&f.ok(&["docs"]));
     for text in [
-        // The store is the only thing init creates, and Git's treatment of it is the reader's.
-        ".axon/state.jsonl and nothing for Git",
-        "never creates or edits .gitignore, .gitattributes or Git config",
+        // Init creates the store inside .axon/, and Git's treatment of it is the reader's.
+        ".axon/records/, .axon/header.json and an .axon/.gitignore",
+        "never creates or edits the repository's .gitignore, .gitattributes or Git config",
     ] {
         assert!(docs.contains(text), "missing from docs: {text}");
     }

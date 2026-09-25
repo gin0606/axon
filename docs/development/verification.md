@@ -26,9 +26,9 @@ Rust fileがstagedされているcommitでは、Lefthookがrustfmt、全target�
 cargo test --workspace --lib --bin axon --test smoke
 ```
 
-`--lib` は共通コア・分岐・codec のテストを実行する。`--bin axon` は端末表示と条件プロセスの起動・trace flush失敗、`--test smoke` は binary の登録から Group 完了、Note・log、並行操作、未対応 format と破損の拒否、保存先探索・`axon init`、入出力失敗を独立 fixture で検証する。
+`--lib` は共通コア・記録の集合の導出と衝突・codec のテストを実行する。`--bin axon` は端末表示と条件プロセスの起動・trace flush失敗、`--test smoke` は binary の登録から Group 完了、Note・log、並行操作、未対応 format と破損の拒否、保存先探索・`axon init`、入出力失敗を独立 fixture で検証する。
 
-`cargo test` はworkspaceの記録者crate単体テストも実行する。保存・統合は `tests/lifecycle/file.rs`、保存先の初期化と探索は `tests/lifecycle/location.rs` をsmokeから実行し、実worktree、driver、index、並行writer、drift拒否を検証する。
+`cargo test` はworkspaceの記録者crate単体テストも実行する。保存・統合は `tests/lifecycle/file.rs`、保存先の初期化と探索は `tests/lifecycle/location.rs` をsmokeから実行し、実worktreeでのGit操作、index、並行writer、破損の報告を検証する。
 
 オプションなしの`cargo test`は引き続きsmokeを含む全test targetの標準入口であり、上記を含まない契約はfull verificationで検査する。Lefthookの各jobは失敗時にcommitを拒否し、staged Rust fileがない場合は既存の`*.rs` globによってRust検証を省略する。
 
@@ -50,11 +50,11 @@ cargo llvm-cov --locked --all-targets --all-features --summary-only
 
 ## モデルと運用検証
 
-モデルで検証する状態・関係・候補・情報の意味論は `spec/*.qnt` にあり、各モデルの対象範囲・探索の設定・検証する性質・再現手順は [モデル](../../spec/README.md) が案内します。契約は `reference/` の各文書が定義し、lifecycleと包含・dependency・情報は [lifecycle](../reference/lifecycle.md)、候補と外部条件の評価は [候補と外部条件](../reference/candidates.md) が担います。意味を変える場合は該当モデルを更新し、型検査とinvariant/witness検査を行ってから、契約文書と実装へ反映します。モデルの対象外であるfilesystem、保存先の探索と初期化、実process、Git統合、記録者はRustで検査します。モデルの意味を変えない文書・テスト整理にモデルの再実行は必須にしません。
+モデルで検証する状態・関係・候補・情報・統合の意味論は `spec/*.qnt` にあり、各モデルの対象範囲・探索の設定・検証する性質・再現手順は [モデル](../../spec/README.md) が案内します。契約は `reference/` の各文書が定義し、lifecycleと包含・dependency・情報は [lifecycle](../reference/lifecycle.md)、候補と外部条件の評価は [候補と外部条件](../reference/candidates.md)、記録の集合・衝突・違反・解決は [保存と統合](../reference/storage.md) が担います。意味を変える場合は該当モデルを更新し、型検査とinvariant/witness検査を行ってから、契約文書と実装へ反映します。統合の規則（衝突、違反と免除、解決、gap）を変えるときは `record_integration` の `run` テストと探索も再実行します。モデルの対象外であるfilesystem、保存先の探索と初期化、実process、Gitが記録fileをどう扱うか、記録者はRustで検査します。モデルの意味を変えない文書・テスト整理にモデルの再実行は必須にしません。
 
-各モデルはそれぞれの検証範囲を持ち、変更に関係のある検査を選んで実行します。モデルの新設や検証範囲の拡張は一律に必須とせず、設計上の不確実性に応じて判断します。検査の実行条件とその結果は [モデル](../../spec/README.md) に置き、backend・sample数・stepsを変えた検査はその実行条件も結果とともに記録します。seedは固定せず、実行ごとに異なる経路を探索させます。同じseedを使い続けても、モデルが変わらない限り同じ経路をなぞるだけで新しい情報は得られません。`quint run` は bounded random simulation であり、反例が見つからなかったことは全状態についての証明ではありません。検査の成功はexit statusだけではなく、列挙した全invariantに反例がなく、列挙した全witnessがいずれかの探索で1 trace以上観測されたことを確認します。通常探索で観測率の低いwitnessは `lifecycle_reachability` の入口と `candidate_evaluation` の補助入口が担保するため、それぞれ通常探索と合わせて1つの検査として扱います。反例が出た場合は、quintが出力する再現用のseedを結果に添えます。
+各モデルはそれぞれの検証範囲を持ち、変更に関係のある検査を選んで実行します。モデルの新設や検証範囲の拡張は一律に必須とせず、設計上の不確実性に応じて判断します。検査の実行条件とその結果は [モデル](../../spec/README.md) に置き、backend・sample数・stepsを変えた検査はその実行条件も結果とともに記録します。seedは固定せず、実行ごとに異なる経路を探索させます。同じseedを使い続けても、モデルが変わらない限り同じ経路をなぞるだけで新しい情報は得られません。`quint run` は bounded random simulation であり、反例が見つからなかったことは全状態についての証明ではありません。検査の成功はexit statusだけではなく、列挙した全invariantに反例がなく、列挙した全witnessがいずれかの探索で1 trace以上観測されたことを確認します。通常探索で観測率の低いwitnessは `lifecycle_reachability` の入口、`candidate_evaluation` の補助入口、`record_integration_paths` の入口が担保するため、それぞれ通常探索と合わせて1つの検査として扱います。反例が出た場合は、quintが出力する再現用のseedを結果に添えます。
 
-`tests/lifecycle/workflow.rs` は独立fixtureで登録、候補選択、並行着手・Note、Group最終確認を一巡します。`tests/lifecycle/file.rs` は実Git worktreeで分岐し、自動統合と衝突、`axon merge prepare|check|apply`、stage後の通常操作まで検証します。`tests/lifecycle/location.rs` は `axon init` の出力と、`.gitignore`・`.gitattributes`・Git configを作成も編集もしないこと、表示された無視する運用の手順に従うと正本がGitに無視されること、表示された追跡する運用の手順に従うと追跡する設定へ到達すること、初期化直後のuntrackedな正本がGitのcheckout・mergeの上書きから保護され、無視した後は警告なしに置き換わること、実linked worktreeからの保存先の共有、worktreeをまたぐ並行`axon start`と確定した保存先の隣に置くlock、linked worktreeでの`axon init`の拒否、bare repositoryに付けたworktreeとsubmoduleで探索が2段目へ落ちないこと、探索の確定と停止、symlinkの拒否を検証します。いずれも `tests/smoke.rs` から読み込みます。テストはこのcheckoutのbinaryを絶対パスで実行し、Git環境を隔離します。実データやPATH上のbinaryを切り替えません。
+`tests/lifecycle/workflow.rs` は独立fixtureで登録、候補選択、並行着手・Note、Group最終確認を一巡します。`tests/lifecycle/file.rs` は実Git worktreeで分岐し、merge・rebase・cherry-pick・revert・squashの後の `axon storage check` の報告（衝突・違反・gap、無ければ報告なし）、`axon resolve` と通常操作による修復、通常操作への復帰まで検証します。`tests/lifecycle/location.rs` は `axon init` の出力と作るfile、repository rootの `.gitignore`・`.gitattributes`・Git configを作成も編集もしないこと、表示された無視する運用の手順に従うと保存先がGitに無視されること、`git add .axon` で記録・header・`.axon/.gitignore` だけが追跡されlockと一時fileが追跡されないこと、初期化直後のuntrackedな保存先がGitのcheckout・mergeの上書きから保護され、無視した後は警告なしに置き換わること、実linked worktreeからの保存先の共有、worktreeをまたぐ並行`axon start`と確定した保存先の隣に置くlock、linked worktreeでの`axon init`の拒否、bare repositoryに付けたworktreeとsubmoduleで探索が2段目へ落ちないこと、探索の確定と停止、symlinkの拒否を検証します。いずれも `tests/smoke.rs` から読み込みます。テストはこのcheckoutのbinaryを絶対パスで実行し、Git環境を隔離します。実データやPATH上のbinaryを切り替えません。
 
 ### Declaration の独立fixture
 
@@ -65,7 +65,7 @@ cargo test --locked --workspace --lib declaration
 cargo test --locked --test smoke declaration
 ```
 
-`src/declaration_file.rs` の単体テストは、保存成功後のfile書戻し失敗と再度`axon import apply`、入力bytesの変化、保存結果の診断などI/O境界を検査します。 process fixtureは同じlib test binaryを子processにし、正本のrename前、保存後の書戻し前・書戻し後で強制終了します。barrier待ちは最大10秒、到達後すぐにkillして終了を回収し、完全snapshot・入力bytesと同じfileの再度`axon import apply`への収束を検査します。`src/declaration_file/relationship_tests.rs` の行列は`Cancelled` Groupへの所属拒否、`Cancelled` Entityの依存差替え、新規Groupへの移動、親子反転、進行中subtreeの移動を検査します。recordの正順・逆順・巡回順で共通コアの適用結果を比較し、`axon import prepare`でcanonical化した各入力を適用して結果の一致を確認します。これらは`--lib`としてfast gateにも含まれます。対象の検証後も、必要なfull verificationは上記の共通入口で行います。実データやPATH上のbinaryは変更しません。この機能は通常操作の意味を変えないため、検証のためだけにQuintの状態やactionを追加しません。
+`src/declaration_file.rs` の単体テストは、保存成功後のfile書戻し失敗と再度`axon import apply`、入力bytesの変化、保存結果の診断などI/O境界を検査します。 process fixtureは同じlib test binaryを子processにし、記録fileのrename前、複数のEntityの記録のrenameの途中、保存後の書戻し前・書戻し後で強制終了します。barrier待ちは最大10秒、到達後すぐにkillして終了を回収し、記録の集合・入力bytesと同じfileの再度`axon import apply`への収束を検査します。`src/declaration_file/relationship_tests.rs` の行列は`Cancelled` Groupへの所属拒否、`Cancelled` Entityの依存差替え、新規Groupへの移動、親子反転、進行中subtreeの移動を検査します。recordの正順・逆順・巡回順で共通コアの適用結果を比較し、`axon import prepare`でcanonical化した各入力を適用して結果の一致を確認します。これらは`--lib`としてfast gateにも含まれます。対象の検証後も、必要なfull verificationは上記の共通入口で行います。実データやPATH上のbinaryは変更しません。この機能は通常操作の意味を変えないため、検証のためだけにQuintの状態やactionを追加しません。
 
 ## 設計変更の進め方
 

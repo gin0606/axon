@@ -1,6 +1,6 @@
 # CLIと表示の契約
 
-この文書は、公開コマンドが受け取る入力と、何をどう表示し、保存結果をどう伝えるかの契約を定める。状態・遷移・包含・種類の変換・dependency・候補集合の意味は [lifecycleと構造の契約](lifecycle.md)、一覧の行と状況の導出と候補一覧の条件評価は [候補と外部条件](candidates.md)、declarationの形式は [計画全体の取得と一括編集](declaration.md) に従う。
+この文書は、公開コマンドが受け取る入力と、何をどう表示し、保存結果をどう伝えるかの契約を定める。状態・遷移・包含・種類の変換・dependency・候補集合の意味は [lifecycleと構造の契約](lifecycle.md)、一覧の行と状況の導出と候補一覧の条件評価は [候補と外部条件](candidates.md)、declarationの形式は [計画全体の取得と一括編集](declaration.md)、記録・衝突・違反の意味は [保存と統合の契約](storage.md) に従う。
 
 ## 情報を見る目的
 
@@ -10,9 +10,9 @@
 
 ## 識別子と入力
 
-Issue/Groupは共通の `<prefix>-<ランダム6文字>` namespaceを使う。乱数部分は小文字Crockford Base32で紛らわしいi/l/o/uを除く。連番やkind、優先順位の意味を持たせず、同じ保存先で衝突したら再生成する。prefixはASCII小文字の `a-z`、数字、ハイフンだけを許し、空、先頭のハイフン、末尾のハイフンは拒否する。Entity ID全体も同じ文字種に限り、保存先の読取とdeclarationの入力で、それ以外の文字を含むIDを拒否する。この文字種に限ることで、完全IDをshellでquoteせずに渡せる。`axon init PREFIX` の明示値は変換せず検証する。省略時は管理rootのdirectory名のASCII大文字を小文字化した結果を使い、規則に合わなければ保存先を作らずに失敗し、`axon init PREFIX` での明示を求める。小文字化以外の自動補正はしない。
+Issue/Groupは共通の `<prefix>-<ランダム8文字>` namespaceを使う。乱数部分は小文字Crockford Base32で紛らわしいi/l/o/uを除く。連番やkind、優先順位の意味を持たせず、同じ保存先で衝突したら再生成する。IDは不透明な文字列として扱い、乱数部分の長さで検証しない。乱数部分が6文字の既存のIDもそのまま有効である。prefixはASCII小文字の `a-z`、数字、ハイフンだけを許し、空、先頭のハイフン、末尾のハイフンは拒否する。Entity ID全体も同じ文字種に限り、保存先の読取とdeclarationの入力で、それ以外の文字を含むIDを拒否する。この文字種に限ることで、完全IDをshellでquoteせずに渡せる。`axon init PREFIX` の明示値は変換せず検証する。省略時は管理rootのdirectory名のASCII大文字を小文字化した結果を使い、規則に合わなければ保存先を作らずに失敗し、`axon init PREFIX` での明示を求める。小文字化以外の自動補正はしない。
 
-全Entity入力は完全IDまたは一意なsuffixを受け付ける。入力が保存済みの完全IDと一致すれば、それが別のIDの末尾であっても、そのEntityに解決する。対象だけでなく`parent`/`needs`も同じ規則。曖昧なときは候補IDを示して拒否し、保存を変更しない。mutationではlock取得後のsnapshotで解決する。Note・状態記録・storeの安定IDは、Entityの短いIDと別の契約である。
+全Entity入力は完全IDまたは一意なsuffixを受け付ける。入力が保存済みの完全IDと一致すれば、それが別のIDの末尾であっても、そのEntityに解決する。対象だけでなく`parent`/`needs`も同じ規則。曖昧なときは候補IDを示して拒否し、保存を変更しない。mutationではlock取得後のsnapshotで解決する。記録ID（Note IDを含む）は記録の内容のhashで、小文字16進64文字の完全なIDだけを受け付け、suffixでは解決しない（[記録](storage.md#記録)）。
 
 option値の先頭hyphenは `--description='--text'` のように渡す。構文は `axon help <COMMAND PATH>` で確認できる。
 
@@ -46,17 +46,18 @@ option値の先頭hyphenは `--description='--text'` のように渡す。構文
 | `InProgress+Blocked` | `InProgress` で未完了の依存先がある | 着手中で、完了に必要な依存先が残る |
 | `Completed` | `Completed` | 完了 |
 | `Cancelled` | `Cancelled` | 取りやめ |
+| `Conflicted` | headが複数ある | 衝突中で現在値がない。他のすべての状況より優先する |
 
-Groupは、保存値が `Undecided`・`Completed`・`Cancelled` ならその状態名を示し、保存値が `NotStarted` なら配下から導出した `Empty`・`Confirmable`・`Ready`・`InProgress`・`Blocked` のいずれかを示す。GroupにはIssueの `InProgress+Blocked` に当たる複合表示を設けず、Groupの状況欄に `Unsurfaced` も設けない。`axon tasks` と `axon show` は評価した再浮上条件を使って着手候補の子孫から `Ready` を決め、条件を評価しない `axon list` と `axon show --skip-conditions` は着手可能な子孫から決める。このため、浮上していない着手可能なIssueだけを配下に持つGroupは、`axon tasks`・`axon show` では `Blocked`、`axon list`・`axon show --skip-conditions` では `Ready` になる。`Undecided` のEntityの状況欄は浮上の有無にかかわらず `Undecided` のままにする。
+Groupは、衝突中なら `Conflicted`、保存値が `Undecided`・`Completed`・`Cancelled` ならその状態名を示し、保存値が `NotStarted` なら配下から導出した `Empty`・`Confirmable`・`Ready`・`InProgress`・`Blocked` のいずれかを示す。GroupにはIssueの `InProgress+Blocked` に当たる複合表示を設けず、Groupの状況欄に `Unsurfaced` も設けない。`axon tasks` と `axon show` は評価した再浮上条件を使って着手候補の子孫から `Ready` を決め、条件を評価しない `axon list` と `axon show --skip-conditions` は着手可能な子孫から決める。このため、浮上していない着手可能なIssueだけを配下に持つGroupは、`axon tasks`・`axon show` では `Blocked`、`axon list`・`axon show --skip-conditions` では `Ready` になる。`Undecided` のEntityの状況欄は浮上の有無にかかわらず `Undecided` のままにする。衝突中のEntityは現在値を持たないため、`axon proposals`・`axon tasks` の行にならず、`axon list` と `axon show` で `Conflicted` として読む。Groupの行の状況と子孫の集計では衝突中の子孫を存在しないものとして導出し、衝突中の祖先は採用済みでない祖先として扱う（配下のIssueは `Blocked`）。違反に含まれるEntity（[構造の違反と修復](storage.md#構造の違反と修復)）は、Issue・Groupとも状況の後ろに `+Invalid` を付す（`Completed+Invalid`、`InProgress+Blocked+Invalid` など）。衝突中のEntityの行のタイトルは、headの値が一致すればその値、異なれば記録ID順で最初のheadの値を示す。衝突・違反・記録の欠けのある保存先を読む一覧と詳細は、件数と `axon storage check` への案内をstderrに一行で示す。
 
 祖先の採用待ちも`Blocked`に含める。これは表示上のまとめ方で、保存する包含と明示dependencyの区別は維持する。Groupの未終了の子は最終確認前の進捗として子一覧へ示し、明示dependencyと混ぜない。一行の中に表示する値（タイトル、理由、actor、条件コマンド、親のタイトル）に含まれる改行は `\n` として表示し、保存された文字列が記録の行や節の見出しを装えないようにする。
 
 ```text
-demo-k3m7pq  Group  Ready  検索画面を実装する
-demo-8bxw2r  Issue  InProgress+Blocked  検索APIを実装する
-demo-c9d4ts  Issue  Ready  検索フォームを実装する
-demo-9f2hjx  Issue  Blocked  検索結果を表示する
-demo-r5w8kn  Group  Empty  検索の運用手順を整える
+demo-k3m7pq2a  Group  Ready  検索画面を実装する
+demo-8bxw2r7n  Issue  InProgress+Blocked  検索APIを実装する
+demo-c9d4ts5e  Issue  Ready  検索フォームを実装する
+demo-9f2hjx8w  Issue  Blocked  検索結果を表示する
+demo-r5w8kn3d  Group  Empty  検索の運用手順を整える
 ```
 
 例は架空の内容である。列の間隔やグルーピングは実装が決め、固定列や機械向けの出力形式は保証しない。
@@ -73,13 +74,15 @@ Groupの場合は、この共通表示の末尾へ短い集計と全子孫のツ
 
 保存値が `NotStarted` のGroupが詰まっている場合は、本文の前へ `Stalled` の節を置き、[詰まっている理由](candidates.md#詰まっている-group-と理由) を、該当するEntityの行とともに示す。未完了のdependencyは、Group自身の依存先を `Dependency must complete:`、祖先の依存先を `Ancestor dependency must complete:`、終了していない子孫の依存先を `Descendant dependency must complete:` とし、最後のものは依存先を待つ子孫の行と依存先の行を並べる。`Undecided` の子は `Undecided child:`、未終了の子Groupは `Open subgroup:`、浮上していない着手可能な子孫は `Unsurfaced candidate:`（行はそのIssue）、自身の再浮上条件が未成立は `Own condition unsatisfied:`（行は当のGroup自身）、`Undecided` の祖先は `Undecided ancestor:`、浮上していない祖先は `Unsurfaced ancestor:`（行は条件が未成立の祖先Group）とする。いずれもID・種別・現在の状況・タイトルの行で示す。`--skip-conditions` では条件をすべて成立とみなすため、`Unsurfaced candidate:`・`Own condition unsatisfied:`・`Unsurfaced ancestor:` は現れない。`Stalled` の節を置くGroupには `Required to complete` の節を置かない。自身の依存先と `Undecided` の祖先は `Stalled` の中で示す。詰まっているGroupの `Stalled` には理由が一つ以上ある。
 
+衝突中のEntityの `axon show` は本文の前へ `Conflicted` の節を置き、`axon resolve ID` と同じheadの一覧を示す。本文と所属は記録ID順で最初のheadの値を示し、待ち理由と `Stalled` の節は置かない。違反に含まれるEntityは `Invalid` の節に自身の違反を種類ごとに一行で示し、関係するEntity（存在しない親・依存先のID、終了した親、未採用の祖先、未完了の依存先、循環に含まれるEntity）を添える。
+
 `axon show ID --details` は保存情報の明示的な詳細入口。通常の待ち理由節を保存情報の詳細へ置き換え、親・条件・全直接dependency・直接dependentを取得する。状況欄の導出は `--details` の有無で変わらず、評価を避けるには `--skip-conditions` を併せて付ける。同じ関係を複数の節へ重複して列挙しない。Issueでは状況と異なる場合だけ保存lifecycleを `Lifecycle:` として別記する。Groupでは `Lifecycle:` に実効値を示し、保存値と異なれば `Lifecycle: InProgress (stored NotStarted)` のように保存値を併記する。条件未設定、親なし、空の依存集合も `(none)` と明示する。Groupの全子孫ツリーは通常表示と同様に表示する。
 
 ## Noteと履歴
 
-`axon note list ID` は指定EntityのNote本文を全文で、各行を2 spaceで字下げして、日時・actor・安定Note IDとともに因果順に表示する。通常の逐次記録は保存順に古いものから読み、分岐した記録は因果関係を保持して表示する。並行する記録だけをID順で並べ、分岐間の先後を時刻から捏造しない。`axon note show ID NOTE_ID` は同じEntityの個別Noteの原文を、字下げせずに取得する。`axon note add ID …` は追記し、編集・削除は設けない。
+`axon note list ID` は指定EntityのNote本文を全文で、各行を2 spaceで字下げして、日時・actor・記録ID（Note ID）とともに日時順に表示する。Noteは因果を持たないため、同じ日時のNoteは記録ID順で固定する。`axon note show ID NOTE_ID` は同じEntityの個別Noteの原文を、字下げせずに取得する。`axon note add ID …` は追記し、編集・削除は設けない。衝突中のEntityにもNoteを追加できる。
 
-`axon log ID` は状態変更・統合の経緯を読む入口とする。変更前後の状態、日時、記録者、任意の理由を人が読める形で示す。統合では実際の操作と採用結果を区別し、内部の因果辺や記録IDの羅列を通常表示へ出さない。並行する分岐を時刻で逐次操作へ並べ替えない。
+`axon log ID` はEntityの記録（Note以外）を読む入口とする。lifecycle遷移は変更前後の状態、日時、記録者、任意の理由を人が読める形で示す。文面編集・所属変更・dependencyの増減・条件の設定と解除も一行ずつ示し、`axon import apply` が書いた記録は `Declaration applied` として変わった項目を示す。種類の変換はlifecycle遷移と区別し、`Converted: Issue → Group` のように変換前後の種類とともに示す。解決記録は `Resolved` として、採ったheadの記録IDと、その現在値のlifecycle・種類を示し、退けたheadは通常表示に列挙しない。記録は因果順で、直前の記録と先後関係がない箇所には `Concurrent branch` と表示し、並行する分岐を時刻で逐次操作へ並べ替えない。親記録が保存先にない記録には `parent missing` を付し、変更前の状態は不明として示す。Entityが衝突中なら末尾にheadの数を示す。内部の因果辺や記録IDの羅列を通常表示へ出さない。
 
 `axon note list ID --recorder-details`・`axon log ID --recorder-details` は保存済みdataを併記し、通常表示はactorのみとする。`axon actor` は現在環境で検出できたactor、未取得なら `—` を表示し、保存を行わない。取得の契約は [記録者連携](../development/lifecycle-recorder.md) を参照する。
 
@@ -89,7 +92,7 @@ Groupの場合は、この共通表示の末尾へ短い集計と全子孫のツ
 
 `axon note search <語句>` は管理root内の全Entity（Issue・Group、`Completed`・`Cancelled`を含む）のNote本文を検索し、条件を実行しない。追加filterは設けない。元の保存文字列にcase-sensitiveなliteral部分一致を適用し、trim・Unicode正規化をしない。空白・改行・%・_・正規表現記号は通常の文字として扱う。空文字は構文エラー（終了2）、該当なしはstdout空・stderrに案内を出して終了0。先頭hyphenの語句は `axon note search -- '--text'` と渡す。
 
-同じNote内の複数一致も1 Note＝1行とし、所属Entityの完全ID、完全な安定Note ID、既存のlocal日時と数値UTC offset、`Excerpt:` 付き抜粋を示す。Entityは`axon list`と同じ作成日時昇順・同時刻ID順、Entity内は`axon note list`と同じ因果順・並行記録のID順で並べる。見出し・空行・分岐説明行は加えない。
+同じNote内の複数一致も1 Note＝1行とし、所属Entityの完全ID、完全なNote ID、既存のlocal日時と数値UTC offset、`Excerpt:` 付き抜粋を示す。Entityは`axon list`と同じ作成日時昇順・同時刻ID順、Entity内は`axon note list`と同じ日時順・同時刻は記録ID順で並べる。見出し・空行・分岐説明行は加えない。
 
 抜粋は最初の一致と前後24文字で、検索語そのものを省略せず、日本語を壊さない文字単位で切り出す。原文を省略した側に `…` を示す。原文で一致位置と範囲を決めた後、改行を可視の `\n`、元のバックスラッシュを `\\` にし、他の端末制御文字も可視化する。保存本文は変えない。長い検索語でも一行の固定上限で切り捨てない。行単位での絞り込み向けで、固定列・区切りや機械向け出力形式は保証しない。
 
@@ -127,6 +130,20 @@ Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへ
 
 `axon convert A --kind issue|group` はEntityの種類を変換し、lifecycle・所属・dependency・文面・条件・Noteを変えない。前提は [種類の変換](lifecycle.md#種類の変換) に従い、子を持つGroupのIssueへの変換は子を示して、`InProgress` のIssueのGroupへの変換は先に`axon release`が必要であることを示して拒否する。lifecycle遷移ではないため `-r/--reason` を受け付けない。
 
+## 衝突・違反と解決
+
+衝突・違反・記録の欠け（gap）・保存先の破損の意味は [保存と統合の契約](storage.md) に従う。
+
+`axon storage check [ROOT]` は、引数なしでは探索で確定した保存先、`ROOT` を与えればその管理rootを探索せずに検査し、破損・衝突・違反・gapを種類ごとに一行ずつ示す。破損は `.axon/records/` からの相対pathと理由（記録IDの形でない名前、名前と内容のhashの不一致、名前と違うsubdirectory、途中で切れた・空の内容、読めないJSONと規則外の内容、headerの欠落・未知のformat）、衝突はEntityの行とheadの数、違反はEntityの行と種類、gapはEntityの行と親の欠けた記録ID（記録のないEntityのNoteも同じ節に示す）を示す。名前が `.tmp` で終わるfileは報告しない。破損があれば記録から導出する検査は行わない。破損・衝突・違反のいずれかがあれば終了1、gapだけなら情報として示して終了0、何もなければ短い確認をstderrに出して終了0。保存先を変更せず、条件コマンドを実行しない。
+
+`axon resolve` は衝突中の全Entityを、`axon resolve ID` は指定したEntityを対象に、Entityの行と各headを示す。headの行は記録ID、日時、actor、記録の種類（lifecycle遷移なら操作名）、その現在値のlifecycle・種類・タイトルを持ち、親記録が保存先にないheadには `parent missing; likely newer`（片方は親記録が欠けていて新しい可能性が高い）を付す。衝突していないEntityを指定した場合は、衝突していないことを示して終了1。保存先を変更しない。
+
+`axon resolve ID --head RECORD_ID` は指定したheadの現在値を採る解決記録を書く。`RECORD_ID` は対象Entityのheadの完全な記録IDで、headでなければ拒否する。`-r/--reason` は他の状態変更と同じ規則で記録に保存する。成功出力は完全なEntity IDが先頭で、採ったheadと解決後の状況を短く示す。解決の後に残る違反は `axon show` の `Invalid` と `axon storage check` で読み、通常操作で直す。
+
+衝突中のEntityが一つでもある保存先では、`axon resolve` と `axon note add` 以外の変更コマンドを拒否し、衝突中のEntityのIDと `axon resolve` を診断に示す。破損のある保存先では読取を含む全コマンド（`axon storage check`、および保存先を開かないコマンドを除く）を拒否し、破損したfileのpathを診断に示す。
+
+`axon init [PREFIX]` は `.axon/records/`、`.axon/header.json`、`.axon/.gitignore` を作り、成功時は作成したheaderのpathを示す。Git内ではさらに、保存先がuntrackedに見えること、無視する運用（`.git/info/exclude` などに `.axon/` を書く）と追跡する運用（`git add .axon` してcommitする）の手順、Axonの状態の取り消しにrevertを使わないことを表示する。repository rootのfileとGit configを作成も編集もせず、stage・commitもしない。`.axon/` に中断した初期化の残骸（lock、`.tmp` で終わるfile、空の記録のdirectory、同じ内容の `.gitignore`）以外の何か（header、記録、内容の異なる `.gitignore`、以前の形式のfile）があれば拒否し、そのpathを示す。
+
 ## 計画全体の取得と一括編集
 
 `axon export` と `axon import prepare|check|apply`、`axon docs declaration` が扱うdeclarationの形式、識別子、競合判定、拒否する入力は [計画全体の取得と一括編集](declaration.md) に従う。declaration内のIDは完全IDだけを使い、`axon export`の引数は他のcommandと同じくsuffixも受け付ける。保存境界の表示はこの文書の「mutationの結果」と同じApplied、Not applied、Result unknownを使う。
@@ -140,9 +157,9 @@ Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへ
 
 `axon import check FILE` は全IDが確定したcanonical YAMLを要求し、違えば`axon import prepare`を案内する。schema・identityと参照・読み取り専用項目・競合・共通コアの拒否を区別し、作成、titleの前後、descriptionの変更有無、parentの前後、needsの増減、差分なしと適用後の状況をEntityごとに表示する。titleは`axon list`と同じく改行を `\n`、制御文字を可視escapeにして一行で表示する。条件は実行せず、fileと保存先を変更しない。
 
-`axon import apply FILE` は書き込みlock内でFILEを読み、`axon import check`と同じ検証を再実行し、全変更を一回の保存境界で反映する。拒否時は全件Not applied。成功後は保存したsnapshotからbase・lifecycle・referencesとcanonical順を更新し、keyを保持してFILEを置き換える。成功出力にはbase更新前に新規だったrecordの `key -> 完全ID` の対応を一行ずつ含める。既存の再浮上条件とNoteは保持し、新規の条件は未設定とする。
+`axon import apply FILE` は書き込みlock内でFILEを読み、`axon import check`と同じ検証を再実行し、全変更を一回のlockの下で反映する。拒否時は全件Not applied。記録の公開の途中でrenameが失敗した場合はResult unknownと診断し、processが失われた場合も結果不明として扱い、再度の`axon import apply`がEntityごとに残りを反映する。成功後は保存した記録の集合からbase・lifecycle・referencesとcanonical順を更新し、keyを保持してFILEを置き換える。成功出力にはbase更新前に新規だったrecordの `key -> 完全ID` の対応を一行ずつ含める。既存の再浮上条件とNoteは保持し、新規の条件は未設定とする。
 
-保存成功後のFILE更新失敗は、保存先のAppliedとdeclarationのNot appliedまたはResult unknownを分けて表示する。rename直前に元bytesを再照合し、編集されていればそのfileを保持する。同じFILEを再度`axon import apply`し、編集集合の全Entityが宣言の最終値に一致すれば保存先はno-opでrewriteだけを完了する。部分一致は競合。正本のrename後のsync失敗は保存先のResult unknownで、declarationは更新しない。
+保存成功後のFILE更新失敗は、保存先のAppliedとdeclarationのNot appliedまたはResult unknownを分けて表示する。rename直前に元bytesを再照合し、編集されていればそのfileを保持する。同じFILEを再度`axon import apply`すると、Entityごとに最終値に一致するものを適用済み、`base` に一致するものを未適用として残りを反映し、全件が適用済みなら保存先はno-opでrewriteだけを完了する。どちらにも一致しないEntityがあれば競合。記録fileのrename後のsync失敗は保存先のResult unknownで、declarationは更新しない。
 
 ## 表示とstream
 
@@ -160,4 +177,4 @@ CLIが生成するhelp・ラベル・診断は英語。利用者のタイトル�
 
 成功はstdout/終了0、アプリケーションの拒否・失敗はError:を含むstderr/終了1。Clapの構文エラーは既定のerror:/Usage構造と終了2。原因、判明している対象・操作を示し、曖昧なFailedだけで済ませない。
 
-保存境界に誤解の余地がある場合はApplied、Not applied、Result unknownを区別する。正本の置換後の同期失敗は再読まで結果不明。保存成功後の出力障害は適用済みを明示し、作成・Noteを盲目的に再送させない。stdoutのBrokenPipeは成功として扱うが、条件traceのstderr障害は一覧失敗。部分適用された複数command列の前段成功を後段失敗で未適用と説明しない。
+保存境界に誤解の余地がある場合はApplied、Not applied、Result unknownを区別する。記録fileのrename後の同期失敗は再読まで結果不明。保存成功後の出力障害は適用済みを明示し、作成・Noteを盲目的に再送させない。stdoutのBrokenPipeは成功として扱うが、条件traceのstderr障害は一覧失敗。部分適用された複数command列の前段成功を後段失敗で未適用と説明しない。

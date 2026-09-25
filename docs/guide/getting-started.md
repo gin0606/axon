@@ -30,7 +30,7 @@ cd "$AXON_TRIAL_DIR"
 "$AXON_BIN" note list ID --recorder-details
 ```
 
-初期化は新規作成専用です。`axon init` は管理rootに正本 `.axon/state.jsonl` を作ります。Gitに関するfileは作りません。保存形式は一つ、配置や形式を選ぶoptionはありません。
+初期化は新規作成専用です。`axon init` は管理rootに記録のdirectory `.axon/records/`、header `.axon/header.json`、lockと一時fileだけを除外する `.axon/.gitignore` を作ります。repository rootのfileとGit configには触れません。保存形式は一つ、配置や形式を選ぶoptionはありません。
 
 ## Git repositoryで使う
 
@@ -44,13 +44,13 @@ git init
 "$AXON_BIN" capture --accept --title 'Gitのrepositoryで管理する仕事' -m '目的と完了条件'
 ```
 
-作った直後の正本はGitからuntrackedに見え、`git add -A` すればcommitされます。二つの運用のどちらを使うかを決め、一つのrepositoryでは混ぜないでください。
+作った直後のheaderと `.axon/.gitignore`（記録を作ればその記録も）はGitからuntrackedに見え、`git add -A` すればcommitされます。二つの運用のどちらを使うかを決め、一つのrepositoryでは混ぜないでください。
 
-無視する運用は、`.git/info/exclude` やglobalのignore fileに `.axon/` の行を書いて、利用者がGitに無視させて選びます。linked worktreeには `.axon` が現れないため、全worktreeがmain worktreeの保存先を共有します。worktreeごとに `axon init` を繰り返す必要はありません。無視した正本はGitのcheckout・mergeの上書きから保護されなくなり、正本を追跡しているcommitを取り込むと警告なしに置き換わります。
+無視する運用は、`.git/info/exclude` やglobalのignore fileに `.axon/` の行を書いて、利用者がGitに無視させて選びます。linked worktreeには `.axon` が現れないため、全worktreeがmain worktreeの保存先を共有します。worktreeごとに `axon init` を繰り返す必要はありません。無視した保存先はGitのcheckout・mergeの上書きから保護されなくなり、`.axon/` を追跡しているcommitを取り込むと警告なしに置き換わります。
 
-追跡する運用は、`axon init` が表示する手順を実行して選びます。正本だけを追跡対象にする `.axon/.gitignore` を作り、`.gitattributes` にmerge driverを宣言し、driverを登録して、stage・commitします。各worktreeが自分の正本を持ち、branchごとに分岐した計画と記録をGitで取り込めます。`axon init` は手順を表示するだけで、`.gitignore`、`.gitattributes`、Git configを作成も編集もしません。
+追跡する運用は、`git add .axon` で記録とheaderをstageしてcommitして選びます。`axon init` が作った `.axon/.gitignore` がlockと一時fileを除くので、ほかにGitの設定は要りません。各worktreeが自分の保存先を持ち、branchごとに分岐した計画と記録をGitで取り込めます。両側が記録を追加したbranchは、記録が別fileなのでGitの属性や設定なしでそのままmergeできます（契約の範囲はローカルのGit操作で、GitHub上のmergeも確認済み。[保存先とworktree](storage.md)）。統合後は `axon storage check` で衝突・違反・記録の欠けを確認し、`axon resolve` と通常操作で直します。Axonの状態の取り消しはlifecycle操作（`axon reopen` など）で行い、Gitのrevertに頼らないでください。`axon init` は手順を表示するだけで、repositoryの `.gitignore`、`.gitattributes`、Git configを作成も編集もしません。
 
-通常操作はどちらの運用でも同じです。driverの登録・追跡・競合解決は [file保存とGit統合](../development/lifecycle-file.md#git-driver)、保存先の選ばれ方は [保存先とworktree](storage.md) を参照してください。
+通常操作はどちらの運用でも同じです。統合の検査と解決は [file保存とGit統合](../development/lifecycle-file.md#git-統合と検査)、保存先の選ばれ方は [保存先とworktree](storage.md) を参照してください。
 
 ## Agent向けskill
 

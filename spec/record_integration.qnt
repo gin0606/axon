@@ -6,7 +6,7 @@
 // Git の merge・rebase・cherry-pick は、いずれも相手の記録の部分集合を取り込む一つの action で表す。
 // 構造の不整合は「違反」の集合として導出し、通常操作は違反を増やさず、違反に含まれる Entity には
 // 修復のための固定規則の免除を与える。
-// 対象外: file の bytes と行の統合、lock、探索、ID の衝突確率、変換操作、再浮上条件と一覧の状況。
+// 対象外: file の bytes と file の配置、lock、探索、ID の衝突確率、変換操作、再浮上条件と一覧の状況。
 module record_integration {
   type Id = int
   type Replica = int
@@ -76,7 +76,7 @@ module record_integration {
     conflicted: Set[Id],        // head が複数ある（値が等しくても、同じ ID の二重登録でも衝突）
     settled: Set[Id],           // known かつ衝突していない
     current: Id -> Current,     // settled な Entity の現在値（唯一の head の値）
-    gaps: Set[Id],              // 親記録が集合にない記録を持つ Entity（cherry-pick や squash の痕跡）
+    gaps: Set[Id],              // 親記録が集合にない記録を持つ Entity（cherry-pick や revert の痕跡）
     violations: Set[Violation], // 全体検査の違反（settled な Entity だけを見る。衝突中は判定を保留）
   }
   // view は二段で作る。core は記録から head と現在値を導き、そのうえで違反を一度だけ導出する。
@@ -423,8 +423,8 @@ module record_integration {
     }
   }
 
-  // 取り込み。相手が持っていて自分にない記録を、全部（merge）、連番の接頭辞（rebase の途中）、
-  // 一件だけ（cherry-pick・squash）のいずれかで取り込む。Note は常に和集合。
+  // 取り込み。相手が持っていて自分にない記録を、全部（merge・squash merge・rebase merge）、
+  // 連番の接頭辞（rebase の途中）、一件だけ（cherry-pick）のいずれかで取り込む。Note は常に和集合。
   action sync(r: Replica, from: Replica, mode: SyncMode, anchor: Record): bool = {
     val mine = stores.get(r)
     val theirs = stores.get(from)

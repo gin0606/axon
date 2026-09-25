@@ -75,18 +75,18 @@ Groupは自身と終了済みを含む全子孫、Issueは単体を取得しま�
 
 競合では元fileを保全して現在値と編集意図を比較します。`base` の改変やIDの振り直しで検査を通さず、再取得が必要な場合は別fileへ`axon export`します。
 
-保存先とdeclaration fileの結果は別です。保存先が `Applied` でもfile更新だけが `Not applied` または `Result unknown` になることがあります。元processの終了後、同じ保存先と入力fileを照合し、確定したIDと内容を保持して `axon import check` します。編集集合の全Entityが最終値に一致する場合は、同じfileの再 `axon import apply` が保存先をno-opにしてfile更新を完了します。一部だけ一致する場合は競合です。結果不明のまま `axon import prepare` でIDを再割当てしたり、雛形から登録し直したりしません。詳細は [保存結果](../reference/cli.md#mutationの結果) を参照してください。
+保存先とdeclaration fileの結果は別です。保存先が `Applied` でもfile更新だけが `Not applied` または `Result unknown` になることがあります。元processの終了後、同じ保存先と入力fileを照合し、確定したIDと内容を保持して `axon import check` します。同じfileの再 `axon import apply` は、最終値に一致するEntityを適用済み、`base` に一致するEntityを未適用として残りを反映し、全件が適用済みなら保存先をno-opにしてfile更新を完了します。どちらにも一致しないEntityがあれば競合です。結果不明のまま `axon import prepare` でIDを再割当てしたり、雛形から登録し直したりしません。詳細は [保存結果](../reference/cli.md#mutationの結果) を参照してください。
 
 ## 並行作業と引継ぎ
 
 無視する運用では全worktreeがmain worktreeの保存先を共有するため、同じ未着手Entityへの並行`axon start`は一つだけ成功します。失敗側は`axon show ID --skip-conditions`・`axon log`で現在値を読み、実行中のworkerと調整してください。記録者情報を所有権として扱わず、作業終了を確認してから継続・`axon release`を判断します。
 
-追跡する運用ではworktreeごとに正本が分かれるため、同じEntityに対してそれぞれ`axon start`を実行できます。Gitで取り込むまで互いの作業は見えません。異なる現在値の衝突はEntity全体で選び、両側のNoteと実操作の履歴を保持します。同じworktreeでGit更新とAxon書込みを並行しないでください。統合後は [明示的な統合](../development/lifecycle-file.md#明示的な統合) に従って検査・stageし、`axon show`・Note・logで成果を確認して通常操作へ戻ります。
+追跡する運用ではworktreeごとに保存先が分かれるため、同じEntityに対してそれぞれ`axon start`を実行できます。Gitで取り込むまで互いの作業は見えません。取り込んだ後、同じEntityへの両側の操作は衝突として `Conflicted` に見え、解決するまで `axon resolve` と `axon note add` 以外の変更は拒否されます。`axon resolve ID` でheadを読み、`axon resolve ID --head RECORD_ID` で片方の現在値を選びます。両側のNoteと記録は残ります。統合が生んだ構造の違反（完了したGroupへの子の流入など）は `axon show` の `Invalid` と `axon storage check` で読み、`axon reopen` などの通常操作で直します。同じworktreeでGit更新とAxon書込みを並行しないでください。手順は [Git統合と検査](../development/lifecycle-file.md#git-統合と検査) にあります。
 
 ## 再浮上
 
 `axon condition set ID --command 'test -f ready.txt'` は条件を保存し、`axon condition unset ID` は解除します。保存時には実行しません。`axon proposals|tasks` と既定の `axon show` が必要な条件を `/bin/sh -c` で評価し、終了0は成立、1は未成立、その他は一覧または表示の失敗です。`axon show ID --skip-conditions` は評価しません。`--condition-timeout` と `--trace-conditions` の契約は [外部条件](../reference/candidates.md) を参照してください。
 
-IDはprefix＋ランダム6文字で、完全IDまたは一意なsuffixを指定できます。CLI生成文は英語、TTYでは意味に応じて装飾し、NO_COLORまたは非TTYでは装飾しません。一覧の絞り込み・検索、Note個別参照と保存結果は [CLIと表示の契約](../reference/cli.md) を参照してください。
+IDはprefix＋ランダム8文字で、完全IDまたは一意なsuffixを指定できます。乱数部分が6文字の既存のIDもそのまま使えます。CLI生成文は英語、TTYでは意味に応じて装飾し、NO_COLORまたは非TTYでは装飾しません。一覧の絞り込み・検索、Note個別参照と保存結果は [CLIと表示の契約](../reference/cli.md) を参照してください。
 
 `axon list|tasks|proposals`の `--search` は現在のtitle・descriptionだけを検索し、Noteだけの一致は返しません。Noteに残る情報は `axon note search` で読みます。終了Entityを含む全Noteから、完全ID・日時と最初の一致の前後24文字を1 Noteにつき1行で表示します。`Excerpt:` と `…` は抜粋・省略を示し、改行や制御文字は可視化します。原文は `axon note show ID NOTE_ID` で取得できます。検索は大小文字を区別するliteral部分一致で、空白の除去やUnicode正規化はしません。
