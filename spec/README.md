@@ -11,7 +11,7 @@ Axon の lifecycle、包含と dependency、Group の実効 lifecycle、候補�
 | [`group_lifecycle.qnt`](group_lifecycle.qnt) | Issue と Group の包含、所属変更、新規登録、種類の変換、dependency、Group の実効 lifecycle、`Reopen`、判断候補・着手候補・`axon tasks` の一覧の行と状況、`axon show` も使う詰まっている理由の導出 | 文面と記録、条件の種類・設定と評価失敗、CLI と表示、ID 発行、永続化、記録の集合と統合 |
 | [`lifecycle_reachability.qnt`](lifecycle_reachability.qnt) | `group_lifecycle` の到達性を補う4つの探索入口 | 許可条件・状態更新・検査する性質（`group_lifecycle` のものをそのまま使う） |
 | [`candidate_evaluation.qnt`](candidate_evaluation.qnt) | `axon proposals`・`axon tasks` の1回の取得と `axon show` の1回の表示における評価範囲、評価回数、結果の共有、判定失敗 | 行の状況の導出、実コマンドと shell、作業ディレクトリ、終了コードの解釈、timeout と中断、出力の上限と診断、並行実行 |
-| [`lifecycle_information.qnt`](lifecycle_information.qnt) | title・description の編集範囲、Note の追記、状態変更履歴と状態の一致（Issue 1件と Group 1件） | 包含・dependency・実効 lifecycle・最終確認による追加の制約、日時・理由・記録者情報、表示順、公開 ID、永続化 |
+| [`lifecycle_information.qnt`](lifecycle_information.qnt) | title・description の編集範囲、Note の追記、種類の変換をまたぐ履歴と現在の状態・種類の一致（Issue として登録した1件と Group として登録した1件） | 包含・dependency・実効 lifecycle・最終確認による追加の制約、Group から Issue への変換が要求する「子がない」、日時・理由・記録者情報、表示順、公開 ID、永続化 |
 
 Quint の `import` の向きは `lifecycle_rules` を起点にした一方向です。`issue_lifecycle`・`group_lifecycle`・`lifecycle_information` がそれぞれ `lifecycle_rules` を取り込み、`lifecycle_reachability` と `candidate_evaluation` が `group_lifecycle` を取り込みます。`issue_lifecycle` と `lifecycle_information` は互いにも `group_lifecycle` にも依存しません。
 
@@ -42,6 +42,7 @@ Quint の `import` の向きは `lifecycle_rules` を起点にした一方向で
 - Group の `Complete` は stored が `NotStarted` のとき、直属の子がすべて終了し、最終確認が通れば許す。空の Group と子がすべて `Cancelled` の Group もこの経路で完了する。Group の `Cancel` は `Undecided`・`NotStarted` からだけ行う。
 - Issue の `Start` は、全祖先が採用済み（stored が `NotStarted`）で、自身と全祖先の dependency がすべて `Completed` であることを要求する。親が実効 `InProgress` であることは要求しない。
 - 種類（kind）は現在値で、`Undecided`・`NotStarted` の Issue は Group に、子のない `Undecided`・`NotStarted` の Group は Issue に変換できる。変換は lifecycle・所属・dependency を変えない。`InProgress` の Issue は先に `Release` する。
+- 変換は lifecycle 遷移ではないが記録として残り、変換前後の種類が読める。lifecycle 遷移の記録の妥当性は、その遷移の時点の種類（直前の記録の現在値。登録時の種類を、その遷移より前の変換の記録で進めたもの）の規則で判定し、Entity の現在の種類では判定しない。Issue として `Start`・`Release` してから Group に変換した履歴と、Group として `NotStarted` から `Complete` し `Reopen` してから Issue に変換した履歴は、この判定で妥当になり、現在の種類で判定すると不正になる。`axon log` は変換を lifecycle 遷移と区別し、変換前後の種類とともに示す。
 - 終了した Group の構成固定は維持し、`Completed` の Group は `Reopen`、`Cancelled` の Group は `Reconsider` で戻してから構成を変える。
 - `InProgress` の Entity にも未完了の dependency を追加できる（その Entity 自身の `Complete` の検査で止まる）。Issue・Group の `Complete` は自身の依存先だけを検査し、祖先の依存先を検査しないため、Group に置いた依存先は Group 自身の `Complete` の前提になるが、配下の `Complete` の前提にはならない（[親子のlifecycle](../docs/reference/lifecycle.md#親子のlifecycle)、[Group の dependency を配下の完了の前提にしない理由](../docs/design/decisions.md#group-の-dependency-を配下の完了の前提にしない理由)）。Issue・Group から Group への dependency は依存先 Group の `Complete` まで待つ。
 - 再浮上条件は候補の表示と `axon show` の状況・理由の表示だけに使い、ID を明示した操作は縛らない。
@@ -109,9 +110,9 @@ witness は各操作の到達に加えて、`Reopen` 後の再着手、完了済
 
 ### `lifecycle_information`
 
-固定2 Entity（0 は Issue、1 は Group）、文面の値3種類で、未判断の登録済み Entity から始めます。文面と Note の内容は不透明な整数で更新と保持を区別し、履歴は変更前後の状態だけを持つ追記列へ抽象化します。日時・任意の理由・記録者情報は設計上の保存項目として残しますが、操作の可否や状態遷移に影響しないため探索変数にしません。登録操作と初期状態の記録は扱いません。状態遷移の前提は `lifecycle_rules` の種類ごとの規則で、Group は `Start`・`Release` を持たず `NotStarted` から完了します。
+固定2 Entity（0 は Issue、1 は Group として登録）、文面の値3種類で、未判断の登録済み Entity から始めます。文面と Note の内容は不透明な整数で更新と保持を区別し、履歴は lifecycle 遷移の変更前後の状態と種類の変換（変換前後の種類）の追記列へ抽象化します。日時・任意の理由・記録者情報は設計上の保存項目として残しますが、操作の可否や状態遷移に影響しないため探索変数にしません。登録操作と初期状態の記録は扱わず、登録時の種類は ID から引きます。状態遷移の前提は `lifecycle_rules` の種類ごとの規則で、Group は `Start`・`Release` を持たず `NotStarted` から完了します。種類の変換は保存値が `Undecided`・`NotStarted` のときだけ行い、Group から Issue への変換が要求する「子がない」は包含を持たないこのモデルの外です。
 
-invariant は、操作が対象以外の Entity を変えないこと、文面の編集が編集可能な状態に限ること、終了後の文面が固定されること、Note が追記専用であること、状態変更と履歴追加が一体で確定すること、履歴を種類ごとの規則で再生すると現在の状態になること、`Completed` から抜けるのが `Reopen` だけで `NotStarted` へ戻ること、種類が変わらないこと、Group が `InProgress` を保存しないことを検査します。witness は8遷移それぞれの到達（`Start`・`Release` は Issue だけ）、Group の `NotStarted` からの完了、採用後・着手中・再検討後・`Reopen` 後の文面編集、各状態での Note 追加、同じ内容の追記が別の記録になることを観測します。基本遷移だけを持つため、このモデルが許す遷移がそのまま実際の Group や依存を持つ Issue で許可されるわけではありません。実時刻の取得、精度、時計補正、公開 ID、actor、記録の表示順、永続化と保存失敗はこのモデルの外です。
+invariant は、操作が対象以外の Entity を変えないこと、文面の編集が編集可能な状態に限ること、終了後の文面が固定されること、Note が追記専用であること、状態変更と履歴追加が一体で確定すること、履歴を各時点の種類の規則で再生すると現在の状態と種類になること、`Completed` から抜けるのが `Reopen` だけで `NotStarted` へ戻ること、種類は変換だけで変わり変換は種類と履歴への変換の追記以外を変えないこと、Group が `InProgress` を保存しないことを検査します。履歴の再生は、lifecycle 遷移の記録をその時点の種類の規則で判定し、変換の記録で種類を進めます。witness は8遷移それぞれの到達（`Start`・`Release` は Issue だけ）、Group の `NotStarted` からの完了、採用後・着手中・再検討後・`Reopen` 後の文面編集、各状態での Note 追加、同じ内容の追記が別の記録になること、両方向の変換、変換後の lifecycle 遷移、Issue として `Start` し続けて `Release` してから Group へ変換した履歴、Group として `NotStarted` から `Complete` し `Reopen` してから Issue へ変換した履歴、各時点の種類では妥当な履歴が現在の種類で全記録を判定すると不正になる状態を観測します。基本遷移だけを持つため、このモデルが許す遷移がそのまま実際の Group や依存を持つ Issue で許可されるわけではありません。実時刻の取得、精度、時計補正、公開 ID、actor、記録の表示順、永続化と保存失敗はこのモデルの外です。
 
 ## 再現手順
 
@@ -161,13 +162,13 @@ run(candidate, 3000, 60, invariants, witnesses, "--init", "queryInit", "--step",
 
 いずれも bounded random simulation の結果であり、全状態の証明でも、必ず完了することの保証でもありません。どのモデルも、完了への到達を強制する公平性は仮定しません。seed を固定しないため、観測される trace 数は実行ごとに変わります。ここに残すのは実行条件と判定で、trace 数は witness の到達しやすさの目安として添えます。
 
-以下は 2026-09-25、Quint 0.32.0、Rust backend、並列実行、seed 未固定での結果です。`group_lifecycle`・`lifecycle_reachability`・`candidate_evaluation` は `axon show` の条件評価の規則（詰まっている理由への浮上していない祖先の追加、`axon show` の評価範囲）を足した後に再実行し、`issue_lifecycle`・`lifecycle_information` はその変更で対象が変わらないため、同日に一覧の Group の行の規則（`Empty` の優先、詰まっている理由の導出範囲）を直した後に実行した結果を残しています。6モデルの型検査はいずれも成功しました。
+以下は Quint 0.32.0、Rust backend、並列実行、seed 未固定での結果です。`group_lifecycle`・`lifecycle_reachability`・`candidate_evaluation` は 2026-09-25 に `axon show` の条件評価の規則（詰まっている理由への浮上していない祖先の追加、`axon show` の評価範囲）を足した後に再実行し、`issue_lifecycle` はその変更で対象が変わらないため、同日に一覧の Group の行の規則（`Empty` の優先、詰まっている理由の導出範囲）を直した後に実行した結果を残しています。`lifecycle_information` は 2026-09-26 に種類の変換と各時点の種類での履歴の再生を足した後に実行しました。6モデルの型検査は 2026-09-26 にいずれも成功しました。
 
 - `issue_lifecycle`: 100,000 traces、最大80 steps（約7秒）。9 invariant に反例はなく、23 witness はすべて観測されました。最も少ない完了後の非浮上で37.8%です。
 - `group_lifecycle`: 5,000 traces、最大150 steps（約4分）。41 invariant に反例はなく、94 witness のうち規則で塞いだ経路と理由のない詰まっている Group を観測する5つが期待どおり0で、残り89をすべて観測しました。最も少ないのは祖先の dependency の完了による着手の解禁で6 traces、次いで完了済みの子を持つ Group の `Reopen` で8 traces、行に出る実効 `InProgress` の Group に浮上していない祖先の理由が付く状態で11 traces、`Reopen` 後の再着手で12 traces です。浮上していない祖先の理由は行に出ない Group で2,366、浮上していない着手可能な子孫の理由は1,015 traces で観測しました。完了できる空の Group の `Empty` は3,401、着手中の子孫がない実効 `InProgress` の行に理由が付く状態は249、完了できない `Empty` の行に理由が付く状態は4,282 traces で観測しました。
 - `lifecycle_reachability`: 同じ41 invariant を指定して反例なし。`workAndReopen`・`dependAndStart`・`listAndWork` は各300 traces、最大100 steps、`readoptAfterClose` は5,000 traces、最大60 steps。`workAndReopen` は `Reopen` 後の再着手を296、完了済みの子を持つ Group の `Reopen` を39、`Completed` の依存元による `Reopen` の拒否を297 traces で観測しました。`dependAndStart` は祖先の dependency の完了による着手の解禁を41、自身の依存先の完了による解禁を246 traces で観測しました。`listAndWork` は `Ready` と実効 `InProgress` が重なる Group を261、実効 `InProgress` の Group の移動を300、完了できる空の Group の `Empty` を300 traces で観測しました。`readoptAfterClose` では規則で塞いだ経路の witness は0のままで、着手中の子孫がない実効 `InProgress` の行に理由が付く状態を1,192 traces で観測しました。通常探索と補助探索を合わせ、0が期待の5つを除く89 witness がいずれかの探索で1 trace 以上に到達しました。
 - `candidate_evaluation`: `queryStep` は30,000 traces、最大60 steps（約4分。`axon show` の対象を全 ID から選ぶ分だけ長くなりました）。17 invariant に反例はなく、34 witness 中33を観測しました。`Reopen` した Issue の再表示は通常探索では未到達で、補助入口が担保します。通常探索で最も少ないのは評価失敗後の着手で3 traces、次いで未成立の結果を持つ進行中の Group の表示で5 traces です。`axon show` の witness は、Group の浮上していない着手可能な子孫の評価を57、祖先の未成立で評価されない Issue を1,819、`axon tasks` の行にならない対象での非評価を29,733、`axon tasks` より狭い範囲を15,492、判定失敗を6,780 traces で観測しました。`workAndList` は3,000 traces、最大60 steps で反例なし、`Reopen` した Issue の再表示を41、評価失敗後の着手を50、未成立の結果を持つ進行中の Group の表示を238、進行中の Group の評価を585 traces で観測しました。両方を合わせ、34 witness はすべて1 trace 以上で観測されました。
-- `lifecycle_information`: 100,000 traces、最大60 steps（約17秒）。9 invariant に反例はなく、21 witness はすべて観測されました。最も少ない `Release` で4.1%、次いで `Reopen` 後の文面編集で7.6%です。
+- `lifecycle_information`: 100,000 traces、最大60 steps（約33秒）。9 invariant に反例はなく、27 witness はすべて観測されました。最も少ないのは Issue として `Start` し続けて `Release` してから Group へ変換した履歴で2.2%、次いで `Release` で3.0%、`Reopen` 後の文面編集で3.2%、Group として完了し `Reopen` してから Issue へ変換した履歴で4.6%です。各時点の種類では妥当な履歴が現在の種類で判定すると不正になる状態は8.2%で観測しました。
 
 各モデルの traces 数は、補助探索が担保しない witness が偶然に左右されずに観測される水準を下限とし、そのうえで invariant を叩く厚みを加えて決めています。観測率の低い witness を通常探索の traces 数で拾おうとするより、補助入口を足すほうが確実です。取り込み前の再設計モデルの反例と review の経緯は「反例と review から足した規則」にまとめています。
 
