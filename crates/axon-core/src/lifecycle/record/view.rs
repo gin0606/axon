@@ -232,7 +232,8 @@ impl View {
                 if unknown {
                     add(id, ViolationKind::UnknownParent);
                 }
-                if self.current(parent).is_some_and(Current::is_terminal) && !current.is_terminal()
+                if self.parent_current(id).is_some_and(Current::is_terminal)
+                    && !current.is_terminal()
                 {
                     add(id, ViolationKind::OpenUnderTerminal);
                 }
@@ -262,11 +263,13 @@ impl View {
         violations
     }
 
-    /// Entities that keep a predecessor on the contracted completion path (direct children,
-    /// own dependencies, ancestors' dependencies) after every free Entity is removed: the
-    /// members of a cycle and everything waiting on one.
+    /// Entities on a cycle of the contracted completion path (direct children, own
+    /// dependencies, ancestors' dependencies): those that reach themselves along it. An
+    /// Entity that merely waits on a cycle is not a member, so a new cycle among waiting
+    /// Entities always adds members and fails the no-new-violation check. Every free Entity
+    /// is removed first; the search runs only over what remains.
     fn completion_cycle_members(&self) -> BTreeSet<EntityId> {
-        let mut pending: BTreeMap<&EntityId, usize> = BTreeMap::new();
+        let mut predecessors: BTreeMap<&EntityId, BTreeSet<&EntityId>> = BTreeMap::new();
         let mut dependents: BTreeMap<&EntityId, Vec<&EntityId>> = BTreeMap::new();
         let mut ready = Vec::new();
         for id in self.settled.keys() {
@@ -278,11 +281,15 @@ impl View {
             if needs.is_empty() {
                 ready.push(id);
             }
-            pending.insert(id, needs.len());
-            for need in needs {
+            for need in &needs {
                 dependents.entry(need).or_default().push(id);
             }
+            predecessors.insert(id, needs);
         }
+        let mut pending: BTreeMap<&EntityId, usize> = predecessors
+            .iter()
+            .map(|(id, needs)| (*id, needs.len()))
+            .collect();
         while let Some(id) = ready.pop() {
             pending.remove(id);
             for dependent in dependents.get(id).into_iter().flatten() {
@@ -294,7 +301,24 @@ impl View {
                 }
             }
         }
-        pending.into_keys().cloned().collect()
+        let on_cycle = |id: &EntityId| {
+            let mut seen = BTreeSet::new();
+            let mut stack: Vec<&EntityId> = predecessors[id].iter().copied().collect();
+            while let Some(next) = stack.pop() {
+                if next == id {
+                    return true;
+                }
+                if pending.contains_key(next) && seen.insert(next) {
+                    stack.extend(predecessors[next].iter().copied());
+                }
+            }
+            false
+        };
+        pending
+            .keys()
+            .filter(|id| on_cycle(id))
+            .map(|id| (*id).clone())
+            .collect()
     }
 
     // ---- what a read shows ----
@@ -443,6 +467,12 @@ impl View {
             .map(|(dependent, _)| dependent)
             .collect()
     }
+    /// The settled current value of the parent, if the Entity has one and it is settled.
+    fn parent_current(&self, id: &EntityId) -> Option<&Current> {
+        self.current(id)
+            .and_then(|c| c.parent.as_ref())
+            .and_then(|parent| self.current(parent))
+    }
     /// Whether the parent, if any, is settled and unfinished.
     pub fn parent_open(&self, id: &EntityId) -> bool {
         self.current(id)
@@ -475,12 +505,20 @@ impl View {
 
     /// Checks the prerequisites of one lifecycle operation on a settled Entity without
     /// evaluating conditions. Checking `Complete` neither records nor implies a final review;
-    /// performing it does. Conflicts elsewhere in the store are checked by the writer, not
-    /// here, so a read can still describe each row.
+    /// performing it does. The waivers of an Entity in violation are granted only where the
+    /// result adds no violation, so for them the read side agrees with the writer: under a
+    /// terminal parent, to operations on an Entity that is unfinished already (a missing
+    /// parent restricts nothing further); against Completed dependents, only when each of
+    /// them already has an unfinished dependency. Conflicts
+    /// elsewhere in the store and the whole check that the result adds no violation stay with
+    /// the writer, which is the rule and may still reject what this check does not
+    /// anticipate.
     pub fn check_operation(&self, id: &EntityId, operation: Operation) -> Result<()> {
         let current = self.require_settled(id)?;
         operation.apply_as(current.kind, current.lifecycle)?;
-        if !self.parent_open(id) && !self.in_violation(id) {
+        let parent_terminal = self.parent_current(id).is_some_and(Current::is_terminal);
+        let parent_waived = self.in_violation(id) && (!parent_terminal || !current.is_terminal());
+        if !self.parent_open(id) && !parent_waived {
             return Err(invalid("parent must be an unfinished Group"));
         }
         let adopted_ancestors = "all ancestor Groups must be adopted (NotStarted)";
@@ -507,15 +545,17 @@ impl View {
                 if !self.dependencies_completed(id) {
                     return Err(invalid(deps_completed));
                 }
-                if current.kind == Kind::Group && !self.children_ended(id) {
+                if !self.children_ended(id) {
                     return Err(invalid("all children must be terminal"));
                 }
                 if !self.ancestors_adopted(id) {
                     return Err(invalid(adopted_ancestors));
                 }
             }
+            // An Issue has children only after an integration (a conversion merged with a
+            // registration); ending it would still leave them under a terminal parent.
             Operation::Cancel => {
-                if current.kind == Kind::Group && !self.children_ended(id) {
+                if !self.children_ended(id) {
                     return Err(invalid("all children must be terminal"));
                 }
             }
@@ -541,7 +581,14 @@ impl View {
                     return Err(invalid(adopted_ancestors));
                 }
                 let dependents = self.completed_dependents(id);
-                if !dependents.is_empty() && !self.in_violation(id) {
+                let dependents_waived = self.in_violation(id)
+                    && dependents.iter().all(|dependent| {
+                        self.violations.contains(&Violation {
+                            entity: (*dependent).clone(),
+                            kind: ViolationKind::CompletedWithOpenDependency,
+                        })
+                    });
+                if !dependents.is_empty() && !dependents_waived {
                     return Err(invalid(format!(
                         "Completed dependents must be reopened first: {}",
                         dependents

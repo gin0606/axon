@@ -27,7 +27,8 @@ impl Store {
         create_in(self, &view, id, current, context)
     }
     /// One lifecycle transition. Performing `Complete` on a Group is the caller's explicit
-    /// final confirmation of that plan.
+    /// final confirmation of that plan. The result may not add a violation: a waiver relaxes
+    /// a prerequisite of the Entity in violation, never the whole check.
     pub fn perform(
         &self,
         id: &EntityId,
@@ -36,7 +37,7 @@ impl Store {
         context: Context,
     ) -> Result<Record> {
         let view = self.settled_view()?;
-        perform_in(&view, id, operation, reason, context)
+        perform_in(self, &view, id, operation, reason, context)
     }
     /// Edits title and description of an unfinished Entity. None when nothing changes.
     pub fn write(
@@ -355,6 +356,7 @@ fn create_in(
 }
 
 fn perform_in(
+    store: &Store,
     view: &View,
     id: &EntityId,
     operation: Operation,
@@ -376,14 +378,15 @@ fn perform_in(
         ..current.clone()
     };
     after.validate()?;
-    Ok(follow(
+    let record = follow(
         view,
         id,
         RecordKind::Transition(operation),
         after,
         reason,
         context,
-    ))
+    );
+    without_new_violations(store, view, record)
 }
 
 fn write_in(

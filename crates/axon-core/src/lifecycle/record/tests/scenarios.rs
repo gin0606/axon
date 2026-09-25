@@ -1,4 +1,7 @@
-//! The six `run` tests of `spec/record_integration_test.qnt`, in the same order.
+//! The `run` tests of `spec/record_integration_test.qnt` on conflicts, gaps, terminal cycles,
+//! mutual Completed dependencies, duplicate creation and gap conflicts, in the same order.
+//! The runs on waivers, the ancestor chain and cycles are covered in `operations` and
+//! `witnesses`.
 use super::*;
 use Operation::*;
 

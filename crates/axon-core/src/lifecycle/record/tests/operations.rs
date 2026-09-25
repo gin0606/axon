@@ -1,5 +1,6 @@
-//! Ordinary operations: conflicts stop them, violations are never added, waivers apply only
-//! inside a violation, and each success is exactly one record.
+//! Ordinary operations: conflicts stop them, violations are never added (lifecycle
+//! operations included), waivers apply only inside a violation and never let an operation add
+//! a violation, and each success is exactly one record.
 use super::*;
 use Operation::*;
 
@@ -144,8 +145,8 @@ fn waivers_work_only_for_entities_inside_a_violation() {
     assert!(error(r.try_move("i1", None)).contains("unfinished Group"));
     assert!(error(r.try_op("i1", Reconsider)).contains("unfinished Group"));
     assert!(r.view().is_valid());
-    // Inside a violation the same three rules are waived, but adding a dependency to a
-    // Completed Entity is not.
+    // Inside a violation the three rules are waived only where the result adds no violation,
+    // and adding a dependency to a Completed Entity is never waived.
     let mut r0 = Replica::new("r0");
     let mut r1 = Replica::new("r1");
     r0.op("i1", Cancel);
@@ -162,22 +163,305 @@ fn waivers_work_only_for_entities_inside_a_violation() {
     r1.resolve("g2", &g2);
     assert!(r1.view().in_violation(&id("g0")));
     assert!(error(r1.try_add_dep("g0", "i3")).contains("fixed"));
-    // i1 waits on the cycle through its ancestor's dependency, so it is in violation too and
-    // may leave its terminal parent; i3 is not and stays where the ordinary rules put it.
+    // i1 is on the cycle (g0 waits for its child i1, i1 for g0's dependency g2, g2 for g0), so
+    // it is in violation too; i3 is not and stays where the ordinary rules put it.
     assert_eq!(
         r1.violations("i1"),
         BTreeSet::from([ViolationKind::CompletionCycle])
     );
     assert!(r1.violations("i3").is_empty());
-    // Reopen despite a Completed dependent, then the remaining cycle by removing a dependency.
-    r1.op("g0", Reopen);
-    assert_eq!(lifecycle(&r1.view(), "g0"), Lifecycle::NotStarted);
-    assert!(
-        r1.violations("g2")
-            .contains(&ViolationKind::CompletedWithOpenDependency)
-    );
-    r1.remove_dep("g2", "g0");
+    // A waiver never lets a lifecycle operation add a violation, and the read-side check
+    // agrees with the writer: Reconsider would leave an unfinished Issue under the Completed
+    // g0, and reopening either Group would leave the other Completed with an unfinished
+    // dependency it does not have yet.
+    for (entity, operation, message) in [
+        ("i1", Reconsider, "unfinished Group"),
+        ("g0", Reopen, "reopened first"),
+        ("g2", Reopen, "reopened first"),
+    ] {
+        let read = error(r1.view().check_operation(&id(entity), operation));
+        assert!(read.contains(message), "{entity}: {read}");
+        let write = error(r1.try_op(entity, operation));
+        assert!(write.contains(message), "{entity}: {write}");
+    }
+    // The repair reduces the violations: a Completed Entity in violation drops a dependency.
+    r1.remove_dep("g0", "g2");
     assert!(r1.view().is_valid());
+    assert_eq!(lifecycle(&r1.view(), "g0"), Lifecycle::Completed);
+    assert_eq!(lifecycle(&r1.view(), "i1"), Lifecycle::Cancelled);
+}
+
+/// The waivers still let lifecycle operations repair, as long as the result adds no
+/// violation: under a terminal parent an unfinished Entity in violation can change while it
+/// stays unfinished and can end, and a Completed dependency whose Completed dependents
+/// already have an unfinished dependency can be reopened.
+#[test]
+fn waived_lifecycle_operations_that_add_no_violation_succeed() {
+    // Terminal parent: i4 flowed under the Completed g0 on the other side.
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r0.op("i1", Cancel);
+    r0.op("g0", Complete);
+    r1.create("i4", Kind::Issue, Lifecycle::NotStarted, Some("g0"));
+    r1.sync(&r0);
+    assert_eq!(
+        r1.violations("i4"),
+        BTreeSet::from([ViolationKind::OpenUnderTerminal])
+    );
+    r1.view().check_operation(&id("i4"), Withdraw).unwrap();
+    r1.op("i4", Withdraw);
+    r1.op("i4", Accept);
+    assert_eq!(
+        r1.violations("i4"),
+        BTreeSet::from([ViolationKind::OpenUnderTerminal])
+    );
+    r1.op("i4", Cancel);
+    assert!(r1.view().is_valid());
+    // Completed dependents: i3 depends on g2, i4 on i3 and g2; one side completes i3 and i4,
+    // the other reopens g2. Both are Completed with an unfinished dependency, so reopening
+    // i3 despite its Completed dependent i4 adds nothing, and reopening i4 repairs the rest.
+    let mut shared = Replica::new("r0");
+    shared.op("g2", Complete);
+    shared.add_dep("i3", "g2");
+    let mut i4 = current(Kind::Issue, Lifecycle::NotStarted, None);
+    i4.needs.extend([id("i3"), id("g2")]);
+    let record = shared.try_create("i4", i4).unwrap();
+    insert(&mut shared.store, record);
+    let mut r0 = Replica::from("r0", &shared.store);
+    let mut r1 = Replica::from("r1", &shared.store);
+    r0.op("i3", Start);
+    r0.op("i3", Complete);
+    r0.op("i4", Start);
+    r0.op("i4", Complete);
+    r1.op("g2", Reopen);
+    r0.sync(&r1);
+    for completed in ["i3", "i4"] {
+        assert_eq!(
+            r0.violations(completed),
+            BTreeSet::from([ViolationKind::CompletedWithOpenDependency]),
+            "{completed}"
+        );
+    }
+    assert_eq!(r0.view().completed_dependents(&id("i3")), vec![&id("i4")]);
+    r0.view().check_operation(&id("i3"), Reopen).unwrap();
+    r0.op("i3", Reopen);
+    assert_eq!(
+        r0.violations("i4"),
+        BTreeSet::from([ViolationKind::CompletedWithOpenDependency])
+    );
+    assert!(r0.violations("i3").is_empty());
+    r0.op("i4", Reopen);
+    assert!(r0.view().is_valid());
+    // With a Completed dependent that has no unfinished dependency yet (i5 depends on i3
+    // only), reopening i3 would add a violation to i5, so the read side and the writer both
+    // reject it until i5 is reopened.
+    let mut shared = Replica::new("r0");
+    shared.op("g2", Complete);
+    shared.add_dep("i3", "g2");
+    let mut i4 = current(Kind::Issue, Lifecycle::NotStarted, None);
+    i4.needs.extend([id("i3"), id("g2")]);
+    let record = shared.try_create("i4", i4).unwrap();
+    insert(&mut shared.store, record);
+    let mut i5 = current(Kind::Issue, Lifecycle::NotStarted, None);
+    i5.needs.insert(id("i3"));
+    let record = shared.try_create("i5", i5).unwrap();
+    insert(&mut shared.store, record);
+    let mut r0 = Replica::from("r0", &shared.store);
+    let mut r1 = Replica::from("r1", &shared.store);
+    for done in ["i3", "i4", "i5"] {
+        r0.op(done, Start);
+        r0.op(done, Complete);
+    }
+    r1.op("g2", Reopen);
+    r0.sync(&r1);
+    let before = r0.view().violations().clone();
+    assert!(r0.view().in_violation(&id("i3")) && r0.view().in_violation(&id("i4")));
+    assert!(!r0.view().in_violation(&id("i5")));
+    assert!(error(r0.view().check_operation(&id("i3"), Reopen)).contains("reopened first"));
+    assert!(error(r0.try_op("i3", Reopen)).contains("reopened first"));
+    assert_eq!(r0.view().violations(), &before);
+    r0.op("i5", Reopen);
+    r0.op("i3", Reopen);
+    r0.op("i4", Reopen);
+    assert!(r0.view().is_valid());
+    // The waiver reaches only an Entity in violation: i3 is Completed with nothing wrong, and
+    // its Completed dependent i4 already has an unfinished dependency, yet i3 stays fixed.
+    let mut shared = Replica::new("r0");
+    shared.op("g2", Complete);
+    let mut i4 = current(Kind::Issue, Lifecycle::NotStarted, None);
+    i4.needs.extend([id("i3"), id("g2")]);
+    let record = shared.try_create("i4", i4).unwrap();
+    insert(&mut shared.store, record);
+    let mut r0 = Replica::from("r0", &shared.store);
+    let mut r1 = Replica::from("r1", &shared.store);
+    for done in ["i3", "i4"] {
+        r0.op(done, Start);
+        r0.op(done, Complete);
+    }
+    r1.op("g2", Reopen);
+    r0.sync(&r1);
+    assert!(!r0.view().in_violation(&id("i3")));
+    assert_eq!(
+        r0.violations("i4"),
+        BTreeSet::from([ViolationKind::CompletedWithOpenDependency])
+    );
+    assert!(error(r0.view().check_operation(&id("i3"), Reopen)).contains("reopened first"));
+    assert!(error(r0.try_op("i3", Reopen)).contains("reopened first"));
+    // A missing parent (the Cancel arrived without the Group's records) blocks nothing beyond
+    // what the waiver allows: Reconsider adds no violation and passes.
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r0.create("g4", Kind::Group, Lifecycle::NotStarted, None);
+    let created = r0.create("i5", Kind::Issue, Lifecycle::NotStarted, Some("g4"));
+    let cancelled = r0.op("i5", Cancel);
+    r1.sync_one(&r0, &created);
+    r1.sync_one(&r0, &cancelled);
+    assert_eq!(
+        r1.violations("i5"),
+        BTreeSet::from([ViolationKind::UnknownParent])
+    );
+    r1.view().check_operation(&id("i5"), Reconsider).unwrap();
+    r1.op("i5", Reconsider);
+    assert_eq!(
+        r1.violations("i5"),
+        BTreeSet::from([ViolationKind::UnknownParent])
+    );
+    r1.sync(&r0);
+    assert!(r1.view().is_valid());
+    // An Issue that gained children through an integration (converted on one side, given a
+    // child on the other) cannot end while the child is unfinished: the read side anticipates
+    // the violation the writer would reject.
+    let mut shared = Replica::new("r0");
+    shared.create("g9", Kind::Group, Lifecycle::NotStarted, None);
+    let mut r0 = Replica::from("r0", &shared.store);
+    let mut r1 = Replica::from("r1", &shared.store);
+    let converted = r0
+        .store
+        .convert(&id("g9"), Kind::Issue, r0.tick())
+        .unwrap()
+        .unwrap();
+    insert(&mut r0.store, converted);
+    r1.create("c", Kind::Issue, Lifecycle::NotStarted, Some("g9"));
+    r0.sync(&r1);
+    assert_eq!(r0.current("g9").kind, Kind::Issue);
+    assert_eq!(
+        r0.violations("c"),
+        BTreeSet::from([ViolationKind::UnknownParent])
+    );
+    assert!(error(r0.view().check_operation(&id("g9"), Cancel)).contains("children"));
+    assert!(error(r0.try_op("g9", Cancel)).contains("children"));
+    // The writer's whole check is the rule and rejects what the read side does not
+    // anticipate: with the child started, starting or withdrawing the Issue g9 would put
+    // InProgress work under an unadopted ancestor.
+    r0.op("c", Start);
+    let before = r0.view().violations().clone();
+    for operation in [Start, Withdraw] {
+        r0.view().check_operation(&id("g9"), operation).unwrap();
+        let rejected = error(r0.try_op("g9", operation));
+        assert!(
+            rejected.contains("would add a structural violation"),
+            "{rejected}"
+        );
+        assert!(rejected.contains("c (unadopted ancestor)"), "{rejected}");
+    }
+    assert_eq!(r0.view().violations(), &before);
+    r0.op("c", Release);
+    r0.op("g9", Start);
+    assert!(error(r0.view().check_operation(&id("g9"), Complete)).contains("children"));
+    assert!(error(r0.try_op("g9", Complete)).contains("children"));
+    r0.move_to("c", None);
+    r0.op("g9", Complete);
+    assert!(r0.view().is_valid());
+}
+
+/// A completion cycle is attributed only to the Entities on it. Entities that merely wait
+/// on the cycle are neither in violation nor waived, a new cycle among them is rejected
+/// because it adds members, and additions on the waiting side that close no cycle pass.
+#[test]
+fn a_new_cycle_among_entities_waiting_on_a_cycle_is_rejected() {
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r0.create("i4", Kind::Issue, Lifecycle::NotStarted, None);
+    r0.add_dep("i4", "g2");
+    r0.add_dep("g0", "g2");
+    r0.add_dep("g2", "i3");
+    r1.add_dep("i3", "g2");
+    r0.sync(&r1);
+    let view = r0.view();
+    assert!(view.conflicted().is_empty());
+    let cycle: BTreeSet<Violation> = ["g2", "i3"]
+        .into_iter()
+        .map(|member| Violation {
+            entity: id(member),
+            kind: ViolationKind::CompletionCycle,
+        })
+        .collect();
+    assert_eq!(view.violations(), &cycle);
+    for waiting in ["g0", "i1", "i4"] {
+        assert!(!view.in_violation(&id(waiting)), "{waiting}");
+    }
+    // g0 waits for i4 as well: no new cycle. i4 waiting for g0 would close one through g0's
+    // child i1 too, and the three new members are named.
+    r0.add_dep("g0", "i4");
+    assert_eq!(r0.view().violations(), &cycle);
+    let rejected = error(r0.try_add_dep("i4", "g0"));
+    for named in [
+        "g0 (completion cycle)",
+        "i1 (completion cycle)",
+        "i4 (completion cycle)",
+    ] {
+        assert!(rejected.contains(named), "{rejected}");
+    }
+    // Registration under the waiting Group and a dependency between waiting Entities pass.
+    r0.create("i5", Kind::Issue, Lifecycle::NotStarted, Some("g0"));
+    r0.add_dep("i1", "i4");
+    assert_eq!(r0.view().violations(), &cycle);
+    // Repairing the original cycle leaves the store valid: nothing else added a violation.
+    r0.remove_dep("g2", "i3");
+    assert!(r0.view().is_valid());
+    // An ancestor depending on its own descendant (a move on one side, a dependency on the
+    // other) is a cycle of one Entity: the descendant waits for itself through its ancestor's
+    // dependency. The ancestor only waits on it.
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r0.move_to("i3", Some("g0"));
+    r1.add_dep("g0", "i3");
+    r0.sync(&r1);
+    assert_eq!(
+        r0.violations("i3"),
+        BTreeSet::from([ViolationKind::CompletionCycle])
+    );
+    assert!(r0.violations("g0").is_empty());
+    r0.remove_dep("g0", "i3");
+    assert!(r0.view().is_valid());
+    // A dependency between Entities already on the same cycle (a chord) changes no member
+    // and passes; the repair removes the cycle's edges one at a time, and the members shrink
+    // to those still on a cycle.
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r0.create("i4", Kind::Issue, Lifecycle::NotStarted, None);
+    r1.sync(&r0);
+    r0.add_dep("i3", "i4");
+    r0.add_dep("g2", "i3");
+    r1.add_dep("i4", "g2");
+    r0.sync(&r1);
+    let members = |names: &[&str]| -> BTreeSet<Violation> {
+        names
+            .iter()
+            .map(|member| Violation {
+                entity: id(member),
+                kind: ViolationKind::CompletionCycle,
+            })
+            .collect()
+    };
+    assert!(r0.view().conflicted().is_empty());
+    assert_eq!(r0.view().violations(), &members(&["g2", "i3", "i4"]));
+    r0.add_dep("g2", "i4");
+    assert_eq!(r0.view().violations(), &members(&["g2", "i3", "i4"]));
+    r0.remove_dep("i3", "i4");
+    assert_eq!(r0.view().violations(), &members(&["g2", "i4"]));
+    r0.remove_dep("g2", "i4");
+    assert!(r0.view().is_valid());
 }
 
 #[test]
@@ -577,6 +861,56 @@ fn unsettled_references_fail_the_prerequisites_without_being_misreported() {
     assert!(r1.violations("i5").is_empty());
     assert!(error(r1.try_op("i5", Start)).contains("adopted"));
     assert!(error(r1.view().check_operation(&id("i5"), Start)).contains("adopted"));
+    // Started work does not move under a Group whose chain is broken either, until the
+    // missing records arrive.
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r0.create("g4", Kind::Group, Lifecycle::NotStarted, None);
+    let moved = r0.move_to("g0", Some("g4"));
+    r1.op("i3", Start);
+    r1.sync_one(&r0, &moved);
+    assert_eq!(
+        r1.violations("g0"),
+        BTreeSet::from([ViolationKind::UnknownParent])
+    );
+    assert!(error(r1.try_move("i3", Some("g0"))).contains("adopted"));
+    r1.sync(&r0);
+    r1.move_to("i3", Some("g0"));
+    assert!(r1.view().is_valid());
+    // Complete, Reopen and the Accept of a Group with finished work below it fail the same
+    // way under the broken chain: i1 is InProgress, i4 Completed and the Undecided g5 holds
+    // the Completed i6, all under g0, whose parent record is missing on r1.
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r0.op("i1", Start);
+    r0.create("i4", Kind::Issue, Lifecycle::NotStarted, Some("g0"));
+    r0.op("i4", Start);
+    r0.op("i4", Complete);
+    r0.create("g5", Kind::Group, Lifecycle::NotStarted, Some("g0"));
+    r0.create("i6", Kind::Issue, Lifecycle::NotStarted, Some("g5"));
+    r0.op("i6", Start);
+    r0.op("i6", Complete);
+    r0.op("g5", Cancel);
+    r0.op("g5", Reconsider);
+    r1.sync(&r0);
+    r0.create("g4", Kind::Group, Lifecycle::NotStarted, None);
+    let moved = r0.move_to("g0", Some("g4"));
+    r1.sync_one(&r0, &moved);
+    assert_eq!(
+        r1.violations("g0"),
+        BTreeSet::from([ViolationKind::UnknownParent])
+    );
+    for (entity, operation) in [("i1", Complete), ("i4", Reopen), ("g5", Accept)] {
+        let read = error(r1.view().check_operation(&id(entity), operation));
+        assert!(read.contains("adopted"), "{entity}: {read}");
+        let write = error(r1.try_op(entity, operation));
+        assert!(write.contains("adopted"), "{entity}: {write}");
+    }
+    r1.sync(&r0);
+    r1.op("i1", Complete);
+    r1.op("i4", Reopen);
+    r1.op("g5", Accept);
+    assert!(r1.view().is_valid());
     // A conflicted grandparent: the read-side check fails and the parent is not "unknown".
     let mut r0 = Replica::new("r0");
     let mut r1 = Replica::new("r1");

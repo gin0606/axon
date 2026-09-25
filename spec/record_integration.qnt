@@ -133,18 +133,23 @@ module record_integration {
     if (workingGroups(v).contains(e)) InProgress else v.current.get(e).life
   pure def hasStartedDescendant(v: View, g: Id): bool =
     descendants(v, g).exists(d => Set(InProgress, Completed).contains(v.current.get(d).life))
-  // 全祖先が採用済み（stored が NotStarted）か。親が衝突中なら判定できないので偽。所属なしは通る。
+  // 親の連なりが切れていないか。自身と settled な祖先のそれぞれについて、親があれば settled である。
+  pure def ancestorChainSettled(v: View, e: Id): bool =
+    Set(e).union(ancestors(v, e)).forall(a => parentIds(v.current.get(a).parent).forall(g => v.settled.contains(g)))
+  // 全祖先が採用済み（stored が NotStarted）か。親の連なりの各段が settled で NotStarted であることを要求し、
+  // 途中に衝突中か記録の欠けた Entity があれば判定できないので偽。所属なしは通る。
   pure def ancestorsAdopted(v: View, e: Id): bool =
-    parentIds(v.current.get(e).parent).forall(g => v.settled.contains(g))
-      and ancestors(v, e).forall(a => v.current.get(a).life == NotStarted)
+    ancestorChainSettled(v, e) and ancestors(v, e).forall(a => v.current.get(a).life == NotStarted)
   pure def completionPredecessors(v: View, e: Id): Set[Id] =
     children(v, e).union(settledDeps(v, e))
       .union(ancestors(v, e).map(a => settledDeps(v, a)).flatten())
-  // 通常完了経路（直属の子 ∪ 自身の依存先 ∪ 全祖先の依存先）の循環に含まれる Entity。
+  // 通常完了経路（直属の子 ∪ 自身の依存先 ∪ 全祖先の依存先）の循環上にある Entity。
+  // 前提をたどって自身に戻れる Entity だけで、循環を待つだけの Entity は含めない。
+  // 待つ側まで含めると、待つ側どうしに新しい循環を足しても違反の集合が増えず、通常操作が循環を作れてしまう。
   pure def completionCycleMembers(v: View): Set[Id] = {
     val preds = v.settled.mapBy(e => completionPredecessors(v, e))
-    v.settled.fold(v.settled, (remaining, _) => remaining.filter(e =>
-      preds.get(e).intersect(remaining).size() > 0))
+    v.settled.filter(e =>
+      v.settled.fold(preds.get(e), (reach, _) => reach.union(reach.map(x => preds.get(x)).flatten())).contains(e))
   }
 
   pure def deriveViolations(v: View): Set[Violation] = {
@@ -245,7 +250,7 @@ module record_integration {
         not(terminal(v.current.get(g).life)),
         not(ancestors(v, g).contains(e)),
         Set(InProgress, Completed).contains(effective(v, e)) implies
-          (v.current.get(g).life == NotStarted and ancestors(v, g).forall(a => v.current.get(a).life == NotStarted)),
+          (v.current.get(g).life == NotStarted and ancestorsAdopted(v, g)),
       }
   }
   pure def canMove(v: View, e: Id, p: Parent): bool = and {
@@ -296,6 +301,11 @@ module record_integration {
     appendRecord(s, newRecord(v, r, n, e, Move, 0, { ...v.current.get(e), parent: p }))
   pure def removeDepResult(s: Store, v: View, r: Replica, n: int, e: Id, t: Id): Store =
     appendRecord(s, newRecord(v, r, n, e, RemoveDep, 0, { ...v.current.get(e), deps: v.current.get(e).deps.exclude(Set(t)) }))
+  pure def addDepResult(s: Store, v: View, r: Replica, n: int, e: Id, t: Id): Store =
+    appendRecord(s, newRecord(v, r, n, e, AddDep, 0, { ...v.current.get(e), deps: v.current.get(e).deps.union(Set(t)) }))
+  // 通常操作の検査: 操作後の違反が操作前の違反の部分集合である。
+  pure def noWorse(before: View, after: View): bool = after.violations.subseteq(before.violations)
+  pure def noNewViolations(v: View, after: Store): bool = noWorse(v, view(after))
   // 修復の進み具合。違反の集合が縮むか、集合が同じでも違反に含まれる Entity の dependency と所属の辺が減れば前進。
   // 二重に絡んだ循環は一手では違反の集合を縮められないが、辺を一本ずつ外して直せる。
   pure def repairEdges(v: View): int =
@@ -341,14 +351,18 @@ module record_integration {
 
   // ---- 通常操作 ----
   // 衝突が一つでも残っている replica では、Resolve と Note 以外の操作を行えない。
-  // 構造の違反は操作を止めない。所属変更・dependency の追加・登録は違反を増やさないことを要求し、
-  // それ以外は各操作の前提で扱う。
+  // 構造の違反は操作を止めないが、lifecycle 操作を含む全通常操作は「操作後の違反が操作前の違反の部分集合」で
+  // あることを要求する。免除は操作の前提を緩めるだけで、違反を増やす操作は通らない。
+  // 所属変更・dependency の追加・登録はこの検査が循環などを防ぐ唯一の検査なので常に課す（strict）。
+  // lifecycle 操作・文面編集・dependency の削除は、有効な store では各操作の前提だけで違反を防ぐはずなので、
+  // 違反のある store でだけ課し、有効な store で前提だけが足りることは invLocalStep が検査する。
+  // 実装は lifecycle 操作を常に検査し、文面編集・dependency の削除は前提だけで確定する。
 
-  action commitLocal(r: Replica, v: View, rec: Record, noWorse: bool): bool = {
+  action commitLocal(r: Replica, v: View, rec: Record, strict: bool): bool = {
     val s2 = appendRecord(stores.get(r), rec)
     val v2 = view(s2)
     all {
-      noWorse implies v2.violations.subseteq(v.violations),
+      (strict or not(structurallyValid(v))) implies noWorse(v, v2),
       stores' = stores.set(r, s2),
       seqs' = seqs.setBy(r, n => n + 1),
       previous' = stores,
@@ -520,6 +534,8 @@ module record_integration {
     | _ => true
   }
   // 通常操作は衝突のない replica でしか起きず、違反を増やさず、gap を変えず、他の Entity の記録を増やさない。
+  // lifecycle 操作・文面編集・dependency の削除は有効な store では検査を課していないので、
+  // 各操作の前提だけで違反を防ぐことをここで検査する。
   pure def localStep(before: Store, vb: View, after: Store, va: View, e: Id): bool = and {
     noConflicts(vb),
     va.violations.subseteq(vb.violations),
