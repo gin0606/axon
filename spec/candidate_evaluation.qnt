@@ -1,8 +1,10 @@
-// 候補一覧の1回の取得を、Entity ごとの評価という観測ステップへ具体化するモデル。
+// 候補一覧の1回の取得と axon show の1回の表示を、Entity ごとの評価という観測ステップへ具体化するモデル。
 // group_lifecycle の状態・許可条件・一覧の行を再利用し、そちらの bool 入力と行の集合を
 // 失敗のない場合の基準として、評価の回数・省略・判定失敗を検査する。
 // proposals は stored が Undecided の Entity、tasks は stored が NotStarted の Issue と Group の浮上と、
 // 浮上に関係なく進行中の Issue と実効 lifecycle が InProgress の Group を対象にする。
+// show は対象が tasks の行になる場合と同じ範囲（対象自身と、Group なら着手可能な子孫の Issue、
+// それらの祖先）だけを評価し、対象の状況と詰まっている理由がその範囲で決まることを検査する。
 // 対象外: 行の状況（Ready・Blocked など）の導出（group_lifecycle が扱い、このモデルは行の集合だけを見る）、
 // 実際のコマンド内容と shell、作業ディレクトリ、終了コードの解釈、timeout と中断、
 // 出力の上限と診断、非実行の閲覧、永続化、並行実行。これらは実装側で検証する。
@@ -17,7 +19,8 @@ module candidate_evaluation {
   // 外部の結果は評価時に成立・未成立・判定失敗から選ぶ。
   type Setting = Unset | ExternalCommand(int)
   type ObservationResult = Unevaluated | Satisfied | Unsatisfied | EvaluationFailed
-  type ListingKind = JudgmentList | TasksList
+  // ShowTarget は axon show ID の1回の表示で、Id は対象。未登録の枠を指す場合は何も評価しない。
+  type ListingKind = JudgmentList | TasksList | ShowTarget(Id)
   type ListingStatus = Idle | Running | Succeeded(Set[Id]) | Failed(Id)
 
   // Listing は1回の取得の間だけ持つ検証用の一時状態で、Entity への保存項目ではない。
@@ -68,10 +71,15 @@ module candidate_evaluation {
   // 実効 lifecycle が InProgress の Group も stored は NotStarted なので、それ自身が対象に入る。
   // 終了した祖先の配下は対象から外す。祖先は上から評価し、未成立ならその配下を評価しない。
   // Group は stored が InProgress にならないため、候補自身でない進行中の祖先だけを評価する経路はない。
+  // show は対象が tasks の行になる場合（stored が NotStarted）だけ、対象自身と、Group なら着手可能な
+  // 子孫の Issue を対象にする。祖先は requiredEntities が加える。Undecided・進行中・終了した対象は評価しない。
   pure def baseCandidates(s: PlanState, kind: ListingKind): Set[Id] = {
     val selected = match kind {
       | JudgmentList => s.registered.filter(e => storedOf(s, e) == Undecided)
       | TasksList => s.registered.filter(e => storedOf(s, e) == NotStarted)
+      | ShowTarget(t) => if (s.registered.contains(t) and storedOf(s, t) == NotStarted)
+          Set(t).union(descendants(s, t).filter(d => startableIssues(s).contains(d)))
+        else Set()
     }
     selected.filter(e => ancestorsOf(s, e).forall(a => not(terminal(storedOf(s, a)))))
   }
@@ -156,11 +164,11 @@ module candidate_evaluation {
     listingObservation' = recordListing(PlanChanged),
   }
 
-  // 取得の各段と、取得外の条件編集・計画変更を混ぜて探索する。
+  // 取得の各段と、取得外の条件編集・計画変更を混ぜて探索する。show の対象は全 ID から選ぶ。
   action queryStep = {
     nondet e = IDS.oneOf()
     nondet setting = Set(Unset, ExternalCommand(0), ExternalCommand(1)).oneOf()
-    nondet kind = Set(JudgmentList, TasksList).oneOf()
+    nondet kind = Set(JudgmentList, TasksList).union(IDS.map(id => ShowTarget(id))).oneOf()
     nondet result = Set(Satisfied, Unsatisfied, EvaluationFailed).oneOf()
     any {
       changePlan,
@@ -210,7 +218,17 @@ module candidate_evaluation {
     match q.kind {
       | JudgmentList => judgments(s, c)
       | TasksList => issueRows(s, c).union(groupRows(s, c))
+      | ShowTarget(_) => q.base.filter(e => surfaced(s, c, e))
     }
+  }
+  // show の対象の状況と詰まっている理由を、未評価の入力の仮定ごとに求める。
+  // Group は行の状況と理由、Issue は浮上しているか（Ready・Blocked か Unsurfaced か）が読み手に見える導出。
+  pure def shownSituation(s: PlanState, q: Listing, t: Id, unseen: bool): (TaskStatus, Set[StallReason], bool) = {
+    val c = observedConditions(q, unseen)
+    if (kindOf(s, t) == Group)
+      (groupStatus(s, c, t), stallReasons(s, c, t), false)
+    else
+      (Blocked, Set(), surfaced(s, c, t))
   }
 
   // invariant: 取得と外部の結果が保存する計画・条件を変えないこと、評価回数の上限、
@@ -279,9 +297,26 @@ module candidate_evaluation {
     | _ => true
   }
   // 進行中の Issue は stored が InProgress なのでどちらの一覧の対象にもならず、
-  // 子を持たないので祖先としても評価されない。tasks には評価なしで載る。
+  // 子を持たないので祖先としても評価されない。tasks には評価なしで載る。show の対象にもならない。
   val invWorkingIssuesNotEvaluated =
     workingIssues(plan).forall(e => listing.counts.get(e) == 0)
+  // show が評価する範囲は、同じ計画で tasks が評価する範囲に含まれる。
+  // 構成の確認: show の対象は stored が NotStarted の Entity に限り、それは tasks の対象でもある。
+  val invShowRangeWithinTasks = match listing.kind {
+    | ShowTarget(_) => listing.status != Idle implies requiredEntities(plan, listing).subseteq(
+        baseCandidates(plan, TasksList).union(baseCandidates(plan, TasksList).map(e => ancestorsOf(plan, e)).flatten()))
+    | _ => true
+  }
+  // show の対象の状況と詰まっている理由は評価した範囲で決まる。未評価の入力をすべて成立と仮定しても、
+  // すべて未成立と仮定しても、Group の状況と理由、Issue が着手候補かどうかは変わらない。
+  val invShowSituationDetermined = match listing.kind {
+    | ShowTarget(t) => match listing.status {
+      | Succeeded(_) => (plan.registered.contains(t) and storedOf(plan, t) == NotStarted) implies
+          shownSituation(plan, listing, t, true) == shownSituation(plan, listing, t, false)
+      | _ => true
+    }
+    | _ => true
+  }
 
   // witness: 成功・空・失敗の各結果、未設定と外部コマンドの評価、条件の設定と訂正、
   // 失敗した条件の解除・訂正による回復、成立の持続と次回の未成立化、
@@ -395,5 +430,30 @@ module candidate_evaluation {
   val wNoEligibleSkipsConfigured = wEmptyListing and listing.base.size() == 0
     and plan.registered.exists(e => settings.get(e) != Unset)
     and IDS.forall(e => listing.counts.get(e) == 0)
+
+  // witness: show の表示。Group の対象で浮上していない着手可能な子孫を評価して見つける、
+  // Issue の対象が祖先の未成立で評価されないまま浮上しないと決まる、対象が tasks の行にならないため
+  // 何も評価しない、tasks より狭い範囲で終わる、判定失敗で表示全体が失敗する。
+  def shownTarget: Set[Id] = match listing.kind {
+    | ShowTarget(t) => Set(t)
+    | _ => Set()
+  }
+  val wShowGroupHiddenCandidate = listingObservation.event == Published and shownTarget.exists(t =>
+    kindOf(plan, t) == Group and descendants(plan, t).exists(d =>
+      startableIssues(plan).contains(d) and listing.cache.get(d) == Unsatisfied))
+  val wShowIssueUnderUnsurfacedAncestor = listingObservation.event == Published and shownTarget.exists(t =>
+    kindOf(plan, t) == Issue and listing.base.contains(t) and listing.counts.get(t) == 0
+      and ancestorsOf(plan, t).exists(a => listing.cache.get(a) == Unsatisfied))
+  val wShowNothingEvaluated = listingObservation.event == Published and shownTarget.exists(t =>
+    plan.registered.contains(t) and storedOf(plan, t) != NotStarted
+      and plan.registered.exists(e => settings.get(e) != Unset)
+      and IDS.forall(e => listing.counts.get(e) == 0))
+  val wShowNarrowerThanTasks = listingObservation.event == Published and shownTarget.size() > 0
+    and baseCandidates(plan, TasksList).exists(e => settings.get(e) != Unset
+      and not(requiredEntities(plan, listing).contains(e)))
+  val wShowFailure = shownTarget.size() > 0 and (match listingObservation.event {
+    | EvaluatedEntity(e) => listing.status == Failed(e)
+    | _ => false
+  })
 
 }

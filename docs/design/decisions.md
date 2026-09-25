@@ -135,6 +135,24 @@ Group の `InProgress` は、実効 lifecycle と同じく「配下の仕事が�
 
 Group を見出しにした木の一覧は採らなかった。表示の改善として導出の規則と独立に扱える。
 
+## `axon show` で再浮上条件を評価する理由
+
+`axon show ID` は既定で、対象が `axon tasks` の行になる場合にその行が必要とする範囲の再浮上条件を評価し、`axon tasks` と同じ導出で状況と詰まっている理由を示す。評価しない表示は `--skip-conditions` で残す。契約は [評価契約](../reference/candidates.md#評価契約) と [`axon show` と待ち理由](../reference/cli.md#axon-show-と待ち理由) にある。
+
+以前は `axon show` が条件を評価せず、条件をすべて成立したものとして状況と理由を導出していた。その結果、浮上していない着手可能な Issue だけを配下に持つ Group は `axon tasks` では `Blocked`、`axon show` では `Ready` になり、`Stalled` の節も出ず、詰まっている理由を読む場所がなかった。手掛かりは配下の Issue の `axon show --details` に出る条件だけで、一覧と詳細の食い違いから読み手が推測する必要があった。
+
+`axon show` の側を評価する形にしたのは、詰まっている理由を示す責任が `axon show` にあるためである。`axon tasks` は行の集合と状況を示す入口で、理由の行を併記すると行の書式と併記する理由の種類を別に決める必要がある。`axon show` は `Stalled` の節を既に持ち、評価した条件から「浮上していない着手可能な子孫」の理由を導出すれば、`axon tasks` の `Blocked` から `axon show` へ辿る流れの中で理由が読める。`axon show` に評価する option を足す案は、既定の表示が `axon tasks` と食い違ったままになる。評価せずに「未評価の条件で隠れうる」と示す案は、条件を持つ Entity があるかは分かっても、隠れているかは断定できない。
+
+`axon list` は評価しないまま据え置く。`axon list` は保存情報の列挙の入口で、評価しても得られるのは状況欄の一致だけであり、非浮上・終了を含む全件の列挙で全 Entity の条件を実行する費用に見合わない。評価しない表示を `--details` に兼ねさせる案は、保存情報の詳細入口という `--details` の意味に評価の有無という別の軸を重ねることになるため採らず、`--condition-timeout`・`--trace-conditions` と同じ語族の `--skip-conditions` にした。`--details` の有無で状況の導出は変えない。
+
+Issue の状況欄には `Unsurfaced` を足し、`Start` の前提の充足・不足より優先する。候補にならないという事実のほうが、前提を満たしても一覧に出ないことを正しく伝えるためである。`Blocked` との複合表示は、Issue の `InProgress+Blocked` と違って二つの条件が独立に解けるわけではなく、浮上すれば前提の充足・不足がそのまま表示に戻るので設けない。語は help が使う surfaced と文書の「浮上」に対応させた。`Hidden` は理由が読めず、`Deferred` は日付以外の条件に合わない。理由の label は既存の `Undecided child:`・`Undecided ancestor:` と同形の `Unsurfaced candidate:`・`Unsurfaced ancestor:` にした。`Undecided` の Entity の状況欄は `Undecided` のままにし、浮上の有無を足さない。判断候補に出るかは `axon proposals` が示す。
+
+祖先の条件が未成立の未着手の対象は、実効値が `InProgress` の Group を除いて `axon tasks` の行に出ないが、`axon show` では対象について何かを示す必要がある。祖先の条件も評価し、Issue には `Required to start` の `Unsurfaced ancestor:`、Group には六つ目の詰まっている理由として示す。祖先は上から評価して未成立の祖先より下は評価しないため、示す祖先は一つになる。判定失敗は `axon tasks` と同じく表示全体を失敗させる。行ごとに失敗の印を付けて続ける案は、部分結果の規則が増えるため採らなかった。失敗の診断に `--skip-conditions` を示すので、壊れた条件でも保存情報は読め、`axon condition set|unset` で修復できる。
+
+評価範囲を対象の行に必要な範囲に限るのは、`axon show` が一つの Entity を読む操作であり、関連する Entity の行のために別の部分木の条件まで実行しない方が読み取りの費用を対象の大きさに比例させられるためである。範囲外の Entity の行は範囲内で得た結果だけを使い、それ以外の条件を成立したものとして状況を導出する。読み取りの重さは、エージェントが `axon show` を頻繁に叩くため、保存情報の読取に `--skip-conditions`、状況の診断に既定の `axon show` という使い分けを同梱 skill と help に書いて吸収する。
+
+`axon tasks` を `--kind`・`--search` で絞り込んだとき、残った Group の行の状況を導出するために表示しない子孫の条件も評価する規則は、この判断のときに現行のまま確定した。評価しない側の規則にすると、壊れた条件で一覧が止まらない代わりに、同じ Group の状況が絞り込みの有無で変わりうる規則を別に決める必要がある。壊れた条件による失敗は絞り込みなしの `axon tasks` と同じ挙動で、修復は `axon show ID --skip-conditions` と `axon condition set|unset` でできる。
+
 ## 終了した Group の構成と配下の状態を固定する理由
 
 Group 配下の Issue は、その計画を前提とした仕事である。Group が `Completed` になった後に、配下の `Cancelled` の Issue だけを `Reconsider` すると、完了した計画の一部を再び未判断に戻すことになる。単独の Issue の再検討とは前提が異なるため、元の計画から独立して見直す仕事は、目的や完了条件を改めて定義した新しい Issue として扱う。
@@ -148,7 +166,7 @@ Group 配下の Issue は、その計画を前提とした仕事である。Grou
 - **終了した Group の構成を固定する。** 最終確認は固定した子の集合について行う。`Reopen` と `Reconsider` で戻す経路があるため、計画を見直す手段は残る。`Completed` の依存元や採用済みでない祖先がある場合は、それらから順に戻す手間がかかる。
 - **`InProgress` の Entity にも未完了の dependency を追加できる。** 追加した依存先はその Entity 自身の `Complete` の前提として完了時に検査されるため、その Entity が未完了の依存先を残したまま完了することはない。Group に足した依存先が配下の `Complete` の前提にならないことは [Group の dependency を配下の完了の前提にしない理由](#group-の-dependency-を配下の完了の前提にしない理由) に記す。着手中に見つかった前提を記録するために、作業の解放を挟ませる必要がない。
 - **Issue・Group から Group への dependency を許す。** 依存元は依存先の Group の `Complete` まで待つ。配下がすべて終了しただけでは満たさず、計画全体の最終確認を待つことが Group への依存の意味になる。
-- **再浮上条件は候補の表示だけに使い、ID を明示した操作を縛らない。** 条件の判定が失敗すると一覧の取得は失敗するが、明示操作と条件の修復は条件を評価しないため、壊れた条件で Entity が操作できなくなることはない。
+- **再浮上条件は候補の表示と `axon show` の状況・理由の表示だけに使い、ID を明示した操作を縛らない。** 条件の判定が失敗すると一覧の取得と `axon show` の表示は失敗するが、明示操作と条件の修復は条件を評価しないため、壊れた条件で Entity が操作できなくなることはない。
 
 ## 親 Group を一つに限る理由
 

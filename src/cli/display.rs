@@ -92,7 +92,7 @@ pub fn situation(text: &str) -> String {
     let style = match text {
         "Undecided" => DECISION,
         "Ready" | "Confirmable" => POSITIVE,
-        "Blocked" | "InProgress+Blocked" | "Empty" => WAITING,
+        "Blocked" | "Unsurfaced" | "InProgress+Blocked" | "Empty" => WAITING,
         "InProgress" | "Started  InProgress" => ID,
         _ => MUTED,
     };

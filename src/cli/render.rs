@@ -12,6 +12,7 @@ pub(super) fn status_label(status: read::Status) -> &'static str {
         read::Status::Undecided => "Undecided",
         read::Status::Ready => "Ready",
         read::Status::Blocked => "Blocked",
+        read::Status::Unsurfaced => "Unsurfaced",
         read::Status::InProgressBlocked => "InProgress+Blocked",
         read::Status::InProgress => "InProgress",
         read::Status::Completed => "Completed",
@@ -44,11 +45,10 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
             value
                 .prerequisites
                 .as_ref()
-                .is_some_and(|p| named(&p.ancestors))
-                || value
-                    .stall
-                    .as_ref()
-                    .is_some_and(|s| named(&s.undecided_ancestors))
+                .is_some_and(|p| named(&p.ancestors) || named(&p.unsurfaced_ancestors))
+                || value.stall.as_ref().is_some_and(|s| {
+                    named(&s.undecided_ancestors) || named(&s.unsurfaced_ancestors)
+                })
         });
     if let Some(parent) = value.parent.filter(|_| !parent_named_below) {
         out.push_str(&format!(
@@ -77,6 +77,9 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
                 row(dependency)
             ));
         }
+        for ancestor in &prerequisites.unsurfaced_ancestors {
+            out.push_str(&format!("Unsurfaced ancestor: {}", row(ancestor)));
+        }
     }
     if !details && let Some(stall) = &value.stall {
         out.push_str(&format!("\n{}\n", display::heading("Stalled")));
@@ -103,8 +106,14 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
         for subgroup in &stall.open_subgroups {
             out.push_str(&format!("Open subgroup: {}", row(subgroup)));
         }
+        for candidate in &stall.unsurfaced_candidates {
+            out.push_str(&format!("Unsurfaced candidate: {}", row(candidate)));
+        }
         for ancestor in &stall.undecided_ancestors {
             out.push_str(&format!("Undecided ancestor: {}", row(ancestor)));
+        }
+        for ancestor in &stall.unsurfaced_ancestors {
+            out.push_str(&format!("Unsurfaced ancestor: {}", row(ancestor)));
         }
     }
     if details {

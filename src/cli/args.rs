@@ -74,12 +74,22 @@ pub(super) enum Command {
         #[command(subcommand)]
         command: Condition,
     },
-    /// Show text, immediate unmet prerequisites and all Group descendants
+    /// Show text, the situation from evaluated conditions, unmet prerequisites and all Group descendants
+    #[command(
+        after_help = "Like tasks, show runs the resurfacing conditions that decide the situation of a NotStarted Entity: the ancestors, the Entity itself and, for a Group, its startable descendants. Undecided, InProgress and terminal Entities run nothing. An unsurfaced Issue is shown as Unsurfaced, and a stalled Group lists unsurfaced candidates and an unsurfaced ancestor under Stalled.
+Conditions run through /bin/sh -c: exit 0 is satisfied, 1 is unsatisfied, other exits fail the whole command.
+To read saved information without running any condition, add --skip-conditions; the situation is then derived as if every condition were satisfied."
+    )]
     Show {
         id: String,
         /// Include saved lifecycle, condition and all direct relationships without duplicate wait sections
         #[arg(long)]
         details: bool,
+        /// Run no condition and derive the situation as if every condition were satisfied
+        #[arg(long, conflicts_with = "trace_conditions")]
+        skip_conditions: bool,
+        #[command(flatten)]
+        conditions: ConditionOptions,
     },
     /// Append or read immutable Notes
     Note {
@@ -200,6 +210,12 @@ Absence from a candidate list does not mean an Entity is missing. Use list for t
 pub(super) struct CandidateOptions {
     #[command(flatten)]
     pub(super) selection: Selection,
+    #[command(flatten)]
+    pub(super) conditions: ConditionOptions,
+}
+/// How one command runs the conditions it evaluates.
+#[derive(Args)]
+pub(super) struct ConditionOptions {
     /// Per-command timeout: positive integer followed by ms, s, m or h
     #[arg(long, default_value = "30s", value_parser = parse_timeout)]
     pub(super) condition_timeout: Duration,

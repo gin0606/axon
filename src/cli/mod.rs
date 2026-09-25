@@ -47,7 +47,12 @@ fn run(command: Command) -> Result<Output> {
         Command::List(options) => read::list(options),
         Command::Proposals(options) => read::proposals(options),
         Command::Tasks(options) => read::tasks(options),
-        Command::Show { id, details } => read::show(id, details),
+        Command::Show {
+            id,
+            details,
+            skip_conditions,
+            conditions,
+        } => read::show(id, details, skip_conditions, conditions),
         Command::Log {
             id,
             recorder_details,

@@ -51,6 +51,17 @@ impl<'a, E: From<Error>, F: FnMut(&Entity, &str) -> std::result::Result<bool, E>
         }
         Ok(true)
     }
+    /// Whether the Entity and its ancestors surface as far as this invocation has evaluated
+    /// them. Entities outside the evaluated range count as surfaced, so a read never evaluates
+    /// anything only to decorate a related row.
+    pub fn surfaced_so_far(&self, entity: &Entity) -> std::result::Result<bool, Error> {
+        let mut chain = self.snapshot.ancestors(entity)?;
+        chain.insert(0, entity);
+        Ok(chain.into_iter().all(|ancestor| {
+            ancestor.current.lifecycle.editable()
+                && self.cache.get(&ancestor.id).copied().unwrap_or(true)
+        }))
+    }
 }
 
 /// Evaluates only relevant candidates and their ancestors, once per invocation.

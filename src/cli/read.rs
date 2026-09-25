@@ -1,6 +1,6 @@
 use super::{
     Output, Publication,
-    args::{CandidateOptions, ListOptions},
+    args::{CandidateOptions, ConditionOptions, ListOptions},
     condition, display,
     render::{self, branch_boundary, format_note, list_row, recorder_display},
     store::{open, resolve},
@@ -64,15 +64,18 @@ pub(super) fn proposals(options: CandidateOptions) -> Result<Output> {
 pub(super) fn tasks(options: CandidateOptions) -> Result<Output> {
     candidates(options, CandidateList::Tasks)
 }
+fn evaluation(options: &ConditionOptions, root: std::path::PathBuf) -> condition::Evaluation {
+    if options.trace_conditions {
+        condition::Evaluation::tracing(root, options.condition_timeout)
+    } else {
+        condition::Evaluation::with_timeout(root, options.condition_timeout)
+    }
+}
 fn candidates(options: CandidateOptions, kind: CandidateList) -> Result<Output> {
     let (location, store) = open()?;
     let (_, snapshot) = store.read()?;
     let text = {
-        let evaluation = if options.trace_conditions {
-            condition::Evaluation::tracing(location.worktree, options.condition_timeout)
-        } else {
-            condition::Evaluation::with_timeout(location.worktree, options.condition_timeout)
-        };
+        let evaluation = evaluation(&options.conditions, location.worktree);
         read::candidates(
             &snapshot,
             kind,
@@ -100,16 +103,30 @@ fn candidates(options: CandidateOptions, kind: CandidateList) -> Result<Output> 
         },
     )
 }
-pub(super) fn show(value: String, details: bool) -> Result<Output> {
-    let (_, store) = open()?;
+pub(super) fn show(
+    value: String,
+    details: bool,
+    skip_conditions: bool,
+    options: ConditionOptions,
+) -> Result<Output> {
+    let (location, store) = open()?;
     let (_, snapshot) = store.read()?;
-    result(
-        render::show(
-            &read::detail(&snapshot, &resolve(&snapshot, &value)?)?,
-            details,
-        ),
-        "No records.",
-    )
+    let id = resolve(&snapshot, &value)?;
+    let detail = if skip_conditions {
+        read::detail(&snapshot, &id)?
+    } else {
+        let evaluation = evaluation(&options, location.worktree);
+        let hint = format!(
+            "Use axon show {id}{} --skip-conditions to read saved information without running conditions",
+            if details { " --details" } else { "" }
+        );
+        read::detail_with(&snapshot, &id, |entity, script| {
+            evaluation
+                .run_command(entity, script)
+                .map_err(|e| axon::Error::Invalid(format!("{e}\n{hint}")))
+        })?
+    };
+    result(render::show(&detail, details), "No records.")
 }
 pub(super) fn show_note(id: String, note_id: String, recorder_details: bool) -> Result<Output> {
     let (_, store) = open()?;

@@ -88,7 +88,7 @@ root は `schema`、`groups`、`issues`、`references` の 4 field だけをこ�
 
 参照は `{ id: demo-8bxw2r }` または `{ key: results }` のどちらか一方だけを持つ mapping とする。一つの参照 mapping への両方の併記、どちらもない mapping、未解決の ID・key はエラーである。素の文字列は使わない。解決後に同じ Entity を指す重複した `needs` はエラーとし、自己依存も拒否する。
 
-親は child が、dependency は dependent が所有する。record に書く `parent` と `needs` はその Entity の所有物だけであり、外部から編集集合への incoming な包含・dependency は record に現れないため編集できない。declaration は incoming edge を表示しない。必要なら`axon show ID --details`で確認する。
+親は child が、dependency は dependent が所有する。record に書く `parent` と `needs` はその Entity の所有物だけであり、外部から編集集合への incoming な包含・dependency は record に現れないため編集できない。declaration は incoming edge を表示しない。必要なら`axon show ID --details --skip-conditions`で確認する。
 
 ## 外部参照
 

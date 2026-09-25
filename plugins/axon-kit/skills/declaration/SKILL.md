@@ -14,7 +14,7 @@ description: Axonのdeclarationを`axon export`し、`axon import prepare`・`ax
 - 既存計画は `axon export ID...` のstdoutを未使用のfileへ保存する。Groupは自身と終了済みを含む全子孫、Issueは単体、複数selectorは和集合。`axon export`は保存先を変更せず条件を実行しない。既存の編集fileへリダイレクトして上書きしない。
 - 新規計画は `axon docs declaration --example` から作る。これは保存先を開かない。`id: null`、`base: null`、一意の `key` を持つrecordに、呼び出し側が決めた初期状態 `undecided` または `not-started` を書く。雛形の初期状態だけから採用判断を推測しない。
 - schemaは `axon-declaration/v1`。fieldはすべて必須。編集集合は `groups` と `issues` のrecordだけで、載っていないEntityは触らない。recordを消しても削除・`axon cancel`・所属解除・依存解除にならない。各recordはtitle、description、親、outgoing dependencyの完全な宣言で、親解除は `parent: null`、依存なしは `needs: []` と書く。
-- 既存のid、base、lifecycle、kindは変えない。`lifecycle`は`references`を含めて保存値で、`axon show --details`・`axon list --lifecycle`が示すGroupの実効値とは異なりうる（保存値`NotStarted`で配下の仕事が始まったGroupも`not-started`のまま）。新規は`axon import prepare`後もkeyを保持する。参照は `{ id: 完全ID }` または `{ key: 別名 }`。`references` は編集集合外への参照の読み取り専用contextで、incoming edgeは含まない。必要なら `axon show ID --details` で確認する。既存Entityを追加するにはselectorを広げて別fileへ`axon export`を再実行し、保全した編集意図を移す。baseを手作りしない。
+- 既存のid、base、lifecycle、kindは変えない。`lifecycle`は`references`を含めて保存値で、`axon show --details`・`axon list --lifecycle`が示すGroupの実効値とは異なりうる（保存値`NotStarted`で配下の仕事が始まったGroupも`not-started`のまま）。新規は`axon import prepare`後もkeyを保持する。参照は `{ id: 完全ID }` または `{ key: 別名 }`。`references` は編集集合外への参照の読み取り専用contextで、incoming edgeは含まない。必要なら `axon show ID --details --skip-conditions` で確認する。既存Entityを追加するにはselectorを広げて別fileへ`axon export`を再実行し、保全した編集意図を移す。baseを手作りしない。
 - 再浮上条件・Note・履歴の取り込み、既存lifecycleの遷移、未知形式の変換には使わない。既存の条件とNoteは保持される。
 
 ## `axon import prepare`・`axon import check`・`axon import apply`
@@ -24,7 +24,7 @@ description: Axonのdeclarationを`axon export`し、`axon import prepare`・`ax
 1. `axon import prepare FILE` は保存先を変えず、局所規則とID・kind・外部参照の存在を検査し、新規IDを確定して同じfileをcanonical rewriteする。keyと新規baseのnullを保持し、referencesを再生成する。コメントは保持しない。出力の `key -> 完全ID` を確認し、fileを読み直して内容を確認し、適用入力のbytesとdigestを固定する。`axon import prepare`成功は競合や共通コアの制約を通過したことを意味しない。
 2. `axon import check FILE` は全IDが確定したcanonical入力を検証し、Entityごとの作成、titleの前後（`axon list`と同じ改行・制御文字の可視化で一行表示）、descriptionの変更有無、親の前後、needsの増減と適用後の状況を示す。fileと保存先を変更せず、条件も実行しない。本文全文は保全した元fileとのdiffで確認する。拒否があれば原因を解決して再検査し、差分が依頼の対象・内容と一致することを呼び出し側で確認する。
 3. 呼び出し側から適用権限がある場合に `axon import apply FILE` を実行する。CLIはlock取得後の入力とsnapshotで再検証し、全件を一つの保存境界で反映する。成功後、保存したsnapshotからbase・lifecycle・referencesと並びを更新し、keyを保持して同じfileを書き戻す。成功出力の `key -> 完全ID` はbase更新前に新規だったrecordの対応を示す。`axon import check`後の編集は`axon import check`を再実行し、古い結果で変更後のfileを承認済み扱いにしない。
-4. 再 `axon import check FILE` で差分なしを確認し、必要な `axon show --details`・logで完全ID、文面、関係、初期状態を照合する。差分があれば別writerによる変更も含めて調べ、完了と報告しない。保存先とfileそれぞれの結果、適用した対象と未解決事項を返す。
+4. 再 `axon import check FILE` で差分なしを確認し、必要な `axon show ID --details --skip-conditions`・logで完全ID、文面、関係、初期状態を照合する。差分があれば別writerによる変更も含めて調べ、完了と報告しない。保存先とfileそれぞれの結果、適用した対象と未解決事項を返す。
 
 ## 失敗・競合・結果不明
 

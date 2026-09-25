@@ -23,8 +23,8 @@ must also be Completed before work completes. Cancelled is terminal but does not
 satisfy a dependency. Group completion requires all direct children to be terminal;
 an empty Group completes as well. Running complete on a Group explicitly confirms
 final review of the entire plan, including the outcomes and Notes of its descendants.
-tasks shows a Group as Empty, Confirmable, Ready, InProgress or Blocked, and show
-explains a stalled Group under Stalled.
+tasks and show show a Group as Empty, Confirmable, Ready, InProgress or Blocked, and
+show explains a stalled Group under Stalled, including candidates that do not surface.
 parent set ID --parent G sets or moves the parent Group and parent unset ID
 removes it; neither changes lifecycle.
 
@@ -56,14 +56,19 @@ Reading and resurfacing
   Entity creation order and Note causal order are preserved. No extra filters or
   fixed-column format are provided. Read the original with note show ID NOTE_ID.
   show reads the saved text, unmet prerequisites and all Group descendants as a tree.
+  Like tasks, show runs the conditions the situation of a NotStarted Entity needs: the
+  ancestors, the Entity and, for a Group, its startable descendants; other Entities run
+  nothing. A NotStarted Issue that does not surface is Unsurfaced. show --skip-conditions
+  runs nothing and treats every condition as satisfied; use it to read saved information
+  only.
   show --details includes saved conditions and all direct relationships once.
   note list ID requires an Entity ID and reads full Notes; note show ID NOTE_ID reads one stable Note. log reads state
   changes and integrations, preserving concurrent branches. --recorder-details
   includes optional stored recorder data; actor information is not ownership.
 
   condition set ID --command 'test -f ready.txt' stores a shell condition without
-  running it. condition unset removes it. proposals/tasks run /bin/sh -c: 0=satisfied,
-  1=unsatisfied, other exits fail the list. The default timeout is 30s;
+  running it. condition unset removes it. proposals/tasks/show run /bin/sh -c: 0=satisfied,
+  1=unsatisfied, other exits fail the list or the display. The default timeout is 30s;
   --condition-timeout accepts positive integers with ms, s, m or h.
   --trace-conditions writes captured output to stderr. Conditions run at the
   current Git worktree root (management root outside Git). Filtering selects

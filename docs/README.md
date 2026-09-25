@@ -20,7 +20,7 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 | 文書 | 定義する範囲 |
 | --- | --- |
 | [lifecycle](reference/lifecycle.md) | 状態と遷移、Groupの実効lifecycle、再浮上条件、計画と包含、種類の変換、dependency、候補集合、文面・Note・状態変更履歴・記録者 |
-| [候補と外部条件](reference/candidates.md) | `axon tasks`の行と状況、`axon proposals|tasks`の評価と、条件コマンドの実行 |
+| [候補と外部条件](reference/candidates.md) | `axon tasks`の行と状況、`axon proposals|tasks|show`の評価と、条件コマンドの実行 |
 | [CLI入出力](reference/cli.md) | ID・引数・一覧と詳細・英語表示・装飾・保存結果 |
 | [保存と統合](reference/storage.md) | 保存形式、保存先の探索と初期化、分岐した記録の統合 |
 | [一括declaration](reference/declaration.md) | 計画全体の取得と一括編集のfile形式、`axon export`・`axon import` |

@@ -242,7 +242,7 @@ fn one_registration_command_selects_kind_and_adoption_independently() {
 }
 
 #[test]
-fn details_show_saved_relationships_once_without_running_conditions() {
+fn details_show_saved_relationships_once_and_skip_conditions_runs_nothing() {
     let f = Fixture::new();
     f.init();
     let parent = f.ok(&["capture", "--kind", "group", "--title", "Plan"]);
@@ -265,11 +265,11 @@ fn details_show_saved_relationships_once_without_running_conditions() {
     let a = created(&a);
     let dependent = f.ok(&["capture", "--accept", "--title", "Consumer", "--needs", a]);
     let dependent = created(&dependent);
-    let plain = f.ok(&["show", a]);
+    let plain = f.ok(&["show", a, "--skip-conditions"]);
     assert!(
         plain.contains("Required to start") && !plain.contains(&dep) && !plain.contains(dependent)
     );
-    let details = f.ok(&["show", a, "--details"]);
+    let details = f.ok(&["show", a, "--details", "--skip-conditions"]);
     for id in [a, parent, &dep, dependent] {
         assert_eq!(details.matches(id).count(), 1, "{details}");
     }
@@ -279,6 +279,10 @@ fn details_show_saved_relationships_once_without_running_conditions() {
             && details.contains("Condition: echo wrong > observed")
     );
     assert!(!f.0.join("observed").exists());
+    // Without --skip-conditions, --details still evaluates the situation.
+    let details = f.ok(&["show", a, "--details"]);
+    assert!(details.contains("Issue  Blocked  Subject"), "{details}");
+    assert!(f.0.join("observed").exists());
 }
 
 #[test]
@@ -1205,7 +1209,7 @@ fn reopen_returns_completed_work_and_groups_are_never_started_or_released() {
 }
 
 #[test]
-fn list_shows_group_situations_without_conditions_while_tasks_evaluates_them() {
+fn list_and_skip_conditions_ignore_conditions_while_tasks_and_show_evaluate_them() {
     let f = Fixture::new();
     f.ok(&["init", "t"]);
     let group = f.ok(&["capture", "--kind", "group", "--accept", "--title", "Plan"]);
@@ -1247,13 +1251,100 @@ fn list_shows_group_situations_without_conditions_while_tasks_evaluates_them() {
         "{tasks}"
     );
     assert!(!tasks.contains(&sub) && !tasks.contains(&issue), "{tasks}");
-    for output in [f.ok(&["list"]), f.ok(&["show", &group])] {
+    // show evaluates like tasks: the Group is Blocked by an unsurfaced candidate, the
+    // intermediate Group by its own condition, and the Issue names the unsurfaced ancestor.
+    let show = f.ok(&["show", &group]);
+    assert!(
+        show.contains(&format!("{group}  Group  Blocked  Plan")),
+        "{show}"
+    );
+    let stalled = show.split("Stalled\n").nth(1).unwrap();
+    assert!(
+        stalled.contains(&format!("Open subgroup: {sub}  Group  Blocked  Sub")),
+        "{show}"
+    );
+    assert!(
+        stalled.contains(&format!(
+            "Unsurfaced candidate: {issue}  Issue  Unsurfaced  Work"
+        )),
+        "{show}"
+    );
+    assert!(!show.contains("Unsurfaced ancestor"), "{show}");
+    assert!(
+        show.contains(&format!("└── {issue}  Issue  Unsurfaced  Work")),
+        "{show}"
+    );
+    let show_sub = f.ok(&["show", &sub]);
+    assert!(
+        show_sub.contains(&format!("Unsurfaced candidate: {issue}"))
+            && !show_sub.contains("Unsurfaced ancestor"),
+        "{show_sub}"
+    );
+    let show_issue = f.ok(&["show", &issue]);
+    assert!(
+        show_issue.starts_with(&format!("{issue}  Issue  Unsurfaced  Work\n")),
+        "{show_issue}"
+    );
+    assert!(
+        show_issue.contains(&format!(
+            "Required to start\nUnsurfaced ancestor: {sub}  Group  Blocked  Sub\n"
+        )),
+        "{show_issue}"
+    );
+    // The named ancestor replaces the parent line.
+    assert!(!show_issue.contains("Parent:"), "{show_issue}");
+    // A Group below an unsurfaced ancestor names it last under Stalled, after its own
+    // unsurfaced candidates, and the named parent replaces the parent line.
+    let root = f.ok(&[
+        "capture",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        "Root",
+        "--command",
+        "exit 1",
+    ]);
+    let root = created(&root).to_owned();
+    let nested = f.ok(&[
+        "capture", "--kind", "group", "--accept", "--title", "Nested", "--parent", &root,
+    ]);
+    let nested = created(&nested).to_owned();
+    let leaf = f.ok(&[
+        "capture", "--accept", "--title", "Leaf", "--parent", &nested,
+    ]);
+    let leaf = created(&leaf).to_owned();
+    let show_nested = f.ok(&["show", &nested]);
+    assert!(
+        show_nested.contains(&format!(
+            "Stalled\nUnsurfaced candidate: {leaf}  Issue  Unsurfaced  Leaf\nUnsurfaced ancestor: {root}  Group  Blocked  Root\n"
+        )),
+        "{show_nested}"
+    );
+    assert!(!show_nested.contains("Parent:"), "{show_nested}");
+    let skipped = f.ok(&["show", &nested, "--skip-conditions"]);
+    assert!(
+        skipped.contains(&format!("{nested}  Group  Ready  Nested\nParent: {root}"))
+            && !skipped.contains("Unsurfaced"),
+        "{skipped}"
+    );
+    for output in [
+        f.ok(&["list"]),
+        f.ok(&["show", &group, "--skip-conditions"]),
+    ] {
         assert!(
             output.contains(&format!("{group}  Group  Ready  Plan")),
             "{output}"
         );
-        assert!(!output.contains("Stalled"), "{output}");
+        assert!(
+            !output.contains("Stalled") && !output.contains("Unsurfaced"),
+            "{output}"
+        );
     }
+    assert!(
+        f.ok(&["show", &issue, "--skip-conditions"])
+            .starts_with(&format!("{issue}  Issue  Ready  Work\n"))
+    );
     let list = f.ok(&["list"]);
     for line in [
         format!("{sub}  Group  Ready  Sub"),
@@ -1269,8 +1360,120 @@ fn list_shows_group_situations_without_conditions_while_tasks_evaluates_them() {
             .contains(&format!("{group}  Group  Ready  Plan"))
     );
     f.ok(&["condition", "unset", &sub]);
+    for output in [f.ok(&["tasks"]), f.ok(&["show", &group])] {
+        assert!(
+            output.contains(&format!("{group}  Group  Ready  Plan")),
+            "{output}"
+        );
+    }
+}
+
+#[test]
+fn show_fails_on_evaluation_failure_and_names_skip_conditions() {
+    let f = Fixture::new();
+    f.ok(&["init", "t"]);
+    let group = f.ok(&["capture", "--kind", "group", "--accept", "--title", "Plan"]);
+    let group = created(&group).to_owned();
+    let issue = f.ok(&[
+        "capture",
+        "--accept",
+        "--title",
+        "Work",
+        "--parent",
+        &group,
+        "--command",
+        "exit 3",
+    ]);
+    let issue = created(&issue).to_owned();
+    let help = f.ok(&["help", "show"]);
+    assert!(help.contains("--skip-conditions") && help.contains("--trace-conditions"));
+    // The failure names the Entity and the way to read saved information.
+    let failed = failure(f.run(&["show", &group]));
     assert!(
-        f.ok(&["tasks"])
+        failed.contains(&issue) && failed.contains("exit status: 3"),
+        "{failed}"
+    );
+    assert!(
+        failed.contains(&format!("axon show {group} --skip-conditions")),
+        "{failed}"
+    );
+    let failed = failure(f.run(&["show", &issue, "--details"]));
+    assert!(failed.contains("exit status: 3"), "{failed}");
+    assert!(
+        failed.contains(&format!("axon show {issue} --details --skip-conditions")),
+        "{failed}"
+    );
+    // A Group without startable descendants still runs its own condition, as tasks does.
+    f.ok(&["condition", "set", &issue, "--command", "exit 1"]);
+    let hollow = f.ok(&[
+        "capture",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        "Hollow",
+        "--command",
+        "exit 3",
+    ]);
+    let hollow = created(&hollow).to_owned();
+    f.ok(&["capture", "--title", "Idea", "--parent", &hollow]);
+    let failed = failure(f.run(&["show", &hollow]));
+    assert!(
+        failed.contains(&hollow) && failed.contains("exit status: 3"),
+        "{failed}"
+    );
+    assert!(failure(f.run(&["tasks"])).contains(&hollow));
+    // The timeout applies to show as it does to tasks.
+    f.ok(&["condition", "set", &hollow, "--command", "sleep 5"]);
+    let started = std::time::Instant::now();
+    let failed = failure(f.run(&["show", &hollow, "--condition-timeout", "200ms"]));
+    assert!(started.elapsed() < std::time::Duration::from_secs(4));
+    assert!(
+        failed.contains("timed out after 200ms") && failed.contains("--skip-conditions"),
+        "{failed}"
+    );
+    f.ok(&["condition", "unset", &hollow]);
+    f.ok(&["condition", "set", &issue, "--command", "exit 3"]);
+    assert!(
+        f.ok(&["show", &group, "--skip-conditions"])
             .contains(&format!("{group}  Group  Ready  Plan"))
     );
+    assert_eq!(
+        f.run(&["show", &group, "--skip-conditions", "--trace-conditions"])
+            .status
+            .code(),
+        Some(2)
+    );
+    // A timeout is accepted, and has nothing to apply to, when conditions are skipped.
+    f.ok(&[
+        "show",
+        &group,
+        "--skip-conditions",
+        "--condition-timeout",
+        "1s",
+    ]);
+    // Undecided targets evaluate nothing, even with a failing condition.
+    f.ok(&["withdraw", &issue]);
+    assert!(
+        f.ok(&["show", &issue])
+            .starts_with(&format!("{issue}  Issue  Undecided  Work\n"))
+    );
+    f.ok(&["accept", &issue]);
+    f.ok(&["condition", "set", &issue, "--command", "echo seen; exit 1"]);
+    let traced = f.run(&[
+        "show",
+        &group,
+        "--trace-conditions",
+        "--condition-timeout",
+        "500ms",
+    ]);
+    assert!(traced.status.success());
+    let trace = String::from_utf8(traced.stderr).unwrap();
+    assert!(
+        trace.contains(&format!("Condition trace: {issue}")) && trace.contains("seen"),
+        "{trace}"
+    );
+    assert!(String::from_utf8(traced.stdout).unwrap().contains(&format!(
+        "Unsurfaced candidate: {issue}  Issue  Unsurfaced  Work"
+    )));
 }

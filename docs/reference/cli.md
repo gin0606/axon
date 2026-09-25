@@ -30,7 +30,7 @@ option値の先頭hyphenは `--description='--text'` のように渡す。構文
 
 `axon list`は保存済み全件を作成日時の昇順、同時刻はID順で表示する。`--kind issue|group`、`--lifecycle undecided|not-started|in-progress|completed|cancelled`、`--terminal=true|false` はANDで組み合わせる。kindは現在値、`--lifecycle` は実効値で絞り込むため、配下の仕事が始まったGroupは `in-progress` に当たり `not-started` に当たらない。terminalは`Completed`または`Cancelled`で、着手できることや浮上とは別。`--search` は現在title・本文だけのcase-sensitiveなliteral一致。Unicode正規化やtrimをせず、空文字は構文エラー。%、_、正規表現記号に特殊な意味はない。検索時だけMatchedに該当field（Title、Description）を付記する。
 
-`axon proposals|tasks`はkind/searchで候補を絞ってから、必要な祖先を含め条件を評価する。一回の呼出しで同じ条件を重複評価しない。除外候補の条件は評価しないが、残った候補の祖先ならkindが異なっても評価し、`axon tasks` は残ったGroupの行の状況を導出するためにその子孫の着手可能なIssueと途中のGroupも評価する。評価失敗時に部分一覧をstdoutへ出さない。時間制限は正整数とms/s/m/hで、既定30s。詳細は [候補と外部条件](candidates.md)。`axon list`と保存情報を読む`axon show`は外部条件コマンドを実行しない。
+`axon proposals|tasks`はkind/searchで候補を絞ってから、必要な祖先を含め条件を評価する。一回の呼出しで同じ条件を重複評価しない。除外候補の条件は評価しないが、残った候補の祖先ならkindが異なっても評価し、`axon tasks` は残ったGroupの行の状況を導出するためにその子孫の着手可能なIssueと途中のGroupも評価する。評価失敗時に部分一覧をstdoutへ出さない。時間制限は正整数とms/s/m/hで、既定30s。詳細は [候補と外部条件](candidates.md)。`axon show`も既定で対象の行に必要な範囲の条件を評価し、`--skip-conditions` を付けると評価しない。`axon list`は外部条件コマンドを実行しない。
 
 一覧とGroupの子一覧は、状態ごとに区切らず作成日時の古い順へ統一する。作成日時そのものを通常の各行へ表示する必要はない。同時刻はID順で安定させる。
 
@@ -41,12 +41,13 @@ option値の先頭hyphenは `--description='--text'` のように渡す。構文
 | `Undecided` | `Undecided` | 未判断 |
 | `Ready` | `NotStarted` で `Start` の前提を満たす | 着手できる |
 | `Blocked` | `NotStarted` で `Start` の前提が不足 | 祖先の採用待ちまたは依存先の完了待ち |
+| `Unsurfaced` | `NotStarted` で、自身または祖先の再浮上条件が未成立 | 浮上しておらず候補にならない。`Start` の前提の充足・不足より優先し、条件を評価した `axon show` だけが示す |
 | `InProgress` | `InProgress` でdependencyが充足 | 着手中 |
 | `InProgress+Blocked` | `InProgress` で未完了の依存先がある | 着手中で、完了に必要な依存先が残る |
 | `Completed` | `Completed` | 完了 |
 | `Cancelled` | `Cancelled` | 取りやめ |
 
-Groupは、保存値が `Undecided`・`Completed`・`Cancelled` ならその状態名を示し、保存値が `NotStarted` なら配下から導出した `Empty`・`Confirmable`・`Ready`・`InProgress`・`Blocked` のいずれかを示す。GroupにはIssueの `InProgress+Blocked` に当たる複合表示を設けない。`axon tasks` は評価した再浮上条件を使って着手候補の子孫から `Ready` を決め、条件を評価しない `axon list` と `axon show` は着手可能な子孫から決める。このため、浮上していない着手可能なIssueだけを配下に持つGroupは、`axon tasks` では `Blocked`、`axon list`・`axon show` では `Ready` になる。Issueの状況欄の判定には再浮上条件を使わない。
+Groupは、保存値が `Undecided`・`Completed`・`Cancelled` ならその状態名を示し、保存値が `NotStarted` なら配下から導出した `Empty`・`Confirmable`・`Ready`・`InProgress`・`Blocked` のいずれかを示す。GroupにはIssueの `InProgress+Blocked` に当たる複合表示を設けず、Groupの状況欄に `Unsurfaced` も設けない。`axon tasks` と `axon show` は評価した再浮上条件を使って着手候補の子孫から `Ready` を決め、条件を評価しない `axon list` と `axon show --skip-conditions` は着手可能な子孫から決める。このため、浮上していない着手可能なIssueだけを配下に持つGroupは、`axon tasks`・`axon show` では `Blocked`、`axon list`・`axon show --skip-conditions` では `Ready` になる。`Undecided` のEntityの状況欄は浮上の有無にかかわらず `Undecided` のままにする。
 
 祖先の採用待ちも`Blocked`に含める。これは表示上のまとめ方で、保存する包含と明示dependencyの区別は維持する。Groupの未終了の子は最終確認前の進捗として子一覧へ示し、明示dependencyと混ぜない。一行の中に表示する値（タイトル、理由、actor、条件コマンド、親のタイトル）に含まれる改行は `\n` として表示し、保存された文字列が記録の行や節の見出しを装えないようにする。
 
@@ -62,17 +63,17 @@ demo-r5w8kn  Group  Empty  検索の運用手順を整える
 
 ## `axon show` と待ち理由
 
-`axon show ID`は、ID・種別・状況・タイトル、Note件数、所属計画のID・タイトル、本文を基本とする。本文は保存された内容を、各行を2 spaceで字下げして表示する。IDや節の見出しなど構造を表す行は行頭から始まり、利用者の複数行の文章は行頭から始まらないので、本文が節や記録の行を装うことはない。Note本文、履歴、内部のcausal情報、不要な設定・件数の羅列、操作コマンドの案内は通常表示から外す。Noteがあれば `5 notes` のように存在を示し、0件ならその表示を省略する。
+`axon show ID`は、ID・種別・状況・タイトル、Note件数、所属計画のID・タイトル、本文を基本とする。状況は `axon tasks` の行と同じく、対象の行に必要な範囲の再浮上条件を評価して導出する。評価範囲、関連するEntityの行の扱い、判定失敗の扱いは [候補と外部条件](candidates.md#評価契約) に定める。`--skip-conditions` は条件を評価せず、条件をすべて成立したものとして状況を導出する。`--condition-timeout` と `--trace-conditions` は `axon tasks` の同名optionと同じ意味で、`--trace-conditions` は `--skip-conditions` と併用できない。`--skip-conditions` を付けたときの `--condition-timeout` は、実行する条件がないため効果を持たない。判定失敗は表示全体を失敗させ、失敗したEntityと条件、および `axon show ID --skip-conditions` で保存情報を読めることを診断に示す。本文は保存された内容を、各行を2 spaceで字下げして表示する。IDや節の見出しなど構造を表す行は行頭から始まり、利用者の複数行の文章は行頭から始まらないので、本文が節や記録の行を装うことはない。Note本文、履歴、内部のcausal情報、不要な設定・件数の羅列、操作コマンドの案内は通常表示から外す。Noteがあれば `5 notes` のように存在を示し、0件ならその表示を省略する。
 
-未充足の前提がある場合だけ、本文の前へ `Required to start` または `Required to complete` の節を置く。`Required to start` はIssueだけに置く。満たされていない前提を `Ancestor must be adopted:`（保存値が `NotStarted` でない祖先）・`Dependency must complete:`（自身の未完了の依存先）・`Ancestor dependency must complete:`（祖先の未完了の依存先）として、ID・種別・現在の状況・タイトルの行で示す。`Required to complete` は同じ語で、全祖先の採用と自身の依存先を示す。Groupの未終了の子は全子孫のツリーで読めるため、この節に再列挙しない。満たされた依存や依存先の先のツリーは常時展開しない。親の所属表示と待ち理由が同じ情報になる場合は、重複を避けて配置する。
+未充足の前提がある場合だけ、本文の前へ `Required to start` または `Required to complete` の節を置く。`Required to start` はIssueだけに置く。満たされていない前提を `Ancestor must be adopted:`（保存値が `NotStarted` でない祖先）・`Dependency must complete:`（自身の未完了の依存先）・`Ancestor dependency must complete:`（祖先の未完了の依存先）として、ID・種別・現在の状況・タイトルの行で示す。祖先の条件が未成立のためIssueが浮上していない場合は、同じ節に `Unsurfaced ancestor:` として、条件が未成立の祖先Groupの行を示す。これは候補にならない理由であり、`Start` の前提ではない（[再浮上条件](lifecycle.md#候補集合) はIDを明示した操作を縛らない）。祖先は上から評価して未成立の祖先より下は評価しないため、この行は一つになる。Issue自身の条件が未成立の場合は状況欄の `Unsurfaced` だけで示し、条件は `--details` で読む。`Required to complete` は同じ語で、全祖先の採用と自身の依存先を示す。Groupの未終了の子は全子孫のツリーで読めるため、この節に再列挙しない。満たされた依存や依存先の先のツリーは常時展開しない。親の所属表示と待ち理由が同じ情報になる場合は、重複を避けて配置する。
 
 Groupの場合は、この共通表示の末尾へ短い集計と全子孫のツリーをこの順で加える。`Completed`・`Cancelled`も含めて全階層を展開する。各行は一覧と同じID・種別・状況・タイトルとし、兄弟を作成日時順（同時刻はID順）で揃え、別のDependencies節へ同じ情報を再列挙しない。
 
 集計は `Descendants: 2/4 terminal (1 completed, 1 cancelled)` のように、全子孫の終了数と完了・取りやめの違いが読める形とする。集計はGroup・Issueの両方を含み、対象自身を除く。全状態の内訳は羅列しない。Groupの状況が `Confirmable` なら `Awaiting final confirmation` を示す。これは導出される案内であり、保存状態やレビュー済み状態を追加しない。
 
-保存値が `NotStarted` のGroupが詰まっている場合は、本文の前へ `Stalled` の節を置き、[詰まっている理由](candidates.md#詰まっている-group-と理由) を、該当するEntityの行とともに示す。未完了のdependencyは、Group自身の依存先を `Dependency must complete:`、祖先の依存先を `Ancestor dependency must complete:`、終了していない子孫の依存先を `Descendant dependency must complete:` とし、最後のものは依存先を待つ子孫の行と依存先の行を並べる。`Undecided` の子は `Undecided child:`、未終了の子Groupは `Open subgroup:`、`Undecided` の祖先は `Undecided ancestor:` とする。いずれもID・種別・現在の状況・タイトルの行で示す。`axon show` は再浮上条件を評価しないため、浮上していない着手可能な子孫という理由は示さない。`Stalled` の節を置くGroupには `Required to complete` の節を置かない。自身の依存先と `Undecided` の祖先は `Stalled` の中で示す。詰まっているGroupの `Stalled` には理由が一つ以上ある。
+保存値が `NotStarted` のGroupが詰まっている場合は、本文の前へ `Stalled` の節を置き、[詰まっている理由](candidates.md#詰まっている-group-と理由) を、該当するEntityの行とともに示す。未完了のdependencyは、Group自身の依存先を `Dependency must complete:`、祖先の依存先を `Ancestor dependency must complete:`、終了していない子孫の依存先を `Descendant dependency must complete:` とし、最後のものは依存先を待つ子孫の行と依存先の行を並べる。`Undecided` の子は `Undecided child:`、未終了の子Groupは `Open subgroup:`、浮上していない着手可能な子孫は `Unsurfaced candidate:`（行はそのIssue）、`Undecided` の祖先は `Undecided ancestor:`、浮上していない祖先は `Unsurfaced ancestor:`（行は条件が未成立の祖先Group）とする。いずれもID・種別・現在の状況・タイトルの行で示す。`--skip-conditions` では条件をすべて成立とみなすため、`Unsurfaced candidate:` と `Unsurfaced ancestor:` は現れない。`Stalled` の節を置くGroupには `Required to complete` の節を置かない。自身の依存先と `Undecided` の祖先は `Stalled` の中で示す。詰まっているGroupの `Stalled` には理由が一つ以上ある。
 
-`axon show ID --details` は保存情報の明示的な詳細入口。通常の待ち理由節を保存情報の詳細へ置き換え、親・条件・全直接dependency・直接dependentを取得する。同じ関係を複数の節へ重複して列挙しない。Issueでは状況と異なる場合だけ保存lifecycleを `Lifecycle:` として別記する。Groupでは `Lifecycle:` に実効値を示し、保存値と異なれば `Lifecycle: InProgress (stored NotStarted)` のように保存値を併記する。条件未設定、親なし、空の依存集合も `(none)` と明示する。Groupの全子孫ツリーは通常表示と同様に表示する。
+`axon show ID --details` は保存情報の明示的な詳細入口。通常の待ち理由節を保存情報の詳細へ置き換え、親・条件・全直接dependency・直接dependentを取得する。状況欄の導出は `--details` の有無で変わらず、評価を避けるには `--skip-conditions` を併せて付ける。同じ関係を複数の節へ重複して列挙しない。Issueでは状況と異なる場合だけ保存lifecycleを `Lifecycle:` として別記する。Groupでは `Lifecycle:` に実効値を示し、保存値と異なれば `Lifecycle: InProgress (stored NotStarted)` のように保存値を併記する。条件未設定、親なし、空の依存集合も `(none)` と明示する。Groupの全子孫ツリーは通常表示と同様に表示する。
 
 ## Noteと履歴
 

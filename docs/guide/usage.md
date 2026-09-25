@@ -6,7 +6,7 @@
 
 | 目的 | 操作 |
 | --- | --- |
-| 保存状態・条件・全直接関係 | `axon show ID --details` |
+| 保存状態・条件・全直接関係 | `axon show ID --details --skip-conditions` |
 | 未判断の候補 | `axon proposals` |
 | 浮上した未着手と全着手中 | `axon tasks` |
 | 保存済み全件（条件を実行しない） | `axon list` |
@@ -18,7 +18,7 @@
 | 状態変更の経緯 | `axon log ID` |
 | 記録者の詳細 | `axon log ID --recorder-details` / `axon note list ID --recorder-details` |
 
-`axon tasks` にはIssueとGroupが平らに並び、依存や祖先の採用待ちも含まれます。表示の状況を読み、着手できると決めつけないでください。Groupの状況は配下から導出され、`Empty` は計画を書く段階、`Confirmable` は最終確認して完了できる段階、`Ready` は配下に着手できる浮上したIssueがある段階です（再浮上条件を評価しない `axon list`・`axon show` では浮上を問いません）。`InProgress` は配下の仕事が始まっていること、`Blocked` はそれ以外を示します。完了できず、配下に着手できるIssueも着手中のIssueもないGroupは、`axon show` の `Stalled` 節で理由を確認できます。候補に出ないことは操作禁止やEntityの不存在を意味しません。
+`axon tasks` にはIssueとGroupが平らに並び、依存や祖先の採用待ちも含まれます。表示の状況を読み、着手できると決めつけないでください。Groupの状況は配下から導出され、`Empty` は計画を書く段階、`Confirmable` は最終確認して完了できる段階、`Ready` は配下に着手できる浮上したIssueがある段階です（再浮上条件を評価しない `axon list`・`axon show --skip-conditions` では浮上を問いません）。`InProgress` は配下の仕事が始まっていること、`Blocked` はそれ以外を示します。完了できず、配下に着手できるIssueも着手中のIssueもないGroupは、`axon show` の `Stalled` 節で理由を確認できます。`axon show` は `axon tasks` と同じく再浮上条件を評価するので、条件で隠れているIssueは `Unsurfaced`、隠れたIssueしか持たないGroupは `Blocked` と `Unsurfaced candidate:` で読めます。保存情報だけを読むときは `--skip-conditions` を付けます。候補に出ないことは操作禁止やEntityの不存在を意味しません。
 
 ## 登録と状態変更
 
@@ -69,7 +69,7 @@ Groupは自身と終了済みを含む全子孫、Issueは単体を取得しま�
 
 `groups`・`issues` に載っていないEntityは触りません。fileからrecordを消しても、削除・取消・所属解除・依存解除にはなりません。Groupから外すにはそのEntityのrecordに `parent: null`、依存をすべて外すには `needs: []` を書きます。作業の取消や既存のlifecycle遷移には通常コマンドを使います。
 
-編集集合のrecordは文面・親・outgoing dependencyの完全な宣言です。外部Entityの `references` は読み取り専用のcontextで、外から入る所属・依存は含みません。必要なら `axon show ID --details` で調べます。既存Entityを編集集合へ加える場合は対象IDを追加して別fileへ再度`axon export`し、保全した編集意図を移してください。既存recordの `base` を手作りしません。再浮上条件・Noteは取り込まず、既存値を保持します。
+編集集合のrecordは文面・親・outgoing dependencyの完全な宣言です。外部Entityの `references` は読み取り専用のcontextで、外から入る所属・依存は含みません。必要なら `axon show ID --details --skip-conditions` で調べます。既存Entityを編集集合へ加える場合は対象IDを追加して別fileへ再度`axon export`し、保全した編集意図を移してください。既存recordの `base` を手作りしません。再浮上条件・Noteは取り込まず、既存値を保持します。
 
 ### 競合と保存失敗を確認する
 
@@ -79,13 +79,13 @@ Groupは自身と終了済みを含む全子孫、Issueは単体を取得しま�
 
 ## 並行作業と引継ぎ
 
-無視する運用では全worktreeがmain worktreeの保存先を共有するため、同じ未着手Entityへの並行`axon start`は一つだけ成功します。失敗側は`axon show`・`axon log`で現在値を読み、実行中のworkerと調整してください。記録者情報を所有権として扱わず、作業終了を確認してから継続・`axon release`を判断します。
+無視する運用では全worktreeがmain worktreeの保存先を共有するため、同じ未着手Entityへの並行`axon start`は一つだけ成功します。失敗側は`axon show ID --skip-conditions`・`axon log`で現在値を読み、実行中のworkerと調整してください。記録者情報を所有権として扱わず、作業終了を確認してから継続・`axon release`を判断します。
 
 追跡する運用ではworktreeごとに正本が分かれるため、同じEntityに対してそれぞれ`axon start`を実行できます。Gitで取り込むまで互いの作業は見えません。異なる現在値の衝突はEntity全体で選び、両側のNoteと実操作の履歴を保持します。同じworktreeでGit更新とAxon書込みを並行しないでください。統合後は [明示的な統合](../development/lifecycle-file.md#明示的な統合) に従って検査・stageし、`axon show`・Note・logで成果を確認して通常操作へ戻ります。
 
 ## 再浮上
 
-`axon condition set ID --command 'test -f ready.txt'` は条件を保存し、`axon condition unset ID` は解除します。保存時には実行しません。`axon proposals|tasks`だけが必要な条件を `/bin/sh -c` で評価し、終了0は成立、1は未成立、その他は一覧の失敗です。`--condition-timeout` と `--trace-conditions` の契約は [外部条件](../reference/candidates.md) を参照してください。
+`axon condition set ID --command 'test -f ready.txt'` は条件を保存し、`axon condition unset ID` は解除します。保存時には実行しません。`axon proposals|tasks` と既定の `axon show` が必要な条件を `/bin/sh -c` で評価し、終了0は成立、1は未成立、その他は一覧または表示の失敗です。`axon show ID --skip-conditions` は評価しません。`--condition-timeout` と `--trace-conditions` の契約は [外部条件](../reference/candidates.md) を参照してください。
 
 IDはprefix＋ランダム6文字で、完全IDまたは一意なsuffixを指定できます。CLI生成文は英語、TTYでは意味に応じて装飾し、NO_COLORまたは非TTYでは装飾しません。一覧の絞り込み・検索、Note個別参照と保存結果は [CLIと表示の契約](../reference/cli.md) を参照してください。
 

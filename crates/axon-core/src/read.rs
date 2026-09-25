@@ -10,6 +10,9 @@ pub enum Status {
     Undecided,
     Ready,
     Blocked,
+    /// A NotStarted Issue whose own or ancestor's condition is unsatisfied. It cannot become a
+    /// candidate, whether or not the prerequisites of `Start` are met.
+    Unsurfaced,
     InProgressBlocked,
     InProgress,
     Completed,
@@ -128,37 +131,46 @@ impl<'a> View<'a> {
         }
         found
     }
-    /// The situation shown without evaluating conditions: a Group is `Ready` when a startable
-    /// Issue is below it.
+    /// The situation with every condition taken as satisfied: a Group is `Ready` when a
+    /// startable Issue is below it, and no Issue is `Unsurfaced`.
     pub fn status(&self, entity: &Entity) -> Status {
         let Ok(status) = self.status_with(entity, |_| Ok::<_, std::convert::Infallible>(true));
         status
     }
-    /// The situation of a `tasks` row: a Group is `Ready` only when a startable Issue below it
-    /// is also a candidate, which `candidate` decides from evaluated conditions.
+    /// The situation from evaluated conditions, as `tasks` rows and `show` derive it: `surfaced`
+    /// decides whether an Entity and its ancestors surface. A NotStarted Issue that does not
+    /// surface is `Unsurfaced`, and a Group is `Ready` only when a startable Issue below it
+    /// surfaces.
     pub fn status_with<E>(
         &self,
         entity: &Entity,
-        candidate: impl FnMut(&Entity) -> std::result::Result<bool, E>,
+        mut surfaced: impl FnMut(&Entity) -> std::result::Result<bool, E>,
     ) -> std::result::Result<Status, E> {
         Ok(match (entity.kind, entity.current.lifecycle) {
             (_, Lifecycle::Undecided) => Status::Undecided,
             (_, Lifecycle::Completed) => Status::Completed,
             (_, Lifecycle::Cancelled) => Status::Cancelled,
-            (Kind::Issue, Lifecycle::NotStarted) if self.startable(entity) => Status::Ready,
-            (Kind::Issue, Lifecycle::NotStarted) => Status::Blocked,
+            (Kind::Issue, Lifecycle::NotStarted) => {
+                if !surfaced(entity)? {
+                    Status::Unsurfaced
+                } else if self.startable(entity) {
+                    Status::Ready
+                } else {
+                    Status::Blocked
+                }
+            }
             (_, Lifecycle::InProgress) if !self.unmet_dependencies(entity).is_empty() => {
                 Status::InProgressBlocked
             }
             (_, Lifecycle::InProgress) => Status::InProgress,
-            (Kind::Group, Lifecycle::NotStarted) => self.group_status(entity, candidate)?,
+            (Kind::Group, Lifecycle::NotStarted) => self.group_status(entity, surfaced)?,
         })
     }
     /// Empty > Confirmable > Ready > InProgress > Blocked, as the model orders them.
     fn group_status<E>(
         &self,
         group: &Entity,
-        mut candidate: impl FnMut(&Entity) -> std::result::Result<bool, E>,
+        surfaced: impl FnMut(&Entity) -> std::result::Result<bool, E>,
     ) -> std::result::Result<Status, E> {
         if self.children(&group.id).is_empty() {
             return Ok(Status::Empty);
@@ -166,21 +178,50 @@ impl<'a> View<'a> {
         if self.completable(group) {
             return Ok(Status::Confirmable);
         }
-        // Every startable descendant is asked, so a failing condition fails the list
-        // regardless of which sibling happens to surface first.
-        let mut ready = false;
+        Ok(
+            if !self.candidate_descendants(group, surfaced)?.1.is_empty() {
+                Status::Ready
+            } else if self.working.contains(&group.id) {
+                Status::InProgress
+            } else {
+                Status::Blocked
+            },
+        )
+    }
+    /// The startable descendants of a Group split into those that do not surface and those
+    /// that do (the candidates). Every startable descendant is asked, so a failing condition
+    /// fails the read regardless of which sibling happens to surface first.
+    fn candidate_descendants<E>(
+        &self,
+        group: &Entity,
+        mut surfaced: impl FnMut(&Entity) -> std::result::Result<bool, E>,
+    ) -> std::result::Result<(Vec<&'a Entity>, Vec<&'a Entity>), E> {
+        let mut unsurfaced = Vec::new();
+        let mut candidates = Vec::new();
         for descendant in self.descendants(&group.id) {
-            if self.startable(descendant) && candidate(descendant)? {
-                ready = true;
+            if self.startable(descendant) {
+                if surfaced(descendant)? {
+                    candidates.push(descendant);
+                } else {
+                    unsurfaced.push(descendant);
+                }
             }
         }
-        Ok(if ready {
-            Status::Ready
-        } else if self.working.contains(&group.id) {
-            Status::InProgress
-        } else {
-            Status::Blocked
-        })
+        Ok((unsurfaced, candidates))
+    }
+    /// The nearest-to-the-root ancestor whose own condition is unsatisfied, if any. Nothing
+    /// below it is evaluated, so at most one ancestor is named.
+    fn unsurfaced_ancestor<E>(
+        &self,
+        ancestors: &[&'a Entity],
+        mut surfaced: impl FnMut(&Entity) -> std::result::Result<bool, E>,
+    ) -> std::result::Result<Option<&'a Entity>, E> {
+        for ancestor in ancestors.iter().rev() {
+            if !surfaced(ancestor)? {
+                return Ok(Some(ancestor));
+            }
+        }
+        Ok(None)
     }
     pub fn row(&self, entity: &'a Entity, query: Option<&str>) -> Row<'a> {
         Row {
@@ -189,63 +230,90 @@ impl<'a> View<'a> {
             matches: query.map(|q| matches_in(entity, q)).unwrap_or_default(),
         }
     }
-    /// Why a NotStarted Group is stalled: it cannot complete and no Issue below it is
-    /// startable or InProgress. Conditions are not evaluated, so a startable Issue that does
-    /// not surface is not a reason here.
-    pub fn stall(&self, group: &'a Entity) -> Option<Stall<'a>> {
-        if group.kind != Kind::Group || group.current.lifecycle != Lifecycle::NotStarted {
-            return None;
+    fn row_with<E>(
+        &self,
+        entity: &'a Entity,
+        surfaced: impl FnMut(&Entity) -> std::result::Result<bool, E>,
+    ) -> std::result::Result<Row<'a>, E> {
+        Ok(Row {
+            entity,
+            status: self.status_with(entity, surfaced)?,
+            matches: Vec::new(),
+        })
+    }
+    /// Why a NotStarted Group is stalled: it cannot complete and no Issue below it is a
+    /// candidate or InProgress. `surfaced` decides candidates and unsurfaced ancestors from
+    /// evaluated conditions; `known` decorates the reason rows from the results so far.
+    fn stall_with<'s, E>(
+        &'s self,
+        group: &'a Entity,
+        mut surfaced: impl FnMut(&Entity) -> std::result::Result<bool, E>,
+        known: impl Fn(&Entity) -> std::result::Result<bool, E> + 's,
+    ) -> std::result::Result<Option<Stall<'a>>, E> {
+        if group.kind != Kind::Group
+            || group.current.lifecycle != Lifecycle::NotStarted
+            || self.completable(group)
+        {
+            return Ok(None);
         }
         let descendants = self.descendants(&group.id);
-        if self.completable(group)
-            || descendants.iter().any(|d| {
-                self.startable(d)
-                    || (d.kind == Kind::Issue && d.current.lifecycle == Lifecycle::InProgress)
-            })
+        let (unsurfaced_candidates, candidates) =
+            self.candidate_descendants(group, &mut surfaced)?;
+        if !candidates.is_empty()
+            || descendants
+                .iter()
+                .any(|d| d.kind == Kind::Issue && d.current.lifecycle == Lifecycle::InProgress)
         {
-            return None;
+            return Ok(None);
         }
         let ancestors = self.ancestors(group);
         let ancestor_dependencies = self.ancestor_dependencies(&ancestors);
+        let unsurfaced_ancestor = self.unsurfaced_ancestor(&ancestors, &mut surfaced)?;
         let rows = |entities: Vec<&'a Entity>| {
             entities
                 .into_iter()
-                .map(|e| self.row(e, None))
-                .collect::<Vec<_>>()
+                .map(|e| self.row_with(e, &known))
+                .collect::<std::result::Result<Vec<_>, E>>()
         };
-        Some(Stall {
-            dependencies: rows(self.unmet_dependencies(group)),
-            ancestor_dependencies: rows(ancestor_dependencies),
-            descendant_dependencies: descendants
-                .iter()
-                .filter(|d| d.current.lifecycle.editable())
-                .flat_map(|d| {
-                    self.unmet_dependencies(d)
-                        .into_iter()
-                        .map(|dependency| (self.row(d, None), self.row(dependency, None)))
-                })
-                .collect(),
+        let mut descendant_dependencies = Vec::new();
+        for descendant in descendants
+            .iter()
+            .filter(|d| d.current.lifecycle.editable())
+        {
+            for dependency in self.unmet_dependencies(descendant) {
+                descendant_dependencies.push((
+                    self.row_with(descendant, &known)?,
+                    self.row_with(dependency, &known)?,
+                ));
+            }
+        }
+        Ok(Some(Stall {
+            dependencies: rows(self.unmet_dependencies(group))?,
+            ancestor_dependencies: rows(ancestor_dependencies)?,
+            descendant_dependencies,
             undecided_children: rows(
                 self.children(&group.id)
                     .iter()
                     .copied()
                     .filter(|c| c.current.lifecycle == Lifecycle::Undecided)
                     .collect(),
-            ),
+            )?,
             open_subgroups: rows(
                 self.children(&group.id)
                     .iter()
                     .copied()
                     .filter(|c| c.kind == Kind::Group && c.current.lifecycle.editable())
                     .collect(),
-            ),
+            )?,
+            unsurfaced_candidates: rows(unsurfaced_candidates)?,
             undecided_ancestors: rows(
                 ancestors
                     .into_iter()
                     .filter(|a| a.current.lifecycle == Lifecycle::Undecided)
                     .collect(),
-            ),
-        })
+            )?,
+            unsurfaced_ancestors: rows(unsurfaced_ancestor.into_iter().collect())?,
+        }))
     }
 }
 
@@ -309,6 +377,8 @@ pub struct Prerequisites<'a> {
     pub ancestors: Vec<Row<'a>>,
     pub dependencies: Vec<Row<'a>>,
     pub ancestor_dependencies: Vec<Row<'a>>,
+    /// For `Start`, the ancestor whose unsatisfied condition keeps the Issue from surfacing.
+    pub unsurfaced_ancestors: Vec<Row<'a>>,
 }
 
 /// The reasons a Group is stalled; at least one is present.
@@ -320,7 +390,11 @@ pub struct Stall<'a> {
     pub descendant_dependencies: Vec<(Row<'a>, Row<'a>)>,
     pub undecided_children: Vec<Row<'a>>,
     pub open_subgroups: Vec<Row<'a>>,
+    /// Startable Issues below the Group that do not surface.
+    pub unsurfaced_candidates: Vec<Row<'a>>,
     pub undecided_ancestors: Vec<Row<'a>>,
+    /// The ancestor whose unsatisfied condition keeps the Group from surfacing.
+    pub unsurfaced_ancestors: Vec<Row<'a>>,
 }
 
 #[derive(Debug)]
@@ -352,9 +426,40 @@ pub struct Detail<'a> {
     pub descendants: Option<Descendants<'a>>,
 }
 
+/// `detail_with` with every condition taken as satisfied.
 pub fn detail<'a>(snapshot: &'a Snapshot, id: &EntityId) -> Result<Detail<'a>> {
+    detail_with(snapshot, id, |_, _| Ok::<_, Error>(true))
+}
+
+/// The detail of one Entity with its situation derived from evaluated conditions. The range
+/// is what a `tasks` row of the Entity needs: its ancestors from the root, the Entity itself
+/// when it is NotStarted, and for a Group its startable descendants with the Groups between.
+/// Each condition runs at most once, and the rows of related Entities use the results so far
+/// rather than evaluating further.
+pub fn detail_with<'a, E: From<Error>>(
+    snapshot: &'a Snapshot,
+    id: &EntityId,
+    evaluate: impl FnMut(&Entity, &str) -> std::result::Result<bool, E>,
+) -> std::result::Result<Detail<'a>, E> {
     let view = View::new(snapshot);
     let entity = snapshot.entity(id)?;
+    // Evaluation and the cache-only lookups never overlap, so one cell serves both closures.
+    let surfacing = std::cell::RefCell::new(Surfacing::new(snapshot, evaluate));
+    let surfaced = |e: &Entity| surfacing.borrow_mut().surfaced(e);
+    let known = |e: &Entity| Ok(surfacing.borrow().surfaced_so_far(e)?);
+    // The target's own chain is evaluated first, as a tasks row is, whether or not deriving
+    // the situation happens to need it (a Group without startable descendants would not).
+    if entity.current.lifecycle == Lifecycle::NotStarted {
+        surfaced(entity)?;
+    }
+    let status = view.status_with(entity, surfaced)?;
+    let stall = view.stall_with(entity, surfaced, known)?;
+    let rows = |entities: Vec<&'a Entity>| {
+        entities
+            .into_iter()
+            .map(|e| view.row_with(e, known))
+            .collect::<std::result::Result<Vec<_>, E>>()
+    };
     let parent = entity
         .current
         .parent
@@ -369,7 +474,6 @@ pub fn detail<'a>(snapshot: &'a Snapshot, id: &EntityId) -> Result<Detail<'a>> {
             .map(|id| snapshot.entity(id))
             .collect::<Result<Vec<_>>>()?,
     );
-    let stall = view.stall(entity);
     let prerequisites = if stall.is_none()
         && matches!(
             entity.current.lifecycle,
@@ -383,13 +487,20 @@ pub fn detail<'a>(snapshot: &'a Snapshot, id: &EntityId) -> Result<Detail<'a>> {
             .copied()
             .filter(|a| a.current.lifecycle != Lifecycle::NotStarted)
             .collect();
-        let ancestor_dependencies = if starting {
-            view.ancestor_dependencies(&ancestors)
+        let (ancestor_dependencies, unsurfaced_ancestor) = if starting {
+            (
+                view.ancestor_dependencies(&ancestors),
+                view.unsurfaced_ancestor(&ancestors, known)?,
+            )
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
         let unmet = view.unmet_dependencies(entity);
-        if unadopted.is_empty() && unmet.is_empty() && ancestor_dependencies.is_empty() {
+        if unadopted.is_empty()
+            && unmet.is_empty()
+            && ancestor_dependencies.is_empty()
+            && unsurfaced_ancestor.is_none()
+        {
             None
         } else {
             Some(Prerequisites {
@@ -398,26 +509,21 @@ pub fn detail<'a>(snapshot: &'a Snapshot, id: &EntityId) -> Result<Detail<'a>> {
                 } else {
                     PrerequisiteOperation::Complete
                 },
-                ancestors: unadopted.into_iter().map(|e| view.row(e, None)).collect(),
-                dependencies: unmet.into_iter().map(|e| view.row(e, None)).collect(),
-                ancestor_dependencies: ancestor_dependencies
-                    .into_iter()
-                    .map(|e| view.row(e, None))
-                    .collect(),
+                ancestors: rows(unadopted)?,
+                dependencies: rows(unmet)?,
+                ancestor_dependencies: rows(ancestor_dependencies)?,
+                unsurfaced_ancestors: rows(unsurfaced_ancestor.into_iter().collect())?,
             })
         }
     } else {
         None
     };
-    let dependents = sorted(
+    let dependents = rows(sorted(
         snapshot
             .entities()
             .filter(|e| e.current.dependencies.contains(id))
             .collect(),
-    )
-    .into_iter()
-    .map(|e| view.row(e, None))
-    .collect();
+    ))?;
     let descendants = if entity.kind == Kind::Group {
         let children = view.children(id);
         let count = children.len();
@@ -449,7 +555,7 @@ pub fn detail<'a>(snapshot: &'a Snapshot, id: &EntityId) -> Result<Detail<'a>> {
                 );
             }
             entries.push(Descendant {
-                row: view.row(child, None),
+                row: view.row_with(child, known)?,
                 ancestor_last,
                 last,
             });
@@ -458,22 +564,23 @@ pub fn detail<'a>(snapshot: &'a Snapshot, id: &EntityId) -> Result<Detail<'a>> {
             entries,
             completed,
             cancelled,
-            awaiting_confirmation: view.status(entity) == Status::Confirmable,
+            awaiting_confirmation: status == Status::Confirmable,
         })
     } else {
         None
     };
     Ok(Detail {
-        row: view.row(entity, None),
+        row: Row {
+            entity,
+            status,
+            matches: Vec::new(),
+        },
         effective: view.effective(entity),
         note_count: snapshot.notes(id)?.len(),
         parent,
         prerequisites,
         stall,
-        dependencies: dependencies
-            .into_iter()
-            .map(|e| view.row(e, None))
-            .collect(),
+        dependencies: rows(dependencies)?,
         dependents,
         descendants,
     })
@@ -954,6 +1061,192 @@ mod tests {
             ["plan", "hidden", "working", "veiled", "broken"]
         );
         assert!(rows.iter().all(|r| r.status == Status::Ready));
+    }
+
+    #[test]
+    fn show_derives_the_situation_from_the_conditions_its_row_needs() {
+        let mut snapshot = Snapshot::empty();
+        create(&mut snapshot, "outer", Kind::Group, None, &[], 1);
+        snapshot
+            .set_condition(&id("outer"), Some("outer".into()))
+            .unwrap();
+        create(&mut snapshot, "plan", Kind::Group, Some("outer"), &[], 2);
+        create(&mut snapshot, "gate", Kind::Issue, None, &[], 3);
+        create(&mut snapshot, "hidden", Kind::Issue, Some("plan"), &[], 4);
+        snapshot
+            .set_condition(&id("hidden"), Some("hidden".into()))
+            .unwrap();
+        create(
+            &mut snapshot,
+            "waiting",
+            Kind::Issue,
+            Some("plan"),
+            &["gate"],
+            5,
+        );
+        snapshot
+            .set_condition(&id("waiting"), Some("waiting".into()))
+            .unwrap();
+        create(&mut snapshot, "draft", Kind::Issue, Some("plan"), &[], 6);
+        perform(&mut snapshot, "draft", Operation::Withdraw);
+        snapshot
+            .set_condition(&id("draft"), Some("draft".into()))
+            .unwrap();
+        create(&mut snapshot, "other", Kind::Group, None, &[], 7);
+        snapshot
+            .set_condition(&id("other"), Some("other".into()))
+            .unwrap();
+        create(
+            &mut snapshot,
+            "elsewhere",
+            Kind::Issue,
+            Some("other"),
+            &[],
+            8,
+        );
+        snapshot
+            .set_condition(&id("gate"), Some("gate".into()))
+            .unwrap();
+        create(
+            &mut snapshot,
+            "consumer",
+            Kind::Issue,
+            None,
+            &["waiting"],
+            9,
+        );
+        snapshot
+            .set_condition(&id("consumer"), Some("consumer".into()))
+            .unwrap();
+        create(&mut snapshot, "vacant", Kind::Group, None, &[], 10);
+        snapshot
+            .set_condition(&id("vacant"), Some("vacant".into()))
+            .unwrap();
+        create(&mut snapshot, "idea", Kind::Issue, Some("vacant"), &[], 11);
+        perform(&mut snapshot, "idea", Operation::Withdraw);
+        fn inspect<'a>(
+            snapshot: &'a Snapshot,
+            name: &str,
+            results: &[(&str, bool)],
+        ) -> (Detail<'a>, Vec<String>) {
+            let mut calls = Vec::new();
+            let value = detail_with::<Error>(snapshot, &id(name), |entity, command| {
+                calls.push(entity.id.to_string());
+                assert_eq!(command, entity.id.to_string());
+                Ok(results
+                    .iter()
+                    .find(|(id, _)| *id == command)
+                    .map(|(_, satisfied)| *satisfied)
+                    .unwrap_or(true))
+            })
+            .unwrap();
+            (value, calls)
+        }
+        // A Group evaluates its ancestors, itself and its startable descendants only: the
+        // Issue waiting for a dependency, the Undecided child and another subtree stay out.
+        let (plan, calls) = inspect(&snapshot, "plan", &[("hidden", false)]);
+        assert_eq!(calls, ["outer", "hidden"]);
+        assert_eq!(plan.row.status, Status::Blocked);
+        let stall = plan.stall.unwrap();
+        assert_eq!(ids(&stall.unsurfaced_candidates), ["hidden"]);
+        assert_eq!(stall.unsurfaced_candidates[0].status, Status::Unsurfaced);
+        assert!(stall.unsurfaced_ancestors.is_empty());
+        assert_eq!(ids(&stall.undecided_children), ["draft"]);
+        assert_eq!(
+            stall
+                .descendant_dependencies
+                .iter()
+                .map(|(d, dep)| (d.status, dep.entity.id.to_string()))
+                .collect::<Vec<_>>(),
+            [(Status::Blocked, "gate".to_owned())]
+        );
+        let tree = plan.descendants.unwrap();
+        assert_eq!(
+            tree.entries
+                .iter()
+                .map(|e| e.row.status)
+                .collect::<Vec<_>>(),
+            [Status::Unsurfaced, Status::Blocked, Status::Undecided]
+        );
+        // The hidden Issue itself is Unsurfaced without naming an ancestor.
+        let (hidden, calls) = inspect(&snapshot, "hidden", &[("hidden", false)]);
+        assert_eq!(calls, ["outer", "hidden"]);
+        assert_eq!(hidden.row.status, Status::Unsurfaced);
+        assert!(hidden.prerequisites.is_none());
+        // Below an unsurfaced ancestor nothing else is evaluated, and the ancestor is named
+        // for the Group and for Issues whether or not their prerequisites are met.
+        let (plan, calls) = inspect(&snapshot, "plan", &[("outer", false)]);
+        assert_eq!(calls, ["outer"]);
+        assert_eq!(plan.row.status, Status::Blocked);
+        let stall = plan.stall.unwrap();
+        assert_eq!(ids(&stall.unsurfaced_candidates), ["hidden"]);
+        assert_eq!(ids(&stall.unsurfaced_ancestors), ["outer"]);
+        let (hidden, calls) = inspect(&snapshot, "hidden", &[("outer", false)]);
+        assert_eq!(calls, ["outer"]);
+        assert_eq!(hidden.row.status, Status::Unsurfaced);
+        let prerequisites = hidden.prerequisites.unwrap();
+        assert_eq!(prerequisites.operation, PrerequisiteOperation::Start);
+        assert_eq!(ids(&prerequisites.unsurfaced_ancestors), ["outer"]);
+        assert!(prerequisites.dependencies.is_empty());
+        let (waiting, calls) = inspect(&snapshot, "waiting", &[("outer", false)]);
+        assert_eq!(calls, ["outer"]);
+        assert_eq!(waiting.row.status, Status::Unsurfaced);
+        let prerequisites = waiting.prerequisites.unwrap();
+        assert_eq!(ids(&prerequisites.unsurfaced_ancestors), ["outer"]);
+        assert_eq!(ids(&prerequisites.dependencies), ["gate"]);
+        // A surfaced Issue keeps Ready or Blocked. Its dependencies and dependents are
+        // outside the range: their conditions do not run and their rows are not Unsurfaced.
+        let (waiting, calls) = inspect(
+            &snapshot,
+            "waiting",
+            &[("gate", false), ("consumer", false)],
+        );
+        assert_eq!(calls, ["outer", "waiting"]);
+        assert_eq!(waiting.row.status, Status::Blocked);
+        let prerequisites = waiting.prerequisites.unwrap();
+        assert!(prerequisites.unsurfaced_ancestors.is_empty());
+        assert_eq!(prerequisites.dependencies[0].status, Status::Ready);
+        assert_eq!(waiting.dependencies[0].status, Status::Ready);
+        assert_eq!(ids(&waiting.dependents), ["consumer"]);
+        assert_eq!(waiting.dependents[0].status, Status::Blocked);
+        let (gate, calls) = inspect(&snapshot, "gate", &[("waiting", false)]);
+        assert_eq!(calls, ["gate"]);
+        assert_eq!(gate.dependents[0].status, Status::Blocked);
+        // A Group without startable descendants still evaluates its own chain, as its tasks
+        // row would, so a failing condition of its own fails the read.
+        let (hollow, calls) = inspect(&snapshot, "vacant", &[("vacant", false)]);
+        assert_eq!(calls, ["vacant"]);
+        assert_eq!(hollow.row.status, Status::Blocked);
+        assert_eq!(ids(&hollow.stall.unwrap().undecided_children), ["idea"]);
+        let error = detail_with::<Error>(&snapshot, &id("vacant"), |entity, _| {
+            Err(Error(format!("{} failed", entity.id)))
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("vacant failed"), "{error}");
+        // A Group whose own condition fails hides its candidates without an ancestor line.
+        let (other, calls) = inspect(&snapshot, "other", &[("other", false)]);
+        assert_eq!(calls, ["other"]);
+        assert_eq!(other.row.status, Status::Blocked);
+        let stall = other.stall.unwrap();
+        assert_eq!(ids(&stall.unsurfaced_candidates), ["elsewhere"]);
+        assert!(stall.unsurfaced_ancestors.is_empty());
+        // Undecided and InProgress targets evaluate nothing.
+        let (draft, calls) = inspect(&snapshot, "draft", &[("draft", false)]);
+        assert!(calls.is_empty());
+        assert_eq!(draft.row.status, Status::Undecided);
+        perform(&mut snapshot, "elsewhere", Operation::Start);
+        let (elsewhere, calls) = inspect(&snapshot, "elsewhere", &[("other", false)]);
+        assert!(calls.is_empty());
+        assert_eq!(elsewhere.row.status, Status::InProgress);
+        // A failing evaluation fails the whole read, and skipping conditions never evaluates.
+        let error = detail_with::<Error>(&snapshot, &id("plan"), |entity, _| {
+            Err(Error(format!("{} failed", entity.id)))
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("outer failed"), "{error}");
+        let plan = detail(&snapshot, &id("plan")).unwrap();
+        assert_eq!(plan.row.status, Status::Ready);
+        assert!(plan.stall.is_none());
     }
 
     #[test]

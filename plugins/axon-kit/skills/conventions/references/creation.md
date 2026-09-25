@@ -4,6 +4,6 @@
 
 一つのEntityを作る入力を先に揃える。titleは `--title`、供給されたkindは `--kind`、本文は `-m/--description` または `-F/--file`。採否に応じた `--accept`、必要な `--parent G`、繰り返せる `--needs B`、供給された初期shell条件 `--command` を同じ作成へ含める。初期条件は未設定またはshell文字列として扱い、未指定なら未設定にする。条件の意味や実行影響が未確定なshellへの変換は、呼び出し側へ返す。
 
-最初の作成前に`axon list`の完全ID集合と固定payloadを保持する。作成は非冪等で、タイトル一致による自動upsertではない。成功後は返された完全IDを保存し、`axon show --details`とlogでkind・本文・lifecycle・親・dependency・条件を照合する。全入力を保存する一回の作成が成功したことを確認してから後続操作へ進む。
+最初の作成前に`axon list`の完全ID集合と固定payloadを保持する。作成は非冪等で、タイトル一致による自動upsertではない。成功後は返された完全IDを保存し、`axon show ID --details --skip-conditions`とlogでkind・本文・lifecycle・親・dependency・条件を照合する。全入力を保存する一回の作成が成功したことを確認してから後続操作へ進む。
 
 結果不明なら元writerの終了後、作成前集合になかったEntityを列挙し、固定した全入力とCreated記録を比較する。時刻、actor、同名だけで自分の操作と決めない。適用を立証できれば再作成せず、複数候補・不十分な証拠なら不明として返す。後続追加をすべて観測でき一致がなく未適用を立証できる場合に限り、同じpayloadで一度だけ再試行し、その結果も同じ手順で照合する。

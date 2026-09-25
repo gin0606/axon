@@ -26,6 +26,6 @@ code表記でない英単語はAxonの操作を指さない。field名、記録�
 
 対象、採用判断、作業選択、実装・review・commitの権限は呼び出し側workflowが与える。CLIが操作を受け付けることも権限の根拠ではない。与えられた効果は重ねて確認せず実行できるが、意味を変える未確定な判断は呼び出し側へ返す。
 
-構文の不確実さは保存先不要のhelpで解決する。保存情報は `axon list`・`axon show --details`・`axon log`・`axon note` で調べ、外部条件の評価が必要なときだけ `axon proposals|tasks` を使う。任意recorderは認証・lock・生存確認ではない。
+構文の不確実さは保存先不要のhelpで解決する。保存情報は `axon list`・`axon show ID --details --skip-conditions`・`axon log`・`axon note` で調べ、外部条件の評価が必要なときだけ `axon proposals|tasks` と既定の `axon show` を使う。`axon show` は `--skip-conditions` を付けない限り対象の状況に必要な条件を実行するため、操作前の現在値確認や本文の取得には `--skip-conditions` を付け、状況の診断（浮上していない候補や祖先を含む詰まっている理由）には付けない。任意recorderは認証・lock・生存確認ではない。
 
 要求した作用、完全ID、保存結果（適用済み・未適用・部分適用・不明）、最終状態と関係への影響を返す。保存結果は読み取り操作と保全したartifactの照合で確認できるため、確認のためだけの追加mutationはしない。
