@@ -41,7 +41,7 @@ option値の先頭hyphenは `--description='--text'` のように渡す。構文
 | `Undecided` | `Undecided` | 未判断 |
 | `Ready` | `NotStarted` で `Start` の前提を満たす | 着手できる |
 | `Blocked` | `NotStarted` で `Start` の前提が不足 | 祖先の採用待ちまたは依存先の完了待ち |
-| `Unsurfaced` | `NotStarted` で、自身または祖先の再浮上条件が未成立 | 浮上しておらず候補にならない。`Start` の前提の充足・不足より優先し、条件を評価した `axon show` だけが示す |
+| `Unsurfaced` | `NotStarted` で、自身または祖先の再浮上条件が未成立、または終了した祖先の配下にある | 浮上しておらず候補にならない。`Start` の前提の充足・不足より優先し、条件を評価した `axon show` だけが示す |
 | `InProgress` | `InProgress` でdependencyが充足 | 着手中 |
 | `InProgress+Blocked` | `InProgress` で未完了の依存先がある | 着手中で、完了に必要な依存先が残る |
 | `Completed` | `Completed` | 完了 |

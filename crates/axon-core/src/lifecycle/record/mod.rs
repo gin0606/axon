@@ -6,8 +6,8 @@
 //! `View` and produce exactly one new record; resolution joins every head of a conflicted
 //! Entity. `encode` / `decode` map one record to its canonical bytes and back.
 //!
-//! This module sits next to the snapshot code it replaces and shares only the lifecycle
-//! vocabulary (`Kind`, `Lifecycle`, `Operation`, `Recorder`, `EntityId`, `StoreId`).
+//! This module is the core of the storage layer. It shares the lifecycle vocabulary (`Kind`,
+//! `Lifecycle`, `Operation`, `Recorder`, `EntityId`, `StoreId`) with the lifecycle model.
 mod codec;
 mod model;
 mod ops;
