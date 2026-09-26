@@ -76,8 +76,8 @@ Group の `Complete` にはさらに、その計画全体の最終確認が通�
 | 操作 | 包含からの前提 | dependency からの前提 |
 | --- | --- | --- |
 | `Start`（Issue） | 全祖先が採用済み | 自身と全祖先の依存先がすべて `Completed` |
-| `Complete` | 全祖先が採用済み。Group なら、直属の子が全員終了している | 自身の依存先がすべて `Completed` |
-| `Cancel` | Group なら、直属の子が全員終了している | 要求しない |
+| `Complete` | 全祖先が採用済み。Group と、統合で子を持った Issue（[構造の違反と修復](storage.md#構造の違反と修復)）なら、直属の子が全員終了している | 自身の依存先がすべて `Completed` |
+| `Cancel` | Group と、統合で子を持った Issue なら、直属の子が全員終了している | 要求しない |
 | `Withdraw` | Group なら、実効値が `NotStarted` | 要求しない |
 | `Accept` | Group で、着手・完了した子孫（保存値が `InProgress` か `Completed`）があるなら、全祖先が採用済み | 要求しない |
 | `Reopen` | 全祖先が採用済み | 自身を依存先に持つ `Completed` の Entity がない |

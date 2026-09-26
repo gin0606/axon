@@ -127,7 +127,7 @@ fn valid_lifecycle(value: &str) -> bool {
     )
 }
 
-/// Parse syntax and file-local constraints. Storage identities are checked against a snapshot separately.
+/// Parse syntax and file-local constraints. Storage identities are checked separately against the set of records read when the operation started.
 pub fn parse(input: &str) -> Result<Declaration> {
     use granit_parser::{BufferedInput, Scanner, TokenType};
     for token in Scanner::new(BufferedInput::new(input.chars())) {

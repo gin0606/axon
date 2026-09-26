@@ -101,7 +101,7 @@ root は `schema`、`groups`、`issues`、`references` の 4 field だけをこ�
 canonical serializer は次の規則で出力する。
 
 1. mapping の key はこの文書の表と例に示した順序で出す。alphabetical にしない。
-2. `groups`・`issues` の要素は、`base` が non-null の要素を保存された作成日時順（同時刻は ID 順）、その後に `base` が null の要素を key 順で並べる。この節の ID 順・key 順はすべて bytewise UTF-8 昇順とし、locale を使わない。`axon list`と同じ並び方の規則であり、乱数 ID 順にしない。作成日時は declaration に書かず保存先から取るため、canonical 形は保存先の snapshot に対して定まる。`check`・`apply` は検証に使う同じ snapshot で canonical 形を判定し、`references` の要素は file 内の値の形式と順序だけを判定する。作成日時は保存後に変わらない。
+2. `groups`・`issues` の要素は、`base` が non-null の要素を保存された作成日時順（同時刻は ID 順）、その後に `base` が null の要素を key 順で並べる。この節の ID 順・key 順はすべて bytewise UTF-8 昇順とし、locale を使わない。`axon list`と同じ並び方の規則であり、乱数 ID 順にしない。作成日時は declaration に書かず保存先から取るため、canonical 形は保存先から読んだ記録の集合に対して定まる。`check`・`apply` は検証に使うのと同じ記録の集合で canonical 形を判定し、`references` の要素は file 内の値の形式と順序だけを判定する。作成日時は保存後に変わらない。
 3. `needs` は解決後の ID 順に並べ、`prepare` 前で ID を持たない参照先はその後に key 順で並べる。`references` は ID 順に並べる。canonical 規則は `prepare` 前後の file、`apply` 後の rewrite、`axon docs declaration --example`の出力のすべてに適用する。
 4. duplicate な Entity、key、解決後の依存は許可せず、sort で潰さない。
 5. block context の string のうち、改行を含み、改行が LF だけで、非空行が 1 行以上あり、末尾の改行が 0 個または 1 個、最初の非空行が空白で始まらず、空白文字だけからなる行や末尾空白を含まないものは literal block で出す。長さ 0 の空行は含んでよい。末尾改行がなければ `|-`、1 個なら `|` とする。flow context（参照 mapping の中）では literal block を使わない。改行を含まない string は plain scalar とし、出力する context（block か flow か）で plain scalar として同じ string に戻らないもの（空文字、null・`~`・真偽値・数値・日時に読める文字列、先頭・末尾の空白、YAML の指示子で始まるか `: ` や ` #` を含む文字列、flow 内では `,` や括弧を含む文字列など）は double quote する。上記のどちらでも無損失に表せない string（CR や制御文字、2 個以上の末尾改行、空白で始まる最初の非空行、flow context の改行など）は escape 付きの double quote で出す。保存値は共通コアが受け入れる任意の文字列であり、`axon export` と parse の往復で一文字も変えない。fingerprint は常に double quote する。
@@ -146,7 +146,7 @@ fingerprint には declaration が見せる項目だけを含める。記録 ID 
 1. strict schema、identity、参照の局所検証と、既存 Entity の ID が保存先に存在し kind が一致すること。`references` に記載された外部 Entity の存在と kind の一致も、再試行の適用済み判定より前に検証する
 2. `base` と保存先の現在値の照合、および新規 Entity の割り当て済み ID が保存先に存在しないことの確認。不一致または存在があれば後述の再試行の適用済み判定を行い、該当すれば以降の検証を省いて適用済みとして扱い、該当しなければ競合とする。`base` が一致するのに file の `lifecycle` が現在値と異なれば、読み取り専用項目の書き換えとして拒否する
 3. 参照先の存在
-4. 編集後の仮 snapshot を共通コアの通常操作で組み立て、包含・dependency・終了構成・固定された文面の制約を通常操作と同じ意味で検査
+4. 検証に使う記録の集合へ編集を共通コアの通常操作として仮に適用し、包含・dependency・終了構成・固定された文面の制約を通常操作と同じ意味で検査
 5. 作成、title の変更前後（改行を `\n`、制御文字を可視 escape とする一覧と同じ一行表示）、description の変更有無、parent の前後、`needs` の増減を Entity ごとに表示。差分がなければその旨を表示
 6. 適用後の状況欄を保存情報から導出できる範囲で表示
 
