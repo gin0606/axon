@@ -304,22 +304,16 @@ impl View {
     /// Entities always adds members and fails the no-new-violation check. Every free Entity
     /// is removed first; the search runs only over what remains.
     fn completion_cycle_members(&self) -> BTreeSet<EntityId> {
-        let mut predecessors: BTreeMap<&EntityId, BTreeSet<&EntityId>> = BTreeMap::new();
+        let predecessors = self.completion_predecessors();
         let mut dependents: BTreeMap<&EntityId, Vec<&EntityId>> = BTreeMap::new();
         let mut ready = Vec::new();
-        for id in self.settled.keys() {
-            let mut needs: BTreeSet<&EntityId> = self.children(id).iter().collect();
-            needs.extend(self.settled_needs(id));
-            for ancestor in self.ancestors(id) {
-                needs.extend(self.settled_needs(&ancestor));
-            }
+        for (id, needs) in &predecessors {
             if needs.is_empty() {
-                ready.push(id);
+                ready.push(*id);
             }
-            for need in &needs {
+            for need in needs {
                 dependents.entry(need).or_default().push(id);
             }
-            predecessors.insert(id, needs);
         }
         let mut pending: BTreeMap<&EntityId, usize> = predecessors
             .iter()
@@ -354,6 +348,100 @@ impl View {
             .filter(|id| on_cycle(id))
             .map(|id| (*id).clone())
             .collect()
+    }
+
+    /// The settled Entities each settled Entity waits on along the contracted completion
+    /// path: its direct children, its own dependencies and its ancestors' dependencies.
+    fn completion_predecessors(&self) -> BTreeMap<&EntityId, BTreeSet<&EntityId>> {
+        self.settled
+            .keys()
+            .map(|id| {
+                let mut needs: BTreeSet<&EntityId> = self.children(id).iter().collect();
+                needs.extend(self.settled_needs(id));
+                for ancestor in self.ancestors(id) {
+                    needs.extend(self.settled_needs(&ancestor));
+                }
+                (id, needs)
+            })
+            .collect()
+    }
+
+    /// An edge of the completion path that a relation `id` gained over `before` (the view
+    /// before the change) induces in this view and that lies on a cycle here: its predecessor
+    /// reaches its dependent again. A new dependency on `t` makes `id` and each of its
+    /// descendants wait on `t`; a new parent `p` makes `p` wait on `id`, and an ancestor that
+    /// joins the parent chain makes `id` and its descendants wait on that ancestor's
+    /// dependencies. The edges count per relation, not per pair, so a relation that repeats a
+    /// pair already induced by another one is still checked, while an ancestor both chains
+    /// share induces nothing new. Violations count Entities, so such an edge between
+    /// Entities already on a cycle (a chord, or an edge between two cycles) adds no
+    /// violation; a move, a dependency or a registration is rejected on it all the same.
+    pub(super) fn relation_on_cycle(
+        &self,
+        before: &View,
+        id: &EntityId,
+    ) -> Option<(EntityId, EntityId)> {
+        let current = self.current(id)?;
+        let earlier = before.current(id);
+        let mut edges: Vec<(EntityId, EntityId)> = Vec::new();
+        let mut targets: BTreeSet<&EntityId> = current
+            .needs
+            .iter()
+            .filter(|t| earlier.is_none_or(|b| !b.needs.contains(*t)) && self.is_settled(t))
+            .collect();
+        let parent_changed = earlier.is_none_or(|b| b.parent != current.parent);
+        if let Some(parent) = current
+            .parent
+            .as_ref()
+            .filter(|p| parent_changed && self.is_settled(p))
+        {
+            edges.push((parent.clone(), id.clone()));
+            let old_chain = before.ancestors(id);
+            let chain = std::iter::once(parent.clone()).chain(self.ancestors(parent));
+            for ancestor in chain.filter(|a| !old_chain.contains(a)) {
+                targets.extend(self.settled_needs(&ancestor));
+            }
+        }
+        let waiting: Vec<EntityId> = std::iter::once(id.clone())
+            .chain(self.descendants(id))
+            .collect();
+        for target in targets {
+            for dependent in &waiting {
+                edges.push((dependent.clone(), target.clone()));
+            }
+        }
+        // Both ends of an edge on a cycle are its members, which leaves little to walk.
+        let member = |id: &EntityId| {
+            self.violations.contains(&Violation {
+                entity: id.clone(),
+                kind: ViolationKind::CompletionCycle,
+            })
+        };
+        edges.retain(|(dependent, predecessor)| member(dependent) && member(predecessor));
+        if edges.is_empty() {
+            return None;
+        }
+        let predecessors = self.completion_predecessors();
+        let mut reach: BTreeMap<EntityId, BTreeSet<&EntityId>> = BTreeMap::new();
+        edges.into_iter().find(|(dependent, predecessor)| {
+            reach
+                .entry(predecessor.clone())
+                .or_insert_with(|| {
+                    let start = predecessors
+                        .get_key_value(predecessor)
+                        .map(|(k, _)| *k)
+                        .expect("a settled Entity");
+                    let mut seen = BTreeSet::new();
+                    let mut stack = vec![start];
+                    while let Some(next) = stack.pop() {
+                        if seen.insert(next) {
+                            stack.extend(predecessors[next].iter().copied());
+                        }
+                    }
+                    seen
+                })
+                .contains(dependent)
+        })
     }
 
     // ---- what a read shows ----

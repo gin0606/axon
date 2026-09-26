@@ -434,9 +434,23 @@ fn a_new_cycle_among_entities_waiting_on_a_cycle_is_rejected() {
     assert!(r0.violations("g0").is_empty());
     r0.remove_dep("g0", "i3");
     assert!(r0.view().is_valid());
-    // A dependency between Entities already on the same cycle (a chord) changes no member
-    // and passes; the repair removes the cycle's edges one at a time, and the members shrink
-    // to those still on a cycle.
+}
+
+fn cycle_members(names: &[&str]) -> BTreeSet<Violation> {
+    names
+        .iter()
+        .map(|member| Violation {
+            entity: id(member),
+            kind: ViolationKind::CompletionCycle,
+        })
+        .collect()
+}
+
+#[test]
+fn a_new_edge_on_a_cycle_is_rejected_even_between_its_members() {
+    // g2 -> i3 -> i4 -> g2. A chord g2 -> i4 adds no member, yet it would stay a cycle
+    // after i3 -> i4 is removed, so it is rejected. An Entity off the cycle may still wait on
+    // it, and removing an edge repairs the store.
     let mut r0 = Replica::new("r0");
     let mut r1 = Replica::new("r1");
     r0.create("i4", Kind::Issue, Lifecycle::NotStarted, None);
@@ -445,22 +459,188 @@ fn a_new_cycle_among_entities_waiting_on_a_cycle_is_rejected() {
     r0.add_dep("g2", "i3");
     r1.add_dep("i4", "g2");
     r0.sync(&r1);
-    let members = |names: &[&str]| -> BTreeSet<Violation> {
-        names
-            .iter()
-            .map(|member| Violation {
-                entity: id(member),
-                kind: ViolationKind::CompletionCycle,
-            })
-            .collect()
-    };
-    assert!(r0.view().conflicted().is_empty());
-    assert_eq!(r0.view().violations(), &members(&["g2", "i3", "i4"]));
-    r0.add_dep("g2", "i4");
-    assert_eq!(r0.view().violations(), &members(&["g2", "i3", "i4"]));
+    let cycle = cycle_members(&["g2", "i3", "i4"]);
+    assert_eq!(r0.view().violations(), &cycle);
+    let rejected = error(r0.try_add_dep("g2", "i4"));
+    assert!(rejected.contains("g2 waiting on i4"), "{rejected}");
+    r0.add_dep("i1", "i4");
+    assert_eq!(r0.view().violations(), &cycle);
+    // Only relations the change adds count: i3 keeps its own dependency on the cycle and may
+    // move under g0, whose new edges close nothing.
+    r0.move_to("i3", Some("g0"));
+    assert_eq!(r0.view().violations(), &cycle);
     r0.remove_dep("i3", "i4");
-    assert_eq!(r0.view().violations(), &members(&["g2", "i4"]));
-    r0.remove_dep("g2", "i4");
+    assert!(r0.view().is_valid());
+
+    // Two separate cycles, g0 <-> i4 (with g0's child i1 through g0's dependency) and
+    // g2 <-> i3. g2 -> i4 closes nothing and passes; i4 -> g2 would then close a cycle
+    // between members of both and is rejected. Removing the two original back edges leaves
+    // no cycle behind.
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r0.create("i4", Kind::Issue, Lifecycle::NotStarted, None);
+    r1.sync(&r0);
+    r0.add_dep("g2", "i3");
+    r0.add_dep("g0", "i4");
+    r1.add_dep("i3", "g2");
+    r1.add_dep("i4", "g0");
+    r0.sync(&r1);
+    let all = cycle_members(&["g0", "i1", "g2", "i3", "i4"]);
+    assert_eq!(r0.view().violations(), &all);
+    r0.add_dep("g2", "i4");
+    assert_eq!(r0.view().violations(), &all);
+    let rejected = error(r0.try_add_dep("i4", "g2"));
+    assert!(rejected.contains("i4 waiting on g2"), "{rejected}");
+    r0.remove_dep("i3", "g2");
+    assert_eq!(r0.view().violations(), &cycle_members(&["g0", "i1", "i4"]));
+    r0.remove_dep("i4", "g0");
+    assert!(r0.view().is_valid());
+
+    // A move is held to the same rule. On g2 -> child i3 -> i4 -> g2, moving i4 under g2
+    // would make the parent wait on its new child on the cycle; i1, off the cycle, moves in.
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r0.create("i4", Kind::Issue, Lifecycle::NotStarted, None);
+    r1.sync(&r0);
+    r0.move_to("i3", Some("g2"));
+    r0.add_dep("i3", "i4");
+    r1.add_dep("i4", "g2");
+    r0.sync(&r1);
+    let cycle = cycle_members(&["g2", "i3", "i4"]);
+    assert_eq!(r0.view().violations(), &cycle);
+    let rejected = error(r0.try_move("i4", Some("g2")));
+    assert!(rejected.contains("g2 waiting on i4"), "{rejected}");
+    r0.move_to("i1", Some("g2"));
+    assert_eq!(r0.view().violations(), &cycle);
+    r0.remove_dep("i4", "g2");
+    assert!(r0.view().is_valid());
+
+    // Only a descendant's new edge closes the cycle: on i1 -> i4 -> i3 -> i1 with g2 waiting
+    // on i3, moving g0 under g2 makes its child i1 inherit the dependency on i3.
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r0.create("i4", Kind::Issue, Lifecycle::NotStarted, None);
+    r1.sync(&r0);
+    r0.add_dep("i1", "i4");
+    r0.add_dep("i4", "i3");
+    r0.add_dep("g2", "i3");
+    r1.add_dep("i3", "i1");
+    r0.sync(&r1);
+    assert_eq!(r0.view().violations(), &cycle_members(&["i1", "i3", "i4"]));
+    let rejected = error(r0.try_move("g0", Some("g2")));
+    assert!(rejected.contains("i1 waiting on i3"), "{rejected}");
+    // A dependency of g0 on i3 closes nothing through g0 itself, only through its child.
+    let rejected = error(r0.try_add_dep("g0", "i3"));
+    assert!(rejected.contains("i1 waiting on i3"), "{rejected}");
+    r0.remove_dep("i3", "i1");
+    r0.move_to("g0", Some("g2"));
+    assert!(r0.view().is_valid());
+
+    // The edges count per relation, not per pair. On i1 -> i3 (inherited from g0) -> i1, a
+    // dependency of i1 on i3 repeats the pair yet would keep the cycle after g0's is removed.
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r0.add_dep("g0", "i3");
+    r1.add_dep("i3", "i1");
+    r0.sync(&r1);
+    assert_eq!(r0.view().violations(), &cycle_members(&["i1", "i3"]));
+    let rejected = error(r0.try_add_dep("i1", "i3"));
+    assert!(rejected.contains("i1 waiting on i3"), "{rejected}");
+    r0.remove_dep("g0", "i3");
+    assert!(r0.view().is_valid());
+    // The same for a move: i1 already waits on i3 on its own; under g2, which depends on i3,
+    // it would inherit that edge too.
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r0.add_dep("g2", "i3");
+    r0.add_dep("i1", "i3");
+    r1.add_dep("i3", "i1");
+    r0.sync(&r1);
+    assert_eq!(r0.view().violations(), &cycle_members(&["i1", "i3"]));
+    let rejected = error(r0.try_move("i1", Some("g2")));
+    assert!(rejected.contains("i1 waiting on i3"), "{rejected}");
+    r0.remove_dep("i3", "i1");
+    assert!(r0.view().is_valid());
+
+    // A registration too: i6 arrived without its parent g5 and is on a cycle with i3. g5
+    // registered with a dependency on i3 would make i6 inherit it; without it, it passes.
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r1.create("g5", Kind::Group, Lifecycle::NotStarted, None);
+    let child = r1.create("i6", Kind::Issue, Lifecycle::NotStarted, Some("g5"));
+    let back = r1.add_dep("i3", "i6");
+    r0.sync_one(&r1, &child);
+    r0.add_dep("i6", "i3");
+    r0.sync_one(&r1, &back);
+    assert!(
+        r0.view()
+            .violations()
+            .is_superset(&cycle_members(&["i6", "i3"]))
+    );
+    let mut value = current(Kind::Group, Lifecycle::NotStarted, None);
+    value.needs.insert(id("i3"));
+    let rejected = error(r0.try_create("g5", value));
+    assert!(rejected.contains("i6 waiting on i3"), "{rejected}");
+    r0.create("g5", Kind::Group, Lifecycle::NotStarted, None);
+    r0.remove_dep("i3", "i6");
+    assert!(r0.view().is_valid());
+
+    // An ancestor both parent chains share adds no relation: i1 inherits g2's dependency on
+    // i3 under g0 and still does under the sibling g4, so the move passes.
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r0.create("g4", Kind::Group, Lifecycle::NotStarted, Some("g2"));
+    r0.move_to("g0", Some("g2"));
+    r0.add_dep("g2", "i3");
+    r1.add_dep("i3", "i1");
+    r0.sync(&r1);
+    assert_eq!(r0.view().violations(), &cycle_members(&["i1", "i3"]));
+    r0.move_to("i1", Some("g4"));
+    assert_eq!(r0.view().violations(), &cycle_members(&["i1", "i3"]));
+    r0.remove_dep("i3", "i1");
+    assert!(r0.view().is_valid());
+
+    // A registration whose parent chain closes the cycle: i3 arrived under g4 without it, on
+    // i1 <-> i3, and g2 depends on i1. g4 registered under g2 would make i3 inherit that
+    // dependency; unassigned, it passes.
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r1.create("g4", Kind::Group, Lifecycle::NotStarted, None);
+    let moved = r1.move_to("i3", Some("g4"));
+    let back = r1.add_dep("i3", "i1");
+    r0.add_dep("i1", "i3");
+    r0.add_dep("g2", "i1");
+    r0.sync_one(&r1, &moved);
+    r0.sync_one(&r1, &back);
+    assert!(
+        r0.view()
+            .violations()
+            .is_superset(&cycle_members(&["i1", "i3"]))
+    );
+    let rejected = error(r0.try_create(
+        "g4",
+        current(Kind::Group, Lifecycle::NotStarted, Some("g2")),
+    ));
+    assert!(rejected.contains("i3 waiting on i1"), "{rejected}");
+    r0.create("g4", Kind::Group, Lifecycle::NotStarted, None);
+    r0.remove_dep("i1", "i3");
+    assert!(r0.view().is_valid());
+
+    // A cycle of one: on i3 <-> i4 with g2 depending on i3, moving i3 under g2's child g0
+    // makes i3 inherit its own dependency. No other new edge is on a cycle.
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r0.create("i4", Kind::Issue, Lifecycle::NotStarted, None);
+    r1.sync(&r0);
+    r0.move_to("g0", Some("g2"));
+    r0.add_dep("g2", "i3");
+    r0.add_dep("i3", "i4");
+    r1.add_dep("i4", "i3");
+    r0.sync(&r1);
+    assert_eq!(r0.view().violations(), &cycle_members(&["i3", "i4"]));
+    let rejected = error(r0.try_move("i3", Some("g0")));
+    assert!(rejected.contains("i3 waiting on i3"), "{rejected}");
+    r0.remove_dep("i4", "i3");
     assert!(r0.view().is_valid());
 }
 

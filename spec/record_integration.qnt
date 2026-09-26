@@ -143,13 +143,16 @@ module record_integration {
   pure def completionPredecessors(v: View, e: Id): Set[Id] =
     children(v, e).union(settledDeps(v, e))
       .union(ancestors(v, e).map(a => settledDeps(v, a)).flatten())
+  pure def completionPredMap(v: View): Id -> Set[Id] = v.settled.mapBy(e => completionPredecessors(v, e))
+  // from と、from から前提をたどって届く Entity。
+  pure def completionReach(preds: Id -> Set[Id], from: Set[Id]): Set[Id] =
+    ENTITIES.fold(from, (reach, _) => reach.union(reach.map(x => preds.get(x)).flatten()))
   // 通常完了経路（直属の子 ∪ 自身の依存先 ∪ 全祖先の依存先）の循環上にある Entity。
   // 前提をたどって自身に戻れる Entity だけで、循環を待つだけの Entity は含めない。
   // 待つ側まで含めると、待つ側どうしに新しい循環を足しても違反の集合が増えず、通常操作が循環を作れてしまう。
   pure def completionCycleMembers(v: View): Set[Id] = {
-    val preds = v.settled.mapBy(e => completionPredecessors(v, e))
-    v.settled.filter(e =>
-      v.settled.fold(preds.get(e), (reach, _) => reach.union(reach.map(x => preds.get(x)).flatten())).contains(e))
+    val preds = completionPredMap(v)
+    v.settled.filter(e => completionReach(preds, preds.get(e)).contains(e))
   }
 
   pure def deriveViolations(v: View): Set[Violation] = {
@@ -306,6 +309,35 @@ module record_integration {
   // 通常操作の検査: 操作後の違反が操作前の違反の部分集合である。
   pure def noWorse(before: View, after: View): bool = after.violations.subseteq(before.violations)
   pure def noNewViolations(v: View, after: Store): bool = noWorse(v, view(after))
+  // 変更で Entity e が新しく持った関係が誘導する通常完了経路の前提の辺（x は y を待つ）。新しい依存先 t は
+  // e と e の子孫に t を待たせ、新しい所属先 p は p に e を待たせ、新しく祖先の連なりに加わった Group は e と
+  // e の子孫にその依存先を待たせる。辺は関係ごとに数え、別の関係がすでに同じ組を誘導していても検査の対象に
+  // する。移動の前後で共通の祖先の依存先は新しい関係ではない。
+  pure def relationEdges(v: View, e: Id, newDeps: Set[Id], newParent: Set[Id], joined: Set[Id]): Set[(Id, Id)] = {
+    val waiting = Set(e).union(descendants(v, e))
+    val targets = newDeps.filter(t => v.settled.contains(t)).union(joined.map(a => settledDeps(v, a)).flatten())
+    newParent.map(p => (p, e)).union(waiting.map(x => targets.map(t => (x, t))).flatten())
+  }
+  // e の変更で新しく持った関係が誘導する辺のどれかが、変更後の循環上に載るか（辺の先から前提をたどって辺の元へ
+  // 戻れるか）。違反の集合は Entity で数えるので、すでに循環上にある Entity どうしの辺（同じ循環への chord、
+  // 別の循環の構成員どうし）は部分集合の検査を通る。所属変更・dependency の追加・登録はこの検査も課す。
+  // 循環上の辺は両端が循環の違反に含まれるので、先にそれで絞る。
+  pure def relationOnCycle(before: View, after: View, e: Id): bool = {
+    val c = after.current.get(e)
+    val existed = before.settled.contains(e)
+    val newDeps = if (existed) c.deps.exclude(before.current.get(e).deps) else c.deps
+    val moved = not(existed and before.current.get(e).parent == c.parent)
+    val newParent = if (moved) settledParent(after, e) else Set()
+    val oldChain = if (existed) ancestors(before, e) else Set()
+    val joined = newParent.union(newParent.map(p => ancestors(after, p)).flatten()).exclude(oldChain)
+    val preds = completionPredMap(after)
+    relationEdges(after, e, newDeps, newParent, joined).exists(xy => and {
+      after.violations.contains(CompletionCycle(xy._1)),
+      after.violations.contains(CompletionCycle(xy._2)),
+      completionReach(preds, Set(xy._2)).contains(xy._1),
+    })
+  }
+  pure def closesCycle(v: View, after: Store, e: Id): bool = relationOnCycle(v, view(after), e)
   // 修復の進み具合。違反の集合が縮むか、集合が同じでも違反に含まれる Entity の dependency と所属の辺が減れば前進。
   // 二重に絡んだ循環は一手では違反の集合を縮められないが、辺を一本ずつ外して直せる。
   pure def repairEdges(v: View): int =
@@ -353,7 +385,9 @@ module record_integration {
   // 衝突が一つでも残っている replica では、Resolve と Note 以外の操作を行えない。
   // 構造の違反は操作を止めないが、lifecycle 操作を含む全通常操作は「操作後の違反が操作前の違反の部分集合」で
   // あることを要求する。免除は操作の前提を緩めるだけで、違反を増やす操作は通らない。
-  // 所属変更・dependency の追加・登録はこの検査が循環などを防ぐ唯一の検査なので常に課す（strict）。
+  // 所属変更・dependency の追加・登録はこの検査が循環などを防ぐ唯一の検査なので常に課し（strict）、
+  // 違反のある store では、新しく持った関係が誘導する辺が循環上に載らないことを合わせて要求する。
+  // 有効な store では循環上に載る辺は必ず違反を増やすので、後者は前者に含まれる。
   // lifecycle 操作・文面編集・dependency の削除は、有効な store では各操作の前提だけで違反を防ぐはずなので、
   // 違反のある store でだけ課し、有効な store で前提だけが足りることは invLocalStep が検査する。
   // 実装は lifecycle 操作を常に検査し、文面編集・dependency の削除は前提だけで確定する。
@@ -363,6 +397,7 @@ module record_integration {
     val v2 = view(s2)
     all {
       (strict or not(structurallyValid(v))) implies noWorse(v, v2),
+      (strict and not(structurallyValid(v))) implies not(relationOnCycle(v, v2, rec.entity)),
       stores' = stores.set(r, s2),
       seqs' = seqs.setBy(r, n => n + 1),
       previous' = stores,

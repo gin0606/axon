@@ -21,7 +21,8 @@ impl Store {
 
     /// Registers an Entity as Undecided or NotStarted with its initial value. The parent must
     /// be a settled, unfinished Group; dependencies must be settled and outside the
-    /// containment line. The result may not add a violation.
+    /// containment line. The result may not add a violation nor put a new completion-path
+    /// edge on a cycle.
     pub fn create(&self, id: EntityId, current: Current, context: Context) -> Result<Record> {
         let view = self.settled_view()?;
         create_in(self, &view, id, current, context)
@@ -77,7 +78,8 @@ impl Store {
             context,
         )))
     }
-    /// Moves the Entity under another Group or out of any. None when unchanged.
+    /// Moves the Entity under another Group or out of any. None when unchanged. The result may
+    /// not add a violation nor put a new completion-path edge on a cycle.
     pub fn set_parent(
         &self,
         id: &EntityId,
@@ -87,6 +89,8 @@ impl Store {
         let view = self.settled_view()?;
         set_parent_in(self, &view, id, parent, context)
     }
+    /// Adds a dependency. None when present. The result may not add a violation nor put the
+    /// new edge on a completion cycle, even between Entities already on one.
     pub fn add_dependency(
         &self,
         id: &EntityId,
@@ -272,9 +276,34 @@ fn follow(
 
 /// Rejects a record whose result adds a violation the store did not have.
 fn without_new_violations(store: &Store, view: &View, record: Record) -> Result<Record> {
-    let id = RecordId::of(&super::encode(&Entry::Record(record.clone()))?);
+    let after = view_after(store, &record)?;
+    reject_new_violations(view, &after)?;
+    Ok(record)
+}
+
+/// Rejects a move, dependency or registration whose result adds a violation or puts an
+/// edge its new relations induce on a completion cycle. In a valid store any cycle through
+/// a new edge adds members, and the violation check has rejected it already.
+fn without_new_violations_or_cycle(store: &Store, view: &View, record: Record) -> Result<Record> {
+    let after = view_after(store, &record)?;
+    reject_new_violations(view, &after)?;
+    if !view.violations().is_empty()
+        && let Some((dependent, predecessor)) = after.relation_on_cycle(view, &record.entity)
+    {
+        return Err(invalid(format!(
+            "the change would put {dependent} waiting on {predecessor} on a completion cycle"
+        )));
+    }
+    Ok(record)
+}
+
+fn view_after(store: &Store, record: &Record) -> Result<View> {
     let entry = Entry::Record(record.clone());
-    let after = View::derive_with(store, Some((&id, &entry)))?;
+    let id = RecordId::of(&super::encode(&entry)?);
+    View::derive_with(store, Some((&id, &entry)))
+}
+
+fn reject_new_violations(view: &View, after: &View) -> Result<()> {
     let added: Vec<_> = after
         .violations()
         .difference(view.violations())
@@ -286,7 +315,7 @@ fn without_new_violations(store: &Store, view: &View, record: Record) -> Result<
             added.join(", ")
         )));
     }
-    Ok(record)
+    Ok(())
 }
 
 fn require_open_group(view: &View, parent: Option<&EntityId>) -> Result<()> {
@@ -357,7 +386,7 @@ fn create_in(
         reason: None,
         after: current,
     };
-    without_new_violations(store, view, record)
+    without_new_violations_or_cycle(store, view, record)
 }
 
 fn perform_in(
@@ -464,7 +493,7 @@ fn set_parent_in(
         ..current.clone()
     };
     let record = follow(view, id, RecordKind::Parent, after, None, context);
-    without_new_violations(store, view, record).map(Some)
+    without_new_violations_or_cycle(store, view, record).map(Some)
 }
 
 fn add_dependency_in(
@@ -485,7 +514,7 @@ fn add_dependency_in(
     let mut after = current.clone();
     after.needs.insert(target.clone());
     let record = follow(view, id, RecordKind::Dependency, after, None, context);
-    without_new_violations(store, view, record).map(Some)
+    without_new_violations_or_cycle(store, view, record).map(Some)
 }
 
 fn remove_dependency_in(

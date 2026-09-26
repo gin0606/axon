@@ -3,7 +3,7 @@
 //! dependencies, duplicate creation and gap conflicts, `witnesses` the main witnesses of
 //! `spec/record_integration.qnt`, and the rest cover conversion across kinds, the rejection
 //! rules of ordinary operations (including the `run` tests on waived lifecycle operations,
-//! the broken ancestor chain, cycles among waiting Entities and chords on a cycle), the
+//! the broken ancestor chain, cycles among waiting Entities and new edges on a cycle), the
 //! lifecycle, relation, text and Note rules on a single store, the codec and order
 //! independence.
 use super::*;
