@@ -1139,6 +1139,78 @@ fn cherry_pick_of_a_later_commit_reports_a_gap_and_a_false_conflict_until_the_re
 }
 
 #[test]
+fn cherry_pick_of_several_records_of_one_entity_marks_the_head_above_the_gap_as_likely_newer() {
+    let (f, x) = tracked_repository("x");
+    let a = add_worktree(&f.0, "a");
+    a.ok(&["start", &x]);
+    commit_store(&a.0, "start");
+    // One commit carries the release and the next start: the release's parent is missing
+    // after the pick, and the head above it has every parent present.
+    a.ok(&["release", &x]);
+    a.ok(&["start", &x]);
+    let both = commit_store(&a.0, "release and start again");
+    let pick = git_integration(&f.0, &["cherry-pick", &both]);
+    assert!(
+        pick.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pick.stderr)
+    );
+    let error = failure(f.run(&["storage", "check"]));
+    assert!(error.contains(&format!("Conflicted: {x}")), "{error}");
+    assert!(
+        error.contains(&format!("Missing parent records: {x}")),
+        "{error}"
+    );
+    let listing = f.ok(&["resolve", &x]);
+    assert_eq!(listed_heads(&listing).len(), 2, "{listing}");
+    let newer = head_line(&listing, "parent missing; likely newer");
+    assert!(newer.contains("Start  InProgress  Issue  x"), "{newer}");
+    assert!(
+        !head_line(&listing, "created").contains("parent missing"),
+        "{listing}"
+    );
+    let show = f.ok(&["show", &x]);
+    assert!(show.contains("Issue  Conflicted  x"), "{show}");
+    assert!(
+        head_line(&show, "parent missing; likely newer").contains("Start  InProgress"),
+        "{show}"
+    );
+    assert_eq!(show.matches("parent missing").count(), 1, "{show}");
+    // Resolving at that head leaves only the gap, as information.
+    let newer = newer.split("  ").next().unwrap().to_owned();
+    f.ok(&["resolve", &x, "--head", &newer]);
+    let check = f.run(&["storage", "check"]);
+    assert!(check.status.success());
+    let report = String::from_utf8(check.stdout).unwrap();
+    assert!(
+        report.contains(&format!("Missing parent records: {x}")),
+        "{report}"
+    );
+    assert!(!report.contains("Conflicted"), "{report}");
+    assert!(f.ok(&["show", &x]).contains("Issue  InProgress  x"));
+    commit_store(&f.0, "resolve");
+    // A real conflict above the gap: both heads reach the creation through the resolve, so
+    // neither is marked.
+    let b = add_worktree(&f.0, "b");
+    b.ok(&["release", &x]);
+    commit_store(&b.0, "release on b");
+    f.ok(&["release", &x, "-r", "main side"]);
+    commit_store(&f.0, "release on main");
+    let merge = git_integration(&f.0, &["merge", "--no-edit", "b"]);
+    assert!(
+        merge.status.success(),
+        "{}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
+    let listing = f.ok(&["resolve", &x]);
+    assert_eq!(listed_heads(&listing).len(), 2, "{listing}");
+    assert!(!listing.contains("parent missing"), "{listing}");
+    let show = f.ok(&["show", &x]);
+    assert!(show.contains("Issue  Conflicted  x"), "{show}");
+    assert!(!show.contains("parent missing"), "{show}");
+}
+
+#[test]
 fn revert_of_a_continued_commit_reports_a_gap_and_of_an_uncontinued_commit_nothing() {
     let (f, x) = tracked_repository("x");
     f.ok(&["start", &x]);

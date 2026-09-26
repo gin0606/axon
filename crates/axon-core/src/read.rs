@@ -80,20 +80,35 @@ impl<'a> View<'a> {
         self.view.is_known(id)
     }
     /// The heads of a known Entity in record ID order.
+    ///
+    /// When the Entity has a gap, a head is `likely_newer` when its own parent is missing or
+    /// when following parents from it never reaches the Entity's oldest record (its creation
+    /// record, or else the earliest record whose parents are all missing). In an ordinary
+    /// false conflict the older side reaches that record, directly or through a resolve record
+    /// that joins it; with several gaps the mark is only a guess.
     pub fn heads(&self, id: &EntityId) -> Vec<Head<'a>> {
+        let oldest = if self.view.gaps().contains_key(id) {
+            oldest_record(self.store, id)
+        } else {
+            None
+        };
         self.view
             .heads(id)
             .into_iter()
             .flatten()
             .map(|head| {
                 let record = self.store.record(head).expect("a head is a record");
+                let likely_newer = oldest.is_some_and(|oldest| {
+                    record
+                        .parents
+                        .iter()
+                        .any(|parent| !self.store.contains(parent))
+                        || !reaches(self.store, head, oldest)
+                });
                 Head {
                     id: head,
                     record,
-                    parent_missing: record
-                        .parents
-                        .iter()
-                        .any(|parent| !self.store.contains(parent)),
+                    likely_newer,
                 }
             })
             .collect()
@@ -571,14 +586,49 @@ pub struct Descendants<'a> {
     pub awaiting_confirmation: bool,
 }
 
+/// The oldest record of an Entity among those without a parent in the set: its creation
+/// record, or else the earliest record whose parents are all missing (ties by ID).
+fn oldest_record<'a>(store: &'a Store, id: &EntityId) -> Option<&'a RecordId> {
+    store
+        .records()
+        .filter(|(_, record)| {
+            &record.entity == id && record.parents.iter().all(|parent| !store.contains(parent))
+        })
+        .min_by_key(|(record_id, record)| {
+            (record.kind != RecordKind::Created, record.at, *record_id)
+        })
+        .map(|(record_id, _)| record_id)
+}
+
+/// Whether following parents from `from` (the record included) reaches `target`.
+fn reaches(store: &Store, from: &RecordId, target: &RecordId) -> bool {
+    let mut seen = BTreeSet::from([from]);
+    let mut pending = vec![from];
+    while let Some(id) = pending.pop() {
+        if id == target {
+            return true;
+        }
+        let Some(record) = store.record(id) else {
+            continue;
+        };
+        for parent in &record.parents {
+            if seen.insert(parent) {
+                pending.push(parent);
+            }
+        }
+    }
+    false
+}
+
 /// One head of a conflicted Entity.
 #[derive(Debug, Clone)]
 pub struct Head<'a> {
     pub id: &'a RecordId,
     pub record: &'a Record,
-    /// A parent record of this head is not in the set: the head is likely the newer side of
-    /// a gap.
-    pub parent_missing: bool,
+    /// This head's parent is missing, or following parents from it does not reach the
+    /// Entity's oldest record because a record on the way has a missing parent: the head is
+    /// likely the newer side of a gap.
+    pub likely_newer: bool,
 }
 
 /// An Entity named by a violation, a prerequisite or a stall reason, with its row when the
@@ -1784,6 +1834,140 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].id, last_id);
         assert!(history[0].parent_missing && history[0].before.is_none());
+    }
+
+    #[test]
+    fn a_head_cut_off_from_the_oldest_record_is_likely_newer_and_a_head_reaching_it_is_not() {
+        let item = id("item");
+        let heads_of = |store: &Store| -> Vec<bool> {
+            let derived = store.view().unwrap();
+            let view = View::new(store, &derived);
+            view.heads(&item).iter().map(|h| h.likely_newer).collect()
+        };
+        let newer_of = |store: &Store| -> Vec<RecordId> {
+            let derived = store.view().unwrap();
+            let view = View::new(store, &derived);
+            view.heads(&item)
+                .into_iter()
+                .filter(|h| h.likely_newer)
+                .map(|h| h.id.clone())
+                .collect()
+        };
+        let mut f = Fixture::new();
+        f.create("item", Kind::Issue, None, &[], 10);
+        let base = f.store.clone();
+        // Start → Release → Start, and only the last two arrive: the gap is below the head.
+        let mut a = Fixture {
+            store: base.clone(),
+            clock: std::cell::Cell::new(200),
+        };
+        a.perform("item", Operation::Start);
+        let start = a.store.view().unwrap().head(&item).unwrap().clone();
+        a.perform("item", Operation::Release);
+        a.perform("item", Operation::Start);
+        let mut main = base.clone();
+        for (record_id, record) in a.store.records() {
+            if record_id != &start {
+                main.insert(Entry::Record(record.clone())).unwrap();
+            }
+        }
+        assert_eq!(heads_of(&main).iter().filter(|m| **m).count(), 1);
+        let newer = newer_of(&main).remove(0);
+        assert_ne!(main.record(&newer).unwrap().kind, RecordKind::Created);
+        let resolved = main.resolve(&item, &newer, None, context(300)).unwrap();
+        main.insert(Entry::Record(resolved)).unwrap();
+        assert!(main.view().unwrap().gaps().contains_key(&item));
+        // A real conflict above the gap: both heads reach the creation through the resolve.
+        let mut left = Fixture {
+            store: main.clone(),
+            clock: std::cell::Cell::new(400),
+        };
+        let mut right = Fixture {
+            store: main.clone(),
+            clock: std::cell::Cell::new(500),
+        };
+        left.perform("item", Operation::Release);
+        right.perform("item", Operation::Cancel);
+        left.store.absorb(&right.store);
+        assert_eq!(heads_of(&left.store), [false, false]);
+        // A later false conflict on the gapped Entity: Release → Start, only the Start
+        // arrives. Its cut-off side is marked, the resolve side is not.
+        let mut later = Fixture {
+            store: main.clone(),
+            clock: std::cell::Cell::new(600),
+        };
+        later.perform("item", Operation::Release);
+        later.perform("item", Operation::Start);
+        let last = later.store.view().unwrap().head(&item).unwrap().clone();
+        let mut picked = main.clone();
+        picked
+            .insert(Entry::Record(later.store.record(&last).unwrap().clone()))
+            .unwrap();
+        assert_eq!(newer_of(&picked), [last]);
+        assert_eq!(heads_of(&picked).len(), 2);
+        // Without a gap nothing is marked.
+        let mut plain_left = Fixture {
+            store: base.clone(),
+            clock: std::cell::Cell::new(700),
+        };
+        let mut plain_right = Fixture {
+            store: base.clone(),
+            clock: std::cell::Cell::new(800),
+        };
+        plain_left.perform("item", Operation::Start);
+        plain_right.perform("item", Operation::Cancel);
+        plain_left.store.absorb(&plain_right.store);
+        assert_eq!(heads_of(&plain_left.store), [false, false]);
+        // A resolve record whose one parent is missing is marked even though its other parent
+        // reaches the creation.
+        let mut left = Fixture {
+            store: base.clone(),
+            clock: std::cell::Cell::new(900),
+        };
+        let mut right = Fixture {
+            store: base.clone(),
+            clock: std::cell::Cell::new(1000),
+        };
+        left.perform("item", Operation::Start);
+        let started = left.store.view().unwrap().head(&item).unwrap().clone();
+        left.perform("item", Operation::Release);
+        let released = left.store.view().unwrap().head(&item).unwrap().clone();
+        right.perform("item", Operation::Cancel);
+        let cancelled = right.store.view().unwrap().head(&item).unwrap().clone();
+        let mut joined = left.store.clone();
+        joined.absorb(&right.store);
+        let resolved = joined
+            .resolve(&item, &cancelled, None, context(1100))
+            .unwrap();
+        let mut partial = base.clone();
+        for record_id in [&started, &cancelled] {
+            partial
+                .insert(Entry::Record(joined.record(record_id).unwrap().clone()))
+                .unwrap();
+        }
+        let resolved = partial.insert(Entry::Record(resolved)).unwrap();
+        assert!(!partial.contains(&released));
+        assert_eq!(newer_of(&partial), [resolved]);
+        // Without the creation record, the oldest record stands in for it: a real conflict
+        // above the gap marks neither head.
+        let mut rootless = Store::new();
+        for (record_id, record) in a.store.records() {
+            if record_id != &start && record.kind != RecordKind::Created {
+                rootless.insert(Entry::Record(record.clone())).unwrap();
+            }
+        }
+        let mut left = Fixture {
+            store: rootless.clone(),
+            clock: std::cell::Cell::new(1200),
+        };
+        let mut right = Fixture {
+            store: rootless,
+            clock: std::cell::Cell::new(1300),
+        };
+        left.perform("item", Operation::Release);
+        right.perform("item", Operation::Cancel);
+        left.store.absorb(&right.store);
+        assert_eq!(heads_of(&left.store), [false, false]);
     }
 
     #[test]

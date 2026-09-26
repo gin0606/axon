@@ -76,7 +76,7 @@ pub(super) fn head(head: &read::Head<'_>) -> String {
         display::situation(&format!("{:?}", after.lifecycle)),
         display::muted(format!("{:?}", after.kind)),
         display::line(&after.title),
-        if head.parent_missing {
+        if head.likely_newer {
             display::muted("  parent missing; likely newer")
         } else {
             String::new()
