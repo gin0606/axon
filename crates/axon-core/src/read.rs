@@ -304,18 +304,26 @@ impl<'a> View<'a> {
         Ok((unsurfaced, candidates))
     }
     /// The nearest-to-the-root ancestor whose own condition is unsatisfied, if any. Nothing
-    /// below it is evaluated, so at most one ancestor is named.
+    /// below it is evaluated, so at most one ancestor is named. A terminal ancestor ends the
+    /// walk without naming it: it has no condition to satisfy, and a read names it as an
+    /// unadopted ancestor instead.
     fn unsurfaced_ancestor<E>(
         &self,
         ancestors: &[EntityId],
         mut surfaced: impl FnMut(&EntityId) -> std::result::Result<bool, E>,
     ) -> std::result::Result<Option<EntityId>, E> {
         for ancestor in ancestors.iter().rev() {
+            if self.is_terminal(ancestor) {
+                return Ok(None);
+            }
             if !surfaced(ancestor)? {
                 return Ok(Some(ancestor.clone()));
             }
         }
         Ok(None)
+    }
+    fn is_terminal(&self, id: &EntityId) -> bool {
+        self.current(id).is_some_and(|c| !c.lifecycle.editable())
     }
     /// The row of a known Entity from a computed situation.
     fn row_from(&self, id: &'a EntityId, status: Status, query: Option<&str>) -> Row<'a> {
@@ -388,9 +396,12 @@ impl<'a> View<'a> {
         let ancestors = self.ancestors(group);
         let ancestor_dependencies = self.ancestor_dependencies(&ancestors);
         let unsurfaced_ancestor = self.unsurfaced_ancestor(&ancestors, &mut surfaced)?;
-        // Below an unsurfaced ancestor the Group's own condition is not evaluated, so only
-        // with every ancestor surfaced does the Group not surfacing mean its own condition.
-        let own_condition_unsatisfied = unsurfaced_ancestor.is_none() && !surfaced(group)?;
+        // Below an unsurfaced or terminal ancestor the Group's own condition is not evaluated,
+        // so only with every ancestor surfaced does the Group not surfacing mean its own
+        // condition.
+        let own_condition_unsatisfied = unsurfaced_ancestor.is_none()
+            && !ancestors.iter().any(|a| self.is_terminal(a))
+            && !surfaced(group)?;
         let rows = |ids: Vec<&'a EntityId>| {
             ids.into_iter()
                 .map(|id| self.row_with(id, &known))
@@ -455,9 +466,13 @@ impl<'a> View<'a> {
             )?,
             unsurfaced_ancestors: self
                 .owned_rows(unsurfaced_ancestor.into_iter().collect(), &known)?,
-            unsettled_ancestors: self
-                .unsettled_ancestor(group)
+            unadopted_ancestors: self
+                .unadopted_ancestors(group)
                 .iter()
+                .filter(|a| {
+                    self.current(a)
+                        .is_none_or(|x| x.lifecycle != Lifecycle::Undecided)
+                })
                 .map(|ancestor| self.related_with(ancestor, &known))
                 .collect::<std::result::Result<Vec<_>, E>>()?,
         }))
@@ -533,9 +548,11 @@ pub struct Stall<'a> {
     pub undecided_ancestors: Vec<Row<'a>>,
     /// The ancestor whose unsatisfied condition keeps the Group from surfacing.
     pub unsurfaced_ancestors: Vec<Row<'a>>,
-    /// The conflicted or missing ancestor that ends the chain: not adopted, having no current
-    /// value, and without a row when the store does not hold it.
-    pub unsettled_ancestors: Vec<Related<'a>>,
+    /// Ancestors that are not adopted other than the Undecided ones: settled ancestors whose
+    /// stored value is not NotStarted (terminal ones, a violation Git left), then the
+    /// conflicted or missing ancestor that ends the chain, which has no row when the store
+    /// does not hold it.
+    pub unadopted_ancestors: Vec<Related<'a>>,
 }
 
 #[derive(Debug)]
@@ -1186,6 +1203,8 @@ mod tests {
             assert_eq!(ids(&stall.undecided_children), ["draft"]);
             assert_eq!(ids(&stall.open_subgroups), ["sub"]);
             assert_eq!(ids(&stall.undecided_ancestors), ["outer"]);
+            // An Undecided ancestor is named once, not also as an unadopted one.
+            assert!(stall.unadopted_ancestors.is_empty());
         });
         inspect(&f, "sub", |value| {
             let sub = value.stall.unwrap();
@@ -1979,8 +1998,8 @@ mod tests {
         ] {
             assert_eq!(plan.row.status, Status::Blocked);
             let stall = plan.stall.unwrap();
-            assert_eq!(related_ids(&stall.unsettled_ancestors), ["outer"]);
-            assert!(stall.unsettled_ancestors[0].row.is_none());
+            assert_eq!(related_ids(&stall.unadopted_ancestors), ["outer"]);
+            assert!(stall.unadopted_ancestors[0].row.is_none());
             assert!(stall.undecided_ancestors.is_empty());
         }
     }
@@ -2036,9 +2055,9 @@ mod tests {
         let plan = detail(&view, &id("plan")).unwrap();
         assert_eq!(plan.row.status, Status::Blocked);
         let stall = plan.stall.unwrap();
-        assert_eq!(related_ids(&stall.unsettled_ancestors), ["outer"]);
+        assert_eq!(related_ids(&stall.unadopted_ancestors), ["outer"]);
         assert_eq!(
-            stall.unsettled_ancestors[0].row.as_ref().unwrap().status,
+            stall.unadopted_ancestors[0].row.as_ref().unwrap().status,
             Status::Conflicted
         );
         let work = detail(&view, &id("work")).unwrap();
@@ -2046,6 +2065,73 @@ mod tests {
             related_ids(&work.prerequisites.unwrap().ancestors),
             ["outer"]
         );
+    }
+
+    #[test]
+    fn a_terminal_ancestor_is_named_as_unadopted_and_not_as_unsurfaced() {
+        let mut f = Fixture::new();
+        f.create("root", Kind::Group, None, &[], 1);
+        f.create("done", Kind::Group, Some("root"), &[], 2);
+        f.create("last", Kind::Issue, Some("done"), &[], 3);
+        // One side adds open work under the Group while the other completes the Group.
+        let mut other = Fixture {
+            store: f.store.clone(),
+            clock: std::cell::Cell::new(500),
+        };
+        other.create("plan", Kind::Group, Some("done"), &[], 4);
+        other.create("work", Kind::Issue, Some("plan"), &[], 5);
+        f.perform("last", Operation::Start);
+        f.perform("last", Operation::Complete);
+        f.perform("done", Operation::Complete);
+        f.store.absorb(&other.store);
+        let derived = f.derived();
+        assert!(derived.violations().contains(&record::Violation {
+            entity: id("plan"),
+            kind: ViolationKind::OpenUnderTerminal
+        }));
+        let view = View::new(&f.store, &derived);
+        let evaluated = |name: &str| detail_with::<Error>(&view, &id(name), |_, _| Ok(true));
+        for plan in [
+            detail(&view, &id("plan")).unwrap(),
+            evaluated("plan").unwrap(),
+        ] {
+            assert_eq!(plan.row.status, Status::Blocked);
+            let stall = plan.stall.unwrap();
+            assert_eq!(related_ids(&stall.unadopted_ancestors), ["done"]);
+            assert_eq!(
+                stall.unadopted_ancestors[0].row.as_ref().unwrap().status,
+                Status::Completed
+            );
+            assert!(stall.unsurfaced_ancestors.is_empty());
+            assert!(stall.own_condition_unsatisfied.is_empty());
+            assert!(stall.undecided_ancestors.is_empty());
+        }
+        for work in [
+            detail(&view, &id("work")).unwrap(),
+            evaluated("work").unwrap(),
+        ] {
+            let prerequisites = work.prerequisites.unwrap();
+            assert_eq!(prerequisites.operation, PrerequisiteOperation::Start);
+            assert_eq!(related_ids(&prerequisites.ancestors), ["done"]);
+            assert!(prerequisites.unsurfaced_ancestors.is_empty());
+        }
+        // An unsatisfied condition above the terminal ancestor is still named, and nothing
+        // below the terminal ancestor is evaluated.
+        f.set_condition("root", Some("root"));
+        f.set_condition("plan", Some("plan"));
+        let derived = f.derived();
+        let view = View::new(&f.store, &derived);
+        let mut asked = Vec::new();
+        let plan = detail_with::<Error>(&view, &id("plan"), |e, _| {
+            asked.push(e.to_string());
+            Ok(false)
+        })
+        .unwrap();
+        assert_eq!(asked, ["root"]);
+        let stall = plan.stall.unwrap();
+        assert_eq!(related_ids(&stall.unadopted_ancestors), ["done"]);
+        assert_eq!(ids(&stall.unsurfaced_ancestors), ["root"]);
+        assert!(stall.own_condition_unsatisfied.is_empty());
     }
 
     #[test]

@@ -116,7 +116,7 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
                 || value.stall.as_ref().is_some_and(|s| {
                     named(&s.undecided_ancestors)
                         || named(&s.unsurfaced_ancestors)
-                        || related(&s.unsettled_ancestors)
+                        || related(&s.unadopted_ancestors)
                 })
         });
     if let Some(parent) = value.parent.as_ref().filter(|_| !parent_named_below) {
@@ -215,7 +215,7 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
         for ancestor in &stall.undecided_ancestors {
             out.push_str(&format!("Undecided ancestor: {}", row(ancestor)));
         }
-        for ancestor in &stall.unsettled_ancestors {
+        for ancestor in &stall.unadopted_ancestors {
             out.push_str(&format!("Ancestor must be adopted: {}", row_of(ancestor)));
         }
         for ancestor in &stall.unsurfaced_ancestors {

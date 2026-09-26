@@ -1300,6 +1300,62 @@ fn a_child_registered_beside_a_completed_group_is_a_violation_that_reopen_repair
 }
 
 #[test]
+fn work_left_below_a_completed_group_names_it_as_unadopted_and_not_as_unsurfaced() {
+    let f = Fixture::new();
+    git(&f.0, &["init", "-q"]);
+    f.init();
+    let capture = |f: &Fixture, args: &[&str]| -> String {
+        f.ok(&[&["capture", "--accept"], args].concat())
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .into()
+    };
+    let done = capture(&f, &["--kind", "group", "--title", "done"]);
+    commit_store(&f.0, "base");
+    let a = add_worktree(&f.0, "a");
+    let b = add_worktree(&f.0, "b");
+    a.ok(&["complete", &done]);
+    commit_store(&a.0, "complete");
+    let plan = capture(
+        &b,
+        &["--kind", "group", "--title", "plan", "--parent", &done],
+    );
+    let work = capture(&b, &["--title", "work", "--parent", &plan]);
+    commit_store(&b.0, "plan");
+    let merge = git_integration(&a.0, &["merge", "--no-edit", "b"]);
+    assert!(
+        merge.status.success(),
+        "{}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
+    // The Completed Group has no condition, so it is named only as an unadopted ancestor.
+    let show = a.ok(&["show", &plan]);
+    assert!(
+        show.contains(&format!(
+            "Stalled\nAncestor must be adopted: {done}  Group  Completed  done\n"
+        )),
+        "{show}"
+    );
+    assert!(!show.contains("Unsurfaced ancestor:"), "{show}");
+    assert!(!show.contains("Parent:"), "{show}");
+    // The Issue still does not surface below the terminal ancestor, which is named as the
+    // reason instead of as an unsurfaced ancestor.
+    let show = a.ok(&["show", &work]);
+    assert!(
+        show.starts_with(&format!("{work}  Issue  Unsurfaced  work\n")),
+        "{show}"
+    );
+    assert!(
+        show.contains(&format!(
+            "Required to start\nAncestor must be adopted: {done}  Group  Completed  done\n"
+        )),
+        "{show}"
+    );
+    assert!(!show.contains("Unsurfaced ancestor:"), "{show}");
+}
+
+#[test]
 fn an_issue_below_a_group_whose_parent_registration_is_missing_names_that_ancestor() {
     let f = Fixture::new();
     f.init();
