@@ -377,7 +377,11 @@ fn describe(entry: &read::RecordEntry<'_>) -> String {
                 .collect(),
                 None => vec!["title/description"],
             };
-            format!("Edited: {}", changed.join(", "))
+            if changed.is_empty() {
+                format!("Edited: no field changes{reason}")
+            } else {
+                format!("Edited: {}", changed.join(", "))
+            }
         }
         RecordKind::Parent => format!(
             "Parent: {} → {}",
