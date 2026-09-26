@@ -15,7 +15,7 @@ module issue_lifecycle {
 
   // 再浮上条件の評価。Undecided・NotStarted・InProgress だけを評価対象とし、
   // Cancelled・Completed は入力の真偽にかかわらず NotEvaluated として浮上しない。
-  // 判定は導出であり、保存する状態を書き換えない。
+  // Reopen で NotStarted へ戻った Issue は再び評価対象になる。判定は導出であり、保存する状態を書き換えない。
   type ConditionResult = NotEvaluated | Evaluated(bool)
 
   pure def evaluationEligible(current: Lifecycle): bool =
@@ -31,13 +31,13 @@ module issue_lifecycle {
   }
   // 到達性と操作順を調べる ghost state。製品の保存情報ではない。
   // 直前の状態・外部入力とイベント、直近の Withdraw・Cancel・Reconsider より後に
-  // 採用されたか、一度でも完了したかを保持する。
+  // 採用されたか、一度でも Reopen したかを保持する。
   type Observation = {
     previous: Lifecycle,
     event: Event,
     previousCondition: bool,
     acceptedSinceReview: bool,
-    completedEver: bool,
+    reopenedEver: bool,
   }
   var observed: Observation
 
@@ -50,7 +50,7 @@ module issue_lifecycle {
       if (op == Accept) true
       else if (Set(Withdraw, Cancel, Reconsider).contains(op)) false
       else before.acceptedSinceReview,
-    completedEver: before.completedEver or applyOperation(current, op) == Completed,
+    reopenedEver: before.reopenedEver or op == Reopen,
   }
 
   pure def observeConditionChange(
@@ -71,7 +71,7 @@ module issue_lifecycle {
       event: Initialized,
       previousCondition: false,
       acceptedSinceReview: false,
-      completedEver: false,
+      reopenedEver: false,
     },
   }
 
@@ -94,7 +94,7 @@ module issue_lifecycle {
     observed' = observeConditionChange(lifecycle, conditionSatisfied, observed),
   }
 
-  // 7操作と外部入力の変化を探索候補にし、前提を満たすものだけが実行される。
+  // 8操作と外部入力の変化を探索候補にし、前提を満たすものだけが実行される。
   action step = any {
     perform(Accept),
     perform(Withdraw),
@@ -103,13 +103,15 @@ module issue_lifecycle {
     perform(Complete),
     perform(Cancel),
     perform(Reconsider),
+    perform(Reopen),
     changeCondition(true),
     changeCondition(false),
   }
 
-  // witness: 7操作それぞれの到達に加え、未判断からの見送り、未着手からの取りやめ、
+  // witness: 8操作それぞれの到達に加え、未判断からの見送り、未着手からの取りやめ、
   // 進行中からの打ち切りを区別する。外部入力の両方向の変化、未判断・未着手の浮上、
-  // 進行中の非浮上化、取りやめ・完了の評価除外、再検討後の浮上・非浮上も観測する。
+  // 進行中の非浮上化、取りやめ・完了の評価除外、再検討後の浮上・非浮上、
+  // Reopen 後の再着手と Reopen 直後の浮上・非浮上も観測する。
   val wAccept = observed.event == LifecycleOperation(Accept)
   val wWithdraw = observed.event == LifecycleOperation(Withdraw)
   val wStart = observed.event == LifecycleOperation(Start)
@@ -117,9 +119,11 @@ module issue_lifecycle {
   val wComplete = observed.event == LifecycleOperation(Complete)
   val wCancel = observed.event == LifecycleOperation(Cancel)
   val wReconsider = observed.event == LifecycleOperation(Reconsider)
+  val wReopen = observed.event == LifecycleOperation(Reopen)
   val wRejectProposal = wCancel and observed.previous == Undecided
   val wCancelBeforeStart = wCancel and observed.previous == NotStarted
   val wCancelDuringWork = wCancel and observed.previous == InProgress
+  val wStartAfterReopen = wStart and observed.reopenedEver
 
   val wConditionRose = observed.event == ConditionChanged and conditionSatisfied
   val wConditionFell = observed.event == ConditionChanged and not(conditionSatisfied)
@@ -130,13 +134,18 @@ module issue_lifecycle {
   val wCompletedSuppressed = lifecycle == Completed and wConditionRose and not(surfaced)
   val wReconsiderSurfaced = wReconsider and surfaced
   val wReconsiderWaiting = wReconsider and not(surfaced)
+  val wReopenSurfaced = wReopen and surfaced
+  val wReopenWaiting = wReopen and not(surfaced)
 
   // invariant: 未着手・進行中・完了には直近の見直しより後の採用が要ること、
-  // 進行中の入口は Start、完了の入口は Complete に限ること、完了が戻らないこと。
+  // 進行中の入口は Start、完了の入口は Complete に限ること、
+  // 完了から抜ける経路は Reopen だけで、Reopen は未着手へ戻すこと。
   val invAdoptedBeforeWork =
     Set(NotStarted, InProgress, Completed).contains(lifecycle)
       implies observed.acceptedSinceReview
-  val invCompletedFinal = observed.completedEver implies lifecycle == Completed
+  val invCompletedLeavesOnlyByReopen =
+    (observed.previous == Completed and lifecycle != Completed)
+      implies (observed.event == LifecycleOperation(Reopen) and lifecycle == NotStarted)
   val invWorkEnteredThroughStart =
     (lifecycle == InProgress and observed.previous != InProgress)
       implies (observed.event == LifecycleOperation(Start) and observed.previous == NotStarted)
@@ -145,9 +154,9 @@ module issue_lifecycle {
       implies (observed.event == LifecycleOperation(Complete) and observed.previous == InProgress)
 
   // 外部入力ではなく、明示的な lifecycle 操作の行き止まりを調べる。
-  val invOnlyCompletionStops =
-    Set(Accept, Withdraw, Start, Release, Complete, Cancel, Reconsider)
-      .exists(op => canPerform(lifecycle, op)) iff lifecycle != Completed
+  // 完了も Reopen で戻せるため、どの状態にも実行できる明示操作がある。
+  // 構成の確認: 前提の定義から直接従う性質で、規則の書き誤りを検出するために置く。
+  val invNoLifecycleDeadEnd = OPERATIONS.exists(op => canPerform(lifecycle, op))
 
   // invariant: 外部入力と明示操作が互いの値を変えないこと、
   // 取りやめ・完了が評価されず浮上しないこと、評価対象の浮上が入力と一致すること。

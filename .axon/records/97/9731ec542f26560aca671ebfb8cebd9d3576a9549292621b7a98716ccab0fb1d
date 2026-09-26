@@ -1,0 +1,1 @@
+{"entity":"axon-6m0wkt","record":"note","parents":[],"nonce":"b267c23656074708fdb78608c362a96e","at":"2026-09-16T05:56:17.108413Z","recorder":{"actor":"codex","data":{"session_id":"01a0a8c8-ee95-7160-8c5c-a4bb20ffdc4e"}},"reason":null,"body":"旧形式の保存先から移行した記録: この Group は 2026-09-16T05:56:17.108413Z に codex が `axon start` した。新形式では Group の `Start` を記録しないため、この Note に写した。"}

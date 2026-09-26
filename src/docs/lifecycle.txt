@@ -1,9 +1,10 @@
 Axon concepts
 
 An Entity is an Issue or a Group. Both share one lifecycle and one ID namespace.
-Generated IDs have a management-root prefix and six random characters. A unique
-suffix works wherever a command takes an Entity ID. Note IDs are complete stable
-record IDs; they do not indicate priority or order.
+Generated IDs have a management-root prefix and eight random characters; older
+six-character IDs stay valid. A unique suffix works wherever a command takes an
+Entity ID. Note IDs are complete record IDs (the BLAKE3 hash of the record); they
+do not indicate priority or order.
 
 Lifecycle
   capture -> Undecided -> accept -> NotStarted -> start -> InProgress -> complete -> Completed
@@ -11,13 +12,28 @@ Lifecycle
   registers it as already adopted, in NotStarted instead of Undecided.
   withdraw returns NotStarted to Undecided; release returns InProgress to NotStarted.
   cancel terminates unfinished work; reconsider returns Cancelled to Undecided.
-  Completed work cannot reopen. Notes can be appended even after work is terminal.
+  reopen returns Completed to NotStarted unless a Completed dependent remains.
+  Notes can be appended even after work is terminal.
+  convert ID --kind issue|group changes the kind of an Undecided or NotStarted
+  Entity (release an InProgress Issue first; a Group with children stays a
+  Group) and nothing else. A Group's description states the outcome of the whole
+  plan and what its final review confirms, so reread it after converting. The
+  kind is not a lifecycle transition and takes no --reason.
 
-A child starts only while its parent Group is InProgress. Explicit dependencies
-must be Completed before work starts or completes. Cancelled is terminal but does
-not satisfy a dependency. Group completion also requires all direct children to
-be terminal. Running complete on a Group explicitly confirms final review of
-the entire plan, including the outcomes and Notes of its descendants.
+A Group is never started or released. A NotStarted Group is InProgress while a direct
+child is InProgress or Completed (a NotStarted child Group passes this up from its own
+children); its saved lifecycle stays NotStarted until it completes.
+An Issue starts only when every ancestor Group is adopted (NotStarted) and the
+explicit dependencies of the Issue and of its ancestors are Completed. Completing an
+Issue or Group requires the explicit dependencies of that Issue or Group itself to be
+Completed and every ancestor Group to be adopted; explicit dependencies of ancestors
+are not a prerequisite of its completion. Cancelled is terminal but does not satisfy
+a dependency. Group completion requires all direct children to be terminal; an empty
+Group completes as well. Running complete on a Group explicitly confirms final
+review of the entire plan, including the outcomes and Notes of its descendants.
+list, tasks and show show a Group as Empty, Confirmable, Ready, InProgress or
+Blocked, and show explains a stalled Group under Stalled, including candidates
+that do not surface and the Group's own unsatisfied condition.
 parent set ID --parent G sets or moves the parent Group and parent unset ID
 removes it; neither changes lifecycle.
 
@@ -46,46 +62,89 @@ Reading and resurfacing
   Each Note occupies one line with complete Entity/Note IDs, local time and offset,
   and Excerpt: around the first match (24 characters before/after, full query).
   An ellipsis marks omitted text; newlines, backslashes and controls are escaped.
-  Entity creation order and Note causal order are preserved. No extra filters or
+  Entities keep creation order and Notes keep time order. No extra filters or
   fixed-column format are provided. Read the original with note show ID NOTE_ID.
   show reads the saved text, unmet prerequisites and all Group descendants as a tree.
+  Like tasks, show runs the conditions the situation of a NotStarted Entity needs: the
+  ancestors, the Entity and, for a Group, its startable descendants; other Entities run
+  nothing. A NotStarted Issue that does not surface is Unsurfaced. show --skip-conditions
+  runs nothing and treats every condition as satisfied; use it to read saved information
+  only.
   show --details includes saved conditions and all direct relationships once.
-  note list ID requires an Entity ID and reads full Notes; note show ID NOTE_ID reads one stable Note. log reads state
-  changes and integrations, preserving concurrent branches. --recorder-details
-  includes optional stored recorder data; actor information is not ownership.
+  note list ID requires an Entity ID and reads full Notes in time order; note show
+  ID NOTE_ID reads one Note. log reads the records of an Entity: state changes,
+  edits, relationship and condition changes, kind conversions (shown with the kind
+  before and after) and resolutions, preserving concurrent branches and marking
+  records whose parent record is missing. --recorder-details includes optional
+  stored recorder data; actor information is not ownership.
 
   condition set ID --command 'test -f ready.txt' stores a shell condition without
-  running it. condition unset removes it. proposals/tasks run /bin/sh -c: 0=satisfied,
-  1=unsatisfied, other exits fail the list. The default timeout is 30s;
+  running it. condition unset removes it. proposals/tasks/show run /bin/sh -c: 0=satisfied,
+  1=unsatisfied, other exits fail the list or the display. The default timeout is 30s;
   --condition-timeout accepts positive integers with ms, s, m or h.
   --trace-conditions writes captured output to stderr. Conditions run at the
   current Git worktree root (management root outside Git). Filtering selects
   candidates before evaluating their ancestors.
 
 Storage and recovery
-  init creates a new management root: .axon/state.jsonl and nothing for Git.
-  One storage format; no option selects the format or the location.
+  The store is a set of immutable records, one file per record under
+  .axon/records/, plus .axon/header.json. Current values are derived from the
+  records on every read. When the store is tracked, the committed records are the
+  state of that commit; uncommitted record files stay untracked across checkout,
+  reset and stash, so commit them or remove them with git clean first.
+  init creates a new management root: .axon/records/, .axon/header.json, an
+  .axon/.gitignore that excludes only locks and temporary files, and an
+  .axon/.gitattributes holding only "* -text". A record's ID is the hash of its
+  bytes, so that line keeps Git line-ending conversion (core.autocrlf, eol) from
+  turning record files into corruption; it sets no merge or union attributes.
+  init does not add the file to an existing store. For a tracked store without
+  it, commit the file alone from the management root:
+    printf '* -text\n' > .axon/.gitattributes
+    git add .axon/.gitattributes
+    git commit -m 'Stop line-ending conversion of the Axon store' -- .axon/.gitattributes
+  Then, in every clone and worktree that uses the store (also one whose records
+  were converted although the file exists), stop Axon and take the tracked
+  files out of the index again from the management root:
+    git ls-files -z -- .axon | xargs -0 rm --
+    git checkout -- .axon
+    git ls-files --eol -- .axon
+  Never stage record files Git already converted (git add .axon, git add -A,
+  commit -a or stash would commit the CRLF bytes for every clone); the last
+  line must show i/lf and w/lf for every file. The storage guide
+  (docs/guide/storage.md) explains the cases where w/crlf or i/crlf remains.
+  Apart from its lock file init writes nothing outside .axon/. One storage
+  format; no option selects the format or the location.
   init PREFIX sets the ID prefix: ASCII lowercase letters, digits and hyphens,
   starting and ending with a letter or digit. Without PREFIX, init lowercases the
   management root directory name and fails if that is not a valid prefix.
   Inside Git the store is untracked until you either ignore .axon/ yourself or
-  follow the steps init prints to track it; do not mix the two ways in one
-  repository. Init never creates or edits .gitignore, .gitattributes
-  or Git config, and does not stage or commit.
+  track it with git add .axon; do not mix the two ways in one repository. Init
+  never creates or edits the repository root's .gitignore, .gitattributes or
+  Git config, and does not stage or commit. Git merges, rebases and cherry-picks
+  records from both sides without merge attributes or configuration; Axon is
+  not invoked during Git operations.
   Inside Git, discovery takes the current worktree root's .axon, then the
   main worktree's .axon, so linked worktrees without one of their own use
   that store. Git replaces an ignored store without warning when you check
   out or merge a commit that tracks it. Outside Git, the nearest management
-  root is used. Corrupt, unmerged or incomplete artifacts are errors; no
-  fallback or automatic conversion runs.
+  root is used. Corrupt record files and unmerged index entries are errors; no
+  fallback or automatic conversion runs. A record file that is its record with
+  CRLF line endings is reported as such, with a hint that Git converted it and a
+  pointer to the storage guide; the file is not repaired.
   help, docs, actor, completion and version do not require a store.
 
   Preserve retained artifacts on errors. Applied, Not applied and Result unknown
   describe persistence boundaries. After an unknown result, wait for the original
-  writer to finish and inspect saved state/record IDs before retrying. Creation and
+  writer to finish and inspect saved records before retrying. Creation and
   Note addition are not idempotent. Do not delete locks to bypass another writer.
-  merge prepare/check/apply uses retained inputs and explicit resolution choices;
-  Git driver configuration, staging and commits remain separate operations.
+  After integrating branches, storage check reports corrupt files, conflicted
+  Entities (several head records), structural violations and missing parent
+  records, and exits non-zero for the first three. While any Entity is conflicted, the
+  store accepts only resolve and note add; resolve ID --head RECORD_ID picks one
+  head. Remaining violations are repaired with ordinary commands such as reopen,
+  parent unset and dep rm. Undo Axon state with lifecycle commands, not git
+  revert: reverting a commit only removes record files, and later records that
+  depend on them are left with a missing parent.
 
 Use axon help <COMMAND PATH> for exact arguments. Create with --title. A title is one line of
 at most 200 characters and a --reason one line of at most 500; longer or multi-line text

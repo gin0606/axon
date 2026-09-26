@@ -1,7 +1,7 @@
 use super::display;
 use axon::{
     Result,
-    lifecycle::{Entity, Kind, Lifecycle},
+    lifecycle::{EntityId, Kind, Lifecycle},
     read,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -43,19 +43,14 @@ pub(super) enum Command {
     Actor,
     /// Write an unstyled shell completion script to stdout
     Completion { shell: clap_complete::Shell },
-    /// Merge snapshots through a retained review workspace
-    Merge {
-        #[command(subcommand)]
-        command: Merge,
-    },
-    /// Validate stored snapshots without running conditions
+    /// Check the store for corrupt files, conflicts, violations and missing records
     Storage {
         #[command(subcommand)]
         command: Storage,
     },
     /// Initialize a new management root
     #[command(
-        after_help = "PREFIX uses ASCII lowercase letters, digits and hyphens, and starts and ends with a letter or digit.\nWithout PREFIX, init lowercases the management root directory name and fails if that is not a valid prefix.\nInit creates .axon/state.jsonl and nothing for Git. Inside Git it prints how to keep the store ignored or to track it; which one applies is your choice.\nInit does not create or edit .gitignore or .gitattributes files or Git config, and does not stage or commit any files."
+        after_help = "PREFIX uses ASCII lowercase letters, digits and hyphens, and starts and ends with a letter or digit.\nWithout PREFIX, init lowercases the management root directory name and fails if that is not a valid prefix.\nInit creates .axon/records/, .axon/header.json, .axon/.gitignore and an .axon/.gitattributes holding only \"* -text\", which stops Git line-ending conversion of record files; it sets no merge attributes. Inside Git it prints how to keep the store ignored or to track it; which one applies is your choice.\nInit does not create or edit the repository root's .gitignore, .gitattributes or Git config, and does not stage or commit any files."
     )]
     Init {
         /// ID prefix for generated Entity IDs
@@ -74,19 +69,29 @@ pub(super) enum Command {
         #[command(subcommand)]
         command: Condition,
     },
-    /// Show text, immediate unmet prerequisites and all Group descendants
+    /// Show text, the situation from evaluated conditions, unmet prerequisites and all Group descendants
+    #[command(
+        after_help = "Like tasks, show runs the resurfacing conditions that decide the situation of a NotStarted Entity: the ancestors, the Entity itself and, for a Group, its startable descendants. Undecided, InProgress and terminal Entities run nothing. An unsurfaced Issue is shown as Unsurfaced, and a stalled Group lists unsurfaced candidates, its own unsatisfied condition and an unsurfaced ancestor under Stalled.
+Conditions run through /bin/sh -c: exit 0 is satisfied, 1 is unsatisfied, other exits fail the whole command.
+To read saved information without running any condition, add --skip-conditions; the situation is then derived as if every condition were satisfied."
+    )]
     Show {
         id: String,
         /// Include saved lifecycle, condition and all direct relationships without duplicate wait sections
         #[arg(long)]
         details: bool,
+        /// Run no condition and derive the situation as if every condition were satisfied
+        #[arg(long, conflicts_with = "trace_conditions")]
+        skip_conditions: bool,
+        #[command(flatten)]
+        conditions: ConditionOptions,
     },
     /// Append or read immutable Notes
     Note {
         #[command(subcommand)]
         command: Notes,
     },
-    /// Read state changes and integrations
+    /// Read the records of an Entity: state changes, edits, relationships, conversions and resolutions
     Log {
         id: String,
         /// Include the stored recorder data as JSON
@@ -97,9 +102,9 @@ pub(super) enum Command {
     Accept(Change),
     /// Withdraw adoption of a NotStarted Entity
     Withdraw(Change),
-    /// Start work after checking parent and dependency prerequisites
+    /// Start an Issue after checking ancestor adoption and dependency prerequisites
     Start(Change),
-    /// Release InProgress work back to NotStarted
+    /// Release an InProgress Issue back to NotStarted
     Release(Change),
     /// Complete work; for a Group, explicitly confirm final review of the entire plan
     Complete(Change),
@@ -107,6 +112,32 @@ pub(super) enum Command {
     Cancel(Change),
     /// Return a Cancelled Entity to Undecided
     Reconsider(Change),
+    /// Return a Completed Entity to NotStarted; rejected while Completed dependents remain
+    Reopen(Change),
+    /// Convert an unstarted Entity between Issue and Group without changing anything else
+    #[command(
+        after_help = "Example: axon convert ID --kind group\nOnly an Undecided or NotStarted Entity converts; release an InProgress Issue first, and a Group with children is not converted to an Issue. Lifecycle, parent, dependencies, text, condition and Notes stay as they are. Converting to the kind the Entity already has is No changes. The kind is not a lifecycle transition, so there is no --reason.\nA Group's description states the outcome of the whole plan and what its final review confirms, so reread an Issue's description after converting it."
+    )]
+    Convert {
+        id: String,
+        /// The kind to convert to
+        #[arg(long, value_enum)]
+        kind: EntityKind,
+    },
+    /// List conflicted Entities with their heads, or resolve one by taking a head's value
+    #[command(
+        after_help = "Example: axon resolve\n         axon resolve ID --head RECORD_ID -r 'keep the side with remaining work'\nWithout ID every conflicted Entity is listed; with ID alone, that Entity. Each head line has the record ID, time, actor, record kind, and the lifecycle, kind and title of that head. When the Entity has a gap, a head whose own parent record is missing, or from which following parent records never reaches the oldest record of the Entity (its creation, or else the earliest record whose parents are all missing), is marked \"parent missing; likely newer\": a cherry-pick or revert left a gap, and that head is probably the later record.\nWith ID and --head RECORD_ID (a complete record ID from the listing) a resolve record takes that head's value and joins every head; the Entity is settled at once. Violations that remain are shown by axon show and axon storage check and repaired with ordinary commands."
+    )]
+    Resolve {
+        /// The conflicted Entity; without it every conflicted Entity is listed
+        id: Option<String>,
+        /// The complete record ID of the head whose value the Entity takes
+        #[arg(long, value_name = "RECORD_ID", requires = "id")]
+        head: Option<String>,
+        /// Why this head is taken: one line, stored in the resolve record like other reasons
+        #[arg(short, long, requires = "head")]
+        reason: Option<String>,
+    },
     /// Edit title or description without changing lifecycle
     Write {
         id: String,
@@ -155,35 +186,13 @@ pub(super) enum Docs {
 }
 #[derive(Subcommand)]
 pub(super) enum Storage {
-    Check { snapshot: PathBuf },
-}
-#[derive(Subcommand)]
-#[command(
-    after_help = "Example: axon merge prepare --base base.jsonl --ours ours.jsonl --theirs theirs.jsonl --output .axon/state.jsonl --workspace .axon/merge-review\nEdit choices in resolution.json, then run axon merge check WORKSPACE and axon merge apply WORKSPACE.\nGit driver configuration, staging and commits are separate user operations. Retain the workspace for recovery."
-)]
-pub(super) enum Merge {
-    /// Retain inputs and prepare conflicts and resolution choices without publishing
-    Prepare {
-        #[arg(long)]
-        base: PathBuf,
-        #[arg(long)]
-        ours: PathBuf,
-        #[arg(long)]
-        theirs: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-        #[arg(long)]
-        workspace: PathBuf,
-    },
-    /// Validate resolution choices and the complete candidate
-    Check { workspace: PathBuf },
-    /// Recheck validated inputs and output before publishing
-    Apply { workspace: PathBuf },
-    /// Git merge driver: %O %A %B; preserve %A and fail on conflicts
-    Driver {
-        base: PathBuf,
-        ours: PathBuf,
-        theirs: PathBuf,
+    /// Report corrupt files, conflicted Entities, structural violations and missing parent records
+    #[command(
+        after_help = "Without ROOT the store found by discovery is checked; with ROOT that management root is checked without discovery, but Git is consulted as discovery does: inside a Git worktree an unmerged index under .axon/ is an error naming the unmerged paths and that worktree, reported alone before the header or any damage is looked at, and a Git repository that discovery rejects is an error too.\nCorrupt files, conflicts and violations exit 1; missing parent records (gaps) are reported as information and exit 0.\nNo condition runs and nothing is written."
+    )]
+    Check {
+        /// The management root holding .axon/ to check instead of the discovered store
+        root: Option<PathBuf>,
     },
 }
 #[derive(Args)]
@@ -198,6 +207,12 @@ Absence from a candidate list does not mean an Entity is missing. Use list for t
 pub(super) struct CandidateOptions {
     #[command(flatten)]
     pub(super) selection: Selection,
+    #[command(flatten)]
+    pub(super) conditions: ConditionOptions,
+}
+/// How one command runs the conditions it evaluates.
+#[derive(Args)]
+pub(super) struct ConditionOptions {
     /// Per-command timeout: positive integer followed by ms, s, m or h
     #[arg(long, default_value = "30s", value_parser = parse_timeout)]
     pub(super) condition_timeout: Duration,
@@ -258,7 +273,7 @@ pub(super) struct Create {
     pub(super) command: Option<String>,
     #[command(flatten)]
     pub(super) body: Body,
-    /// Containing Group; the new Entity starts only while that Group is InProgress
+    /// Containing Group; an Issue starts only after every ancestor Group is adopted
     #[arg(long)]
     pub(super) parent: Option<String>,
     /// Dependency that must be Completed first; repeat for several
@@ -299,7 +314,7 @@ pub(super) enum Dependency {
 pub(super) enum Notes {
     /// Search all Note bodies, including terminal Entities, without running conditions
     #[command(
-        after_help = "Matches case-sensitive literal text without trimming or Unicode normalization. Prints one line per Note: complete Entity and Note IDs, local timestamp and an escaped excerpt around the first match. Entity creation order and Note causal order are preserved. Read the original with axon note show ID NOTE_ID. No matches succeeds with empty stdout. For a query beginning with a hyphen use: axon note search -- '--text'."
+        after_help = "Matches case-sensitive literal text without trimming or Unicode normalization. Prints one line per Note: complete Entity and Note IDs, local timestamp and an escaped excerpt around the first match. Entities are listed in creation order and Notes in time order (record ID order at the same time). Read the original with axon note show ID NOTE_ID. No matches succeeds with empty stdout. For a query beginning with a hyphen use: axon note search -- '--text'."
     )]
     Search {
         #[arg(value_parser = clap::builder::NonEmptyStringValueParser::new())]
@@ -343,8 +358,8 @@ impl EntityKind {
             Self::Group => Kind::Group,
         }
     }
-    fn matches(self, entity: &Entity) -> bool {
-        self.kind() == entity.kind
+    fn matches(self, kind: Kind) -> bool {
+        self.kind() == kind
     }
 }
 #[derive(Clone, Copy, ValueEnum)]
@@ -376,19 +391,24 @@ pub struct Selection {
     pub search: Option<String>,
 }
 impl Selection {
-    pub fn matches(&self, entity: &Entity) -> bool {
-        self.kind.is_none_or(|k| k.matches(entity))
+    /// Whether the Entity's presented value (its current value, or its first head's while
+    /// conflicted) matches the kind and search filters.
+    pub fn matches(&self, view: &read::View<'_>, id: &EntityId) -> bool {
+        let Some(current) = view.presented(id) else {
+            return false;
+        };
+        self.kind.is_none_or(|k| k.matches(current.kind))
             && self
                 .search
                 .as_ref()
-                .is_none_or(|query| !read::matches_in(entity, query).is_empty())
+                .is_none_or(|query| !read::matches_in(current, query).is_empty())
     }
 }
 #[derive(Args)]
 pub struct ListOptions {
     #[command(flatten)]
     pub selection: Selection,
-    /// Restrict the saved lifecycle (independent of surfacing and blocking)
+    /// Restrict the lifecycle; a Group matches by its effective value (independent of surfacing and blocking)
     #[arg(long)]
     pub(super) lifecycle: Option<LifecycleFilter>,
     /// Select terminal (true) or non-terminal (false) Entities; omit for both
@@ -396,14 +416,16 @@ pub struct ListOptions {
     pub(super) terminal: Option<bool>,
 }
 impl ListOptions {
-    pub fn matches(&self, entity: &Entity) -> bool {
-        self.selection.matches(entity)
+    /// A conflicted Entity has no lifecycle, so a lifecycle or terminal filter leaves it out.
+    pub fn matches(&self, view: &read::View<'_>, id: &EntityId) -> bool {
+        self.selection.matches(view, id)
             && self
                 .lifecycle
-                .is_none_or(|l| l.state() == entity.current.lifecycle)
-            && self
-                .terminal
-                .is_none_or(|terminal| terminal != entity.current.lifecycle.editable())
+                .is_none_or(|l| view.effective(id) == Some(l.state()))
+            && self.terminal.is_none_or(|terminal| {
+                view.current(id)
+                    .is_some_and(|c| terminal != c.lifecycle.editable())
+            })
     }
 }
 pub fn parse_timeout(value: &str) -> std::result::Result<Duration, String> {
@@ -443,6 +465,9 @@ pub fn operation_label(command: &Command) -> String {
         Command::Complete(c) => ("complete", Some(&c.id)),
         Command::Cancel(c) => ("cancel", Some(&c.id)),
         Command::Reconsider(c) => ("reconsider", Some(&c.id)),
+        Command::Reopen(c) => ("reopen", Some(&c.id)),
+        Command::Convert { id, .. } => ("convert", Some(id)),
+        Command::Resolve { id, .. } => ("resolve", id.as_deref()),
         Command::Condition {
             command: Condition::Set { id, .. },
         } => ("condition set", Some(id)),
@@ -475,7 +500,6 @@ pub fn operation_label(command: &Command) -> String {
         Command::Tasks(_) => ("tasks", None),
         Command::Proposals(_) => ("proposals", None),
         Command::Init { .. } => ("init", None),
-        Command::Merge { .. } => ("merge", None),
         Command::Storage { .. } => ("storage check", None),
         Command::Docs { .. } => ("docs", None),
         Command::Import { .. } => ("import", None),

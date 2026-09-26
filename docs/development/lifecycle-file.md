@@ -1,98 +1,87 @@
 # file 保存と Git 統合
 
-[保存と統合の契約](../reference/storage.md) を `src/file.rs`、`src/location.rs`、`src/file_merge.rs` が実装する。通常操作は [CLIと保存の接続](lifecycle-cli.md) と同じ `Snapshot` の操作・記録・全体検査を通す。未知のformatは自動変換しない。試用・検証は独立fixtureで行う。
+[保存と統合の契約](../reference/storage.md) を `src/file.rs` と `src/location.rs` が実装する。通常操作は [CLI と保存の接続](lifecycle-cli.md) と同じ共通コアの記録の集合からの導出・前提検査・記録の生成を通す。未知の format は自動変換しない。試用・検証は独立 fixture で行う。
 
 ## 初期化と探索
 
-`axon init demo` は現在の管理rootに正本 `.axon/state.jsonl` だけを新規作成する。Git内では現在のworktree root、Git外では現在directoryを対象とし、Git外で既存管理root内への入れ子の`axon init`は拒否する。
+`axon init demo` は現在の管理 root に `.axon/records/`、`.axon/.gitignore`、`.axon/.gitattributes`、`.axon/header.json` を新規作成する。Git 内では現在の worktree root、Git 外では現在 directory を対象とし、Git 外で既存管理 root 内への入れ子の `axon init` は拒否する。`.axon/` に header、記録、内容の異なる `.gitignore` か `.gitattributes`、以前の形式の `state.jsonl` などがあれば、その path を示して拒否する。lock、`.tmp` で終わる file、空の `records/`、同じ内容（CRLF を LF と読んで比べる）の `.gitignore` と `.gitattributes` だけなら中断した初期化の残骸として作り直し、CRLF を含む file は `axon init` が書く内容で置き換える。repository root の `.gitignore`・`.gitattributes`・Git config を作成も変更もせず、stage も commit もしない。Git 内では初期化した保存先が untracked に見えることと、無視する運用・追跡する運用それぞれの手順、Axon の状態の取り消しに revert を使わないことを表示する。
 
-`axon init` が保存先として作るのは `.axon/state.jsonl` だけで、ほかに残すのはOS lock用のfileに限り、既存のfileは編集しない。repositoryの `.gitignore`、`.gitattributes`、Git configを作成も変更もせず、実効merge属性も検査せず、stageもcommitもしない。Git内では初期化した正本がuntrackedに見えることと、無視する運用・追跡する運用それぞれの手順を表示する。無視する運用は、利用者が `.git/info/exclude` やglobalのignore fileに `.axon/` の行を書いて選ぶ。追跡する運用は、`axon init` が表示する次の手順を、利用者がrepository rootで行って選ぶ。
+```gitignore
+# .axon/.gitignore
+*.lock
+*.tmp
+```
 
-1. 正本だけを追跡対象にする `.axon/.gitignore` を作る。
+```gitattributes
+# .axon/.gitattributes
+* -text
+```
 
-    ```gitignore
-    # .axon/.gitignore
-    *
-    !.gitignore
-    !state.jsonl
-    ```
+`.axon/.gitattributes` は checkout 時の改行変換で記録 file が破損になるのを防ぐ。目的と効く範囲は [保存と統合の契約](../reference/storage.md#保存先と初期化) にある。
 
-2. repository rootの `.gitattributes` にmerge driverを宣言する。
+無視する運用は、利用者が `.git/info/exclude` や global の ignore file に `.axon/` の行を書いて選ぶ。追跡する運用は、利用者が `git add .axon` で記録、header、`.axon/.gitignore`、`.axon/.gitattributes` を stage して commit して選ぶ。二つの運用は一つの repository では混ぜない。無視されている保存先は Git の checkout・merge の上書き保護を受けず、警告なしに置き換わる。Axon はこの混在を検出しない。理由と境界は [保存と統合の契約](../reference/storage.md#無視する運用と追跡する運用) にある。
 
-    ```gitattributes
-    # repository root の .gitattributes
-    /.axon/state.jsonl merge=axon
-    ```
+探索は Git 内では現在の worktree root の `.axon`、次に main worktree の `.axon` の順に見る。2 段目は linked worktree で、Git common directory が main worktree 直下の `.git` directory である場合だけ使い、bare repository に付けた worktree と submodule では使わない。各段は `header.json` があれば確定し、header がなく記録やその他の file（以前の形式の `state.jsonl` を含む）があれば破損または未知の format として停止し、中断した初期化の残骸しかない `.axon` では確定せず次へ進む。Git 内では header のない段（`.axon` がない段を含む）の判定より先にその段の Git index の unmerged を検査し、unmerged なら停止する。確定した保存先が破損・読取不能なら停止し、別の保存先へ fallback しない。Git 外では最寄りの `header.json` を持つ祖先で止まる。段の意味と、追跡する運用で保存先を持たない branch の linked worktree が main worktree の保存先に書く副作用は [保存と統合の契約](../reference/storage.md#探索) に定める。
 
-3. [Git driver](#git-driver) の `git config` でdriverを登録する。
-4. `.axon/state.jsonl`・`.axon/.gitignore`・`.gitattributes` をstage・commitする。
+`axon init` は 2 段目を使わず、Git 内では現在の worktree root だけを対象にする。2 段目が働く構成の linked worktree での `axon init` は、main worktree に保存先があればその path を示して拒否し、main worktree の Git index で `.axon/` の下が unmerged なら拒否し、main worktree に保存先がなければ作成したうえで他の worktree からは見えないことを表示する。main worktree の判定は、common directory の親で `git rev-parse --is-bare-repository` を含む一回の Git 呼出しで行う。bare repository なら 2 段目を使わず、それ以外の理由で Git が失敗した場合は未初期化として扱わずにエラーとする。
 
-3の登録が漏れるとGitは正本をtextとして統合する。その結果も次の読み取りの全体検査を受け、conflict markerや不整合を含めば拒否される。離れたEntityへの変更どうしはtextとして統合でき検査も通るため、設定漏れは同じEntityの衝突まで表に出ない。
+OS lock、Git index の unmerged 検査、管理 directory が通常の directory であること（symlink の拒否）の検査は、確定した保存先とそれを含む worktree に対して行う（保存先の確定より前の unmerged 検査は header のない段に対して行う）。通常 writer の lock は確定した保存先の `.axon/write.lock`、`axon init` の lock は Git 内では common Git directory の `axon-init.lock`、Git 外では管理 directory の `.axon/axon-init.lock` で、worktree をまたぐ並行初期化も直列化する。
 
-二つの運用は一つのrepositoryでは混ぜない。無視されている正本はGitのcheckout・mergeの上書き保護を受けず、警告なしに置き換わる。Axonはこの混在を検出しない。理由と境界は [保存と統合の契約](../reference/storage.md#無視する運用と追跡する運用) にある。
+`axon init` はその OS lock 下で既存の保存先を確認し、記録の directory を作り、`.axon/.gitignore` と `.axon/.gitattributes` をそれぞれ一時 file から rename で作り、header を一時 file `header.json.tmp` に書いて sync し、`header.json` へ rename して directory を sync する。header の公開前に中断した保存先は未初期化のままで、再実行で作り直せる。
 
-探索はGit内では現在のworktree rootの `.axon`、次にmain worktreeの `.axon` の順に見る。2段目はlinked worktreeで、Git common directoryがmain worktree直下の `.git` directoryである場合だけ使い、bare repositoryに付けたworktreeとsubmoduleでは使わない。各段は正本または `init.pending` があれば確定し、空の `.axon` とlockだけでは確定せず次へ進む。確定した保存先が破損・読取不能・初期化途中なら停止し、別の保存先へfallbackしない。Git外では最寄りの正本または `init.pending` を持つ祖先で止まる。段の意味と、追跡する運用で正本を持たないbranchのlinked worktreeがmain worktreeの正本を書き換える副作用は [保存と統合の契約](../reference/storage.md#探索) に定める。
+## 記録 file と codec
 
-`axon init` は2段目を使わず、Git内では現在のworktree rootだけを対象にする。2段目が働く構成のlinked worktreeでの`axon init`は、main worktreeに正本または初期化途中のmarkerがあればそのpathを示して拒否し、なければ作成したうえで他のworktreeからは見えないことを表示する。main worktreeの判定は、common directoryの親で `git rev-parse --is-bare-repository` を含む一回のGit呼出しで行う。bare repositoryなら2段目を使わず、それ以外の理由でGitが失敗した場合は未初期化として扱わずにエラーとする。
+header file `.axon/header.json` は 1 行の JSON で、`{"format":"axon-records/v1","store":"store-…","prefix":"demo"}` の形とする。store ID は `axon init` が乱数で生成する。未知 format の読取や暗黙変換はしない。
 
-OS lock、Git indexのunmerged検査、管理directoryが通常のdirectoryであること（symlinkの拒否）の検査は、確定した保存先とそれを含むworktreeに対して行う。通常writerのlockは確定した保存先の `.axon/state.lock`、`axon init` のlockはGit内ではcommon Git directoryの `axon-init.lock`、Git外では管理directoryの `.axon/axon-init.lock` で、worktreeをまたぐ並行初期化も直列化する。
+記録 file は `.axon/records/<記録 ID の先頭 2 文字>/<記録 ID>` に置き、内容は canonical な 1 行の JSON と末尾の LF 一つである。記録 ID は file の bytes 全体の BLAKE3 hash の小文字 16 進 64 文字で、file 名と一致する。JSON の object のキーは決定的な順、空白なし、文字列の escape は最小、記録者 metadata の JSON 数値は任意精度の表現で保持し、整数の桁あふれや小数の丸めで内容や記録の同一性を変えない。同じ内容の記録は同じ bytes に encode され、同じ記録 ID になる。
 
-`axon init`はそのOS lock下で既存の正本を確認し、`init.pending` markerと同期済みtemporaryを作り、既存正本を上書きせず公開してdirectoryを同期し、最後にmarkerを除く。途中失敗はartifactを保持する。writerを止め、エラーに表示された正本・temporary・markerを保全して確認する。`axon init`の再実行による修復・自動rollbackは行わない。
+記録は次の項目をこの順で持つ。
 
-## 保存の保証
+| key | 内容 |
+| --- | --- |
+| `entity` | 対象の Entity ID |
+| `record` | 種類。`created`、`transition`、`edit`、`parent`、`dependency`、`condition`、`convert`、`import`、`resolve`、`note` |
+| `operation` | `transition` だけ。`accept`、`withdraw`、`start`、`release`、`complete`、`cancel`、`reconsider`、`reopen` |
+| `parents` | 親記録の ID の list。`created` と `note` は `[]`、`resolve` は全 head、それ以外は一つ |
+| `nonce` | `note` だけ。乱数の小文字 16 進 32 文字。同じ本文・日時・記録者の Note を別の記録にする |
+| `chosen` | `resolve` だけ。採った head の記録 ID |
+| `at` | UTC の RFC 3339 日時（`Z`。小数秒は 0 なら省き、それ以外は 3・6・9 桁のうち値を表せる最短の桁数）。writer が入力表記の offset を UTC に正規化してから書く |
+| `recorder` | `{"actor":"…","data":{…}}` または null |
+| `reason` | 任意の理由の文字列または null |
+| `after` | `note` 以外。操作後の現在値 `{"kind","lifecycle","owner","title","description","condition","parent","needs"}`。`kind` は `issue`・`group`、`lifecycle` は `undecided`・`not-started`・`in-progress`・`completed`・`cancelled`（declaration と同じ綴り）。`import` は `axon import apply` が既存 Entity に書く記録で、title・description・parent・needs の変更をまとめて一つの現在値で持つ。`owner` は `InProgress` の Issue の着手した actor（取得できなければ null）で、それ以外の状態では null。`condition` と `parent` は未設定なら null、`needs` は Entity ID の昇順の list |
+| `body` | `note` だけ。Note の本文 |
 
-fileの先頭行は `{"format":"axon-file/v1","prefix":"demo"}`。続く行は既存の `axon-lifecycle/v1` 共通codecそのものであり、store ID・状態・全記録を保持する。未知formatの読取や暗黙変換はしない。
+decode は未知の key、欠けた key、種類と合わない key、規則外の値（title・reason の長さと文字種、ID の文字種、`InProgress` の Group、`InProgress` 以外の owner、`start` の記録者と異なる owner、その種類にありえない遷移）と、内容を encode した結果と一致しない bytes（空白、キーの順、日時や数値の綴りが違う file）を拒否する。記録 ID は bytes の hash なので、canonical でない bytes を受け入れると同じ内容が別の ID を持つことになる。遷移元を要する検査（その時点の種類の規則に反する遷移、その種類が変えてよい項目以外の変更。[記録の集合と導出](lifecycle-core.md#記録の集合と導出)）は記録の集合の導出で親記録の現在値と照合して行い、親記録が欠けていれば行わない。いずれの違反も破損として扱う。記録 ID は内容に含めず、bytes から計算する。途中で切れた file、空の file、名前と hash が一致しない file、名前が記録 ID の形でない file は保存先の破損として [保存と統合の契約](../reference/storage.md#保存先の破損) に従って報告し、読取を止める。名前と hash が一致しない file の内容が CRLF を LF に戻すと名前の hash と一致するなら、その file の理由にその旨を書き、報告の末尾に改行変換の可能性と利用ガイドへの案内を添える。内容は戻さない。名前が `.tmp` で終わる file は無視する。
 
-writerは `.axon/state.lock` のOS lockを取得してから最新の正本を読み、通常操作と全体検査を行う。temporaryの書込・sync後、管理directoryが通常のdirectoryであること・正本が初期化途中でなく存在すること・Git index・元bytesを再照合し、atomic replaceとdirectory syncを終えて成功する。lock fileは置換・削除しない。process終了時はOSがlockを解放する。同値の操作では非canonicalな空白も含め元bytesを保持する。通常の読み取り・書き込みでは保存先の発見はCLI実行ごとに一回で、以後の再照合はこの管理directory・正本・Git index・元bytesを対象とする。実行の途中でGitのtoplevelやcommon directoryが変わったことは検出しない。
+記録の集合からの導出（head、衝突、settled、現在値、実効 lifecycle、gap、違反）は共通コアの [記録の集合](lifecycle-core.md#記録の集合と導出) が行い、file の列挙順に依存しない。同じ日時の Note の表示順など同順位の並びは記録 ID で固定する。
 
-置換前の失敗は `not applied`、置換後のsync失敗は `result unknown` と区別する。結果不明ならprocess終了を確認し、保存済みEntityと記録を照合する。Noteや作成を推測で再実行しない。出力失敗は `storage applied; output failed` で区別する。
+## 書込の保証
 
-通常読取も完全なsnapshotを検査し、Git indexで正本がunmergedなら内容がvalidでも拒否する。Gitがdriverを呼ばないfast-forwardなどでも壊れたsnapshotは受理しない。解決した内容を検査・stageした後に通常操作へ戻る。改行を含むpathに置かれたGit worktreeは保存先の発見でエラーにする。GitやeditorはOS lockに従わないため、同じworktreeでcheckout/merge/editor保存とAxon書込を並行しない。最終再照合直後の非協調書込やnetwork filesystemの透過的な保証は対象外。
+writer は `.axon/write.lock` の OS lock を取得してから記録の集合を読み、通常操作の前提を検査して新しい記録を一つ作る。記録 ID を計算し、目的の subdirectory を必要なら作り、`<記録 ID>.tmp` に bytes を書いて sync し、`<記録 ID>` へ rename して directory を sync して成功する。既存の記録 file は書き直さず、置き換えず、削除しない。lock file は置換・削除しない。process 終了時は OS が lock を解放する。同値の操作は記録を作らず No changes で終わる。保存先の発見は CLI 実行ごとに一回で、実行の途中で Git の toplevel や common directory が変わったことは検出しない。
 
-## 明示的な統合
+rename 前の失敗は `not applied`、rename 後の directory sync の失敗は `result unknown` と区別する。結果不明なら process 終了を確認し、記録の集合を読み直して記録の有無を照合する。Note や登録を推測で再実行しない。出力失敗は `storage applied; output failed` で区別する。
+
+通常読取も記録の集合全体を読み、破損・衝突・違反・gap を導出する。Git index で `.axon/` の下の path が unmerged なら内容が有効でも拒否する。改行を含む path に置かれた Git worktree は保存先の発見でエラーにする。Git や editor は OS lock に従わないため、同じ worktree で checkout・merge・editor 保存と Axon の書込を並行しない。最終 sync 直後の非協調書込や network filesystem の透過的な保証は対象外。
+
+## Git 統合と検査
+
+追跡する運用では、両側が追加した記録 file を Git が merge の属性なしで統合する。Axon は Git から呼ばれず、`.axon/.gitattributes` の `* -text` 以外の属性と Git config を持たない。統合の結果は次の読取と `axon storage check` が検査する。
 
 ```sh
-axon merge prepare --base /tmp/base.jsonl --ours /tmp/ours.jsonl \
-  --theirs /tmp/theirs.jsonl --output .axon/state.jsonl --workspace .axon/review
-axon merge check .axon/review
-axon merge apply .axon/review
-axon storage check .axon/state.jsonl
+axon storage check
+axon resolve
+axon resolve ID --head RECORD_ID -r '残作業のある側を採る'
+axon storage check
 ```
 
-workspaceの親directoryを先に用意し、workspace自身は未使用の名前を指定する。outputは現在のfile正本。`axon merge prepare`は入力を保全し、衝突や不正があれば非0で終了するが正本は変更しない。`base.jsonl / ours.jsonl / theirs.jsonl`、出力の元bytesである `preimage`、絶対path・digest・固定記録contextの `manifest.json` は編集しない。
+`axon storage check [ROOT]` は破損、衝突、違反、gap を報告し、破損・衝突・違反のいずれかがあれば非 0 で終了する（gap は情報）。破損があれば記録から導出する検査は行わない。引数なしでは探索で確定した保存先、`ROOT` を与えればその管理 root を探索せずに検査する。`ROOT` の指定が省くのは探索だけで、Git の扱い（unmerged index の検査、探索が拒否する Git の境界のエラー）は探索と同じ。条件コマンドを実行せず、保存先を変更しない。
 
-`choices.json` に自動選択と衝突の候補を示す。`resolution.json` の `choices` はEntity IDから `Left`（ours）または `Right`（theirs）へのmapで、現在値の全項目を選ぶ。衝突する全Entityを明示選択する。循環などの全体不整合には、自動選択したEntityも上書き選択できる。Noteと状態記録は両側を保持し、採用結果を通常遷移とは別の統合記録へ残す。
+`axon resolve ID --head RECORD_ID` は通常の writer と同じ lock と境界で解決記録を一つ書く。head の一覧は保存先の現在の記録から計算し、指定した記録 ID が対象 Entity の head でなければ拒否する。解決記録の後に残る違反は通常操作で直す。cherry-pick と revert による gap の扱いと、偽の衝突の解決は [保存と統合の契約](../reference/storage.md#記録の欠けgap) に定める。
 
-```json
-{
-  "choices": {"demo-ENTITY_ID": "Right"},
-  "reason": "残作業のある分岐を採用する",
-  "repairs": []
-}
-```
+記録 file には本文に加え取得できた記録者情報が入る。Git で追跡するとこれらも共有される。記録者の保存項目は [記録者連携](lifecycle-recorder.md) を参照する。
 
-`repairs` は選択後のvalidな候補へ順に適用する通常編集。`operation` は `write`（id/title/description）、`parent`（id/parent）、`dependency`（id/needs/present）、`condition`（id/command）で、通常コアの制約に従う。終了構成や`Completed`の編集制限を免除しない。構造的に不正な選択をrepairsで救済することはせず、まず選択自体を整える。条件コマンドは実行しない。
+検証入口は `cargo test --workspace --lib --bin axon --test smoke`。並行 writer、rename 前後の障害、初期化と探索、実 worktree での merge・rebase・cherry-pick・revert・squash、index guard、破損の報告を独立 fixture で扱う。保存と CLI 接続で lifecycle の意味は変更せず、Quint の状態を増やさない。統合の意味論は [`spec/record_integration.qnt`](../../spec/record_integration.qnt) が扱う。
 
-`axon merge check`は全体を検証し、`candidate.jsonl` と入力・解決案・候補を結び付ける `checked.json` を作る。`report.json` にはvalidまたはエラーを残す。これらは編集しない。失敗した再`axon merge check`は前のcheckedを無効化する。統合記録のIDは記録の内容から決まるため、入力と解決案が同じなら`axon merge check`を繰り返しても同じ候補になる。
+## Declaration の一括反映
 
-`axon merge apply`はworkspaceと正本のlockを取り、元入力・保全コピー・解決案・候補・保存先の変更を拒否する。validな正本はレビュー対象のours/theirsいずれかと一致する必要があり、別storeや入力に含まれない追加作業を上書きしない。Git conflict markerのある正本にも、`axon merge prepare`時の元bytesが変わっていなければ適用できる。Git indexは変更しない。`axon merge apply`後の再実行は保存先の変更として拒否するので、結果不明時は記録を照合する。
-
-## Git driver
-
-driverが働くのは追跡する運用だけで、[初期化と探索](#初期化と探索) の4手順を利用者が行って初めて成立する。`.axon/.gitignore` の作成と `.gitattributes` の1行がなければ正本はGitの追跡対象にならず、driverも呼ばれない。利用するbinaryの絶対pathを選び、利用者が設定する。
-
-```sh
-git config merge.axon.driver "'/absolute/path/to/axon' merge driver %O %A %B"
-git add .axon/state.jsonl .axon/.gitignore .gitattributes
-git commit -m 'Track task snapshot'
-```
-
-Axon自身はGit config・stage・commitを行わない。`axon merge driver`も同じ `MergePlan` のEntity単位比較と全体検査を使う。成功時だけGitのours temporaryへ公開する。衝突時は非0でoursを保持し、Git indexの三入力を取り出して上記の`axon merge prepare|check|apply`で解決する。検証後に利用者が `git add .axon/state.jsonl` する。fast-forwardでも通常読取の検査は省略しない。
-
-file snapshotには本文に加え取得できた記録者情報が入る。Gitで追跡するとこれらも共有される。記録者の保存項目は [記録者連携](lifecycle-recorder.md) を参照する。
-
-検証入口は `cargo test --workspace --lib --bin axon --test smoke`。並行writer、置換前後の障害、drift、初期化と探索、実worktreeとdriver、index guardを独立fixtureで扱う。保存とCLI接続でlifecycleの意味は変更せず、Quintの状態を増やさない。
-
-## Declarationの一括反映
-
-`axon import apply FILE` は `src/declaration_file.rs::apply` から通常の `Store::update` を使い、OS lock取得後にdeclarationを読み、全件の検証と一回の正本atomic replaceを行う。保存成功後のdeclaration rewriteは同じpublish実装を使う別の保存境界であり、元bytesの再照合、rename、directory syncを行う。保存先Appliedとdeclaration未更新・結果不明を別々に表示する。再試行は全編集Entityの最終値一致なら正本bytesを保持し、保存したsnapshotからbaseと外部参照を更新する。
+`axon import apply FILE` は `src/declaration_file.rs::apply` から共通コアの通常操作の列で候補を検証し、OS lock 取得後に declaration を読み、全件の検証と一回の保存境界で記録 file を追加する。書く記録は変更のある Entity ごとに一つで、新規 Entity は最終値（parent・needs を含む）を持つ `created`、既存 Entity は最終値を持つ `import` とし、検証に使った通常操作の列を個々の記録にはしない。一つの保存境界で複数の記録 file を作る唯一の経路で、全件の一時 file を書いて sync してから、新規 Entity の `created` を親と依存先が先になる順に、次いで既存 Entity の `import` の順に rename し、rename の失敗で途中で止まった場合は rename 済みの記録を残したまま `result unknown` と診断し、process の喪失で止まった場合も同じ状態になる。Entity ごとに記録が一つなので、rename 済みの Entity は最終値、未 rename の Entity は元の値のままであり、再試行は [Declaration](../reference/declaration.md#再試行) の Entity ごとの適用済み判定で残りを反映する。衝突・違反のある保存先では拒否するが、途中で止まった反映の再試行では、残りの反映で消える違反を拒否の対象にしない。保存成功後の declaration rewrite は別の保存境界であり、元 bytes の再照合、rename、directory sync を行う。保存先 Applied と declaration 未更新・結果不明を別々に表示する。再試行は全編集 Entity の最終値一致なら記録を増やさず、保存した記録の集合から base と外部参照を更新する。

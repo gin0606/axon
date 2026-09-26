@@ -3,14 +3,11 @@ use axon::declaration::{self, Reference};
 fn created(text: &str) -> String {
     text.split_whitespace().next().unwrap().into()
 }
-fn snapshot(f: &Fixture) -> Snapshot {
-    axon::location::Location::discover(&f.0, false)
-        .unwrap()
-        .open()
-        .unwrap()
-        .read()
-        .unwrap()
-        .1
+fn snapshot(f: &Fixture) -> Store {
+    f.records()
+}
+fn view_of(records: &Store) -> record::View {
+    records.view().unwrap()
 }
 #[test]
 fn declaration_export_selectors_and_references_are_read_only() {
@@ -49,20 +46,24 @@ fn declaration_export_selectors_and_references_are_read_only() {
         "--command",
         "touch executed",
     ]));
-    f.ok(&["start", &outer]);
-    f.ok(&["start", &group]);
     f.ok(&["start", &done]);
     f.ok(&["complete", &done]);
     f.ok(&["cancel", &cancelled]);
     let before = snapshot(&f);
-    let file_before = fs::read(f.0.join(".axon/state.jsonl")).unwrap();
+    let file_before = f.record_files();
     let output = f.run(&["export", group.rsplit('-').next().unwrap()]);
     assert!(output.stderr.is_empty());
     let yaml = success(output);
     let d = declaration::parse(&yaml).unwrap();
-    assert_eq!(d.serialize(&before).unwrap(), yaml);
+    assert_eq!(d.serialize(&view_of(&before)).unwrap(), yaml);
     assert_eq!(d.groups.len(), 2);
     assert_eq!(d.issues.len(), 3);
+    // Groups export their saved lifecycle, not the derived InProgress.
+    assert!(d.groups.iter().all(|r| r.lifecycle == "not-started"));
+    assert!(
+        f.ok(&["list", "--lifecycle", "in-progress"])
+            .contains(&group)
+    );
     assert_eq!(
         d.issues
             .iter()
@@ -114,10 +115,7 @@ fn declaration_export_selectors_and_references_are_read_only() {
     assert!(failure(f.run(&["export", &group, "missing"])).contains("missing"));
     failure(f.run(&["export"]));
     assert_eq!(snapshot(&f), before);
-    assert_eq!(
-        fs::read(f.0.join(".axon/state.jsonl")).unwrap(),
-        file_before
-    );
+    assert_eq!(f.record_files(), file_before);
     assert!(!f.0.join("executed").exists());
 }
 #[test]
@@ -125,7 +123,7 @@ fn declaration_docs_and_template_work_with_broken_management_root() {
     let f = Fixture::new();
     fs::write(f.0.join(".git"), "broken marker").unwrap();
     fs::create_dir(f.0.join(".axon")).unwrap();
-    fs::write(f.0.join(".axon/state.jsonl"), "broken storage").unwrap();
+    fs::write(f.0.join(".axon/header.json"), "broken storage").unwrap();
     let docs = f.ok(&["docs", "declaration"]);
     for phrase in [
         "id",
@@ -150,7 +148,7 @@ fn declaration_docs_and_template_work_with_broken_management_root() {
     let yaml = success(output);
     let d = declaration::parse(&yaml).unwrap();
     assert_eq!(d, declaration::example());
-    assert_eq!(d.serialize(&Snapshot::empty()).unwrap(), yaml);
+    assert_eq!(d.serialize(&view_of(&Store::new())).unwrap(), yaml);
     assert!(f.ok(&["docs"]).contains("docs declaration"));
     let help = f.ok(&["--help"]);
     for (heading, name) in [
@@ -326,7 +324,7 @@ fn declaration_check_rejects_local_and_core_guards() {
     );
     let mut fresh = declaration::example();
     fresh.prepare(&snapshot(&f), "demo").unwrap();
-    let fresh_yaml = fresh.serialize(&snapshot(&f)).unwrap();
+    let fresh_yaml = fresh.serialize(&view_of(&snapshot(&f))).unwrap();
     reject(
         fresh_yaml.replace("    key: first\n", "    key: null\n"),
         "identity/reference:",
@@ -360,11 +358,11 @@ fn declaration_check_rejects_local_and_core_guards() {
     );
     let mut d = declaration::parse(&exported).unwrap();
     d.groups = std::mem::take(&mut d.issues);
-    reject(d.serialize(&snapshot(&f)).unwrap(), "read-only:");
+    reject(d.serialize(&view_of(&snapshot(&f))).unwrap(), "read-only:");
     let mut d = declaration::parse(&exported).unwrap();
     d.issues[0].base = Some(format!("blake3:{}", "0".repeat(64)));
     d.issues[0].title = "Edit".into();
-    reject(d.serialize(&snapshot(&f)).unwrap(), "conflict:");
+    reject(d.serialize(&view_of(&snapshot(&f))).unwrap(), "conflict:");
     let mut d = declaration::parse(&exported).unwrap();
     d.issues[0].parent = Some(Reference::id(&b));
     // Leave references empty to test the storage-side parent guard after regeneration.
@@ -377,16 +375,27 @@ fn declaration_check_rejects_local_and_core_guards() {
     let mut d = declaration::parse(&f.ok(&["export", &a, &b])).unwrap();
     d.issues[0].needs.push(Reference::id(&b));
     d.issues[1].needs.push(Reference::id(&a));
-    reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
+    reject(
+        d.serialize(&view_of(&snapshot(&f))).unwrap(),
+        "core rejection:",
+    );
     let mut d = declaration::parse(&f.ok(&["export", &group, &other])).unwrap();
     d.groups[0].parent = Some(Reference::id(&other));
     d.groups[1].parent = Some(Reference::id(&group));
-    reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
+    reject(
+        d.serialize(&view_of(&snapshot(&f))).unwrap(),
+        "core rejection:",
+    );
     f.ok(&["start", &a]);
+    f.ok(&["withdraw", &group]);
     let mut d = declaration::parse(&f.ok(&["export", &a])).unwrap();
     d.issues[0].parent = Some(Reference::id(&group));
-    d.refresh_references(&snapshot(&f)).unwrap();
-    reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
+    d.refresh_references(&view_of(&snapshot(&f))).unwrap();
+    reject(
+        d.serialize(&view_of(&snapshot(&f))).unwrap(),
+        "core rejection:",
+    );
+    f.ok(&["accept", &group]);
     f.ok(&["complete", &a]);
     f.ok(&["cancel", &b]);
     for item in [&a, &b] {
@@ -397,24 +406,35 @@ fn declaration_check_rejects_local_and_core_guards() {
             } else {
                 d.issues[0].description = "Edit".into();
             }
-            reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
+            reject(
+                d.serialize(&view_of(&snapshot(&f))).unwrap(),
+                "core rejection:",
+            );
         }
     }
     let mut d = declaration::parse(&f.ok(&["export", &a])).unwrap();
     d.issues[0].needs.push(Reference::id(&b));
-    d.refresh_references(&snapshot(&f)).unwrap();
-    reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
+    d.refresh_references(&view_of(&snapshot(&f))).unwrap();
+    reject(
+        d.serialize(&view_of(&snapshot(&f))).unwrap(),
+        "core rejection:",
+    );
     f.ok(&["parent", "set", &a, "--parent", &group]);
-    f.ok(&["start", &group]);
     f.ok(&["complete", &group]);
     let mut d = declaration::parse(&f.ok(&["export", &a])).unwrap();
     d.issues[0].parent = None;
-    d.refresh_references(&snapshot(&f)).unwrap();
-    reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
+    d.refresh_references(&view_of(&snapshot(&f))).unwrap();
+    reject(
+        d.serialize(&view_of(&snapshot(&f))).unwrap(),
+        "core rejection:",
+    );
     let mut d = declaration::parse(&f.ok(&["export", &b])).unwrap();
     d.issues[0].parent = Some(Reference::id(&group));
-    d.refresh_references(&snapshot(&f)).unwrap();
-    reject(d.serialize(&snapshot(&f)).unwrap(), "core rejection:");
+    d.refresh_references(&view_of(&snapshot(&f))).unwrap();
+    reject(
+        d.serialize(&view_of(&snapshot(&f))).unwrap(),
+        "core rejection:",
+    );
 }
 
 #[test]
@@ -464,14 +484,16 @@ fn declaration_prepare_reports_applied_file_when_output_fails() {
 #[test]
 fn declaration_apply_registers_edits_and_retries() {
     let mut prepared = declaration::example();
-    prepared.prepare(&Snapshot::empty(), "demo").unwrap();
-    let input = prepared.serialize(&Snapshot::empty()).unwrap();
+    prepared.prepare(&Store::new(), "demo").unwrap();
+    let input = prepared.serialize(&view_of(&Store::new())).unwrap();
     let f = Fixture::new();
     f.ok(&["init", "demo"]);
     let path = f.0.join("plan.yaml");
     let apply = ["import", "apply", path.to_str().unwrap()];
     fs::write(&path, &input).unwrap();
     let applied_output = f.ok(&apply);
+    // One record per registered Entity, with its final value.
+    assert_eq!(f.record_files().len(), 3);
     for record in prepared.records() {
         let mapping = format!(
             "{} -> {}",
@@ -489,10 +511,12 @@ fn declaration_apply_registers_edits_and_retries() {
         f.ok(&["import", "check", path.to_str().unwrap()])
             .contains("No changes")
     );
-    // Simulate a successful storage save whose declaration rewrite never happened.
+    // Simulate a successful storage save whose declaration rewrite never happened: the
+    // retry with the same content adds no record.
     fs::write(&path, &input).unwrap();
     assert!(f.ok(&apply).contains("no-op"));
     assert_eq!(snapshot(&f), saved);
+    assert_eq!(f.record_files().len(), 3);
     assert_eq!(fs::read_to_string(&path).unwrap(), canonical);
     let group = d.groups[0].id.as_ref().unwrap();
     let first = d
@@ -536,19 +560,24 @@ fn declaration_apply_registers_edits_and_retries() {
     new.needs = vec![Reference::id(first)];
     edit.issues.push(new);
     edit.prepare(&before, "demo").unwrap();
-    fs::write(&path, edit.serialize(&before).unwrap()).unwrap();
+    fs::write(&path, edit.serialize(&view_of(&before)).unwrap()).unwrap();
     f.ok(&["write", group, "--title", "Concurrent"]);
     let concurrent = snapshot(&f);
     assert!(failure(f.run(&apply)).contains("conflict:"));
     assert_eq!(snapshot(&f), concurrent);
     f.ok(&["write", group, "--title", &d.groups[0].title]);
+    let files = f.record_files().len();
     f.ok(&apply);
+    // One record per changed Entity: the three edited ones and the new one.
+    assert_eq!(f.record_files().len(), files + 4);
     let after = snapshot(&f);
-    let first_id = first.clone().try_into().unwrap();
+    let first_id: EntityId = first.clone().try_into().unwrap();
     assert_eq!(
-        after.entity(&first_id).unwrap().current.condition,
-        before.entity(&first_id).unwrap().current.condition
+        view_of(&after).current(&first_id).unwrap().condition,
+        view_of(&before).current(&first_id).unwrap().condition
     );
+    let log = f.ok(&["log", first]);
+    assert!(log.contains("Declaration applied: needs"), "{log}");
     assert_eq!(
         f.ok(&["note", "list", first])
             .matches("Keep this note")
@@ -575,7 +604,7 @@ fn declaration_title_changes_show_each_side_and_reject_control_characters() {
     d.issues[0].title = "After title".into();
     d.issues[0].description = "Private full description".into();
     let path = f.0.join("plan.yaml");
-    fs::write(&path, d.serialize(&snapshot(&f)).unwrap()).unwrap();
+    fs::write(&path, d.serialize(&view_of(&snapshot(&f))).unwrap()).unwrap();
     let text = f.ok(&["import", "check", path.to_str().unwrap()]);
     assert!(
         text.lines()
@@ -587,7 +616,7 @@ fn declaration_title_changes_show_each_side_and_reject_control_characters() {
     let before = snapshot(&f);
     for title in ["After\nline", "After\u{1b}[2J", &"a".repeat(201)] {
         d.issues[0].title = title.into();
-        let input = d.serialize(&before).unwrap();
+        let input = d.serialize(&view_of(&before)).unwrap();
         fs::write(&path, &input).unwrap();
         for command in ["check", "apply"] {
             let error = failure(f.run(&["import", command, path.to_str().unwrap()]));
@@ -603,7 +632,7 @@ fn declaration_title_changes_show_each_side_and_reject_control_characters() {
 fn declaration_help_gives_examples_and_next_commands_without_opening_the_store() {
     let f = Fixture::new();
     f.ok(&["init", "demo"]);
-    let storage = f.0.join(".axon/state.jsonl");
+    let storage = f.0.join(".axon/header.json");
     fs::write(&storage, "broken storage").unwrap();
     for (args, example, next) in [
         (
@@ -651,7 +680,7 @@ fn declaration_keeps_a_valid_written_id_and_rejects_ids_outside_the_character_ru
     ] {
         let mut d = declaration::example();
         d.groups[0].id = Some(written.into());
-        let input = d.serialize(&before).unwrap();
+        let input = d.serialize(&view_of(&before)).unwrap();
         fs::write(&path, &input).unwrap();
         for command in ["prepare", "check", "apply"] {
             let error = failure(f.run(&["import", command, path.to_str().unwrap()]));
@@ -663,7 +692,7 @@ fn declaration_keeps_a_valid_written_id_and_rejects_ids_outside_the_character_ru
     }
     let mut d = declaration::example();
     d.groups[0].id = Some("demo-custom".into());
-    fs::write(&path, d.serialize(&before).unwrap()).unwrap();
+    fs::write(&path, d.serialize(&view_of(&before)).unwrap()).unwrap();
     for command in ["prepare", "apply"] {
         let output = f.ok(&["import", command, path.to_str().unwrap()]);
         assert!(
@@ -692,7 +721,7 @@ fn declaration_rejects_external_kind_changes_before_apply_and_on_retry() {
         let original = snapshot(&f);
         let mut d = declaration::parse(&f.ok(&["export", &selected])).unwrap();
         d.issues[0].title = "Edited".into();
-        let valid = d.serialize(&original).unwrap();
+        let valid = d.serialize(&view_of(&original)).unwrap();
         let path = f.0.join("plan.yaml");
         for retry in [false, true] {
             if retry {
@@ -706,7 +735,7 @@ fn declaration_rejects_external_kind_changes_before_apply_and_on_retry() {
                 "group"
             }
             .into();
-            let input = d.serialize(&before).unwrap();
+            let input = d.serialize(&view_of(&before)).unwrap();
             fs::write(&path, &input).unwrap();
             for operation in ["check", "apply"] {
                 let error = failure(f.run(&["import", operation, path.to_str().unwrap()]));
@@ -720,7 +749,7 @@ fn declaration_rejects_external_kind_changes_before_apply_and_on_retry() {
             d.references[0].kind = external_kind.into();
             d.references[0].title = "Stale context".into();
             d.references[0].lifecycle = "cancelled".into();
-            fs::write(&path, d.serialize(&before).unwrap()).unwrap();
+            fs::write(&path, d.serialize(&view_of(&before)).unwrap()).unwrap();
             f.ok(&["import", "check", path.to_str().unwrap()]);
         }
     }

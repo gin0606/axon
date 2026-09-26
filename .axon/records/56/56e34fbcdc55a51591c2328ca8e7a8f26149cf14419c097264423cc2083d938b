@@ -1,0 +1,1 @@
+{"entity":"axon-p7xznq","record":"note","parents":[],"nonce":"58af6579756d3b15b5d5b0ca1a6137d4","at":"2026-09-18T04:53:17.749832Z","recorder":{"actor":"claude-code","data":{"session_id":"aa4b4c8c-d215-44d6-a5b5-53f2ff481202"}},"reason":null,"body":"ユーザー判断 (2026-09-18): 採用は後回しにする。理由は、旧データの扱いに加えて、実装の積み重ねで設計が悪くなっている箇所があり、その改善を先に行うほうがよいと判断したため。本 Issue は採用可能の状態で Undecided を維持する。"}

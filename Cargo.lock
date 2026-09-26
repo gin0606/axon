@@ -102,7 +102,6 @@ dependencies = [
  "clap_complete",
  "libc",
  "rand",
- "serde",
  "serde_json",
  "thiserror",
 ]

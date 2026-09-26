@@ -8,11 +8,11 @@ Axon が Entity ごとに保存するものは、性質の違う三種類に分�
 
 | 種類 | 保存されるもの | 例 |
 | --- | --- | --- |
-| 利用者が明示的に遷移させる状態 | 一つの lifecycle と、その変更履歴 | `Undecided`・`NotStarted`・`InProgress`・`Completed`・`Cancelled` |
+| 利用者が明示的に遷移させる状態 | 一つの lifecycle と、その変更履歴 | `Undecided`・`NotStarted`・`InProgress`・`Completed`・`Cancelled`（Group は `InProgress` を保存しない） |
 | Entity 間の関係 | 親 Group の ID、outgoing dependency の ID 集合 | 包含、dependency |
 | 機械が判定する属性 | 外部コマンドの文字列 | 再浮上条件 |
 
-一覧の状況 (Ready、Blocked) と候補集合は、これらから完全に導出する。優先度と表示上の強調は保存しない。
+Group の実効 lifecycle、一覧の状況 (Ready、Blocked など) と候補集合は、これらから完全に導出する。優先度と表示上の強調は保存しない。
 
 この分け方は、性質の違う値を一つのフィールドへ畳むと操作どうしが互いを壊すことへの対処である。Axon は、個人向けの issue tracker である beads_rust を長く使ってきたところから始まっている。長く使うほど自分の手に合わせたい部分がはっきりし、その要求を形にしたものが Axon の出発点になった。
 
@@ -59,25 +59,126 @@ Note は編集・削除せず、訂正は新しい Note で行う。今の運用
 
 ## Group を計画 Entity にした理由
 
-Issue 間の dependency だけでは、計画に含まれる子タスクと、その計画全体が待つ外部の前提を区別できない。Group は Issue・Group を計画範囲として包含し、Group に置いた dependency と判断の frontier を配下へ効かせる独立した Entity とする。
+Issue 間の dependency だけでは、計画に含まれる子タスクと、その計画全体が待つ外部の前提を区別できない。Group は Issue・Group を計画範囲として包含し、Group に置いた dependency を配下の着手と Group 自身の完了へ、判断の frontier を配下へ効かせる独立した Entity とする。
 
-Group は単なる分類ではない。利用者またはエージェントが計画単位を明示的に `Start` し、子孫を確認してから明示的に `Complete` する。子孫の集計は観測事実、Group の `Completed` は計画単位についての宣言であり、両者を同じ値にしない。
+Group は単なる分類ではない。計画単位の着手は配下の Issue の着手から導出し、完了は子孫を確認してから明示的に `Complete` する。子孫の集計は観測事実、Group の `Completed` は計画単位についての宣言であり、両者を同じ値にしない。
+
+## Group の着手を子から導出する理由
+
+Group は `Start`・`Release` を持たず、保存値として `InProgress` を持たない。直属の子に実効値が `InProgress` か `Completed` のものがあれば、Group の実効値を `InProgress` と導出する。契約は [Group の実効 lifecycle](../reference/lifecycle.md#group-の実効-lifecycle) にある。
+
+以前は子の `Start` に親の `InProgress` を要求し、各階層で明示的に `Start` していた。この規則は、子に着手するたびに親を先に着手させる儀式になり、workflow は親を自動で `Start` する手順を持っていた。Git で追跡した保存先では、別々の worktree が同じ親 Group を `Start` し、統合時に同じ値の並行記録を生む原因にもなった。Group の着手は「配下の仕事が始まった」という観測事実であり、利用者の宣言である `Complete` と違って、別に記録する情報を持たない。
+
+Group の `Start` が担っていた検査は Issue の `Start` へ移した。Issue の `Start` は全祖先が採用済みであることと、自身と全祖先の依存先が `Completed` であることを要求する。Group に置いた dependency は配下の Issue の着手を待たせ続け、Group の着手を経由しなくても効く。祖先の依存先の検査は `Complete` と移動へは移していない。その扱いは [Group の dependency を配下の完了の前提にしない理由](#group-の-dependency-を配下の完了の前提にしない理由) に記す。
+
+以前の「`InProgress` の Entity の祖先はすべて `InProgress`」は、「実効値が `InProgress` の Group と `InProgress` の Issue の全祖先は採用済み」に置き換えた。Group の着手が導出になると、`Complete`・`Reopen`・`Accept`・移動が祖先を見ないまま、`Undecided` の祖先の下に着手済みの計画ができる経路がモデルの反例として出た（[反例と review から足した規則](../../spec/README.md#反例と-review-から足した規則)）。`Complete`・`Reopen`、着手・完了した子孫を持つ Group の `Accept`、着手・完了した Entity の移動に全祖先の採用を要求し、Group の `Withdraw` を実効値が `NotStarted` のときだけ許して塞いだ。実効値は `NotStarted` の子 Group を通じて上へ伝わるため、直属の子の保存値だけを見る検査では孫の着手を見落とす。一方、完了済みの子を持つ Group を `Cancel` してから `Reconsider` すると、`Undecided` の Group の下に完了済みの子孫が残る。この状態は取りやめと再検討の組合せで自然に生じ、着手中の仕事を含まないため許す。
+
+Group の `Complete` は保存値が `NotStarted` のときに許す。直属の子がない Group と子がすべて `Cancelled` の Group は実効値が `InProgress` にならないため、`InProgress` を要求するとこれらを終える経路がなくなる。最終確認の明示入力は残す。
+
+採らなかった案:
+
+- Group の `Start` を残し、子の `Start` で親を自動的に `Start` する案。自動の遷移が履歴と統合の衝突を生む点は変わらず、明示の `Start` との区別も要る。
+- Group の保存値に `InProgress` を残して、子の変化に合わせて書き換える案。導出できる値を保存すると、子の記録と Group の記録の統合が食い違ったときにどちらを正とするかを決める必要がある。
+
+## `Completed` を `Reopen` で戻せるようにした理由
+
+`Reopen` は `Completed` を `NotStarted` へ戻す。以前は `Completed` を永久とし、完了後の追加作業を新しい Issue で扱っていた。新しい Issue で済む場面は今も多いが、完了した Group の構成を直す、Git の統合で完了済みの Group に子が流入した状態を直す、完了済みの Entity の dependency を直す、といった修復には、完了を取り消す経路が要る。
+
+`Reopen` は `Completed` の依存元がある Entity に使えない。守る性質を「`Completed` は永久」から「`Completed` の Entity の依存先はすべて `Completed`」へ言い換えたためで、依存元が先に `Reopen` されていれば依存先も戻せる。全祖先が採用済みであることも要求し、`Undecided` の祖先の下に着手済みの計画を作らない。`Reopen` は子の lifecycle を変えない。完了済みの子を持つ Group を `Reopen` すると実効値は `InProgress` になり、構成を変えてから再び最終確認する。
+
+`Reopen` の後は title・description と dependency を編集できる。終了中の文面を固定する規則は変えず、完了した結果を保ったままの訂正は Note で行う。
+
+## Group の dependency を配下の完了の前提にしない理由
+
+Group に置いた dependency は、配下の Issue の `Start` と Group 自身の `Complete` の前提であり、配下の Entity の `Complete` の前提ではない。Issue の `Start` は自身と全祖先の依存先の完了を要求するが、`Complete` は Issue・Group とも自身の依存先だけを検査する。移動は移動先とその祖先の依存先を検査せず、依存先の追加は依存元の配下を検査しない（どちらも循環の検査を除く）。種類の変換は依存先を検査しない。依存先の `Reopen` は、dependency については `Completed` の依存元がないことだけを検査し、依存元の配下を検査しない。契約は [親子のlifecycle](../reference/lifecycle.md#親子のlifecycle)、[所属変更と新規登録](../reference/lifecycle.md#所属変更と新規登録)、[種類の変換](../reference/lifecycle.md#種類の変換)、[dependency](../reference/lifecycle.md#dependency) にある。
+
+このため、Group P の依存先 D が未完了のままでも、P の配下の Entity が `Completed` になる、または `Completed` のまま残る経路がある。代表的なものは次の四つである。
+
+1. 空の子 Group と、子がすべて `Cancelled` の子 Group は、配下の `Start` を経ずに `Complete` できる。
+2. P の外で着手した Issue を P の下へ移し、そのまま `Complete` できる。P の下の未着手の Issue を一度外へ出して着手し、戻した場合も同じである。
+3. 配下の仕事が始まった P に後から未完了の依存先を足しても、配下の着手済み Issue や、子がすべて終了した子 Group は `Complete` できる。
+4. `Completed` の P とその依存先を順に `Reopen` しても、P の配下の `Completed` の Entity は `Completed` のまま残る。P が完了していなければ、依存先だけを `Reopen` しても同じである。
+
+`Completed` の Entity の P への移し入れ、完了済みの子孫を持つ P への依存先の追加、P の下の未着手の Issue を Group へ変換して `Complete` することも、同じ状態を生む。
+
+Group の dependency が保証するのは、P 自身が D より先に `Completed` にならないことである。これは P 自身の `Complete` が検査し、上の経路はどれも破らない。P の下の未着手の Issue は `Start` の検査で D を待つが、所属の付け替えや種類の変換で迂回できるため、これは P の下で着手する通常の経路での検査であり、保証ではない。Group の dependency は計画の前提として、計画の仕事を通常の経路で始めるときと計画を閉じるときに検査し、配下の個々の完了が D より先か後かは問わない。配下の完了は P の最終確認で計画全体として確かめる。配下の `Complete` まで D を待たせた場合の制約は、下の採らなかった案に記す。
+
+経路 3 では、Issue 自身に後から足した依存先はその Issue の `Complete` を止め、祖先に足した依存先は止めない。この非対称は意図した扱いである。Issue 自身に足した依存先は、その Issue の作業を完了する前に必要と判断した前提である。祖先に足した依存先は計画全体の前提で、すでに始まっている配下の仕事の完了まで待たせると、進行中の作業が祖先への dependency の追加だけで閉じられなくなる。
+
+以前は子の `Start` が親の `InProgress` を要求し、親の `Start` が親の依存先の完了を要求し、着手中の Entity を `InProgress` の Group の下へだけ移せた。このため、P の着手より前から置いた依存先について、経路 1・2 は生じなかった。経路 3、`Completed` の Entity の移し入れ、完了済みの子を持つ P への依存先の追加は、以前の規則でも生じた。種類の変換による経路は、変換とともに加わった。Group の `Start` をなくしたとき、依存先の検査は Issue の `Start` へ移し（[Group の着手を子から導出する理由](#group-の着手を子から導出する理由)）、`Complete` と移動へは移さなかった。経路 4 は `Reopen` とともに加わった（[`Completed` を `Reopen` で戻せるようにした理由](#completed-を-reopen-で戻せるようにした理由)）。
+
+構造の循環検査に使う「完了の前提」は全祖先の依存先を含み、Group の完了や、祖先の依存先の完了を待たずに着手した Issue の完了については、操作の前提より厳しい近似になる。この近似は構造の検査で循環とみなす範囲を広げるが、lifecycle 操作の前提は変えない。
+
+採らなかった案:
+
+- Issue・Group の `Complete` に全祖先の依存先の完了を要求する案。P の下での完了として経路 1〜3 は止まるが、経路 4 と、`Completed` の Entity の移し入れ、完了済みの子を持つ P への依存先の追加は残る。着手中の Issue が祖先への dependency の追加で完了できなくなり、一覧で祖先の依存先を Issue の行の問題として示す規則も要る。
+- Group の `Complete` にだけ要求する案。経路 1 と、経路 3 のうち子 Group の完了を止めるが、Issue の完了は止めず、Issue と Group で `Complete` の前提が非対称になる。
+- 一つ目の案に加え「`Completed` の Entity の全祖先の依存先は `Completed`」を守る性質にする案。移動・dependency の追加・`Reopen` にも制約が要り、完了済みの子を持つ Group に後から未完了の前提を足せなくなる。計画のやり直しを妨げる制約が増える。
+
+## 種類を変換できる現在値にした理由
+
+種類（Issue・Group）は Entity の同一性ではなく現在値とし、変換を許す。Issue として登録した仕事が調べるうちに複数の単位へ分かれることはよくあり、作り直すと ID・Note・dependency の参照が切れる。変換はそれらを保ったまま種類だけを変える。
+
+変換できるのは保存値が `Undecided`・`NotStarted` の Issue と、同じ状態で子のない Group に限る。`InProgress` の Issue を Group にすると、保存値として `InProgress` を持たない Group の規則と合わないため、先に `Release` させる。子を持つ Group を Issue にすると、Issue が子を持たないという包含の規則が崩れる。終了した Entity は計画を閉じた時点の判断を保つため変換しない。
+
+## 一覧の Group の行の状況と詰まっている理由
+
+`axon tasks` は Issue と Group を平らに並べ、Group の行には配下から導出した状況を示す。契約は [一覧の行と状況](../reference/candidates.md#一覧の行と状況) にある。Group が着手候補にならなくなったため、一覧で Group の行が次に何をすべきかを示す必要がある。
+
+状況は `Empty`・`Confirmable`・`Ready`・`InProgress`・`Blocked` の優先順位で一つに決める。`Blocked` は残余として定義する。当初の「未着手の Issue の子孫はあるが着手候補がない」という定義では、採用直後で子がすべて `Undecided` の Group や、空の子 Group しか持たない Group がどの状況にも入らなかった。残余にすると五つの状況で Group の行を必ず分類できる。
+
+`Empty` は `Confirmable` より先に判定する。直属の子がない Group は最終確認を通れば完了できるが、空の計画の次の一手はたいてい計画を書くことであり、`Confirmable` と示すと中身のない完了を促す。`axon complete` の可否は変えない。
+
+Group の `InProgress` は、実効 lifecycle と同じく「配下の仕事が始まっている」を表す。完了済みの子孫はあるが着手中の子孫がない Group も `InProgress` のままにし、`Blocked` へ落とす案と `InProgress+Blocked` の複合表示は採らなかった。前者は実効 lifecycle と一覧で同じ Group の状態が食い違い、後者は Issue の表示と同じ語で別の条件を表すことになる。
+
+その代わり、詰まっている理由を `Blocked` の行に限らず、完了できず、着手候補の子孫も着手中の Issue の子孫もない Group の行全般に示す。着手が始まった後に止まった計画や、完了できない空の Group も次の一手が状況から読めないためである。`Confirmable` の行、`Ready` の行、完了できる `Empty` の行は次の一手が状況から分かるため理由を求めない。着手中の Issue に後から足した未完了の依存先はその Issue の行の問題とし、Group を詰まっているとは見なさない。理由は未完了の dependency、`Undecided` の子、未終了の子 Group、浮上していない着手可能な子孫、`Undecided` の祖先、浮上していない祖先、自身の再浮上条件が未成立の七種類で、詰まっている行には少なくとも一つ付くことをモデルで検査している。衝突や親の不在のある保存先では、祖先の連なりが衝突中または保存先に無い祖先で切れ、その祖先の採用を確かめられないために詰まることがある。統合の結果、終了した祖先の下に未終了の Group が残った場合も詰まる。モデルはこれらの状態を持たないため、実装はその祖先を採用済みでない祖先として八つ目の理由に示す。「詰まっている理由は詳細に示す」原則に例外を作らないためで、Issue の着手の前提でも同じ祖先を示す。終了した祖先の配下は候補として非浮上に扱うが、終了した祖先を浮上していない祖先としては示さない。その理由は条件が未成立の祖先の行を示すもので、条件の無い終了した祖先を載せると、読み手が存在しない条件を直そうとするためである。
+
+Group を見出しにした木の一覧は採らなかった。表示の改善として導出の規則と独立に扱える。
+
+## `axon show` で再浮上条件を評価する理由
+
+`axon show ID` は既定で、対象が `axon tasks` の行になる場合にその行が必要とする範囲の再浮上条件を評価し、`axon tasks` と同じ導出で状況と詰まっている理由を示す。評価しない表示は `--skip-conditions` で残す。契約は [評価契約](../reference/candidates.md#評価契約) と [`axon show` と待ち理由](../reference/cli.md#axon-show-と待ち理由) にある。
+
+以前は `axon show` が条件を評価せず、条件をすべて成立したものとして状況と理由を導出していた。その結果、浮上していない着手可能な Issue だけを配下に持つ Group は `axon tasks` では `Blocked`、`axon show` では `Ready` になり、`Stalled` の節も出ず、詰まっている理由を読む場所がなかった。手掛かりは配下の Issue の `axon show --details` に出る条件だけで、一覧と詳細の食い違いから読み手が推測する必要があった。
+
+`axon show` の側を評価する形にしたのは、詰まっている理由を示す責任が `axon show` にあるためである。`axon tasks` は行の集合と状況を示す入口で、理由の行を併記すると行の書式と併記する理由の種類を別に決める必要がある。`axon show` は `Stalled` の節を既に持ち、評価した条件から「浮上していない着手可能な子孫」の理由を導出すれば、`axon tasks` の `Blocked` から `axon show` へ辿る流れの中で理由が読める。`axon show` に評価する option を足す案は、既定の表示が `axon tasks` と食い違ったままになる。評価せずに「未評価の条件で隠れうる」と示す案は、条件を持つ Entity があるかは分かっても、隠れているかは断定できない。
+
+`axon list` は評価しないまま据え置く。`axon list` は保存情報の列挙の入口で、評価しても得られるのは状況欄の一致だけであり、非浮上・終了を含む全件の列挙で全 Entity の条件を実行する費用に見合わない。評価しない表示を `--details` に兼ねさせる案は、保存情報の詳細入口という `--details` の意味に評価の有無という別の軸を重ねることになるため採らず、`--condition-timeout`・`--trace-conditions` と同じ語族の `--skip-conditions` にした。`--details` の有無で状況の導出は変えない。
+
+Issue の状況欄には `Unsurfaced` を足し、`Start` の前提の充足・不足より優先する。候補にならないという事実のほうが、前提を満たしても一覧に出ないことを正しく伝えるためである。`Blocked` との複合表示は、Issue の `InProgress+Blocked` と違って二つの条件が独立に解けるわけではなく、浮上すれば前提の充足・不足がそのまま表示に戻るので設けない。語は help が使う surfaced と文書の「浮上」に対応させた。`Hidden` は理由が読めず、`Deferred` は日付以外の条件に合わない。理由の label は既存の `Undecided child:`・`Undecided ancestor:` と同形の `Unsurfaced candidate:`・`Unsurfaced ancestor:` にした。`Undecided` の Entity の状況欄は `Undecided` のままにし、浮上の有無を足さない。判断候補に出るかは `axon proposals` が示す。
+
+祖先の条件が未成立の未着手の対象は、実効値が `InProgress` の Group を除いて `axon tasks` の行に出ないが、`axon show` では対象について何かを示す必要がある。祖先の条件も評価し、Issue には `Required to start` の `Unsurfaced ancestor:`、Group には六つ目の詰まっている理由として示す。祖先は上から評価して未成立の祖先より下は評価しないため、示す祖先は一つになる。判定失敗は `axon tasks` と同じく表示全体を失敗させる。行ごとに失敗の印を付けて続ける案は、部分結果の規則が増えるため採らなかった。失敗の診断に `--skip-conditions` を示すので、壊れた条件でも保存情報は読め、`axon condition set|unset` で修復できる。
+
+Group 自身の条件が未成立の場合も、Issue の状況欄の `Unsurfaced` に当たる表示が Group にはなく、`axon tasks` に出ない原因を `axon show` だけでは読めなかった。配下に着手可能な Issue があれば `Unsurfaced candidate:` から、その Issue の `axon show` の `Unsurfaced ancestor:` を辿って初めて分かり、`Undecided` の子しかない Group には手掛かりがなかった。`axon show` は対象自身の条件を既に評価しているので、その結果を七つ目の詰まっている理由 `Own condition unsatisfied:`（行は当の Group 自身）として `Stalled` に示す。Group の状況欄に `Unsurfaced` を設ける案は、`Empty`・`Blocked` など配下から導出した状況を状況欄から失い、Group の状況欄に `Unsurfaced` を設けない判断を覆すため採らなかった。状況欄とも `Stalled` とも別の行で示す案は、どの状況の Group にも出せる代わりに表示要素が増え、Issue 自身の条件は状況欄、Group 自身の条件は別の行という不揃いを生むため採らなかった。理由として示す形では、詰まっていない扱いの Group（完了できる `Empty` と `Confirmable`）には示されないが、それらは完了できて次の一手が分かるため受け入れる。自身の条件だけで隠れている子孫は引き続き `Unsurfaced candidate:` にも並べ、原因と止まっている仕事の両方を読めるようにする。
+
+評価範囲を対象の行に必要な範囲に限るのは、`axon show` が一つの Entity を読む操作であり、関連する Entity の行のために別の部分木の条件まで実行しない方が読み取りの費用を対象の大きさに比例させられるためである。範囲外の Entity の行は範囲内で得た結果だけを使い、それ以外の条件を成立したものとして状況を導出する。読み取りの重さは、エージェントが `axon show` を頻繁に叩くため、保存情報の読取に `--skip-conditions`、状況の診断に既定の `axon show` という使い分けを同梱 skill と help に書いて吸収する。
+
+`axon tasks` を `--kind`・`--search` で絞り込んだとき、残った Group の行の状況を導出するために表示しない子孫の条件も評価する規則は、この判断のときに現行のまま確定した。評価しない側の規則にすると、壊れた条件で一覧が止まらない代わりに、同じ Group の状況が絞り込みの有無で変わりうる規則を別に決める必要がある。壊れた条件による失敗は絞り込みなしの `axon tasks` と同じ挙動で、修復は `axon show ID --skip-conditions` と `axon condition set|unset` でできる。
 
 ## 終了した Group の構成と配下の状態を固定する理由
 
 Group 配下の Issue は、その計画を前提とした仕事である。Group が `Completed` になった後に、配下の `Cancelled` の Issue だけを `Reconsider` すると、完了した計画の一部を再び未判断に戻すことになる。単独の Issue の再検討とは前提が異なるため、元の計画から独立して見直す仕事は、目的や完了条件を改めて定義した新しい Issue として扱う。
 
-終了した Group の構成と配下の lifecycle を固定することで、計画を閉じた時点の判断を保つ。この規則は、子だけを再検討・取り外しする例外や、それに伴う親の状態の扱いを増やさず、実装を単純に保つことにもつながる。`Cancelled` の Group は、親の制約を満たせば `Reconsider` によって計画自体を見直せるが、`Completed` の Group にはその経路を設けない。具体的な制約は [計画と包含](../reference/lifecycle.md#計画と包含) に定める。
+終了した Group の構成と配下の lifecycle を固定することで、計画を閉じた時点の判断を保つ。Group の最終確認は完了の時点で固定した子の集合について行うものであり、終了後に子を足したり外したりすると、確認した計画と現在の計画が食い違う。この規則は、子だけを再検討・取り外しする例外や、それに伴う親の状態の扱いを増やさず、実装を単純に保つことにもつながる。計画自体を見直すには、親の制約を満たせば、`Cancelled` の Group は `Reconsider`、`Completed` の Group は `Reopen` で戻してから構成を変え、`Completed` へ戻すときは改めて最終確認を経る。具体的な制約は [計画と包含](../reference/lifecycle.md#計画と包含) に定める。
+
+## 見直しを前提に置いていた規則を現行のまま確定した理由
+
+次の四つの規則は、運用上の負担が分かれば見直す前提で置いていたが、Group の着手の導出と `Reopen` を加えた再設計の際に見直し、いずれも現行のまま確定した。
+
+- **終了した Group の構成を固定する。** 最終確認は固定した子の集合について行う。`Reopen` と `Reconsider` で戻す経路があるため、計画を見直す手段は残る。`Completed` の依存元や採用済みでない祖先がある場合は、それらから順に戻す手間がかかる。
+- **`InProgress` の Entity にも未完了の dependency を追加できる。** 追加した依存先はその Entity 自身の `Complete` の前提として完了時に検査されるため、その Entity が未完了の依存先を残したまま完了することはない。Group に足した依存先が配下の `Complete` の前提にならないことは [Group の dependency を配下の完了の前提にしない理由](#group-の-dependency-を配下の完了の前提にしない理由) に記す。着手中に見つかった前提を記録するために、作業の解放を挟ませる必要がない。
+- **Issue・Group から Group への dependency を許す。** 依存元は依存先の Group の `Complete` まで待つ。配下がすべて終了しただけでは満たさず、計画全体の最終確認を待つことが Group への依存の意味になる。
+- **再浮上条件は候補の表示と `axon show` の状況・理由の表示だけに使い、ID を明示した操作を縛らない。** 条件の判定が失敗すると一覧の取得と `axon show` の表示は失敗するが、明示操作と条件の修復は条件を評価しないため、壊れた条件で Entity が操作できなくなることはない。
 
 ## 親 Group を一つに限る理由
 
 Issue・Group は最大一つの親 Group を持つ。多重所属を許すと、複数の親が別々の lifecycle にあるときに配下の活性と判断範囲が矛盾する。包含を tree に保つことでこれを構造的に起こさない。共有する成果物は dependency、横断的な分類は一覧の絞り込みで扱う。
 
-## ID を `<prefix>-<ランダム6文字>` にした理由
+## ID を `<prefix>-<ランダム8文字>` にした理由
 
 連番にはしない。識別子に意味を持たせないためである。`#12` と `#15` があると、エージェントも人間も「12 のほうが先に作られたから先にやるべき」「番号が若いほうが基盤的なタスクだろう」と推測する。優先度を持たないと決めているのに、ID が暗黙の優先度として機能してしまう。順序が要るなら順序として明示的に持つべきで、ID から漏れ出してはいけない。
 
-乱数部分の桁数は 6、文字種は小文字の Crockford Base32 (`0-9a-z` から紛らわしい `i`・`l`・`o`・`u` を除く) とする。
+乱数部分の桁数は 8、文字種は小文字の Crockford Base32 (`0-9a-z` から紛らわしい `i`・`l`・`o`・`u` を除く) とする。
 
 | 桁数 | 空間 | 衝突確率 50% に達する件数 |
 | --- | --- | --- |
@@ -85,7 +186,7 @@ Issue・Group は最大一つの親 Group を持つ。多重所属を許すと�
 | 6 | 約 10 億 | 約 41,000 件 |
 | 8 | 約 1 兆 | 約 130 万件 |
 
-誕生日問題を考えると、4 文字では個人の repository でも数千件で衝突のリスクが出る。6 文字なら実質的に気にしなくてよい。
+以前は 6 文字だった。一つの保存先に対して発行する限り、生成時にその保存先と照合して衝突を避けられるので、誕生日問題の確率だけを見れば 6 文字で足りる。保存層を記録の集合にし、Git で追跡した保存先を worktree ごとに分けると、別の worktree で発行した ID とは生成時に照合できず、同じ ID の二重登録は統合後に衝突として見えて手で解決することになる（[保存層を記録の集合にし、Git 統合を読取時の検出に委ねる理由](#保存層を記録の集合にしgit-統合を読取時の検出に委ねる理由)）。この手間を実質的に起こさない水準まで空間を広げるために 8 文字にした。既存の 6 文字の ID はそのまま有効で、ID は不透明な文字列として扱い、乱数部分の長さで検証しない。
 
 prefix は意味を持ってよい。管理 root の名前なので「どの作業単位の Issue か」という実際に意味のある情報になる。意味を持たせないのは乱数部分だけである。
 
@@ -99,7 +200,7 @@ Issue と Group は同じ ID の namespace を使い、kind を ID に埋め込�
 
 複数のエージェント・セッションが同時に動くため、同じ Entity への `Start` の競合は日常的に起きる。しかも自動で動いているので人間が気づきにくく、二つのセッションが同じ Issue を実装して両方が成果を出してから発覚する、という壊れ方をする。
 
-候補の確認と `axon start` は別の操作なので、同じ Entity への `axon start` が並行することはある。`axon start` は実行時点の Entity が着手可能であることを、現在値の更新と同じ保存境界で検査する。先に着手された Entity への更新は失敗するため、競合しても二重実装にはならない。競合後の扱いは呼び出し側の workflow が決める。
+候補の確認と `axon start` は別の操作なので、同じ Entity への `axon start` が並行することはある。`axon start` は実行時点の Entity が着手可能であることを、記録の作成と同じ lock の下で検査する。同じ保存先では先に着手された Entity への `axon start` は失敗するため、競合しても二重実装にはならない。追跡する運用で worktree ごとに保存先が分かれている場合は、それぞれで `axon start` が成功し、Git で取り込んだ次の読取で衝突として見える（[複数 head をすべて衝突にする理由](#複数-head-をすべて衝突にする理由)）。競合後の扱いは呼び出し側の workflow が決める。
 
 候補の選択と着手を一つの操作にまとめる入口は置かない。応答が欠落して再試行されると、そのたびに別の Entity へ着手する非決定的な副作用になり、一つのセッションが意図せず複数件を握るためである。候補一覧と、対象を明示した `axon start` に分けることで、再試行の対象を固定する。
 
@@ -160,41 +261,100 @@ Issue と Group は同じ ID の namespace を使い、kind を ID に埋め込�
 
 コマンド名や出力は紙の上で詰めず、実装しながら決める。実際に打つと必ず変わるうえ、間違えても保存した情報の作り直しが要らないためである。
 
-## 保存形式を一つにし、配置を Git の運用に委ねる理由
+## 保存層を記録の集合にし、Git 統合を読取時の検出に委ねる理由
 
-保存形式は JSONL 一つとし、保存先は管理 root の `.axon/state.jsonl` だけにする。契約は [保存と統合の契約](../reference/storage.md#保存先と初期化) にある。
+保存先は不変な記録の集合で、記録 1 件を 1 file として `.axon/records/` の下に置き、現在値は読取のたびに導出する。Git の統合時に Axon は呼ばれず、統合が生んだ衝突・構造の違反・記録の欠けは次の読取と `axon storage check` が検出する。契約は [保存と統合の契約](../reference/storage.md)、モデルは [`spec/record_integration.qnt`](../../spec/record_integration.qnt)（[統合モデルが表す規則](../../spec/README.md#統合モデルが表す規則)）にある。
+
+### 記録の集合にした理由
+
+Git で追跡した保存先に求めたことは三つある。`git reset --hard` で作業前の状態に戻して別の agent に投げ直せること、`git checkout` で特定の commit に移動して `axon` を叩けばその時点の状態が分かること、並列作業の rebase・merge で壊れないことである。前の二つは「作業 tree の追跡 file だけで Axon の状態が完全に決まる」に還元される。
+
+以前の保存先は現在値と記録を一つの JSONL snapshot に持ち、操作のたびに snapshot 全体を検査して置き換えていた。分岐した snapshot は三者比較の merge engine（`axon merge prepare|check|apply`）と Git の merge driver で統合し、driver の登録は clone ごとの `git config` に頼っていた。この形では、設定漏れの clone で正常系が text conflict になり、conflict marker の入った snapshot を手で直すことになった。Git が driver を呼ばない fast-forward では検査が読取まで遅れた。
+
+記録を不変な集合にすると、Git の merge・rebase・cherry-pick・revert はいずれも「記録の部分集合を持ち込む、または消す」操作になり、Axon が Git の途中に介入する必要がなくなる。統合の正しさは Git ではなく次の読取で判定し、両側の記録が同じ Entity で分かれていれば衝突、組み合わせが構造に反すれば違反として示す。現在値を保存しないので、子の記録と Group の記録の統合が食い違ったときにどちらを正とするかを決める必要もない。
+
+### 記録 1 件 1 file にした理由
+
+記録の集合を 1 file への 1 行追記で表し、`.axon/.gitattributes` の union 属性で両側の行を残す案を先に採り、Quint のモデルもその前提で書いた（[`spec/record_integration.qnt`](../../spec/record_integration.qnt) は file の bytes を扱わないため、形式の変更で変わらない）。2026-09-25 の実験で、ローカルの Git は union 属性で両側の行を残すが、GitHub の merge button（merge commit・squash・rebase）と Update branch（merge・rebase）は `.axon/.gitattributes` でも root の `.gitattributes` でも union 属性を効かせず、両側が追記した PR を常に conflict と判定して merge できないことが分かった。加えて、revert は末尾の記録だけを消せて後続の追記があると空になり、1 件だけの cherry-pick は union が直前の欠けた記録も持ち込む。GitHub 上で直接 merge するには、先にローカルで base を取り込んで push する運用が要る。
+
+記録 1 件を 1 file にすると、両側が記録を追加した branch は別 file の追加どうしなので、merge の属性なしの Git の 3-way merge で衝突しない。同じ repository と手順で、単一 file への追記だけが conflict になることを 2026-09-25 に確認した（ローカルの merge・rebase・cherry-pick・revert と、使い捨ての private repository での GitHub の merge button 3 方式と Update branch 2 方式）。記録 ID が内容の hash なので、同名の file は同じ内容で、両側が同じ file を追加しても衝突しない。cherry-pick と revert は commit に含まれる記録 file の単位で効き、記録の集合と file の集合が一致するため、Git の add と remove がそのまま記録の追加と欠けに対応する。union 属性と GitHub 上の merge の注意書きは不要になった。`.axon/.gitattributes` は統合には使わず、改行変換を止める `* -text` だけを書く（[`axon init` が `.axon/` の中に file を書く理由](#axon-init-が-axon-の中に-file-を書く理由)）。
+
+費用は file 数の増加、header（format、store ID、prefix）を別 file に置くこと、書込を 1 行の追記から file の作成に変えることである。1 file 約 2.7 KB の記録 20,000 件（現在の増加速度で約 2 年分）を置いた計測（2026-09-25、APFS、git 2.54.0）では、全 file の列挙と読取が 0.31 秒、`git add` が 0.52 秒、記録 1 件を足す commit が 0.08 秒で、支障になる水準ではない。
+
+記録 ID の先頭 2 文字で subdirectory に分けるのは、Git が directory を「その中の file 名と hash の一覧」（tree object）として保存し、中身が一つでも変わる commit は一覧を丸ごと書き直すためである。1 directory に置くと 20,000 件で tree object が 1.84 MB になり、記録を足す commit ごとに複製される。先頭 2 文字で分けると root の tree は 7.5 KB、各 subdirectory の tree は約 6 KB になる。記録 ID は小文字 16 進なので、大文字小文字を区別しない file system でも名前は衝突しない。
+
+`git checkout`・`git reset --hard`・`git stash` は untracked な新しい記録 file を消さない。未 commit の記録は移った先の記録と並んで読まれ、捨てるには `git clean` も要る。commit した記録だけを見れば「作業 tree の追跡 file だけで状態が決まる」ことは保たれるので、この手間は受け入れた。
+
+採らなかった案:
+
+- 記録者ごとの append-only file。複数の worktree が同じ actor で並行して書くので、actor で分けても同じ file に書くことになり GitHub 上の衝突は残る。分けるには worktree ごとの識別子を Git 管理外に持つ必要があり、file 数を減らす以外の利点がない。
+- 形式を変えずに、conflict 中の PR を GitHub Actions で自動 rebase する案。Actions 上の Git は union を効かせるので技術的には可能だが、PR の head branch を force push するため各 worktree が remote と食い違い、取り込み直す手間が別の場所に移る。union の edge case も残る。
+- Entity ごとの file。`git log --stat` は読みやすいが、同じ Entity への両側の操作が同じ file の変更になり、text の統合に戻る。
+
+### merge driver と `axon merge` を持たない理由
+
+統合の判定を Git の merge 中ではなく次の読取に置くと、driver は要らない。driver を残す案は、設定済みの clone では衝突の時点で Git が止まる利点があるが、clone ごとの `git config` が要り、設定漏れの clone では正常系でも conflict marker で止まる。記録 1 件 1 file では Git 側で衝突するものがそもそもなく、データ設計は driver の有無で変わらない。三者比較と base、統合 workspace、manifest、preimage、`axon merge prepare|check|apply` は、現在値を保存しなくなったことで対象を失った。分岐間の統合は「相手の記録の部分集合を取り込む」一つの操作になり、`axon resolve` の解決記録が head を一つに戻す。
+
+### 複数 head をすべて衝突にする理由
+
+当初は値の等しい並行 head を次の記録が畳む規則を置いていたが、それが要った場面（両側の worktree が親 Group を `axon start` する）は Group の `Start` を導出に変えて消えた。残るのは同じ actor が二つの worktree で同じ Issue を `axon start` した、両側で同じ提案を `axon accept` した、といった稀な場合で、衝突として見えた方が二重作業に気づける。畳む規則をやめると、現在値の導出が「head が一つならその値、複数なら衝突」の二分岐になり、二重登録の特別扱いも消える。Issue の `Start` の排他性は `InProgress` の現在値に着手した actor を含めて表し、特別な規則を足さずに通常の衝突判定で済ませる。
+
+衝突中の Entity が一つでもある保存先では、解決と Note 以外の操作を止める。衝突した Entity の現在値がないまま他の Entity を操作すると、祖先や依存先の判定が確定しない記録を重ねることになるためである。
+
+### 違反と免除
+
+構造の不整合は「違反」の集合として導出し、通常操作は違反を増やさない。違反は Entity ごとに種類を持つ（包含の循環、親の不在、終了した親の下の未終了、`InProgress` の Issue と実効 `InProgress` の Group の未採用の祖先、`Completed` の未完了の依存先、依存先の不在、通常完了経路の循環）。lifecycle 操作を含む全通常操作は、各操作の前提に加えて「操作後の違反が操作前の違反の部分集合」であることを要求する。無関係な違反が残っていても操作を止めないのは、統合で生じた不整合が保存先全体を凍らせないためである。
+
+違反に含まれる Entity には修復のための免除を与える。終了した親の配下は変更しないという固定、`Completed` の dependency の固定、`Completed` の依存元による `Reopen` の阻止を、その Entity が違反に含まれるときだけ免除する。終了した Group どうしの包含の循環（両側の移動と完了の取り込みで起きる）は取り外しで、完了済みの相互依存（解決の選択で起きる）は dependency の削除で直せる。免除は有効な保存先では働かない。違反があり衝突がない保存先には修復を確実に進める通常操作が一つはあることを invariant にしており、修復の進み具合は「違反の集合が縮む」か「集合が同じでも違反に含まれる Entity の dependency と所属の辺が減る」で測る。二重に絡んだ dependency の循環は一手では違反の集合を縮められないが、dependency を一本ずつ外せば直る。
+
+lifecycle 操作にも部分集合の検査を課すのは、免除された前提が違反を作れたためである。当初は所属変更・dependency の追加・登録だけにこの検査を課し、lifecycle 操作は各操作の前提で扱っていた。有効な保存先では前提が違反を防ぐが、違反のある保存先では免除がそれを崩す。解決の選択で互いを依存先にして `Completed` になった Group どうしでは、依存元による `Reopen` の阻止が免除されるため一方の `Reopen` が通り、他方が `Completed` のまま未完了の依存先を持つ違反が増えた。`Completed` の Group の下の `Cancelled` の Issue が循環に含まれていれば、終了した親の固定が免除されるため `Reconsider` が通り、終了した親の下に未終了の Entity ができた。「通常操作は違反を増やさない」は全通常操作についての性質なので、lifecycle 操作にも同じ検査を課した（種類の変換は実装の時点から課している）。免除は修復に要る操作の前提を緩めるためのもので、違反を増やす操作を通す根拠にはならない。修復は違反を減らす方向の操作（解決記録、dependency の削除、依存元から順の `Reopen`、取り外し、再採用）で行え、修復可能性の invariant はもともと、操作後の違反が操作前の部分集合であることを前提に、違反の集合が縮む操作か、集合が同じで違反に含まれる Entity の辺が減る操作だけを修復に数えているため、この検査で修復が塞がることはない。違反は Entity と種類の組で数えるので、同じ Entity の同じ種類の違反を重くする操作は拒否しない。`Completed` の依存元による阻止の免除が働くのは、その依存元がすでに未完了の依存先を持つ違反にあるときに限られる。
+
+循環の違反の構成員は循環上の Entity（包含または完了の前提をたどって自身に戻れる Entity）だけとし、循環を待つだけの Entity は違反にも免除にも含めない。当初の定義は、前提の残っていない Entity を順に除いた後に残る全 Entity（循環を待つ側を含む）を通常完了経路の循環の違反としていた。この定義では、待つ側の Entity どうしに新しい循環を足しても違反の集合が変わらず、「操作後の違反が操作前の部分集合」の検査を通り抜けて通常操作が循環を作れた。元の循環を直した後にその新しい循環が違反として残り、通常操作が違反を作ったことになる。逆に、循環を待つ側への循環にならない dependency の追加や登録は、追加した Entity が待つ側として違反に加わるため拒否されていた。構成員を循環上の Entity に限ると、待つ側や無関係な Entity を通る新しい循環は必ず新しい構成員を加えるので検査が効き、待つ側への無関係な追加は通る。すでに循環上にある Entity どうしの間の辺（既存の循環への chord や、別の循環の構成員どうしで閉じる循環）は構成員を変えないので部分集合の検査では止まらず、次に述べる辺の検査が拒否する。守る性質「包含と完了経路の非循環」を有効な保存先で保ちつつ、違反のある保存先でも循環に含まれる Entity を増やさない。循環を閉じる dependency を持つ Entity が循環上にない場合（`Completed` の Group が自身の `Completed` の子孫に依存する自己辺）は、その Group は免除を受けず、修復は子孫の取り外しか Group の `Reopen` から行う。
+
+所属変更・dependency の追加・登録は、違反のある保存先でも、変更で新しく持った関係（dependency、所属）が誘導する通常完了経路の辺が変更後の循環上に載るなら拒否する。違反は Entity で数えるため、部分集合の検査だけではすでに循環上にある Entity どうしの辺を止められない。同じ循環への chord（g2 → i3 → i4 → g2 の循環がある状態で g2 に i4 への dependency を足す）や、別々の循環 {a, b}・{c, d} の構成員どうしの往復（a から c、続けて c から a への dependency）は構成員を増やさずに通り、統合で生じた元の循環を直した後に、通常操作で足した循環が残っていた。これは「通常操作は違反を増やさない」の趣旨に反し、[lifecycle](../reference/lifecycle.md) の「包含を合わせた通常完了経路の循環を、追加時に拒否する」も違反のある保存先を例外にしていない。確定した規則から導けるのは各操作の前提を常に課すことなので、違反の集合の検査に辺の検査を足した。有効な保存先には循環がないので、新しい辺が循環上に載る変更は必ず違反を増やし、辺の検査は部分集合の検査に含まれて公開挙動は変わらない。違反のある保存先で新しく拒否されるのは既存の循環上の Entity どうしで循環を閉じる辺だけで、修復は辺の除去（dependency の削除、取り外し）で進み辺の追加を要しないため、修復可能性は損なわれない。登録でも、所属先より先に記録の届いた子孫が新しい Entity の依存先や所属先の祖先の依存先を継ぎ、その辺が既存の循環を閉じることがあるので、辺を足す三つの操作に同じ規則を課す。移動の前後で共通の祖先の dependency は新しい関係ではないので、共通の祖先の下で兄弟の Group へ移すことは拒否しない。辺を Entity の組で数え、変更の前になかった組だけを検査する案は、祖先の dependency ですでに待っている組に自身の dependency や所属を重ねる変更を通し、祖先の dependency を外した後も重ねた関係が循環を保つため採らず、辺は関係ごとに数える。現状の違反の集合で判定し続ける案は、違反のある保存先で循環を作れる穴を残すため採らなかった。
+
+「全祖先が採用済み」は親の連なりの各段が settled で保存値が `NotStarted` であることを要求し、連なりの途中に衝突中または記録の欠けた Entity があれば満たさない。統合モデルは当初、直属の親が settled であることと settled な祖先がすべて `NotStarted` であることだけを見ていたため、root → Group → Issue の三階層で root の記録が欠けていても Group が `NotStarted` なら Issue を `Start` できた。守る性質「実効 `InProgress` の Group と `InProgress` の Issue の全祖先が採用済み」は、現在値を持たない祖先を採用済みとみなすと保証できないので、契約と実装の読み方にモデルを揃えた。違反を直すか記録が届くまで、その下の `Start`・`Complete`・`Reopen`・着手済みの子孫を持つ Group の `Accept`・着手済みの Entity の移動は待つ。
+
+解決記録は違反の検査を免除する。解決の選択で違反ができることがあり、それを解決時に拒否すると、どの選択も拒否されて行き止まりになる場合がある。解決で head を一つに戻してから、通常操作で直す。
+
+### gap を受け入れる理由
+
+cherry-pick や revert で親が欠けた記録が入ると、受け手が持つ古い祖先の記録と並んで head になり、偽の衝突として見える。記録は親しか知らないので、実際には祖先どうしだと判定できない。祖先集合を記録に持たせれば偽の衝突をなくせるが、記録が祖先の数に比例して大きくなる。gap を作るのは、Axon の記録を含む commit を後から部分的に取り消すか拾う操作と、未 commit の記録 file を残したまま別の commit へ移る操作で、merge・rebase が自身で作ることはない（片側の revert による削除を merge が他側へ伝える場合を除く）。受け入れて、CLI が「片方は親記録が欠けていて新しい可能性が高い」と示し、新しい方を選んで解決すれば正しい値になる形にした。祖先集合を持たせる案は困ったときに後から足す。解決記録だけが先に届いた保存先でも、受け手が解決記録の親のどれかを持っていれば、解決記録が値を持つので現在値は決まる。
+
+### 同じ ID の二重登録を通常の衝突として解決する理由
+
+作成記録が二つとも head なので通常の衝突として見え、解決記録が両系列の head を親にして片方の値を採る。捨てた側の内容は登録し直す。二重登録に専用の規則や ID の振り直しを持つより、衝突の一種として同じ入口で解決する方が規則が少ない。起きる確率は ID を 8 文字にして下げた。
+
+### `axon init` が `.axon/` の中に file を書く理由
+
+`axon init` は記録の directory、header file、`.axon/.gitignore`、`.axon/.gitattributes` を作る。`.axon/.gitignore` は lock と書込途中の一時 file だけを除外し、記録と header は追跡できる。`.axon/.gitattributes` は `* -text` の 1 行だけを持つ。repository root の `.gitignore`・`.gitattributes`・Git config には触れない。
+
+以前は保存先 `.axon/state.jsonl` だけを作り、Git に関する file は作らなかった。追跡する運用には `.axon/.gitignore` と root の `.gitattributes` と driver の登録が要り、利用者が表示された手順で行っていた。記録 1 件 1 file では merge の属性と driver が要らず、Git から除外すべきものは lock と一時 file だけになる。この除外は運用の種類によらず常に正しく、`.axon/` の中で閉じるので、`axon init` が書く。root の file を編集しないのは、無関係な行を保ちながら補完すると、競合する規則、後続の広い規則による打ち消し、上位の属性 file による上書きといった端の場合を生み続けるためである。
+
+`.axon/.gitattributes` の `* -text` は Git の改行変換から記録 file を守る（2026-09-26 の判断）。記録 ID は末尾の LF を含む file の bytes 全体の hash なので、root の `.gitattributes` の `text=auto eol=crlf` や Git の設定の `core.autocrlf=true`（Git for Windows では system の設定にある。WSL2 と Windows で同じ checkout を共有する場合など）で checkout 時に CRLF へ変わると、名前と内容の hash が一致しない破損として読取と全操作が止まる。利用者は原因に辿り着きにくいが、1 行の属性で防げ、`text` 属性を外せば `core.autocrlf` によらず変換されず、作業 tree の属性 file は深い directory のものが root のものより優先される（防げない設定は [保存と統合の契約](../reference/storage.md#保存先と初期化) にある）。以前 `.axon/.gitattributes` を作らなかったのは、union 属性が GitHub の web merge で効かず、記録 1 件 1 file にしたことで統合に属性が要らなくなったためで（[記録 1 件 1 file にした理由](#記録-1-件-1-file-にした理由)）、checkout 時の変換を止める `-text` には当てはまらない。merge・union の属性は書かない。統合は記録が別 file であることで成り立ち、属性はその前提を変えず、効かない環境があるためである。
+
+`text eol=lf` や `binary` ではなく `-text` にしたのは、Git に記録 file の bytes をどちらの方向にも変えさせないためである。`text eol=lf` も checkout 時の CRLF を止め、canonical な記録は CR を含まないので有効な記録は変わらず、`git add` 時に変換された file を LF に戻せる利点もある。それでも採らなかったのは、`git add` 時に Git が内容を正規化する規則を残し、hash の対象の bytes を Git の変換に委ねることになるためである。`binary` は `-diff -merge -text` の macro で、merge の属性を書かないという上の判断に反し、差分表示も止めて記録 file の差分を読めなくする。代わりに、`-text` の下では `git add` 時の正規化も働かないので、属性を足す前に変換された記録 file を stage するとその bytes が commit される。既存の保存先に足す手順は、これを避ける形で [保存先と worktree](../guide/storage.md#改行変換と-axongitattributes) に書いた。
+
+`axon init` 直後の header、`.axon/.gitignore`、`.axon/.gitattributes` は Git から untracked に見え、Git に無視させて使うか、追跡して branch ごとに統合するかは、表示した手順に従って利用者が選ぶ。コードは二つの運用を区別しない。
+
+採らなかった案:
+
+- `*` の 1 行だけを持つ `.axon/.gitignore` を `axon init` が作り、設定なしで無視される運用を既定にする案。Git は untracked な file を checkout・merge の上書きから保護するが、無視されている file は保護しない。無視を既定にすると、無視されている保存先がある作業 directory で `.axon/` を追跡している commit を checkout・merge したときに、警告なしに記録が置き換わる事故が起きうる状態を Axon が黙って作ることになる。lock と一時 file だけを除外すれば、既定は Git の保護を受ける untracked で、無視は利用者が承知して選ぶ操作になる。代わりに既定側に来るのは `git add -A` による意図しない commit だが、これは差分として見え、push 前なら戻せる。利用者が自分で `.axon/` を無視した場合の上書きの危険は残るため、契約と利用ガイドに注意として書く。
+- 改行変換を止める設定を利用者の Git 設定に委ね、文書に運用として書くだけにする案。設定しなかった clone では破損として全操作が止まり、原因が Git の設定にあると気づきにくい。`.axon/` の中で閉じる 1 行で防げるので、利用者に委ねる理由がない。
+- 読取で CRLF を LF に戻してから hash を照合する案。名前と内容の bytes が一致するという破損の規則を弱める。
+- 配置を選ぶ option を持つ案。無視するか追跡するかは Git 側の事実で決まり、Axon が同じ情報を option や設定として二重に持つと、両者が食い違った状態を定義する必要が生じる。
 
 ### 保存 adapter を一つにする
 
-保存 adapter は file 一つだけを持つ。SQLite の 1 行の BLOB に同じ共通 codec の byte 列を入れる adapter を併せ持つ構成を、実装して比べたうえで採らなかった (2026-09)。二つの adapter はどちらも操作のたびに snapshot 全体を decode・検査・encode して置き換えるため、保存形式・検査・速度に差がなかった。実際に分かれたのは配置だけで、SQLite は Git に追跡させず linked worktree 間で共有する保存先、file は worktree ごとに Git で追跡して統合する保存先になった。この配置の違いは SQLite でなくても成り立つ。一方で二つ持つ費用は、C のビルドを伴う依存、adapter の dispatch と混在の検出、両方を対にしたテストと文書、保存形式を変えるたびの二重の版上げである。
-
-SQLite を既定として公開した後に廃止すると破壊的変更になるが、JSONL を正本としたまま、破棄できる派生 index を後から足すことは非破壊でできる。このため公開する保存形式を JSONL 一つに絞った。
-
-採らなかった案:
-
-- SQLite に record 単位の schema と index を入れて速くする案。共通コアは操作のたびに snapshot 全体を検査するため、保存側だけを部分読み書きにしても操作の時間は縮まらない。速くするにはコアの検査を差分化する設計変更が要り、共通モデルの構造を SQL の schema へ複製することにもなる。4 MB 程度の保存先で一覧が数十 ms という計測 (2026-09) では、速度の支障は観測されていない。
-- 二つの adapter を併せ持ち、使い分けの理由を文書化する案。SQLite が与えるのは入れ物としての堅牢さだけで、二重の保守費用を公開後も持ち続ける根拠を示せなかった。
-- SQLite を「共有する側の入れ物」としてだけ残す案。共有は下のとおり file と探索順で実現でき、入れ物を二種類にする理由がない。
-
-### Git が保存先をどう扱うかに関与しない
-
-`axon init` は正本 `.axon/state.jsonl` を作り、Git に関する file は作らない。init 直後の正本は Git から untracked に見え、Git に無視させて使うか、追跡して branch ごとに統合するかは、表示した手順に従って利用者が選ぶ。コードは二つの運用を区別せず、`.gitignore`・`.gitattributes`・Git config を作成も編集もしない。
-
-採らなかった案:
-
-- `*` の 1 行だけを持つ `.axon/.gitignore` を `axon init` が作り、設定なしで無視される運用を既定にする案。Git は untracked な file を checkout・merge の上書きから保護するが、無視されている file は保護しない。このため、無視されている正本がある作業 directory で、正本を追跡している commit を checkout・merge すると、警告なしに正本が置き換わる。無視を既定にすると、この戻せない事故が起きうる状態を Axon が黙って作ることになる。生成しなければ、既定は Git の保護を受ける untracked で、無視は利用者が承知して選ぶ操作になる。代わりに既定側に来るのは `git add -A` による意図しない commit だが、これは差分として見え、push 前なら戻せる。`axon init` の出力と skill の文書で、untracked に見えることと二つの運用の手順をはっきり示して補う。利用者が自分で `.axon/` を無視した場合の上書きの危険は残るため、契約と利用ガイドに注意として書く。
-- 無関係な行を保ちながら repository の `.gitignore`・`.gitattributes` を `axon init` が補完し、実効 merge 属性まで検査する案。利用者の file の自動編集は、競合する規則、後続の広い規則による打ち消し、上位の属性 file による上書きといった端の場合を生み続け、そのたびに検出と診断を足すことになる。
-- 配置を選ぶ option を持つ案。無視するか追跡するかは Git 側の事実で決まり、Axon が同じ情報を option や設定として二重に持つと、両者が食い違った状態を定義する必要が生じる。
-
-merge driver の登録が漏れて Git が正本を text として統合しても、その結果は次の読み取りで全体検査を受けるため、conflict marker や不整合を含む正本が使われることはない。離れた Entity への変更どうしは text として統合でき検査も通るので、設定漏れは同じ Entity を両側で変更して衝突するまで表に出ない。実効 merge 属性の検査を持たない代わりに、この範囲を受け入れている。
+保存 adapter は file 一つだけを持つ。SQLite の 1 行の BLOB に同じ共通 codec の byte 列を入れる adapter を併せ持つ構成を、実装して比べたうえで採らなかった (2026-09)。二つの adapter はどちらも操作のたびに全体を decode・検査するため、保存形式・検査・速度に差がなかった。実際に分かれたのは配置だけで、SQLite は Git に追跡させず linked worktree 間で共有する保存先、file は worktree ごとに Git で追跡して統合する保存先になった。この配置の違いは SQLite でなくても成り立ち、下の探索順で実現できる。一方で二つ持つ費用は、C のビルドを伴う依存、adapter の dispatch と混在の検出、両方を対にしたテストと文書、保存形式を変えるたびの二重の版上げである。記録の集合を正本としたまま、破棄できる派生 index を後から足すことは非破壊でできる。
 
 ### 探索順と、許容した副作用
 
-Git 内では、現在の worktree root の `.axon` を先に、次に main worktree の `.axon` を探す。無視する運用では linked worktree に `.axon` が現れないため、この一つの規則で全 worktree が main worktree の保存先を共有する。追跡する運用では各 worktree が checkout した正本を持つため、常に手前が選ばれる。運用の種類を判別せずに両方を扱えることが、この順序の理由である。
+Git 内では、現在の worktree root の `.axon` を先に、次に main worktree の `.axon` を探す。無視する運用では linked worktree に `.axon` が現れないため、この一つの規則で全 worktree が main worktree の保存先を共有する。追跡する運用では各 worktree が checkout した保存先を持つため、常に手前が選ばれる。運用の種類を判別せずに両方を扱えることが、この順序の理由である。
 
-追跡する運用で、正本を持たない branch (`axon init` より前に分岐した branch、orphan branch) の linked worktree から操作すると、main worktree の追跡対象の正本を書き換える。これは許容した。変更は main worktree の差分として見え、記録は失われない。防ぐには運用の種類の判別か、正本を持たない worktree での操作の一律な拒否が要るが、前者は上の理由で持たず、後者は無視する運用の共有そのものを止めてしまう。
+追跡する運用で、保存先を持たない branch (`axon init` より前に分岐した branch、orphan branch) の linked worktree から操作すると、main worktree の追跡対象の保存先に記録を書く。これは許容した。変更は main worktree の差分として見え、記録は失われない。防ぐには運用の種類の判別か、保存先を持たない worktree での操作の一律な拒否が要るが、前者は上の理由で持たず、後者は無視する運用の共有そのものを止めてしまう。
 
-lock、unmerged index の検査、symlink の拒否は、現在の worktree ではなく確定した保存先の側で行う。lock を現在の worktree 側で取ると、共有する正本への並行 writer が直列化されない。unmerged index の検査を現在の worktree に対して行うと、main worktree の正本を書き換える場合に検査が黙って効かなくなる。
+lock、unmerged index の検査、symlink の拒否は、現在の worktree ではなく確定した保存先の側で行う。lock を現在の worktree 側で取ると、共有する保存先への並行 writer が直列化されない。unmerged index の検査を現在の worktree に対して行うと、main worktree の保存先に書く場合に検査が黙って効かなくなる。保存先の確定より前には、header のない段ごとにその worktree の unmerged index を検査する。統合が未解決なまま header が作業 tree から消えた保存先を、header の欠落や未初期化と報告しても利用者は Git での解決に辿り着けず、その worktree が追跡する保存先を飛ばして main worktree の保存先に書いてしまうためである。代わりに、保存先を持たない linked worktree から main worktree の保存先を使う操作ごとに Git の呼出しが一回増える。
 
 linked worktree での `axon init` は、main worktree に保存先が既にあれば拒否する。無視する運用では、手前に保存先ができて読む先が気づかないまま切り替わる。追跡する運用でも、別の store ID の保存先ができて後で統合できなくなるため、ほぼ常に誤りである。それ以外の取り違えは利用者の運用に委ね、`axon init` は既存の保存先を壊さないことだけを保証する。
 
@@ -216,7 +376,7 @@ linked worktree での `axon init` は、main worktree に保存先が既にあ�
 - 完全な宣言と部分変更を区別する。省略が維持・解除・削除のどれかを曖昧にしない。
 - 変更前後の計画全体と差分を、保存前に確認できるようにする。
 - 取得後に前提が変わった場合は競合として扱い、意図を再照合する。ID や digest の再生成で競合を隠さない。
-- 全体の包含・dependency・終了構成を検査し、部分的な適用で不整合を残さない。
+- 全体の包含・dependency・終了構成を検査し、拒否は全件を止める。公開の途中で止まった反映は Entity ごとの再試行で完了できるようにする。
 - 新規 ID を固定して再実行時の重複作成を防ぐ。コマンド名や file 形式は目的と安全性を確定してから決めた。
 - 保存先への適用と declaration artifact への書戻しを別の保存境界として扱い、部分適用・結果不明を区別する。
 - 入力・backup・途中の artifact を保全し、未適用が立証できる操作だけを安全に再試行する。

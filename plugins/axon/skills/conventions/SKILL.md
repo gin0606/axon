@@ -13,7 +13,7 @@ description: Axonの操作契約の上に、自律実行とユーザー判断の
 
 ユーザーへ返すのは、依頼と確定情報から復元できず、何を、なぜ、いつ行うかを変える重要な意思決定である。目的、scope、完了条件、採否、時期、計画の意味、複数の妥当な選択肢から価値判断で選ぶ事項が該当する。操作の技術的な大きさだけを理由に確認を増やさない。
 
-`axon tasks`または`axon proposals`から着手対象や判断対象を選ぶことは、このworkflowではユーザーの意思決定とする。ただし、ユーザーが対象を指定した場合、または明示的な上位workflowが対象選択の範囲を与えた場合は、その範囲内で選択できる。
+`axon tasks`または`axon proposals`から着手対象や判断対象を選ぶことは、このworkflowではユーザーの意思決定とする。ただし、ユーザーが対象を指定した場合、または明示的な上位workflowが対象選択の範囲を与えた場合は、その範囲内で選択できる。着手の対象はIssueだけで、`axon tasks`のGroupの行は配下から導出した状況を示す（読み方は`axon-kit:conventions`のモデル参照）。Group自身へは着手しない。Groupだけが指定され、配下に着手候補のIssueが複数ある場合、どのIssueに着手するかはユーザーの判断とする。上位workflowがGroup配下の選択範囲を与えた場合はその範囲で選べる。
 
 ## 合意済みの計画構造を自律して整える
 
@@ -27,7 +27,7 @@ description: Axonの操作契約の上に、自律実行とユーザー判断の
 
 ## 既存情報と波及を調べる
 
-既存Entityを変更するときは `axon show ID --details` で保存状態・条件・全直接関係を読み、判断や現在の計画に関係するlogとNoteを確認する。Noteは追記専用で、有効な制約も訂正済みの内容も同じ形で残るため、古いNoteを年齢だけで無関係とみなさない。導出される候補への影響が必要な場合だけ`axon tasks`/`axon proposals`を評価する。
+既存Entityを変更するときは `axon show ID --details --skip-conditions` で保存状態・条件・全直接関係を読み（Groupは実効lifecycleと、異なる場合に併記される保存値を区別する）、判断や現在の計画に関係するlogとNoteを確認する。浮上していない候補や祖先を含む詰まっている理由を診断するときだけ、条件を評価する既定の `axon show ID` を使う。Noteは追記専用で、有効な制約も訂正済みの内容も同じ形で残るため、古いNoteを年齢だけで無関係とみなさない。導出される候補への影響が必要な場合だけ`axon tasks`/`axon proposals`で評価する。
 
 終了状態・構造に影響する操作や`axon complete`では、detailsの直接dependent、親を辿った祖先、全子孫ツリーで確認した子孫への波及を調べる。関係先のために新しい採否や目的を決める必要があれば、その判断だけを返す。
 
@@ -47,4 +47,4 @@ description: Axonの操作契約の上に、自律実行とユーザー判断の
 
 入力と現在状態を照合でき、同じ効果へ収束する再試行は自律して行う。結果不明、競合、重複作成の可能性、rollback、補償操作、別の最終状態が必要な場合は停止し、観測済みの状態と必要な判断を示す。
 
-選択された保存先へのmutationだけがsandboxに拒否された場合は、そのmutation commandだけをホストの許可機構で再実行する。保存先は探索で決まり、無視する運用ではcurrent worktree外にあるmain worktreeの`.axon/state.jsonl`、追跡する運用ではcurrent worktreeのGit管理対象の`.axon/state.jsonl`になり得る。後者では変更がGitの差分として現れるため、Axon操作の権限をGitのstage、commit、merge、破棄の権限へ広げず、変更artifactを呼び出し元へ返す。別worktreeの未統合snapshotや未調整の実作業はcurrent worktreeから観測できない。読み取りcommandや他のprogramまで権限を広げない。再実行できなければ観測できた適用範囲を返す。`Result unknown`は成功でも未適用でもないため、不明な保存結果を未反映と断定しない。
+選択された保存先へのmutationだけがsandboxに拒否された場合は、そのmutation commandだけをホストの許可機構で再実行する。保存先は探索で決まり、無視する運用ではcurrent worktree外にあるmain worktreeの`.axon/`、追跡する運用ではcurrent worktreeのGit管理対象の`.axon/`（保存先を持たないbranchのlinked worktreeではmain worktreeの`.axon/`）になり得る。後者では変更がGitの差分として現れるため、Axon操作の権限をGitのstage、commit、merge、破棄の権限へ広げず、変更artifactを呼び出し元へ返す。別worktreeの未統合の記録や未調整の実作業はcurrent worktreeから観測できない。読み取りcommandや他のprogramまで権限を広げない。再実行できなければ観測できた適用範囲を返す。`Result unknown`は成功でも未適用でもないため、不明な保存結果を未反映と断定しない。

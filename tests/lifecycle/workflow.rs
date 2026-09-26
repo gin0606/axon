@@ -30,8 +30,8 @@ fn the_daily_workflow_runs_from_registration_to_group_completion() {
     assert!(f.ok(&["list"]).contains(&second));
     f.ok(&["condition", "unset", &second]);
     assert!(f.ok(&["tasks"]).contains(&second));
-    failure(f.run(&["start", &first]));
-    f.ok(&["start", &group]);
+    let rejected = failure(f.run(&["start", &group]));
+    assert!(rejected.contains("not started directly"), "{rejected}");
     let mut attempts = (0..4)
         .map(|_| {
             f.command()
@@ -73,14 +73,17 @@ fn the_daily_workflow_runs_from_registration_to_group_completion() {
     let review = f.ok(&["show", &group]);
     assert!(review.contains("2/2 terminal (2 completed, 0 cancelled)"));
     assert!(review.contains("Awaiting final confirmation"));
-    assert!(f.ok(&["tasks"]).contains(&group));
+    assert!(
+        f.ok(&["tasks"])
+            .contains(&format!("{group}  Group  Confirmable  納品"))
+    );
     assert!(
         f.ok(&["note", "list", &second])
             .contains("成果を統合・検証済み")
     );
     f.ok(&["complete", &group]);
     assert!(f.ok(&["tasks"]).is_empty());
-    assert!(f.ok(&["log", &group]).contains("InProgress → Completed"));
+    assert!(f.ok(&["log", &group]).contains("NotStarted → Completed"));
 }
 
 #[test]
@@ -149,13 +152,13 @@ fn help_exposes_lifecycle_commands() {
         "withdraw",
         "cancel",
         "reconsider",
-        "merge",
         "storage",
         "export",
         "import",
     ] {
         assert!(help.contains(name));
     }
+    assert!(!help.contains("merge"));
     let rejected = f.run(&["no-such-command"]);
     assert_eq!(rejected.status.code(), Some(2));
     assert!(failure(rejected).contains("unrecognized subcommand"));
@@ -172,16 +175,18 @@ fn help_exposes_lifecycle_commands() {
     assert!(docs.contains("axon proposals"));
     for args in [
         vec!["init", "--help"],
-        vec!["merge", "--help"],
+        vec!["storage", "check", "--help"],
         vec!["note", "list", "--help"],
     ] {
         f.ok(&args);
     }
+    assert_eq!(f.run(&["merge", "--help"]).status.code(), Some(2));
     let init_help = f.ok(&["init", "--help"]);
     for text in [
-        "Init creates .axon/state.jsonl and nothing for Git",
+        "Init creates .axon/records/, .axon/header.json, .axon/.gitignore and an .axon/.gitattributes holding only \"* -text\"",
+        "which stops Git line-ending conversion of record files; it sets no merge attributes",
         "prints how to keep the store ignored or to track it",
-        "does not create or edit .gitignore or .gitattributes files or Git config",
+        "does not create or edit the repository root's .gitignore, .gitattributes or Git config",
         "does not stage or commit any files",
     ] {
         assert!(init_help.contains(text), "missing from init help: {text}");
@@ -198,9 +203,14 @@ fn docs_describe_the_one_store_and_the_discovery_order() {
     let f = Fixture::new();
     let docs = unwrapped(&f.ok(&["docs"]));
     for text in [
-        // The store is the only thing init creates, and Git's treatment of it is the reader's.
-        ".axon/state.jsonl and nothing for Git",
-        "never creates or edits .gitignore, .gitattributes or Git config",
+        // Init creates the store inside .axon/ with only a line-ending attribute; ignoring or
+        // tracking it is the reader's choice.
+        ".axon/records/, .axon/header.json, an .axon/.gitignore",
+        "an .axon/.gitattributes holding only \"* -text\"",
+        "keeps Git line-ending conversion (core.autocrlf, eol) from turning record files into corruption",
+        "it sets no merge or union attributes",
+        "never creates or edits the repository root's .gitignore, .gitattributes or Git config",
+        "records from both sides without merge attributes or configuration",
     ] {
         assert!(docs.contains(text), "missing from docs: {text}");
     }
@@ -209,7 +219,8 @@ fn docs_describe_the_one_store_and_the_discovery_order() {
     let main = docs.find("main worktree's .axon").unwrap();
     assert!(current < main, "{docs}");
     // Neither a second storage format nor a way to choose one is described.
-    for absent in ["--backend", "axon.db"] {
+    // Only merging is described as needing no attributes.
+    for absent in ["--backend", "axon.db", "without any attributes"] {
         assert!(!docs.contains(absent), "{docs}");
     }
 }

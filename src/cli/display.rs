@@ -91,8 +91,8 @@ pub fn error_label() -> String {
 pub fn situation(text: &str) -> String {
     let style = match text {
         "Undecided" => DECISION,
-        "Ready" => POSITIVE,
-        "Blocked" | "InProgress+Blocked" => WAITING,
+        "Ready" | "Confirmable" => POSITIVE,
+        "Blocked" | "Unsurfaced" | "InProgress+Blocked" | "Empty" => WAITING,
         "InProgress" | "Started  InProgress" => ID,
         _ => MUTED,
     };

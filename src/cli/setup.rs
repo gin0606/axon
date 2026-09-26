@@ -1,11 +1,11 @@
 use super::{
     Output,
-    args::{Cli, Docs, Merge, Storage},
+    args::{Cli, Docs, Storage},
     display, output,
-    render::{actor as actor_text, init_output},
+    render::{actor as actor_text, init_output, storage_report},
     store::context,
 };
-use axon::{Result, lifecycle::Snapshot, location::Location};
+use axon::{Result, lifecycle::record::Store as Records, location::Location, read};
 use clap::CommandFactory;
 
 pub(super) fn actor() -> Result<Output> {
@@ -18,7 +18,7 @@ pub(super) fn docs(command: Option<Docs>) -> Result<Output> {
             include_str!("../docs/declaration.txt").into()
         }
         Some(Docs::Declaration { example: true }) => axon::declaration::example()
-            .serialize(&Snapshot::empty())
+            .serialize(&Records::new().view()?)
             .map_err(|e| axon::Error::Invalid(e.to_string()))?,
     };
     Ok(output(text, false))
@@ -59,28 +59,70 @@ fn default_prefix(root: &std::path::Path) -> Result<String> {
     })?;
     Ok(prefix)
 }
+/// `axon storage check`: corrupt files, conflicts, violations and gaps, one line each.
+/// Corruption, conflicts and violations fail the command; gaps are information.
 pub(super) fn storage(command: Storage) -> Result<Output> {
-    let _cwd = std::env::current_dir()?;
-    let Storage::Check { snapshot } = command;
-    axon::file::decode(&std::fs::read(snapshot)?)?;
-    Ok(output("Valid snapshot\n".into(), false))
-}
-pub(super) fn merge(command: Merge) -> Result<Output> {
-    let _cwd = std::env::current_dir()?;
-    let saved = matches!(command, Merge::Apply { .. } | Merge::Driver { .. });
-    match command {
-        Merge::Prepare {
-            base,
-            ours,
-            theirs,
-            output,
-            workspace,
-        } => axon::file_merge::prepare(&base, &ours, &theirs, &output, &workspace, context())?,
-        Merge::Check { workspace } => axon::file_merge::check(&workspace)?,
-        Merge::Apply { workspace } => axon::file_merge::apply(&workspace)?,
-        Merge::Driver { base, ours, theirs } => {
-            axon::file_merge::driver(&base, &ours, &theirs, context())?
+    let Storage::Check { root } = command;
+    // Header problems are corruption too, reported in the same form as record files.
+    let corrupt_header = |root: &std::path::Path, reason: String| {
+        axon::Error::Invalid(format!(
+            "1 corrupt files under {}; records are not derived until they are repaired\nCorrupt: {}: {}",
+            display::human_text(root.join(".axon").display()),
+            axon::file::HEADER_FILE,
+            display::human_text(reason)
+        ))
+    };
+    // An unmerged index is reported alone; the header and damage are checked once Git resolves it.
+    let reported = |error: axon::Error| match error {
+        axon::Error::NotAStore { root, .. } => corrupt_header(&root, "missing".into()),
+        other => other,
+    };
+    let cwd = std::env::current_dir()?;
+    let location = match root {
+        Some(root) => Location::explicit(&root)?,
+        // Discovery stops at a `.axon` without a header; for the check that directory is
+        // the store to report on.
+        None => Location::discover(&cwd, false).map_err(reported)?,
+    };
+    let store = location.open().map_err(reported)?;
+    let loaded = store.load().map_err(|error| match error {
+        axon::Error::Invalid(text) if text.starts_with(axon::file::CORRUPT_HEADER) => {
+            corrupt_header(&location.root, text)
         }
+        other => other,
+    })?;
+    if !loaded.is_intact() {
+        let lines: Vec<_> = loaded
+            .corruption_lines("Corrupt: ")
+            .into_iter()
+            .map(display::human_text)
+            .collect();
+        return Err(axon::Error::Invalid(format!(
+            "{} corrupt files under {}; records are not derived until they are repaired\n{}",
+            loaded.corruption.len(),
+            display::human_text(store.records_path().display()),
+            lines.join("\n")
+        )));
     }
-    Ok(output("Merge operation succeeded\n".into(), saved))
+    let derived = loaded.view.expect("an intact store is derived");
+    let view = read::View::new(&loaded.records, &derived);
+    let report = storage_report(&view);
+    if report.failing > 0 {
+        return Err(axon::Error::Invalid(format!(
+            "{} problems in the store\n{}",
+            report.failing,
+            report.text.trim_end()
+        )));
+    }
+    if report.text.is_empty() {
+        return Ok(Output {
+            text: String::new(),
+            publication: super::Publication::None,
+            diagnostic: format!(
+                "Store is consistent: {} Entities, no conflicts, violations or missing records.\n",
+                view.entities().len()
+            ),
+        });
+    }
+    Ok(output(report.text, false))
 }

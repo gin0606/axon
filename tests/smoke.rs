@@ -1,4 +1,11 @@
-use axon::{file, lifecycle::*, location::Location};
+use axon::{
+    file,
+    lifecycle::{
+        Context, EntityId, Kind, Lifecycle, Recorder,
+        record::{self, Current, Entry, Store},
+    },
+    location::Location,
+};
 use chrono::Utc;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -37,14 +44,68 @@ impl Fixture {
     fn init(&self) {
         self.ok(&["init", "t"]);
     }
-    fn state(&self) -> PathBuf {
-        self.0.join(".axon/state.jsonl")
+    fn header(&self) -> PathBuf {
+        self.0.join(".axon/header.json")
+    }
+    fn records_dir(&self) -> PathBuf {
+        self.0.join(".axon/records")
     }
     fn store(&self) -> file::Store {
         Location::discover(&self.0, false).unwrap().open().unwrap()
     }
-    fn snapshot(&self) -> Snapshot {
+    /// The record set as the CLI reads it.
+    fn records(&self) -> Store {
         self.store().read().unwrap().1
+    }
+    fn view(&self) -> record::View {
+        self.records().view().unwrap()
+    }
+    /// The current value of a settled Entity.
+    fn current(&self, id: &str) -> Current {
+        self.view().current(&eid(id)).unwrap().clone()
+    }
+    /// The record files under `.axon/records/`, relative, sorted.
+    fn record_files(&self) -> Vec<PathBuf> {
+        record_files(&self.0)
+    }
+    /// Publishes records built in memory, as one batch under the writer's lock.
+    fn publish(&self, entries: Vec<Entry>) {
+        self.store().update(|_, _, _| Ok((entries, ()))).unwrap();
+    }
+}
+fn record_files(root: &Path) -> Vec<PathBuf> {
+    let base = root.join(".axon/records");
+    let mut found = Vec::new();
+    let Ok(subdirectories) = fs::read_dir(&base) else {
+        return found;
+    };
+    for subdirectory in subdirectories {
+        let subdirectory = subdirectory.unwrap();
+        if !subdirectory.file_type().unwrap().is_dir() {
+            found.push(
+                subdirectory
+                    .path()
+                    .strip_prefix(&base)
+                    .unwrap()
+                    .to_path_buf(),
+            );
+            continue;
+        }
+        for file in fs::read_dir(subdirectory.path()).unwrap() {
+            let path = file.unwrap().path();
+            found.push(path.strip_prefix(&base).unwrap().to_path_buf());
+        }
+    }
+    found.sort();
+    found
+}
+/// Copies every record file of `from` into `to`: what a Git merge of two tracked stores does.
+fn merge_records(from: &Path, to: &Path) {
+    for relative in record_files(from) {
+        let source = from.join(".axon/records").join(&relative);
+        let destination = to.join(".axon/records").join(&relative);
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::copy(source, destination).unwrap();
     }
 }
 impl Drop for Fixture {
@@ -97,8 +158,8 @@ fn git_output(path: &Path, args: &[&str]) -> Output {
 fn git(path: &Path, args: &[&str]) {
     success(git_output(path, args));
 }
-/// A commit with a fixed identity and no hooks; `args` follows `commit`.
-fn git_commit(path: &Path, args: &[&str]) {
+/// Git with a fixed identity and no hooks, for the operations that create commits.
+fn git_integration(path: &Path, args: &[&str]) -> Output {
     let mut all = vec![
         "-c",
         "user.name=Test",
@@ -106,13 +167,24 @@ fn git_commit(path: &Path, args: &[&str]) {
         "user.email=test@example.com",
         "-c",
         "core.hooksPath=/dev/null",
-        "commit",
     ];
     all.extend_from_slice(args);
-    git(path, &all);
+    git_output(path, &all)
 }
-fn merge_driver() -> String {
-    format!("'{}' merge driver %O %A %B", env!("CARGO_BIN_EXE_axon"))
+/// A commit with a fixed identity and no hooks; `args` follows `commit`.
+fn git_commit(path: &Path, args: &[&str]) {
+    let mut all = vec!["commit"];
+    all.extend_from_slice(args);
+    success(git_integration(path, &all));
+}
+/// A linked worktree on a new branch cut from the main worktree's HEAD.
+fn add_worktree(main: &Path, name: &str) -> Fixture {
+    let linked = Fixture::new();
+    git(
+        main,
+        &["worktree", "add", "-qb", name, linked.0.to_str().unwrap()],
+    );
+    linked
 }
 /// The ignored operation, as `axon init` displays it: the shown line, added to the ignore file
 /// of this repository alone. The isolated template may carry no `info` directory yet.
@@ -127,27 +199,9 @@ fn ignore_store(root: &Path, line: &str) {
     rules.push('\n');
     fs::write(&exclude, rules).unwrap();
 }
-/// The tracked operation, whose steps `axon init` prints instead of applying them.
+/// The tracked operation, whose step `axon init` prints instead of applying it.
 fn track_store(root: &Path) {
-    fs::write(
-        root.join(".axon/.gitignore"),
-        "*\n!.gitignore\n!state.jsonl\n",
-    )
-    .unwrap();
-    let attributes = root.join(".gitattributes");
-    let mut rules = fs::read_to_string(&attributes).unwrap_or_default();
-    rules.push_str("/.axon/state.jsonl merge=axon\n");
-    fs::write(&attributes, rules).unwrap();
-    git(root, &["config", "merge.axon.driver", &merge_driver()]);
-    git(
-        root,
-        &[
-            "add",
-            ".axon/state.jsonl",
-            ".axon/.gitignore",
-            ".gitattributes",
-        ],
-    );
+    git(root, &["add", ".axon"]);
 }
 fn context() -> Context {
     Context {
@@ -160,13 +214,19 @@ fn eid(value: &str) -> EntityId {
 }
 fn current(title: &str) -> Current {
     Current {
+        kind: Kind::Issue,
+        lifecycle: Lifecycle::NotStarted,
+        owner: None,
         title: title.into(),
         description: String::new(),
-        lifecycle: Lifecycle::NotStarted,
         condition: None,
         parent: None,
-        dependencies: BTreeSet::new(),
+        needs: BTreeSet::new(),
     }
+}
+/// A registration record for a NotStarted Issue with a fixed ID, as a library caller makes it.
+fn registration(records: &Store, id: &str) -> Entry {
+    Entry::Record(records.create(eid(id), current(id), context()).unwrap())
 }
 
 #[test]
@@ -178,7 +238,6 @@ fn registration_to_group_completion_and_records() {
             "capture",
             "--kind",
             "group",
-            "--accept",
             "--title",
             "計画",
             "-m",
@@ -208,11 +267,15 @@ fn registration_to_group_completion_and_records() {
     assert!(f.ok(&["show", &issue]).contains("Undecided"));
     f.ok(&["accept", &issue]);
     let wait = f.ok(&["show", &issue]);
-    assert!(wait.contains("Parent must start:"));
+    assert!(wait.contains("Required to start"));
+    assert!(wait.contains(&format!("Ancestor must be adopted: {group}")));
     assert!(wait.contains("Dependency must complete:"));
     assert!(!wait.contains("Parent:"));
     failure(f.run(&["start", &issue]));
-    f.ok(&["start", &group]);
+    f.ok(&["accept", &group]);
+    assert!(f.ok(&["show", &issue]).contains("Parent:"));
+    failure(f.run(&["start", &issue]));
+    failure(f.run(&["start", &group]));
     f.ok(&["start", &dependency]);
     f.ok(&["complete", &dependency]);
     f.ok(&[
@@ -224,6 +287,8 @@ fn registration_to_group_completion_and_records() {
         "編集本文",
     ]);
     f.ok(&["start", &issue]);
+    assert!(f.ok(&["show", &group]).contains("Group  InProgress  計画"));
+    failure(f.run(&["release", &group]));
     f.ok(&["note", "add", &issue, "-m", "検証結果"]);
     failure(f.run(&["complete", &group]));
     let show = f.ok(&["show", &issue]);
@@ -247,12 +312,15 @@ fn registration_to_group_completion_and_records() {
     assert!(log.contains("InProgress → Completed"));
     assert!(log.contains("検証完了"));
     assert!(!log.contains("record-"));
+    let log = f.ok(&["log", &group]);
+    assert!(log.contains("NotStarted → Completed"));
+    assert!(!log.contains("InProgress"));
     let list = f.ok(&["list"]);
     assert!(list.find(&group) < list.find(&dependency));
     assert!(list.find(&dependency) < list.find(&issue));
-    let bytes = fs::read(f.state()).unwrap();
+    let files = f.record_files();
     failure(f.run(&["reconsider", &issue]));
-    assert_eq!(bytes, fs::read(f.state()).unwrap());
+    assert_eq!(files, f.record_files());
 }
 #[test]
 fn lifecycle_and_relation_edits_use_common_guards() {
@@ -385,70 +453,64 @@ fn concurrent_start_has_one_winner_and_other_writes_survive() {
     for child in children {
         success(child.wait_with_output().unwrap());
     }
-    let snapshot = f.snapshot();
-    assert_eq!(snapshot.notes(&eid(&id)).unwrap().len(), 12);
-    assert_eq!(snapshot.entities().count(), 9);
-    assert_eq!(snapshot.history(&eid(&id)).unwrap().len(), 2);
+    let records = f.records();
+    assert_eq!(records.notes_of(&eid(&id)).len(), 12);
+    assert_eq!(records.view().unwrap().known().count(), 9);
+    assert_eq!(records.history(&eid(&id)).unwrap().len(), 2);
 }
 #[test]
-fn stored_snapshot_preserves_branches_integration_and_failed_changes() {
+fn concurrent_branches_are_read_as_a_conflict_that_stops_ordinary_operations() {
     let f = Fixture::new();
-    let mut base = Snapshot::new(StoreId::generate());
-    base.create(eid("item"), Kind::Issue, current("item"), context())
-        .unwrap();
-    base.perform(&eid("item"), Operation::Start, None, context())
-        .unwrap();
-    let mut left = base.clone();
-    let mut right = base.clone();
-    left.perform(&eid("item"), Operation::Complete, None, context())
-        .unwrap();
-    right
-        .perform(&eid("item"), Operation::Release, None, context())
-        .unwrap();
-    left.add_note(&eid("item"), "same".into(), context())
-        .unwrap();
-    right
-        .add_note(&eid("item"), "same".into(), context())
-        .unwrap();
-    let merged = left
-        .integrate(
-            &right,
-            &BTreeMap::from([(eid("item"), Side::Right)]),
-            Some("adopt unfinished".into()),
-            context(),
-        )
-        .unwrap();
-    fs::create_dir(f.0.join(".axon")).unwrap();
-    fs::write(f.state(), file::encode("branch", &merged).unwrap()).unwrap();
-    let mut store = f.store();
-    assert_eq!(store.read().unwrap().1, merged);
-    let log = f.ok(&["log", "item"]);
-    assert!(log.contains("Concurrent branch"));
-    assert!(log.contains("Integrated: selected NotStarted"));
-    assert!(!log.contains("record-"));
-    assert!(
-        f.ok(&["note", "list", "item"])
-            .contains("Concurrent branch")
-    );
-    let failed: axon::Result<()> = store.update(|_, snapshot| {
-        snapshot.add_note(&eid("item"), "rollback".into(), context())?;
-        snapshot.perform(&eid("item"), Operation::Complete, None, context())?;
-        Ok(())
-    });
-    assert!(failed.is_err());
-    assert_eq!(store.read().unwrap().1, merged);
+    f.init();
+    f.publish(vec![registration(&f.records(), "t-item")]);
+    f.ok(&["start", "t-item"]);
+    // Two copies of the store diverge: one completes the Issue, the other releases it.
+    let left = Fixture::new();
+    let right = Fixture::new();
+    for side in [&left, &right] {
+        fs::create_dir(side.0.join(".axon")).unwrap();
+        fs::copy(f.header(), side.header()).unwrap();
+        merge_records(&f.0, &side.0);
+    }
+    left.ok(&["complete", "t-item"]);
+    left.ok(&["note", "add", "t-item", "-m", "same"]);
+    right.ok(&["release", "t-item"]);
+    right.ok(&["note", "add", "t-item", "-m", "same"]);
+    merge_records(&right.0, &left.0);
+    let log = left.ok(&["log", "t-item"]);
+    assert!(log.contains("Concurrent branch"), "{log}");
+    assert!(log.contains("InProgress → Completed") && log.contains("InProgress → NotStarted"));
+    assert!(log.contains("Conflicted: 2 heads"), "{log}");
+    let notes = left.ok(&["note", "list", "t-item"]);
+    assert_eq!(notes.matches("same").count(), 2);
+    assert!(!notes.contains("Concurrent branch"));
+    let show = left.ok(&["show", "t-item"]);
+    assert!(show.contains("Issue  Conflicted  t-item"), "{show}");
+    assert!(show.contains("Conflicted\n"), "{show}");
+    let list = left.run(&["list"]);
+    assert!(list.status.success());
+    assert!(String::from_utf8_lossy(&list.stderr).contains("axon storage check"));
+    // A conflicted store accepts Notes and rejects everything else without a record.
+    let before = left.record_files();
+    let rejected = failure(left.run(&["start", "t-item"]));
+    assert!(rejected.contains("conflicted"), "{rejected}");
+    failure(left.run(&["capture", "--title", "blocked"]));
+    assert_eq!(left.record_files(), before);
+    left.ok(&["note", "add", "t-item", "-m", "still allowed"]);
+    // Parallel writers of the same Entity both succeed: each adds its own record file.
     let barrier = Arc::new(Barrier::new(2));
     let handles: Vec<_> = (0..2)
         .map(|_| {
-            let root = f.0.clone();
+            let root = left.0.clone();
             let barrier = barrier.clone();
             std::thread::spawn(move || {
                 let mut store = Location::discover(&root, false).unwrap().open().unwrap();
                 barrier.wait();
                 store
-                    .update(|_, s| {
-                        s.add_note(&eid("item"), "parallel".into(), context())?;
-                        Ok(())
+                    .update(|_, records, _| {
+                        let note =
+                            records.add_note(&eid("t-item"), "parallel".into(), None, context())?;
+                        Ok((vec![Entry::Note(note)], ()))
                     })
                     .unwrap();
             })
@@ -457,33 +519,120 @@ fn stored_snapshot_preserves_branches_integration_and_failed_changes() {
     for handle in handles {
         handle.join().unwrap();
     }
-    assert_eq!(
-        store.read().unwrap().1.notes(&eid("item")).unwrap().len(),
-        4
-    );
+    assert_eq!(left.records().notes_of(&eid("t-item")).len(), 5);
 }
 #[test]
-fn unsupported_corrupt_and_incomplete_stores_are_rejected_without_changes() {
-    for kind in ["wrong-format", "corrupt", "pending"] {
+fn log_lists_each_concurrent_branch_together_with_one_branch_boundary() {
+    let f = Fixture::new();
+    f.init();
+    f.publish(vec![registration(&f.records(), "t-item")]);
+    let left = Fixture::new();
+    let right = Fixture::new();
+    for side in [&left, &right] {
+        fs::create_dir(side.0.join(".axon")).unwrap();
+        fs::copy(f.header(), side.header()).unwrap();
+        merge_records(&f.0, &side.0);
+    }
+    // Several records per side, so that the sides can interleave unless kept together.
+    for (side, name) in [(&left, "left"), (&right, "right")] {
+        for n in 1..=3 {
+            side.ok(&["start", "t-item"]);
+            side.ok(&["release", "t-item", "-r", &format!("{name} {n}")]);
+        }
+    }
+    merge_records(&right.0, &left.0);
+    merge_records(&left.0, &right.0);
+    let log = left.ok(&["log", "t-item"]);
+    assert_eq!(log, right.ok(&["log", "t-item"]));
+    assert!(log.contains("Conflicted: 2 heads"), "{log}");
+    assert_eq!(log.matches("Concurrent branch").count(), 1, "{log}");
+    let at = |text: &str| log.find(text).unwrap_or_else(|| panic!("{text}: {log}"));
+    let boundary = at("Concurrent branch");
+    let (first, second) = if at("left 1") < at("right 1") {
+        ("left", "right")
+    } else {
+        ("right", "left")
+    };
+    let positions: Vec<_> = [first, second]
+        .iter()
+        .flat_map(|name| (1..=3).map(move |n| format!("{name} {n}")))
+        .map(|text| at(&text))
+        .collect();
+    assert!(positions.is_sorted(), "{log}");
+    assert!(positions[2] < boundary && boundary < positions[3], "{log}");
+}
+#[test]
+fn log_finishes_a_nested_fork_before_moving_to_another_branch() {
+    let f = Fixture::new();
+    f.init();
+    f.publish(vec![registration(&f.records(), "t-item")]);
+    let copy = |from: &Fixture| {
+        let side = Fixture::new();
+        fs::create_dir(side.0.join(".axon")).unwrap();
+        fs::copy(from.header(), side.header()).unwrap();
+        merge_records(&from.0, &side.0);
+        side
+    };
+    // One side starts and then forks into two releases; the other side starts and releases.
+    let left = copy(&f);
+    let right = copy(&f);
+    left.ok(&["start", "t-item"]);
+    let fork = copy(&left);
+    left.ok(&["release", "t-item", "-r", "left inner"]);
+    fork.ok(&["release", "t-item", "-r", "fork inner"]);
+    right.ok(&["start", "t-item"]);
+    right.ok(&["release", "t-item", "-r", "right outer"]);
+    merge_records(&fork.0, &left.0);
+    merge_records(&right.0, &left.0);
+    let log = left.ok(&["log", "t-item"]);
+    assert!(log.contains("Conflicted: 3 heads"), "{log}");
+    // Two switches, one per branch end, and the two inner releases stay next to each other.
+    // The record IDs vary per run; the unit tests of the history order pin the IDs apart.
+    assert_eq!(log.matches("Concurrent branch").count(), 2, "{log}");
+    let lines: Vec<_> = log.lines().collect();
+    let at = |text: &str| {
+        lines
+            .iter()
+            .position(|line| line.contains(text))
+            .unwrap_or_else(|| panic!("{text}: {log}"))
+    };
+    let (inner, other) = (
+        at("left inner").min(at("fork inner")),
+        at("left inner").max(at("fork inner")),
+    );
+    assert_eq!(other - inner, 2, "{log}");
+    assert!(lines[inner + 1].starts_with("Concurrent branch"), "{log}");
+}
+#[test]
+fn unsupported_corrupt_and_earlier_format_stores_are_rejected_without_changes() {
+    for kind in ["wrong-format", "corrupt-header", "earlier-format"] {
         let f = Fixture::new();
         fs::create_dir(f.0.join(".axon")).unwrap();
-        match kind {
+        let path = match kind {
             "wrong-format" => {
-                let valid =
-                    String::from_utf8(file::encode("t", &Snapshot::empty()).unwrap()).unwrap();
-                fs::write(f.state(), valid.replacen("axon-file/v1", "axon-file/v2", 1)).unwrap();
+                fs::write(
+                    f.header(),
+                    "{\"format\":\"axon-records/v2\",\"store\":\"store-1\",\"prefix\":\"t\"}\n",
+                )
+                .unwrap();
+                f.header()
             }
-            "corrupt" => fs::write(f.state(), b"invalid snapshot").unwrap(),
-            "pending" => {
-                fs::write(f.0.join(".axon/init.pending"), "interrupted").unwrap();
-                fs::write(f.state(), "").unwrap();
+            "corrupt-header" => {
+                fs::write(f.header(), b"not a header").unwrap();
+                f.header()
             }
-            _ => unreachable!(),
-        }
-        let before = fs::read(f.state()).unwrap();
-        failure(f.run(&["list"]));
+            _ => {
+                let state = f.0.join(".axon/state.jsonl");
+                fs::write(&state, "{\"format\":\"axon-file/v1\",\"prefix\":\"t\"}\n").unwrap();
+                state
+            }
+        };
+        let before = fs::read(&path).unwrap();
+        let error = failure(f.run(&["list"]));
+        assert!(!error.contains("not initialized"), "{kind}: {error}");
         failure(f.run(&["init"]));
-        assert_eq!(before, fs::read(f.state()).unwrap(), "{kind}");
+        assert_eq!(before, fs::read(&path).unwrap(), "{kind}");
+        assert!(!f.records_dir().exists(), "{kind}");
     }
 }
 #[test]
@@ -493,12 +642,13 @@ fn discovery_outside_git_and_git_boundary() {
     let id = f.accepted("outer");
     let nested = f.0.join("nested/deeper");
     fs::create_dir_all(nested.join(".axon")).unwrap();
-    fs::write(nested.join(".axon/lock"), "").unwrap();
+    fs::write(nested.join(".axon/write.lock"), "").unwrap();
     assert!(success(command(&nested).args(["list"]).output().unwrap()).contains(&id));
     failure(command(&nested).args(["init"]).output().unwrap());
-    fs::write(nested.join(".axon/init.pending"), "").unwrap();
-    assert!(failure(command(&nested).args(["list"]).output().unwrap()).contains("incomplete"));
-    fs::remove_file(nested.join(".axon/init.pending")).unwrap();
+    // A file that is not the residue of an initialization stops discovery here.
+    fs::write(nested.join(".axon/state.jsonl"), "").unwrap();
+    assert!(failure(command(&nested).args(["list"]).output().unwrap()).contains("not a store"));
+    fs::remove_file(nested.join(".axon/state.jsonl")).unwrap();
     git(&nested, &["init", "--quiet"]);
     assert!(failure(command(&nested).args(["list"]).output().unwrap()).contains("not initialized"));
     success(command(&nested).args(["init", "inner"]).output().unwrap());
@@ -523,7 +673,7 @@ fn concurrent_initialization_never_replaces_a_store() {
         .map(|c| c.wait_with_output().unwrap())
         .collect();
     assert_eq!(results.iter().filter(|o| o.status.success()).count(), 1);
-    assert!(!f.0.join(".axon/init.pending").exists());
+    assert!(!f.0.join(".axon/header.json.tmp").exists());
     f.store();
 }
 #[test]
@@ -563,9 +713,9 @@ fn git_repository_paths_keep_trailing_whitespace() {
     assert!(success(command(&plain).args(["list"]).output().unwrap()).is_empty());
     assert!(success(command(&spaced).args(["list"]).output().unwrap()).contains("only in spaced"));
     let identity = |root: &Path| {
-        let (_, snapshot) =
-            file::decode(&fs::read(root.join(".axon/state.jsonl")).unwrap()).unwrap();
-        snapshot.store().clone()
+        record::decode_header(&fs::read(root.join(".axon/header.json")).unwrap())
+            .unwrap()
+            .store
     };
     assert_ne!(identity(&plain), identity(&spaced));
 }
@@ -579,7 +729,7 @@ fn broken_git_marker_blocks_ancestor_storage_fallback() {
     let nested = f.0.join("nested");
     fs::create_dir(&nested).unwrap();
     std::os::unix::fs::symlink("missing-git-directory", nested.join(".git")).unwrap();
-    let before = fs::read(f.state()).unwrap();
+    let before = f.record_files();
     for args in [
         vec!["list"],
         vec!["init"],
@@ -589,7 +739,7 @@ fn broken_git_marker_blocks_ancestor_storage_fallback() {
             failure(command(&nested).args(args).output().unwrap()).contains("Git discovery failed")
         );
     }
-    assert_eq!(before, fs::read(f.state()).unwrap());
+    assert_eq!(before, f.record_files());
 }
 #[cfg(unix)]
 #[test]
@@ -604,7 +754,7 @@ fn initialization_path_never_emits_terminal_controls() {
     let out = success(command(&path).args(["init", "repo"]).output().unwrap());
     assert!(!out.contains('\x1b'));
     assert!(out.contains("repo\\x1b[2J"));
-    assert!(path.join(".axon/state.jsonl").is_file());
+    assert!(path.join(".axon/header.json").is_file());
 }
 
 #[cfg(unix)]
@@ -616,7 +766,7 @@ fn git_cannot_skip_a_broken_inner_marker_to_an_outer_repository() {
     let nested = f.0.join("nested");
     fs::create_dir(&nested).unwrap();
     std::os::unix::fs::symlink("missing", nested.join(".git")).unwrap();
-    let before = fs::read(f.state()).unwrap();
+    let before = f.record_files();
     for args in [
         vec!["list"],
         vec!["init"],
@@ -626,7 +776,7 @@ fn git_cannot_skip_a_broken_inner_marker_to_an_outer_repository() {
             failure(command(&nested).args(args).output().unwrap()).contains("Git discovery failed")
         );
     }
-    assert_eq!(before, fs::read(f.state()).unwrap());
+    assert_eq!(before, f.record_files());
 }
 #[test]
 fn bare_repository_is_a_boundary_without_a_dot_git_entry() {
@@ -635,7 +785,7 @@ fn bare_repository_is_a_boundary_without_a_dot_git_entry() {
     let bare = f.0.join("bare.git");
     fs::create_dir(&bare).unwrap();
     git(&bare, &["init", "--bare", "--quiet"]);
-    let before = fs::read(f.state()).unwrap();
+    let before = f.record_files();
     for args in [
         vec!["list"],
         vec!["init"],
@@ -645,7 +795,7 @@ fn bare_repository_is_a_boundary_without_a_dot_git_entry() {
             failure(command(&bare).args(args).output().unwrap()).contains("Git discovery failed")
         );
     }
-    assert_eq!(before, fs::read(f.state()).unwrap());
+    assert_eq!(before, f.record_files());
 }
 
 #[test]
@@ -655,7 +805,7 @@ fn inherited_git_overrides_do_not_select_a_foreign_store() {
     fs::create_dir(&repo).unwrap();
     git(&repo, &["init", "--quiet"]);
     success(command(&repo).args(["init"]).output().unwrap());
-    let before = fs::read(repo.join(".axon/state.jsonl")).unwrap();
+    let before = record_files(&repo);
     let outside = f.0.join("outside");
     fs::create_dir(&outside).unwrap();
     let out = command(&outside)
@@ -666,7 +816,7 @@ fn inherited_git_overrides_do_not_select_a_foreign_store() {
         .output()
         .unwrap();
     assert!(failure(out).contains("not initialized"));
-    assert_eq!(before, fs::read(repo.join(".axon/state.jsonl")).unwrap());
+    assert_eq!(before, record_files(&repo));
     success(
         command(&outside)
             .env("GIT_DIR", repo.join(".git"))
@@ -674,8 +824,8 @@ fn inherited_git_overrides_do_not_select_a_foreign_store() {
             .output()
             .unwrap(),
     );
-    assert!(outside.join(".axon/state.jsonl").is_file());
-    assert_eq!(before, fs::read(repo.join(".axon/state.jsonl")).unwrap());
+    assert!(outside.join(".axon/header.json").is_file());
+    assert_eq!(before, record_files(&repo));
 }
 
 fn set_condition(f: &Fixture, id: &str, command: &str) {
@@ -748,22 +898,29 @@ fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation
         fs::read_to_string(f.0.join("observations")).unwrap(),
         "root\nnested\ndraft\n"
     );
-    f.ok(&["start", &root]);
-    f.ok(&["start", &nested]);
+    f.ok(&["start", &dep]);
+    f.ok(&["complete", &dep]);
+    f.ok(&["start", &child]);
     fs::remove_file(f.0.join("open")).unwrap();
-    let rows = f.ok(&["tasks"]);
-    assert!(rows.contains(&root) && rows.contains(&nested));
-    assert!(!rows.contains(&child));
-    f.ok(&["cancel", &child]);
-    set_condition(&f, &root, "exit 23");
     fs::write(f.0.join("observations"), "").unwrap();
+    // Working Groups are listed although they do not surface, and only the root is
+    // evaluated because nothing below an unsurfaced ancestor is.
     let rows = f.ok(&["tasks"]);
-    assert!(rows.contains(&root) && rows.contains(&nested));
+    for id in [&root, &nested, &child] {
+        assert!(rows.contains(id));
+    }
     assert!(
-        fs::read_to_string(f.0.join("observations"))
-            .unwrap()
-            .is_empty()
+        rows.lines()
+            .filter(|s| s.starts_with(&root) || s.starts_with(&nested))
+            .all(|s| s.contains("Group  InProgress  "))
     );
+    assert_eq!(
+        fs::read_to_string(f.0.join("observations")).unwrap(),
+        "root\n"
+    );
+    // A working Group's own condition is still evaluated, so its failure fails the list.
+    set_condition(&f, &root, "exit 23");
+    assert!(failure(f.run(&["tasks"])).contains("exit status: 23"));
     assert!(failure(f.run(&["proposals"])).contains("exit status: 23"));
 }
 
@@ -790,7 +947,6 @@ fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
     f.ok(&["accept", &id]);
     f.ok(&["withdraw", &id]);
     f.ok(&["accept", &id]);
-    f.ok(&["start", &root]);
     f.ok(&["start", &id]);
     f.ok(&["release", &id]);
     f.ok(&["cancel", &id]);
@@ -802,18 +958,23 @@ fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
     f.ok(&["accept", &id]);
     f.ok(&["start", &id]);
     f.ok(&["complete", &id]);
+    f.ok(&["reopen", &id]);
+    f.ok(&["start", &id]);
+    f.ok(&["complete", &id]);
+    f.ok(&["complete", &root]);
+    f.ok(&["reopen", &root]);
     f.ok(&["complete", &root]);
     set_condition(&f, &id, "exit 2");
     f.ok(&["condition", "unset", &id]);
     f.ok(&["note", "add", &id, "-m", "supplement"]);
     assert!(!f.0.join("forbidden").exists());
-    let before = f.snapshot();
+    let before = f.records();
     assert!(f.ok(&["tasks"]).is_empty());
     assert!(f.ok(&["proposals"]).is_empty());
     assert!(
         failure(f.run(&["condition", "set", &id, "--command", " "])).contains("empty condition")
     );
-    assert_eq!(f.snapshot(), before);
+    assert_eq!(f.records(), before);
 }
 
 #[test]
@@ -828,7 +989,7 @@ fn condition_results_diagnostics_and_repair_do_not_publish_partial_rows() {
         &id,
         "printf '\\033bad\\377'; printf problem >&2; exit 23",
     );
-    let before = f.snapshot();
+    let before = f.records();
     let error = failure(f.run(&["tasks", "--trace-conditions"]));
     for text in [
         &id,
@@ -840,7 +1001,7 @@ fn condition_results_diagnostics_and_repair_do_not_publish_partial_rows() {
         assert!(error.contains(text), "{error}");
     }
     assert!(!error.contains("Condition trace:"));
-    assert_eq!(f.snapshot(), before);
+    assert_eq!(f.records(), before);
     set_condition(&f, &id, "exit 1");
     let out = f.run(&["tasks", "--trace-conditions"]);
     assert!(!String::from_utf8(out.stdout).unwrap().contains(&id));
@@ -922,7 +1083,7 @@ fn condition_timeout_and_ctrl_c_terminate_shell_and_descendants() {
     let id = f.accepted("interrupt");
     let script = "echo $$ > shell-pid; sh -c 'trap \"\" TERM; echo $$ > descendant-pid; while :; do :; done' </dev/null >/dev/null 2>/dev/null & wait";
     set_condition(&f, &id, script);
-    let before = f.snapshot();
+    let before = f.records();
     for interrupt in [false, true] {
         let mut cmd = f.command();
         cmd.args([
@@ -958,7 +1119,7 @@ fn condition_timeout_and_ctrl_c_terminate_shell_and_descendants() {
         );
         assert_process_gone(wait_pid(&f.0.join("shell-pid")));
         assert_process_gone(wait_pid(&f.0.join("descendant-pid")));
-        assert_eq!(f.snapshot(), before);
+        assert_eq!(f.records(), before);
     }
 }
 
@@ -1158,12 +1319,12 @@ fn recorder_is_automatic_durable_optional_and_not_an_operation_guard() {
     assert!(details.contains("another-worker  data: {}"));
     let notes = f.ok(&["note", "list", id, "--recorder-details"]);
     assert!(notes.contains("codex  data: {}"));
-    let history = f.snapshot();
-    let history = history.history(&eid(id)).unwrap();
+    let records = f.records();
+    let history = records.history(&eid(id)).unwrap();
     assert_eq!(history.len(), 3);
-    assert!(history[1].context.recorder.is_none());
+    assert!(history[1].1.recorder.is_none());
     assert_eq!(
-        history[0].context.recorder.as_ref().unwrap().data["session_id"],
+        history[0].1.recorder.as_ref().unwrap().data["session_id"],
         "original-session"
     );
 }
@@ -1255,7 +1416,7 @@ fn recorder_details_preserve_unknown_json_and_escape_terminal_controls() {
     let id = f.accepted("unknown metadata");
     let mut store = f.store();
     store
-        .update(|_, snapshot| {
+        .update(|_, records, _| {
             let mut ctx = context();
             ctx.recorder = Some(Recorder {
                 actor: "future\x1b[31m-agent".into(),
@@ -1264,8 +1425,8 @@ fn recorder_details_preserve_unknown_json_and_escape_terminal_controls() {
                     serde_json::json!({"number": 17, "array": [true, null], "text": "\x1b[31m"}),
                 )]),
             });
-            snapshot.add_note(&eid(&id), "unknown actor".into(), ctx)?;
-            Ok(())
+            let note = records.add_note(&eid(&id), "unknown actor".into(), None, ctx)?;
+            Ok((vec![Entry::Note(note)], ()))
         })
         .unwrap();
     let normal = f.ok(&["note", "list", &id]);
@@ -1283,7 +1444,7 @@ fn recorder_help_is_available_without_a_store() {
     for args in [vec!["log", "--help"], vec!["note", "list", "--help"]] {
         assert!(f.ok(&args).contains("--recorder-details"));
     }
-    assert!(!f.state().exists());
+    assert!(!f.0.join(".axon").exists());
 }
 
 #[path = "lifecycle/file.rs"]

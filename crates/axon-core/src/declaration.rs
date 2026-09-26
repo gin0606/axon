@@ -1,5 +1,6 @@
-//! Strict declaration YAML and canonical export over an immutable core snapshot.
-use crate::lifecycle::{Entity, EntityId, Kind, Lifecycle, Snapshot};
+//! Strict declaration YAML and canonical export over the current values a record set derives.
+use crate::lifecycle::record::{Current, Store, View};
+use crate::lifecycle::{EntityId, Kind, Lifecycle};
 use serde::{Deserialize, Deserializer};
 use std::collections::BTreeSet;
 use std::fmt::Write;
@@ -126,7 +127,7 @@ fn valid_lifecycle(value: &str) -> bool {
     )
 }
 
-/// Parse syntax and file-local constraints. Storage identities are checked against a snapshot separately.
+/// Parse syntax and file-local constraints. Storage identities are checked separately against the set of records read when the operation started.
 pub fn parse(input: &str) -> Result<Declaration> {
     use granit_parser::{BufferedInput, Scanner, TokenType};
     for token in Scanner::new(BufferedInput::new(input.chars())) {
@@ -305,8 +306,8 @@ impl Declaration {
             format!("{{ id: {} }}", scalar(&target.1, true))
         })
     }
-    /// Canonical order uses creation times from the same snapshot used for export or validation.
-    pub fn serialize(&self, snapshot: &Snapshot) -> Result<String> {
+    /// Canonical order uses creation times from the same view used for export or validation.
+    pub fn serialize(&self, view: &View) -> Result<String> {
         self.validate()?;
         let mut out = format!("schema: {SCHEMA}\n");
         for (label, records) in [("groups", &self.groups), ("issues", &self.issues)] {
@@ -319,10 +320,8 @@ impl Declaration {
                             .try_into()
                             .map_err(|e: crate::lifecycle::Error| invalid(e.to_string()))?;
                     Some(
-                        snapshot
-                            .entity(&id)
-                            .map_err(|e| invalid(e.to_string()))?
-                            .created_at,
+                        view.created_at(&id)
+                            .ok_or_else(|| invalid(format!("missing Entity {id}")))?,
                     )
                 } else {
                     None
@@ -585,17 +584,16 @@ fn field(out: &mut String, name: &str, value: &str, indent: usize) {
     }
 }
 
-pub fn fingerprint(entity: &Entity) -> String {
+pub fn fingerprint(id: &EntityId, c: &Current) -> String {
     fn token(hash: &mut blake3::Hasher, s: &str) {
         hash.update(&(s.len() as u64).to_be_bytes());
         hash.update(s.as_bytes());
     }
     let mut hash = blake3::Hasher::new();
-    let c = &entity.current;
     for s in [
         SCHEMA,
-        kind(entity.kind),
-        &entity.id.to_string(),
+        kind(c.kind),
+        id.as_ref(),
         lifecycle(c.lifecycle),
         &c.title,
         &c.description,
@@ -604,35 +602,58 @@ pub fn fingerprint(entity: &Entity) -> String {
     }
     token(&mut hash, if c.parent.is_some() { "some" } else { "none" });
     if let Some(parent) = &c.parent {
-        token(&mut hash, &parent.to_string());
+        token(&mut hash, parent.as_ref());
     }
-    hash.update(&(c.dependencies.len() as u64).to_be_bytes());
-    for id in &c.dependencies {
-        token(&mut hash, &id.to_string());
+    hash.update(&(c.needs.len() as u64).to_be_bytes());
+    for id in &c.needs {
+        token(&mut hash, id.as_ref());
     }
     format!("blake3:{}", hash.finalize().to_hex())
 }
+/// The settled current value of an Entity; a conflicted one has none and a missing one is
+/// reported as such.
+fn settled<'a>(view: &'a View, id: &EntityId) -> Result<&'a Current> {
+    if view.is_conflicted(id) {
+        return Err(invalid(format!(
+            "identity/reference: {id}: conflicted; resolve it first"
+        )));
+    }
+    view.current(id).ok_or_else(|| {
+        invalid(format!(
+            "identity/reference: {id}: ID does not exist in storage"
+        ))
+    })
+}
 /// Select the union of Issues and complete Group subtrees, including terminal descendants.
-pub fn export(snapshot: &Snapshot, selectors: &[EntityId]) -> Result<Declaration> {
+/// A conflicted Entity in the selection (a conflicted child of a selected Group counts, by
+/// the parent any of its heads names) or among the references is rejected; violations are
+/// not, and a referenced Entity that does not exist is left out of `references`.
+pub fn export(store: &Store, view: &View, selectors: &[EntityId]) -> Result<Declaration> {
     if selectors.is_empty() {
         return Err(invalid("at least one selector is required"));
     }
-    let children = snapshot.children_by_parent();
     let mut selected = BTreeSet::new();
     let mut pending = selectors.to_vec();
     while let Some(id) = pending.pop() {
         if !selected.insert(id.clone()) {
             continue;
         }
-        let entity = snapshot.entity(&id).map_err(|e| invalid(e.to_string()))?;
-        if entity.kind == Kind::Group {
-            pending.extend(
-                children
-                    .get(&id)
-                    .into_iter()
-                    .flatten()
-                    .map(|e| e.id.clone()),
-            );
+        let current = settled(view, &id)?;
+        if current.kind == Kind::Group {
+            pending.extend(view.children(&id).iter().cloned());
+        }
+    }
+    for id in view.conflicted() {
+        let under_selection = view.heads(id).into_iter().flatten().any(|head| {
+            store
+                .record(head)
+                .and_then(|record| record.after.parent.as_ref())
+                .is_some_and(|parent| selected.contains(parent))
+        });
+        if under_selection {
+            return Err(invalid(format!(
+                "identity/reference: {id}: conflicted child of a selected Group; resolve it first"
+            )));
         }
     }
     let mut declaration = Declaration {
@@ -643,41 +664,43 @@ pub fn export(snapshot: &Snapshot, selectors: &[EntityId]) -> Result<Declaration
     };
     let mut references = BTreeSet::new();
     for id in &selected {
-        let entity = snapshot.entity(id).map_err(|e| invalid(e.to_string()))?;
-        let c = &entity.current;
+        let c = settled(view, id)?;
         references.extend(
             c.parent
                 .iter()
-                .chain(&c.dependencies)
+                .chain(&c.needs)
                 .filter(|id| !selected.contains(*id))
                 .cloned(),
         );
         let record = Record {
             id: Some(id.to_string()),
             key: None,
-            base: Some(fingerprint(entity)),
+            base: Some(fingerprint(id, c)),
             lifecycle: lifecycle(c.lifecycle).into(),
             title: c.title.clone(),
             description: c.description.clone(),
             parent: c.parent.as_ref().map(|id| Reference::id(id.to_string())),
             needs: c
-                .dependencies
+                .needs
                 .iter()
                 .map(|id| Reference::id(id.to_string()))
                 .collect(),
         };
-        match entity.kind {
+        match c.kind {
             Kind::Group => declaration.groups.push(record),
             Kind::Issue => declaration.issues.push(record),
         }
     }
     for id in references {
-        let e = snapshot.entity(&id).map_err(|e| invalid(e.to_string()))?;
+        if !view.is_known(&id) {
+            continue;
+        }
+        let c = settled(view, &id)?;
         declaration.references.push(External {
             id: id.to_string(),
-            kind: kind(e.kind).into(),
-            lifecycle: lifecycle(e.current.lifecycle).into(),
-            title: e.current.title.clone(),
+            kind: kind(c.kind).into(),
+            lifecycle: lifecycle(c.lifecycle).into(),
+            title: c.title.clone(),
         });
     }
     Ok(declaration)

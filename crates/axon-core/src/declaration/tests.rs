@@ -1,5 +1,5 @@
 use super::*;
-use crate::lifecycle::{Context, Current};
+use crate::lifecycle::record::{Context, Entry, Operation, RecordKind, Store};
 use chrono::{TimeZone, Utc};
 fn id(s: &str) -> EntityId {
     s.to_owned().try_into().unwrap()
@@ -10,25 +10,124 @@ fn context() -> Context {
         recorder: None,
     }
 }
-fn current(title: &str) -> Current {
-    Current {
-        title: title.into(),
-        description: String::new(),
-        lifecycle: Lifecycle::NotStarted,
-        condition: None,
-        parent: None,
-        dependencies: BTreeSet::new(),
+fn context_at(seconds: i64) -> Context {
+    Context {
+        at: Utc.timestamp_opt(seconds, 0).unwrap(),
+        recorder: None,
     }
 }
-fn snapshot() -> Snapshot {
-    Snapshot::empty()
+fn current(kind: Kind, title: &str) -> Current {
+    Current {
+        kind,
+        lifecycle: Lifecycle::NotStarted,
+        owner: None,
+        title: title.into(),
+        description: String::new(),
+        condition: None,
+        parent: None,
+        needs: BTreeSet::new(),
+    }
+}
+/// A store under a clock, so successive records of one Entity are distinct.
+struct Fixture {
+    store: Store,
+    clock: std::cell::Cell<i64>,
+}
+impl Fixture {
+    fn new() -> Self {
+        Self {
+            store: Store::new(),
+            clock: std::cell::Cell::new(2000),
+        }
+    }
+    fn tick(&self) -> Context {
+        self.clock.set(self.clock.get() + 1);
+        context_at(self.clock.get())
+    }
+    fn view(&self) -> View {
+        self.store.view().unwrap()
+    }
+    fn create(&mut self, name: &str, kind: Kind) {
+        self.create_at(name, kind, 1);
+    }
+    fn create_at(&mut self, name: &str, kind: Kind, seconds: i64) {
+        let record = self
+            .store
+            .create(id(name), current(kind, name), context_at(seconds))
+            .unwrap();
+        self.store.insert(Entry::Record(record)).unwrap();
+    }
+    fn perform(&mut self, name: &str, operation: Operation) {
+        let record = self
+            .store
+            .perform(&id(name), operation, None, self.tick())
+            .unwrap();
+        self.store.insert(Entry::Record(record)).unwrap();
+    }
+    fn write(&mut self, name: &str, title: &str) {
+        let record = self
+            .store
+            .write(&id(name), Some(title.into()), None, self.tick())
+            .unwrap()
+            .unwrap();
+        self.store.insert(Entry::Record(record)).unwrap();
+    }
+    fn set_parent(&mut self, name: &str, parent: Option<&str>) {
+        let record = self
+            .store
+            .set_parent(&id(name), parent.map(id), self.tick())
+            .unwrap()
+            .unwrap();
+        self.store.insert(Entry::Record(record)).unwrap();
+    }
+    fn add_dependency(&mut self, name: &str, target: &str) {
+        let record = self
+            .store
+            .add_dependency(&id(name), &id(target), self.tick())
+            .unwrap()
+            .unwrap();
+        self.store.insert(Entry::Record(record)).unwrap();
+    }
+    fn set_condition(&mut self, name: &str, command: &str) {
+        let record = self
+            .store
+            .set_condition(&id(name), Some(command.into()), self.tick())
+            .unwrap()
+            .unwrap();
+        self.store.insert(Entry::Record(record)).unwrap();
+    }
+    fn note(&mut self, name: &str, body: &str) {
+        let note = self
+            .store
+            .add_note(&id(name), body.into(), None, self.tick())
+            .unwrap();
+        self.store.insert(Entry::Note(note)).unwrap();
+    }
+    fn insert(&mut self, record: crate::lifecycle::record::Record) {
+        self.store.insert(Entry::Record(record)).unwrap();
+    }
+    /// The declaration checked and its records added, as `axon import apply` publishes them.
+    fn apply(&mut self, d: &Declaration) -> Checked {
+        let input = d.serialize(&self.view()).unwrap();
+        let checked = d.check(&input, &self.store, self.tick()).unwrap();
+        for record in &checked.records {
+            self.store.insert(Entry::Record(record.clone())).unwrap();
+        }
+        checked
+    }
+}
+fn empty_view() -> View {
+    Store::new().view().unwrap()
 }
 #[test]
 fn new_example_is_canonical_and_has_one_dependency() {
     let d = example();
-    let text = d.serialize(&snapshot()).unwrap();
+    let text = d.serialize(&empty_view()).unwrap();
     assert_eq!(parse(&text).unwrap(), d);
-    assert_eq!(parse(&text).unwrap().serialize(&snapshot()).unwrap(), text);
+    assert_eq!(
+        parse(&text).unwrap().serialize(&empty_view()).unwrap(),
+        text
+    );
     assert_eq!(d.groups.len(), 1);
     assert_eq!(d.issues.len(), 2);
     assert_eq!(d.records().map(|r| r.needs.len()).sum::<usize>(), 1);
@@ -99,7 +198,7 @@ fn arbitrary_strings_round_trip_without_normalization() {
         if !value.trim().is_empty() {
             d.groups[0].title = value.into();
         }
-        let yaml = d.serialize(&snapshot()).unwrap();
+        let yaml = d.serialize(&empty_view()).unwrap();
         assert_eq!(
             parse(&yaml).unwrap_or_else(|e| panic!("{value:?}: {e}\n{yaml}")),
             d,
@@ -109,7 +208,7 @@ fn arbitrary_strings_round_trip_without_normalization() {
     for value in ['\0', '\u{1}', '\u{1f}', '\u{7f}', '\u{9f}', '\u{a0}'] {
         let mut d = example();
         d.issues[0].description = format!("a{value}b");
-        assert_eq!(parse(&d.serialize(&snapshot()).unwrap()).unwrap(), d);
+        assert_eq!(parse(&d.serialize(&empty_view()).unwrap()).unwrap(), d);
     }
 }
 #[test]
@@ -156,7 +255,7 @@ fn canonical_scalar_styles_and_literal_chomping() {
 }
 #[test]
 fn strict_yaml_rejects_unsupported_constructs_and_wrong_types() {
-    let text = example().serialize(&snapshot()).unwrap();
+    let text = example().serialize(&empty_view()).unwrap();
     let invalid = [
         text.replace(
             "schema: axon-declaration/v1",
@@ -206,13 +305,12 @@ fn strict_yaml_rejects_unsupported_constructs_and_wrong_types() {
 }
 #[test]
 fn canonical_order_uses_creation_then_ids_then_keys_and_resolved_needs() {
-    let mut s = snapshot();
+    let mut f = Fixture::new();
     for (name, sec) in [("p-z", 1), ("p-b", 2), ("p-a", 2)] {
-        let mut c = context();
-        c.at = Utc.timestamp_opt(sec, 0).unwrap();
-        s.create(id(name), Kind::Issue, current(name), c).unwrap();
+        f.create_at(name, Kind::Issue, sec);
     }
-    let mut d = export(&s, &[id("p-a"), id("p-z"), id("p-b")]).unwrap();
+    let view = f.view();
+    let mut d = export(&f.store, &view, &[id("p-a"), id("p-z"), id("p-b")]).unwrap();
     d.issues[0].key = Some("alias".into());
     d.issues.extend(example().issues.into_iter().map(|mut r| {
         r.parent = None;
@@ -224,7 +322,7 @@ fn canonical_order_uses_creation_then_ids_then_keys_and_resolved_needs() {
         Reference::id("p-z"),
         Reference::key("alias"),
     ];
-    let yaml = d.serialize(&s).unwrap();
+    let yaml = d.serialize(&view).unwrap();
     let parsed = parse(&yaml).unwrap();
     assert_eq!(
         parsed
@@ -242,20 +340,21 @@ fn canonical_order_uses_creation_then_ids_then_keys_and_resolved_needs() {
             Reference::key("first")
         ]
     );
-    assert_eq!(parsed.serialize(&s).unwrap(), yaml);
+    assert_eq!(parsed.serialize(&view).unwrap(), yaml);
     d.issues
         .last_mut()
         .unwrap()
         .needs
         .push(Reference::id("p-a"));
-    assert!(d.serialize(&s).is_err());
+    assert!(d.serialize(&view).is_err());
 }
 #[test]
 fn fingerprint_tokens_and_visible_field_changes() {
-    let mut s = snapshot();
-    s.create(id("demo-a"), Kind::Issue, current("日本語"), context())
-        .unwrap();
-    let e = s.entity(&id("demo-a")).unwrap().clone();
+    let mut f = Fixture::new();
+    f.create("demo-a", Kind::Issue);
+    f.write("demo-a", "日本語");
+    let view = f.view();
+    let e = view.current(&id("demo-a")).unwrap().clone();
     let mut bytes = Vec::new();
     for token in [
         SCHEMA,
@@ -270,29 +369,32 @@ fn fingerprint_tokens_and_visible_field_changes() {
         bytes.extend(token.as_bytes());
     }
     bytes.extend(0u64.to_be_bytes());
-    let base = fingerprint(&e);
+    let base = fingerprint(&id("demo-a"), &e);
     assert_eq!(base, format!("blake3:{}", blake3::hash(&bytes).to_hex()));
     for change in 0..7 {
         let mut other = e.clone();
+        let mut other_id = id("demo-a");
         match change {
-            0 => other.current.title.push('!'),
-            1 => other.current.description.push('!'),
-            2 => other.current.lifecycle = Lifecycle::Completed,
-            3 => other.current.parent = Some(id("parent")),
+            0 => other.title.push('!'),
+            1 => other.description.push('!'),
+            2 => other.lifecycle = Lifecycle::Completed,
+            3 => other.parent = Some(id("parent")),
             4 => {
-                other.current.dependencies.insert(id("needs"));
+                other.needs.insert(id("needs"));
             }
             5 => other.kind = Kind::Group,
-            _ => other.id = id("other"),
+            _ => other_id = id("other"),
         }
-        assert_ne!(base, fingerprint(&other));
+        assert_ne!(base, fingerprint(&other_id, &other));
     }
-    s.set_condition(&e.id, Some("exit 1".into())).unwrap();
-    s.add_note(&e.id, "Evidence".into(), context()).unwrap();
-    assert_eq!(base, fingerprint(s.entity(&e.id).unwrap()));
-    let mut other = e;
-    other.created_at = Utc::now();
-    assert_eq!(base, fingerprint(&other));
+    // Conditions, Notes and the recorder are not visible in a declaration.
+    f.set_condition("demo-a", "exit 1");
+    f.note("demo-a", "Evidence");
+    let view = f.view();
+    assert_eq!(
+        base,
+        fingerprint(&id("demo-a"), view.current(&id("demo-a")).unwrap())
+    );
 }
 #[test]
 fn declaration_doc_example_has_identical_canonical_bytes() {
@@ -306,137 +408,266 @@ fn declaration_doc_example_has_identical_canonical_bytes() {
         .unwrap();
     let text = format!("schema: axon-declaration/v1\n{text}");
     let d = parse(&text).unwrap();
-    let mut s = snapshot();
-    s.create(id("demo-k3m7pq"), Kind::Group, current("Group"), context())
-        .unwrap();
+    let mut f = Fixture::new();
+    f.create("demo-k3m7pq", Kind::Group);
     for name in ["demo-8bxw2r", "demo-c9d4ts"] {
-        s.create(id(name), Kind::Issue, current(name), context())
-            .unwrap();
+        f.create(name, Kind::Issue);
     }
-    assert_eq!(d.serialize(&s).unwrap(), text);
+    assert_eq!(d.serialize(&f.view()).unwrap(), text);
 }
 
 #[test]
 fn prepared_plan_checks_retries_and_collisions_without_partial_matches() {
-    let original = snapshot();
+    let mut f = Fixture::new();
     let mut d = example();
-    d.prepare(&original, "demo").unwrap();
-    let yaml = d.serialize(&original).unwrap();
-    let checked = d.check(&yaml, &original, context()).unwrap();
-    assert_eq!(checked.snapshot.entities().count(), 3);
-    assert!(d.already_applied(&checked.snapshot).unwrap());
+    d.prepare(&f.store, "demo").unwrap();
+    let yaml = d.serialize(&f.view()).unwrap();
+    let checked = d.check(&yaml, &f.store, context()).unwrap();
+    assert_eq!(checked.records.len(), 3);
     assert!(
-        d.check(&yaml, &checked.snapshot, context())
-            .unwrap()
-            .already_applied
+        checked
+            .records
+            .iter()
+            .all(|r| r.kind == RecordKind::Created)
     );
-    let mut retry = d.clone();
-    retry.prepare(&checked.snapshot, "demo").unwrap();
-    assert_eq!(retry, d);
-    let mut changed = checked.snapshot.clone();
-    let first = id(d.issues[0].id.as_ref().unwrap());
-    changed
-        .write(&first, Some("Concurrent".into()), None)
+    // Records are published parents and dependencies first.
+    let order: Vec<_> = checked
+        .records
+        .iter()
+        .map(|r| r.entity.to_string())
+        .collect();
+    let position = |key: &str| {
+        order
+            .iter()
+            .position(|e| {
+                d.records()
+                    .find(|r| r.key.as_deref() == Some(key))
+                    .unwrap()
+                    .id
+                    .as_deref()
+                    == Some(e.as_str())
+            })
+            .unwrap()
+    };
+    assert!(position("plan") < position("first") && position("first") < position("second"));
+    let applied = f.apply(&d);
+    assert_eq!(applied.records.len(), 3);
+    assert_eq!(applied.after.view().unwrap().known().count(), 3);
+    let retried = d.check(&yaml, &f.store, context()).unwrap();
+    assert!(retried.already_applied && retried.records.is_empty());
+    // A conflict elsewhere in the store rejects even a completed retry.
+    let mut other = Fixture {
+        store: f.store.clone(),
+        clock: std::cell::Cell::new(7000),
+    };
+    other.create("elsewhere", Kind::Issue);
+    other.perform("elsewhere", Operation::Withdraw);
+    f.create("elsewhere", Kind::Issue);
+    f.perform("elsewhere", Operation::Cancel);
+    let mut conflicted = f.store.clone();
+    conflicted.absorb(&other.store);
+    assert!(conflicted.view().unwrap().is_conflicted(&id("elsewhere")));
+    let error = d
+        .check(&yaml, &conflicted, context())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("conflicted"), "{error}");
+    // An export that was never edited is not "already applied": nothing was applied.
+    let unedited = export(&f.store, &f.view(), &[applied.records[0].entity.clone()]).unwrap();
+    let checked = unedited
+        .check(&unedited.serialize(&f.view()).unwrap(), &f.store, context())
         .unwrap();
+    assert!(!checked.already_applied && checked.records.is_empty());
+    // An ID that only Notes refer to is taken as well.
+    let note = f
+        .store
+        .add_note(&id("demo-noted"), "orphan".into(), None, context())
+        .map(Entry::Note);
+    assert!(note.is_err(), "a Note needs a record; insert one directly");
+    let orphan = crate::lifecycle::record::Note {
+        entity: id("demo-noted"),
+        nonce: crate::lifecycle::record::Nonce::generate(),
+        at: context().at,
+        recorder: None,
+        reason: None,
+        body: "orphan".into(),
+    };
+    f.store.insert(Entry::Note(orphan)).unwrap();
+    let mut with_noted = example();
+    with_noted.groups[0].id = Some("demo-noted".into());
+    with_noted.prepare(&f.store, "demo").unwrap();
+    assert_ne!(with_noted.groups[0].id.as_deref(), Some("demo-noted"));
+    let mut retry = d.clone();
+    retry.prepare(&f.store, "demo").unwrap();
+    assert_eq!(retry, d);
+    let first = d.issues[0].id.as_ref().unwrap().clone();
+    f.write(&first, "Concurrent");
     assert!(
-        d.check(&yaml, &changed, context())
+        d.check(&yaml, &f.store, context())
             .unwrap_err()
             .to_string()
             .contains("conflict:")
     );
-    retry.prepare(&changed, "demo").unwrap();
-    assert!(retry.records().zip(d.records()).all(|(a, b)| a.id != b.id));
-    retry
-        .check(&retry.serialize(&changed).unwrap(), &changed, context())
+    // The edited Issue no longer holds the declared value, so its ID is taken by another
+    // writer as far as the declaration knows; the Issue that depends on it follows, and the
+    // Group that still holds its value keeps its ID.
+    retry.prepare(&f.store, "demo").unwrap();
+    assert_eq!(retry.groups[0].id, d.groups[0].id);
+    assert!(
+        retry
+            .issues
+            .iter()
+            .zip(&d.issues)
+            .all(|(a, b)| a.id != b.id)
+    );
+    let checked = retry
+        .check(&retry.serialize(&f.view()).unwrap(), &f.store, context())
         .unwrap();
+    assert_eq!(checked.records.len(), 2);
+    f.apply(&retry);
+    assert_eq!(f.view().known().count(), 6);
+}
+
+#[test]
+fn partial_publication_is_completed_by_a_retry_without_duplicate_records() {
+    let mut f = Fixture::new();
+    f.create("a", Kind::Issue);
+    f.create("b", Kind::Issue);
+    f.add_dependency("a", "b");
+    let mut d = export(&f.store, &f.view(), &[id("a"), id("b")]).unwrap();
+    d.issues[0].needs.clear();
+    d.issues[1].needs.push(Reference::id("a"));
+    let input = d.serialize(&f.view()).unwrap();
+    let checked = d.check(&input, &f.store, context()).unwrap();
+    assert_eq!(checked.records.len(), 2);
+    assert!(checked.records.iter().all(|r| r.kind == RecordKind::Import));
+    // Only the first record was published: the store is in between, valid but not final.
+    f.store
+        .insert(Entry::Record(checked.records[0].clone()))
+        .unwrap();
+    let retried = d.check(&input, &f.store, context()).unwrap();
+    assert!(!retried.already_applied);
+    assert_eq!(retried.records.len(), 1);
+    assert_eq!(retried.records[0].entity, checked.records[1].entity);
+    f.store
+        .insert(Entry::Record(retried.records[0].clone()))
+        .unwrap();
+    let done = d.check(&input, &f.store, context()).unwrap();
+    assert!(done.already_applied && done.records.is_empty());
+    assert!(f.view().is_valid());
+    assert_eq!(f.store.len(), 5);
+    // The same file with a fresh context adds no record either.
+    let again = d.check(&input, &f.store, context_at(9000)).unwrap();
+    assert!(again.already_applied && again.records.is_empty());
+    // A violation another writer adds afterwards does not stop the retry the interrupted
+    // apply asked for: the declaration adds nothing to the store, so it is still applied.
+    f.create("p", Kind::Group);
+    f.create("q", Kind::Group);
+    let mut other = Fixture {
+        store: f.store.clone(),
+        clock: std::cell::Cell::new(7000),
+    };
+    other.set_parent("p", Some("q"));
+    f.set_parent("q", Some("p"));
+    f.store.absorb(&other.store);
+    assert!(!f.view().violations().is_empty());
+    let again = d.check(&input, &f.store, context_at(9500)).unwrap();
+    assert!(again.already_applied && again.records.is_empty());
+    d.clone().prepare(&f.store, "demo").unwrap();
 }
 
 #[test]
 fn check_core_constraints_and_references() {
-    use crate::lifecycle::Operation;
-    let mut s = snapshot();
+    let mut f = Fixture::new();
     for (name, kind) in [
         ("g", Kind::Group),
         ("h", Kind::Group),
         ("a", Kind::Issue),
         ("b", Kind::Issue),
     ] {
-        s.create(id(name), kind, current(name), context()).unwrap();
+        f.create(name, kind);
     }
-    let reject = |d: &Declaration, snapshot: &Snapshot, field: &str| {
-        let bytes = d.serialize(snapshot).unwrap();
+    let reject = |d: &Declaration, f: &Fixture, field: &str| {
+        let bytes = d.serialize(&f.view()).unwrap();
         let error = d
-            .check(&bytes, snapshot, context())
+            .check(&bytes, &f.store, context())
             .unwrap_err()
             .to_string();
         assert!(error.contains(field), "{field}: {error}");
     };
-    let mut d = export(&s, &[id("a"), id("b")]).unwrap();
+    let mut d = export(&f.store, &f.view(), &[id("a"), id("b")]).unwrap();
     d.issues[0].needs.push(Reference::id("b"));
     d.issues[1].needs.push(Reference::id("a"));
-    reject(&d, &s, "core rejection: b: needs");
-    let mut d = export(&s, &[id("g"), id("h")]).unwrap();
+    reject(&d, &f, "core rejection: b: needs");
+    let mut d = export(&f.store, &f.view(), &[id("g"), id("h")]).unwrap();
     d.groups[0].parent = Some(Reference::id("h"));
     d.groups[1].parent = Some(Reference::id("g"));
-    reject(&d, &s, "parent");
-    s.perform(&id("a"), Operation::Start, None, context())
-        .unwrap();
-    let mut d = export(&s, &[id("a")]).unwrap();
+    reject(&d, &f, "parent");
+    f.perform("a", Operation::Start);
+    // InProgress work moves only under adopted Groups.
+    f.perform("g", Operation::Withdraw);
+    let mut d = export(&f.store, &f.view(), &[id("a")]).unwrap();
     d.issues[0].parent = Some(Reference::id("g"));
-    d.refresh_references(&s).unwrap();
-    reject(&d, &s, "parent");
-    s.perform(&id("a"), Operation::Complete, None, context())
-        .unwrap();
+    d.refresh_references(&f.view()).unwrap();
+    reject(&d, &f, "parent");
+    f.perform("g", Operation::Accept);
+    f.perform("a", Operation::Complete);
     for field in ["title", "description", "needs"] {
-        let mut d = export(&s, &[id("a")]).unwrap();
+        let mut d = export(&f.store, &f.view(), &[id("a")]).unwrap();
         match field {
             "title" => d.issues[0].title = "Changed".into(),
             "description" => d.issues[0].description = "Changed".into(),
             _ => d.issues[0].needs.push(Reference::id("b")),
         }
-        d.refresh_references(&s).unwrap();
-        reject(&d, &s, field);
+        d.refresh_references(&f.view()).unwrap();
+        reject(&d, &f, field);
     }
-    s.set_parent(&id("a"), Some(id("g"))).unwrap();
-    s.perform(&id("g"), Operation::Start, None, context())
+    // A terminal Entity exported and applied as it is passes: its text is not edited.
+    let d = export(&f.store, &f.view(), &[id("a")]).unwrap();
+    let checked = d
+        .check(&d.serialize(&f.view()).unwrap(), &f.store, context())
         .unwrap();
-    s.perform(&id("g"), Operation::Complete, None, context())
-        .unwrap();
-    let mut d = export(&s, &[id("a")]).unwrap();
+    assert!(checked.records.is_empty() && !checked.already_applied);
+    f.set_parent("a", Some("g"));
+    f.perform("g", Operation::Complete);
+    let mut d = export(&f.store, &f.view(), &[id("a")]).unwrap();
     d.issues[0].parent = None;
-    d.refresh_references(&s).unwrap();
-    reject(&d, &s, "parent");
-    let mut d = export(&s, &[id("b")]).unwrap();
+    d.refresh_references(&f.view()).unwrap();
+    reject(&d, &f, "parent");
+    let mut d = export(&f.store, &f.view(), &[id("b")]).unwrap();
     d.issues[0].parent = Some(Reference::id("g"));
-    d.refresh_references(&s).unwrap();
-    reject(&d, &s, "parent");
-    let mut d = export(&s, &[id("b")]).unwrap();
+    d.refresh_references(&f.view()).unwrap();
+    reject(&d, &f, "parent");
+    let mut d = export(&f.store, &f.view(), &[id("b")]).unwrap();
     d.issues[0].needs.push(Reference::id("a"));
-    d.refresh_references(&s).unwrap();
+    d.refresh_references(&f.view()).unwrap();
     d.references[0].title = "Stale title".into();
     d.references[0].lifecycle = "undecided".into();
-    d.check(&d.serialize(&s).unwrap(), &s, context()).unwrap();
+    d.check(&d.serialize(&f.view()).unwrap(), &f.store, context())
+        .unwrap();
 }
 
 #[test]
 fn prepare_mixed_records_and_check_replace_edges_before_adding() {
-    let mut s = snapshot();
+    let mut f = Fixture::new();
     for name in ["a", "b"] {
-        s.create(id(name), Kind::Issue, current(name), context())
-            .unwrap();
+        f.create(name, Kind::Issue);
     }
-    s.add_dependency(&id("a"), &id("b")).unwrap();
-    let mut d = export(&s, &[id("a"), id("b")]).unwrap();
+    f.add_dependency("a", "b");
+    let mut d = export(&f.store, &f.view(), &[id("a"), id("b")]).unwrap();
     d.issues[0].needs.clear();
     d.issues[1].needs.push(Reference::id("a"));
-    let checked = d.check(&d.serialize(&s).unwrap(), &s, context()).unwrap();
+    let checked = d
+        .check(&d.serialize(&f.view()).unwrap(), &f.store, context())
+        .unwrap();
     assert!(
         checked
-            .snapshot
-            .entity(&id("b"))
+            .after
+            .view()
             .unwrap()
-            .current
-            .dependencies
+            .current(&id("b"))
+            .unwrap()
+            .needs
             .contains(&id("a"))
     );
     let new = example().issues.remove(0);
@@ -447,7 +678,269 @@ fn prepare_mixed_records_and_check_replace_edges_before_adding() {
     new.needs.clear();
     d.issues.push(new);
     d.issues[0].needs.push(Reference::key("first"));
-    d.prepare(&s, "demo").unwrap();
+    d.prepare(&f.store, "demo").unwrap();
     assert!(d.issues[2].id.is_some());
-    d.check(&d.serialize(&s).unwrap(), &s, context()).unwrap();
+    let checked = d
+        .check(&d.serialize(&f.view()).unwrap(), &f.store, context())
+        .unwrap();
+    // The new Issue is published before the existing one that depends on it.
+    assert_eq!(checked.records[0].kind, RecordKind::Created);
+    assert!(
+        checked.records[1..]
+            .iter()
+            .all(|r| r.kind == RecordKind::Import)
+    );
+}
+
+#[test]
+fn conflicted_and_violating_stores_reject_declarations_except_a_completing_retry() {
+    let mut f = Fixture::new();
+    f.create("a", Kind::Issue);
+    f.create("b", Kind::Issue);
+    let base = f.store.clone();
+    // A conflict: the same Issue started on two sides.
+    let mut other = Fixture {
+        store: base.clone(),
+        clock: std::cell::Cell::new(5000),
+    };
+    other.perform("a", Operation::Start);
+    f.perform("a", Operation::Start);
+    f.store.absorb(&other.store);
+    assert!(f.view().is_conflicted(&id("a")));
+    assert!(
+        export(&f.store, &f.view(), &[id("a")])
+            .unwrap_err()
+            .to_string()
+            .contains("conflicted")
+    );
+    assert!(export(&f.store, &f.view(), &[id("b")]).is_ok());
+    let mut d = example();
+    assert!(
+        d.prepare(&f.store, "demo")
+            .unwrap_err()
+            .to_string()
+            .contains("conflicted")
+    );
+    // A violation: a Completed dependent whose dependency was reopened elsewhere.
+    let mut f = Fixture::new();
+    f.create("dep", Kind::Issue);
+    f.create("user", Kind::Issue);
+    f.add_dependency("user", "dep");
+    f.perform("dep", Operation::Start);
+    f.perform("dep", Operation::Complete);
+    let mut other = Fixture {
+        store: f.store.clone(),
+        clock: std::cell::Cell::new(5000),
+    };
+    other.perform("dep", Operation::Reopen);
+    f.perform("user", Operation::Start);
+    f.perform("user", Operation::Complete);
+    f.store.absorb(&other.store);
+    let view = f.view();
+    assert!(view.conflicted().is_empty() && !view.violations().is_empty());
+    // Export still works; a fresh plan is rejected until the violation is repaired.
+    let exported = export(&f.store, &view, &[id("user")]).unwrap();
+    assert_eq!(exported.issues.len(), 1);
+    let error = d.prepare(&f.store, "demo").unwrap_err().to_string();
+    assert!(error.contains("structural violations"), "{error}");
+    let mut prepared = example();
+    let mut clean = Fixture::new();
+    prepared.prepare(&clean.store, "demo").unwrap();
+    let input = prepared.serialize(&clean.view()).unwrap();
+    let error = prepared
+        .check(&input, &f.store, context())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("structural violations"), "{error}");
+    // A retry whose remaining records remove the violation is allowed.
+    let mut f = Fixture::new();
+    f.create("x", Kind::Issue);
+    f.create("y", Kind::Issue);
+    f.add_dependency("x", "y");
+    let mut swap = export(&f.store, &f.view(), &[id("x"), id("y")]).unwrap();
+    swap.issues[0].needs.clear();
+    swap.issues[1].needs.push(Reference::id("x"));
+    let input = swap.serialize(&f.view()).unwrap();
+    let checked = swap.check(&input, &f.store, context()).unwrap();
+    // Publish the second record first: a completion cycle until the first one lands.
+    f.store
+        .insert(Entry::Record(checked.records[1].clone()))
+        .unwrap();
+    assert!(!f.view().violations().is_empty());
+    let retried = swap.check(&input, &f.store, context()).unwrap();
+    assert_eq!(retried.records.len(), 1);
+    let mut again = swap.clone();
+    again.prepare(&f.store, "demo").unwrap();
+    f.store
+        .insert(Entry::Record(retried.records[0].clone()))
+        .unwrap();
+    assert!(f.view().is_valid());
+    let _ = clean.apply(&prepared);
+    // A retry whose remaining records leave an unrelated violation in place is rejected.
+    let mut f = Fixture::new();
+    f.create("x", Kind::Issue);
+    f.create("y", Kind::Issue);
+    f.add_dependency("x", "y");
+    f.create("a", Kind::Group);
+    f.create("b", Kind::Group);
+    let mut swap = export(&f.store, &f.view(), &[id("x"), id("y")]).unwrap();
+    swap.issues[0].needs.clear();
+    swap.issues[1].needs.push(Reference::id("x"));
+    let input = swap.serialize(&f.view()).unwrap();
+    let checked = swap.check(&input, &f.store, context()).unwrap();
+    f.store
+        .insert(Entry::Record(checked.records[1].clone()))
+        .unwrap();
+    let mut other = Fixture {
+        store: f.store.clone(),
+        clock: std::cell::Cell::new(6000),
+    };
+    other.set_parent("a", Some("b"));
+    f.set_parent("b", Some("a"));
+    f.store.absorb(&other.store);
+    let before = f.store.clone();
+    for error in [
+        swap.check(&input, &f.store, context()).unwrap_err(),
+        swap.clone().prepare(&f.store, "demo").unwrap_err(),
+    ] {
+        let error = error.to_string();
+        assert!(error.contains("structural violations"), "{error}");
+    }
+    assert_eq!(f.store, before);
+}
+
+#[test]
+fn prepare_keeps_the_ids_an_interrupted_apply_published_and_replaces_only_taken_ones() {
+    let mut f = Fixture::new();
+    let mut d = example();
+    d.prepare(&f.store, "demo").unwrap();
+    let input = d.serialize(&f.view()).unwrap();
+    let checked = d.check(&input, &f.store, context()).unwrap();
+    // Only the Group was published before the process died.
+    f.insert(checked.records[0].clone());
+    let mut retry = d.clone();
+    retry.prepare(&f.store, "demo").unwrap();
+    assert_eq!(
+        retry, d,
+        "a published Entity keeps its ID on the next prepare"
+    );
+    let outcome = f.apply(&retry);
+    assert_eq!(outcome.records.len(), 2);
+    assert_eq!(f.view().known().count(), 3);
+    // An ID another writer took for a different Entity is replaced; key references follow.
+    let mut fresh = example();
+    fresh.prepare(&f.store, "demo").unwrap();
+    let taken = fresh.groups[0].id.clone().unwrap();
+    f.create(&taken, Kind::Issue);
+    let mut prepared = fresh.clone();
+    prepared.prepare(&f.store, "demo").unwrap();
+    assert_ne!(prepared.groups[0].id, fresh.groups[0].id);
+    // The Issues' IDs are not in the store and are kept.
+    assert!(
+        prepared
+            .issues
+            .iter()
+            .zip(&fresh.issues)
+            .all(|(a, b)| a.id == b.id)
+    );
+    assert!(
+        prepared
+            .issues
+            .iter()
+            .all(|r| r.parent == Some(Reference::key("plan")))
+    );
+    prepared
+        .check(&prepared.serialize(&f.view()).unwrap(), &f.store, context())
+        .unwrap();
+}
+
+#[test]
+fn export_tolerates_violations_and_missing_references_but_not_a_conflicted_child() {
+    // A child whose parent's registration is missing (cherry-picked alone) exports; the
+    // missing parent is not among the references, so a later check names it as missing.
+    let mut f = Fixture::new();
+    f.create("g", Kind::Group);
+    let record = f
+        .store
+        .create(
+            id("child"),
+            Current {
+                parent: Some(id("g")),
+                ..current(Kind::Issue, "child")
+            },
+            context(),
+        )
+        .unwrap();
+    let mut alone = Fixture::new();
+    alone.insert(record);
+    let view = alone.view();
+    assert!(!view.violations().is_empty());
+    let mut d = export(&alone.store, &view, &[id("child")]).unwrap();
+    assert_eq!(d.issues.len(), 1);
+    assert!(d.references.is_empty());
+    let error = d
+        .clone()
+        .prepare(&alone.store, "demo")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("does not exist"), "{error}");
+    // Unchanged or changed, the declaration is refused: the missing parent is named as a
+    // missing reference before the store's violation, which no application would remove.
+    let input = d.serialize(&view).unwrap();
+    let error = d
+        .check(&input, &alone.store, context())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("does not exist"), "{error}");
+    d.issues[0].title = "renamed".into();
+    let input = d.serialize(&view).unwrap();
+    let error = d
+        .check(&input, &alone.store, context())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("does not exist"), "{error}");
+    // A conflicted child of a selected Group is rejected, whichever head names the parent.
+    let mut f = Fixture::new();
+    f.create("g", Kind::Group);
+    f.create("c", Kind::Issue);
+    f.set_parent("c", Some("g"));
+    let mut other = Fixture {
+        store: f.store.clone(),
+        clock: std::cell::Cell::new(5000),
+    };
+    other.set_parent("c", None);
+    f.perform("c", Operation::Start);
+    f.store.absorb(&other.store);
+    let view = f.view();
+    assert!(view.is_conflicted(&id("c")));
+    let error = export(&f.store, &view, &[id("g")]).unwrap_err().to_string();
+    assert!(error.contains("conflicted child"), "{error}");
+}
+
+#[test]
+fn a_fresh_declaration_that_would_repair_a_violation_is_still_rejected() {
+    // Two sides each move a Group under the other; the merge is a containment cycle.
+    let mut f = Fixture::new();
+    f.create("a", Kind::Group);
+    f.create("b", Kind::Group);
+    let mut other = Fixture {
+        store: f.store.clone(),
+        clock: std::cell::Cell::new(5000),
+    };
+    other.set_parent("a", Some("b"));
+    f.set_parent("b", Some("a"));
+    f.store.absorb(&other.store);
+    let view = f.view();
+    assert!(view.conflicted().is_empty() && !view.violations().is_empty());
+    let mut d = export(&f.store, &view, &[id("a"), id("b")]).unwrap();
+    d.groups[0].parent = None;
+    let input = d.serialize(&view).unwrap();
+    // Every Entity matches its base, so this is not the retry of an interrupted apply.
+    let error = d
+        .check(&input, &f.store, context())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("structural violations"), "{error}");
+    let error = d.prepare(&f.store, "demo").unwrap_err().to_string();
+    assert!(error.contains("structural violations"), "{error}");
 }

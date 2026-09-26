@@ -1,5 +1,6 @@
 use crate::declaration::*;
-use crate::lifecycle::{Context, Current, EntityId, Kind, Lifecycle};
+use crate::lifecycle::EntityId;
+use crate::lifecycle::record::{Context, Current, Entry, Kind, Lifecycle, Operation, Store};
 use chrono::{TimeZone, Utc};
 use std::collections::BTreeSet;
 
@@ -12,14 +13,66 @@ fn context() -> Context {
         recorder: None,
     }
 }
-fn current(title: &str) -> Current {
+fn current(kind: Kind, title: &str) -> Current {
     Current {
+        kind,
+        lifecycle: Lifecycle::NotStarted,
+        owner: None,
         title: title.into(),
         description: String::new(),
-        lifecycle: Lifecycle::NotStarted,
         condition: None,
         parent: None,
-        dependencies: BTreeSet::new(),
+        needs: BTreeSet::new(),
+    }
+}
+/// The records of one scenario, built in memory and published as one batch per fixture.
+struct Scenario {
+    store: Store,
+    clock: std::cell::Cell<i64>,
+}
+impl Scenario {
+    fn new() -> Self {
+        Self {
+            store: Store::new(),
+            clock: std::cell::Cell::new(2000),
+        }
+    }
+    fn tick(&self) -> Context {
+        self.clock.set(self.clock.get() + 1);
+        Context {
+            at: Utc.timestamp_opt(self.clock.get(), 0).unwrap(),
+            recorder: None,
+        }
+    }
+    fn create(&mut self, name: &str, kind: Kind) {
+        let record = self
+            .store
+            .create(id(name), current(kind, name), self.tick())
+            .unwrap();
+        self.store.insert(Entry::Record(record)).unwrap();
+    }
+    fn perform(&mut self, name: &str, operation: Operation) {
+        let record = self
+            .store
+            .perform(&id(name), operation, None, self.tick())
+            .unwrap();
+        self.store.insert(Entry::Record(record)).unwrap();
+    }
+    fn set_parent(&mut self, name: &str, parent: &str) {
+        let record = self
+            .store
+            .set_parent(&id(name), Some(id(parent)), self.tick())
+            .unwrap()
+            .unwrap();
+        self.store.insert(Entry::Record(record)).unwrap();
+    }
+    fn add_dependency(&mut self, name: &str, target: &str) {
+        let record = self
+            .store
+            .add_dependency(&id(name), &id(target), self.tick())
+            .unwrap()
+            .unwrap();
+        self.store.insert(Entry::Record(record)).unwrap();
     }
 }
 
@@ -52,7 +105,6 @@ fn reorder_records(text: &str, order: usize) -> String {
 
 #[test]
 fn relationship_changes_are_order_independent() {
-    use crate::lifecycle::Operation;
     for case in [
         "cancelled-parent",
         "cancelled-dependencies",
@@ -60,13 +112,7 @@ fn relationship_changes_are_order_independent() {
         "invert-tree",
         "active-subtree",
     ] {
-        let root =
-            std::env::temp_dir().join(format!("axon-relations-{:032x}", rand::random::<u128>()));
-        std::fs::create_dir(&root).unwrap();
-        let location = crate::location::Location::discover(&root, true).unwrap();
-        location.init("demo").unwrap();
-        let mut store = location.open().unwrap();
-        let mut before = store.read().unwrap().1;
+        let mut scenario = Scenario::new();
         for (name, kind) in [
             ("g", Kind::Group),
             ("h", Kind::Group),
@@ -74,36 +120,26 @@ fn relationship_changes_are_order_independent() {
             ("a", Kind::Issue),
             ("b", Kind::Issue),
         ] {
-            before
-                .create(id(name), kind, current(name), context())
-                .unwrap();
+            scenario.create(name, kind);
         }
         match case {
-            "cancelled-parent" => {
-                before
-                    .perform(&id("g"), Operation::Cancel, None, context())
-                    .unwrap();
-            }
+            "cancelled-parent" => scenario.perform("g", Operation::Cancel),
             "cancelled-dependencies" => {
-                before.add_dependency(&id("a"), &id("b")).unwrap();
-                before
-                    .perform(&id("a"), Operation::Cancel, None, context())
-                    .unwrap();
+                scenario.add_dependency("a", "b");
+                scenario.perform("a", Operation::Cancel);
             }
-            "invert-tree" => before.set_parent(&id("h"), Some(id("g"))).unwrap(),
+            "invert-tree" => scenario.set_parent("h", "g"),
             "active-subtree" => {
-                before.set_parent(&id("j"), Some(id("g"))).unwrap();
-                before.set_parent(&id("a"), Some(id("j"))).unwrap();
-                for name in ["g", "h", "j", "a"] {
-                    before
-                        .perform(&id(name), Operation::Start, None, context())
-                        .unwrap();
-                }
+                scenario.set_parent("j", "g");
+                scenario.set_parent("a", "j");
+                scenario.perform("a", Operation::Start);
             }
             _ => {}
         }
+        let before = scenario.store;
+        let before_view = before.view().unwrap();
         let selectors = [id("g"), id("h"), id("j"), id("a"), id("b")];
-        let mut d = export(&before, &selectors).unwrap();
+        let mut d = export(&before, &before_view, &selectors).unwrap();
         match case {
             "cancelled-parent" => d.issues[0].parent = Some(Reference::id("g")),
             "cancelled-dependencies" => d.issues[0].needs = vec![Reference::id("h")],
@@ -119,15 +155,19 @@ fn relationship_changes_are_order_independent() {
             _ => unreachable!(),
         }
         d.prepare(&before, "demo").unwrap();
-        let text = d.serialize(&before).unwrap();
+        let text = d.serialize(&before_view).unwrap();
         let mut canonical_result = None;
         for order in 0..3 {
+            let root = std::env::temp_dir()
+                .join(format!("axon-relations-{:032x}", rand::random::<u128>()));
+            std::fs::create_dir(&root).unwrap();
+            let location = crate::location::Location::discover(&root, true).unwrap();
+            location.init("demo").unwrap();
+            let mut store = location.open().unwrap();
             store
-                .update(|_, snapshot| {
-                    *snapshot = before.clone();
-                    Ok(())
-                })
+                .update(|_, _, _| Ok((before.entries().map(|(_, e)| e.clone()).collect(), ())))
                 .unwrap();
+            assert_eq!(store.read().unwrap().1, before);
             let input = reorder_records(&text, order);
             let mut parsed = parse(&input).unwrap();
             if order == 1 {
@@ -137,7 +177,7 @@ fn relationship_changes_are_order_independent() {
             let mut candidate = before.clone();
             let operations = parsed.apply_operations(&mut candidate, context());
             parsed.prepare(&before, "demo").unwrap();
-            let input = parsed.serialize(&before).unwrap();
+            let input = parsed.serialize(&before_view).unwrap();
             let path = root.join("plan.yaml");
             std::fs::write(&path, &input).unwrap();
             let result = crate::declaration_file::apply(&mut store, &path, context());
@@ -148,18 +188,22 @@ fn relationship_changes_are_order_independent() {
                 assert!(error.contains("parent"), "{error}");
                 assert_eq!(after, before);
                 assert_eq!(std::fs::read_to_string(&path).unwrap(), input);
+                drop(store);
+                std::fs::remove_dir_all(root).unwrap();
                 continue;
             }
             operations.unwrap();
             assert!(result.unwrap().changed, "{case}");
-            for entity in candidate.entities() {
-                assert_eq!(after.entity(&entity.id).unwrap().current, entity.current);
+            let candidate_view = candidate.view().unwrap();
+            let after_view = after.view().unwrap();
+            for (entity, settled) in candidate_view.settled() {
+                assert_eq!(after_view.current(entity).unwrap(), &settled.current);
             }
-            let state = |name: &str| &after.entity(&id(name)).unwrap().current;
+            let state = |name: &str| after_view.current(&id(name)).unwrap();
             match case {
                 "cancelled-dependencies" => {
                     assert_eq!(state("a").lifecycle, Lifecycle::Cancelled);
-                    assert_eq!(state("a").dependencies, BTreeSet::from([id("h")]));
+                    assert_eq!(state("a").needs, BTreeSet::from([id("h")]));
                 }
                 "new-parent" => assert_eq!(
                     state("a").parent,
@@ -172,9 +216,14 @@ fn relationship_changes_are_order_independent() {
                 "active-subtree" => {
                     assert_eq!(state("j").parent, Some(id("h")));
                     assert_eq!(state("a").parent, Some(id("j")));
-                    for name in ["g", "h", "j", "a"] {
-                        assert_eq!(state(name).lifecycle, Lifecycle::InProgress);
+                    assert_eq!(state("a").lifecycle, Lifecycle::InProgress);
+                    for name in ["g", "h", "j"] {
+                        assert_eq!(state(name).lifecycle, Lifecycle::NotStarted);
                     }
+                    assert_eq!(
+                        after_view.effective_lifecycle(&id("h")),
+                        Some(Lifecycle::InProgress)
+                    );
                 }
                 _ => unreachable!(),
             }
@@ -190,8 +239,8 @@ fn relationship_changes_are_order_independent() {
                     .changed
             );
             assert_eq!(store.read().unwrap().1, after);
+            drop(store);
+            std::fs::remove_dir_all(root).unwrap();
         }
-        drop(store);
-        std::fs::remove_dir_all(root).unwrap();
     }
 }

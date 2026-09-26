@@ -41,13 +41,17 @@ fn run(command: Command) -> Result<Output> {
         Command::Completion { shell } => setup::completion(shell),
         Command::Init { prefix } => setup::init(prefix),
         Command::Storage { command } => setup::storage(command),
-        Command::Merge { command } => setup::merge(command),
         Command::Import { command } => write::import(command),
         Command::Export { ids } => read::export(ids),
         Command::List(options) => read::list(options),
         Command::Proposals(options) => read::proposals(options),
         Command::Tasks(options) => read::tasks(options),
-        Command::Show { id, details } => read::show(id, details),
+        Command::Show {
+            id,
+            details,
+            skip_conditions,
+            conditions,
+        } => read::show(id, details, skip_conditions, conditions),
         Command::Log {
             id,
             recorder_details,
@@ -85,6 +89,13 @@ fn run(command: Command) -> Result<Output> {
         Command::Complete(args) => write::transition(args, Operation::Complete),
         Command::Cancel(args) => write::transition(args, Operation::Cancel),
         Command::Reconsider(args) => write::transition(args, Operation::Reconsider),
+        Command::Reopen(args) => write::transition(args, Operation::Reopen),
+        Command::Convert { id, kind } => write::convert(id, kind.kind()),
+        Command::Resolve { id, head, reason } => match (id, head) {
+            (Some(id), Some(head)) => write::resolve_conflict(id, head, reason),
+            (id, None) => read::conflicts(id),
+            (None, Some(_)) => unreachable!("clap requires ID with --head"),
+        },
     }
 }
 

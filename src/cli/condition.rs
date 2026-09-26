@@ -1,5 +1,5 @@
 use super::display;
-use axon::lifecycle::Entity;
+use axon::lifecycle::EntityId;
 use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
@@ -53,11 +53,11 @@ impl Evaluation {
         }
     }
 
-    pub fn run_command(&self, entity: &Entity, script: &str) -> Result<bool> {
+    pub fn run_command(&self, entity: &EntityId, script: &str) -> Result<bool> {
         let interrupt_guard = InterruptGuard::install().map_err(|error| {
             EvaluationError(format!(
                 "{}: Command({}) could not install Ctrl-C handling: {error}",
-                entity.id,
+                entity,
                 display::human_text(script)
             ))
         })?;
@@ -72,7 +72,7 @@ impl Evaluation {
         let child = command.spawn().map_err(|error| {
             EvaluationError(format!(
                 "{}: Command({}) could not start in {}: {error}",
-                entity.id,
+                entity,
                 display::human_text(script),
                 display::human_text(self.root.display())
             ))
@@ -95,7 +95,7 @@ impl Evaluation {
             };
             EvaluationError(format!(
                 "{}: Command({}) evaluation failed in {}: {detail}\nstdout:\n{}\nstderr:\n{}",
-                entity.id,
+                entity,
                 display::human_text(script),
                 display::human_text(self.root.display()),
                 failure.stdout.render(),
@@ -109,7 +109,7 @@ impl Evaluation {
             }
             _ => Err(EvaluationError(format!(
                 "{}: Command({}) failed in {}: {}\nstdout:\n{}\nstderr:\n{}",
-                entity.id,
+                entity,
                 display::human_text(script),
                 display::human_text(self.root.display()),
                 outcome.status,
@@ -121,7 +121,7 @@ impl Evaluation {
 
     fn write_trace(
         &self,
-        entity: &Entity,
+        entity: &EntityId,
         code: i32,
         stdout: &CapturedStream,
         stderr: &CapturedStream,
@@ -136,12 +136,12 @@ impl Evaluation {
         };
         let mut block = format!(
             "Condition trace: {}\ncwd: {}\nresult: {result} (exit {code})\n",
-            entity.id,
+            entity,
             display::human_text(self.root.display())
         );
         append_trace_stream(&mut block, "stdout", stdout);
         append_trace_stream(&mut block, "stderr", stderr);
-        block.push_str(&format!("End condition trace: {}\n", entity.id));
+        block.push_str(&format!("End condition trace: {entity}\n"));
 
         let mut writer = writer.borrow_mut();
         writer
@@ -149,8 +149,7 @@ impl Evaluation {
             .and_then(|()| writer.flush())
             .map_err(|error| {
                 EvaluationError(format!(
-                    "{}: Command condition trace could not be written: {error}",
-                    entity.id
+                    "{entity}: Command condition trace could not be written: {error}"
                 ))
             })
     }
@@ -755,8 +754,6 @@ fn display_duration(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axon::lifecycle::*;
-    use std::collections::BTreeSet;
 
     struct FlushFailure;
     impl Write for FlushFailure {
@@ -770,27 +767,8 @@ mod tests {
 
     #[test]
     fn real_process_spawn_and_trace_flush_failures_are_errors() {
-        let mut snapshot = Snapshot::new(StoreId::generate());
-        let id = "condition".to_string().try_into().unwrap();
-        snapshot
-            .create(
-                id,
-                Kind::Issue,
-                Current {
-                    title: "condition".into(),
-                    description: String::new(),
-                    lifecycle: Lifecycle::NotStarted,
-                    condition: None,
-                    parent: None,
-                    dependencies: BTreeSet::new(),
-                },
-                Context {
-                    at: chrono::Utc::now(),
-                    recorder: None,
-                },
-            )
-            .unwrap();
-        let entity = snapshot.entities().next().unwrap();
+        let entity: EntityId = "condition".to_string().try_into().unwrap();
+        let entity = &entity;
         let missing =
             std::env::temp_dir().join(format!("axon-missing-{:032x}", rand::random::<u128>()));
         let error = Evaluation::with_timeout(missing.clone(), Duration::from_secs(1))

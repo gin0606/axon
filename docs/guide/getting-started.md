@@ -30,11 +30,11 @@ cd "$AXON_TRIAL_DIR"
 "$AXON_BIN" note list ID --recorder-details
 ```
 
-初期化は新規作成専用です。`axon init` は管理rootに正本 `.axon/state.jsonl` を作ります。Gitに関するfileは作りません。保存形式は一つ、配置や形式を選ぶoptionはありません。
+初期化は新規作成専用です。`axon init` は管理rootに記録のdirectory `.axon/records/`、header `.axon/header.json`、lockと一時fileだけを除外する `.axon/.gitignore`、Gitの改行変換を止める `* -text` の1行だけの `.axon/.gitattributes` を作ります。repository rootのfileとGit configには触れません。保存形式は一つ、配置や形式を選ぶoptionはありません。
 
 ## Git repositoryで使う
 
-Gitが保存先をどう扱うかにAxonは関与しません。Git内での使い方は二つあり、どちらになるかは利用者のGitの運用だけで決まります。
+Gitが保存先を無視するか追跡するかにAxonは関与しません。Git内での使い方は二つあり、どちらになるかは利用者のGitの運用だけで決まります。
 
 ```sh
 AXON_GIT_TRIAL_DIR="$(mktemp -d)"
@@ -44,18 +44,20 @@ git init
 "$AXON_BIN" capture --accept --title 'Gitのrepositoryで管理する仕事' -m '目的と完了条件'
 ```
 
-作った直後の正本はGitからuntrackedに見え、`git add -A` すればcommitされます。二つの運用のどちらを使うかを決め、一つのrepositoryでは混ぜないでください。
+作った直後のheader、`.axon/.gitignore`、`.axon/.gitattributes`（記録を作ればその記録も）はGitからuntrackedに見え、`git add -A` すればcommitされます。二つの運用のどちらを使うかを決め、一つのrepositoryでは混ぜないでください。
 
-無視する運用は、`.git/info/exclude` やglobalのignore fileに `.axon/` の行を書いて、利用者がGitに無視させて選びます。linked worktreeには `.axon` が現れないため、全worktreeがmain worktreeの保存先を共有します。worktreeごとに `axon init` を繰り返す必要はありません。無視した正本はGitのcheckout・mergeの上書きから保護されなくなり、正本を追跡しているcommitを取り込むと警告なしに置き換わります。
+無視する運用は、`.git/info/exclude` やglobalのignore fileに `.axon/` の行を書いて、利用者がGitに無視させて選びます。linked worktreeには `.axon` が現れないため、全worktreeがmain worktreeの保存先を共有します。worktreeごとに `axon init` を繰り返す必要はありません。無視した保存先はGitのcheckout・mergeの上書きから保護されなくなり、`.axon/` を追跡しているcommitを取り込むと警告なしに置き換わります。
 
-追跡する運用は、`axon init` が表示する手順を実行して選びます。正本だけを追跡対象にする `.axon/.gitignore` を作り、`.gitattributes` にmerge driverを宣言し、driverを登録して、stage・commitします。各worktreeが自分の正本を持ち、branchごとに分岐した計画と記録をGitで取り込めます。`axon init` は手順を表示するだけで、`.gitignore`、`.gitattributes`、Git configを作成も編集もしません。
+追跡する運用は、`git add .axon` で記録、header、`.axon/.gitignore`、`.axon/.gitattributes` をstageしてcommitして選びます。`axon init` が作った `.axon/.gitignore` がlockと一時fileを除き、`.axon/.gitattributes` が記録fileをcheckout時の改行変換から外すので、ほかにGitの設定は要りません（`.axon/.gitattributes` のない既存の保存先に足す手順は [保存先とworktree](storage.md#改行変換と-axongitattributes)）。各worktreeが自分の保存先を持ち、branchごとに分岐した計画と記録をGitで取り込めます。両側が記録を追加したbranchは、記録が別fileなのでmergeの属性やGitの設定なしでそのままmergeできます（契約の範囲はローカルのGit操作で、GitHub上のmergeも確認済み。[保存先とworktree](storage.md)）。統合後は `axon storage check` で衝突・違反・記録の欠けを確認し、`axon resolve` と通常操作で直します。Axonの状態の取り消しはlifecycle操作（`axon reopen` など）で行い、Gitのrevertに頼らないでください。`axon init` は `.axon/` の外については手順を表示するだけで、repository rootの `.gitignore`、`.gitattributes`、Git configを作成も編集もしません。
 
-通常操作はどちらの運用でも同じです。driverの登録・追跡・競合解決は [file保存とGit統合](../development/lifecycle-file.md#git-driver)、保存先の選ばれ方は [保存先とworktree](storage.md) を参照してください。
+通常操作はどちらの運用でも同じです。統合の検査と解決は [file保存とGit統合](../development/lifecycle-file.md#git-統合と検査)、保存先の選ばれ方は [保存先とworktree](storage.md) を参照してください。
 
 ## Agent向けskill
 
 [`axon-kit`](../../plugins/axon-kit/skills) は操作契約、[`axon`](../../plugins/axon/skills) は任意の個人用協業方針です。plugin内に必要なreferenceを同梱しているため、利用先repositoryにAxonのソースcheckoutを置く必要はありません。対応するCLIとpluginを対象環境へ導入し、管理するrepositoryで呼び出します。
 
 binaryを指定した場合はその指定を、未指定なら対象環境で発見した `axon` を使います。skillは`axon --version`・`axon --help`で対応を照合して実行ファイルとrootを固定します。対象環境のCLIとsessionに読み込まれたskillのversionが一致しない場合は、その不一致を解決してから操作します。開発版の試用では上記の絶対パスを渡す方法も使えます。
+
+同梱skillは、Groupを直接着手せず配下から実効lifecycleを導出する規則（[Group の実効 lifecycle](../reference/lifecycle.md#group-の実効-lifecycle)）、`axon reopen`、記録の集合の保存先と `axon storage check`・`axon resolve`・`axon convert` を前提にします。
 
 例えば「このrepositoryの懸念をAxonに未判断として記録して」と依頼できます。対象と任せる範囲は依頼が決め、登録から実装・commitの権限を推測しません。

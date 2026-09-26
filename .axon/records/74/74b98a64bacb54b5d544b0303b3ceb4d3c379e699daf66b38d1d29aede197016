@@ -1,0 +1,1 @@
+{"entity":"axon-1ajnef","record":"created","parents":[],"at":"2026-08-31T12:49:27.167158Z","recorder":{"actor":"codex","data":{}},"reason":null,"after":{"kind":"issue","lifecycle":"not-started","owner":null,"title":"pre-commit で cargo test を回す","description":"","condition":null,"parent":null,"needs":["axon-5k16k6","axon-6y6w3s"]}}

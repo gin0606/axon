@@ -16,28 +16,28 @@ axon binary: src/main.rs → src/cli/
 
 | 層 | 実装の入口 | 責務 |
 | --- | --- | --- |
-| 保存から独立したコア | [crates/axon-core/src/lib.rs](../../crates/axon-core/src/lib.rs) | `lifecycle` は `Snapshot`、通常操作・検査、候補導出、因果順、canonical codec、三者比較を扱う。`declaration` は YAML の解析・出力、fingerprint、差分と適用を扱う。`read` は一覧・詳細・履歴・Note の検索と構造化された読み取り結果を返す |
-| 保存 adapter | [src/lib.rs](../../src/lib.rs) | `file` がコアを呼び、正本 `.axon/state.jsonl` への保存の原子性と障害境界を担う。`location` は保存先の探索と `axon init`、`file_merge` は統合 workspace と Git driver、`declaration_file` は宣言ファイルと正本の I/O を接続する |
+| 保存から独立したコア | [crates/axon-core/src/lib.rs](../../crates/axon-core/src/lib.rs) | `lifecycle` は記録の集合からの導出（head・衝突・現在値・違反・gap）、通常操作の前提検査と記録の生成、解決記録、候補導出、因果順、記録 1 件の canonical codec を扱う。`declaration` は YAML の解析・出力、fingerprint、差分と適用を扱う。`read` は一覧・詳細・履歴・Note の検索と構造化された読み取り結果を返す |
+| 保存 adapter | [src/lib.rs](../../src/lib.rs) | `file` がコアを呼び、`.axon/records/` の記録 file の列挙・hash の照合・作成の原子性と障害境界を担う。`location` は保存先の探索と `axon init`、`declaration_file` は宣言ファイルと記録の集合の I/O を接続する |
 | adapter 共通エラー | [src/error.rs](../../src/error.rs) | root の `axon::Error` / `axon::Result` と prefix 検証。コアのエラーを包み、保存・I/O の失敗を表す |
 | CLI | [src/main.rs](../../src/main.rs)、[src/cli/mod.rs](../../src/cli/mod.rs) | `main.rs` は入口だけを持つ。`cli::mod` が dispatch、stdout/stderr、保存後の出力失敗と終了コードを処理する |
 | 記録者取得 | [crates/axon-recorder/src/lib.rs](../../crates/axon-recorder/src/lib.rs) | 継承された環境変数だけから任意の記録者情報を取得する。コアの lifecycle 判断や保存 adapter を所有しない |
 
-`src/lib.rs` は `axon_core::{lifecycle, declaration, read}` を再公開するため、root library の利用側も同じコア API を使う。保存形式は JSONL 一つで、保存 adapter の crate 分割や Repository trait、形式を選ぶ dispatch は持たない。保存先の選択は `location` の探索に集約する。
+`src/lib.rs` は `axon_core::{lifecycle, declaration, read}` を再公開するため、root library の利用側も同じコア API を使う。保存形式は記録 1 件 1 file の一つで、保存 adapter の crate 分割や Repository trait、形式を選ぶ dispatch は持たない。保存先の選択は `location` の探索に集約する。Git の統合に介入する仕組みは持たず、統合の結果は読取時の導出が検査する。
 
 ### CLI の内訳と読み取りの流れ
 
 | module | 責務 |
 | --- | --- |
 | `args` | Clap のコマンド・引数定義と操作名 |
-| `read` | 保存済み snapshot の取得、コアの読み取り API の呼出し、描画への受渡し |
-| `write` | 登録、本文・関係・条件・状態変更、Note 追記、declaration import の接続 |
-| `setup` | 初期化、保存検査、merge、docs、completion、記録者表示 |
+| `read` | 記録の集合の取得、コアの読み取り API の呼出し、描画への受渡し |
+| `write` | 登録、本文・関係・条件・状態変更、種類の変換、Note 追記、衝突の解決、`axon import` の接続 |
+| `setup` | 初期化、保存検査、`axon docs`、`axon completion`、記録者表示 |
 | `store` | 保存先の取得、ID 解決、新規 ID の衝突確認 |
 | `condition` | 候補の外部条件を実行する process、timeout、trace、呼出し内の評価結果保持 |
 | `render` | 読み取り結果から CLI の文字列を組み立てる |
 | `display` | 端末装飾、制御文字の可視化、表示時刻などの表示規則 |
 
-読み取りは「保存 adapter → `Snapshot` → `axon::read` の構造化結果 → `cli::render` → 出力」と進む。コアの `read` は CLI の英語ラベル、ANSI、端末への出力を持たず、候補条件の評価は呼出し側の callback を受け取る。shell の実行は `cli::condition` に残す。保存された条件文字列と、その呼出しで得た評価結果を混同しない。
+読み取りは「保存 adapter → 記録の集合 → コアの view → `axon::read` の構造化結果 → `cli::render` → 出力」と進む。コアの `read` は CLI の英語ラベル、ANSI、端末への出力を持たず、候補条件の評価は呼出し側の callback を受け取る。shell の実行は `cli::condition` に残す。保存された条件文字列と、その呼出しで得た評価結果を混同しない。
 
 ## 依存方向の規則
 
@@ -58,7 +58,7 @@ cargo tree -p axon-core --depth 1
 | 対象 | コマンドと fixture |
 | --- | --- |
 | コア | `cargo test --locked -p axon-core`。`lifecycle`、`declaration`、`read` のメモリ上の単体テスト |
-| 保存 adapter | `cargo test --locked -p axon --lib`。`src/file.rs`、`src/location.rs`、`src/file_merge.rs`、`src/declaration_file.rs` と関連 test module の保存・障害・process fixture |
+| 保存 adapter | `cargo test --locked -p axon --lib`。`src/file.rs`、`src/location.rs`、`src/declaration_file.rs` と関連 test module の保存・障害・process fixture |
 | CLI 内部 | `cargo test --locked -p axon --bin axon`。表示、ID 解決、外部条件 process の単体テスト |
 | 公開 CLI と保存の接続 | `cargo test --locked --test smoke`。`tests/smoke.rs` が `tests/lifecycle/{workflow,file,location,contracts,declaration}.rs` も読み込み、独立 fixture、実 Git worktree、公開出力を検証する |
 | 記録者取得 | `cargo test --locked -p axon-recorder`。環境変数からの検出の単体テスト |
@@ -67,8 +67,8 @@ cargo tree -p axon-core --depth 1
 
 ## 詳細契約の参照先
 
-- [共通コア](lifecycle-core.md): 通常操作、情報・因果順、codec、三者比較の意味と制約。
+- [共通コア](lifecycle-core.md): 通常操作、記録の集合と導出、衝突と解決、codec の意味と制約。
 - [Declaration](lifecycle-declaration.md): YAML と一括適用の契約、コアとファイル書戻しの境界。
 - [CLIと保存の接続](lifecycle-cli.md): 公開操作、mutation と出力の境界、内部 Git 呼出し。
-- [file保存とGit統合](lifecycle-file.md): 初期化と探索、writer、公開、worktree、統合 workspace と Git driver。
+- [file保存とGit統合](lifecycle-file.md): 初期化と探索、記録 file と codec、writer、worktree、`axon storage check` と `axon resolve`。
 - [候補と外部条件](../reference/candidates.md)、[記録者連携](lifecycle-recorder.md)、[CLI入出力契約](../reference/cli.md): 外部 process、任意 metadata、表示と入出力の詳細。

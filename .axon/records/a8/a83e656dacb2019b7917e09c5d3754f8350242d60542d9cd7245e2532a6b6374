@@ -1,0 +1,1 @@
+{"entity":"axon-5n8chm","record":"created","parents":[],"at":"2026-08-31T12:49:27.181684Z","recorder":{"actor":"codex","data":{}},"reason":null,"after":{"kind":"issue","lifecycle":"not-started","owner":null,"title":"カバレッジを観測できるようにする","description":"","condition":null,"parent":null,"needs":["axon-1ajnef"]}}

@@ -1,6 +1,6 @@
 # 候補一覧と外部条件
 
-この文書は、`axon proposals`・`axon tasks` が再浮上条件を評価する範囲と失敗の扱い、および再浮上条件の外部コマンドの実行契約を定める。候補集合そのものの定義は [lifecycleと構造の契約](lifecycle.md#候補集合)、option の表記と一覧の表示は [CLIと表示の契約](cli.md) に定める。
+この文書は、`axon tasks` の一覧の行と状況、詰まっている Group の理由、`axon proposals`・`axon tasks`・`axon show` が再浮上条件を評価する範囲と失敗の扱い、および再浮上条件の外部コマンドの実行契約を定める。候補集合そのものの定義は [lifecycleと構造の契約](lifecycle.md#候補集合)、option の表記と一覧・詳細の表示は [CLIと表示の契約](cli.md) に定める。行と状況の定義は [`spec/group_lifecycle.qnt`](../../spec/group_lifecycle.qnt)、評価範囲は [`spec/candidate_evaluation.qnt`](../../spec/candidate_evaluation.qnt) がモデルとして検査し、その範囲は [モデルの読み方](../../spec/README.md) にある。
 
 ```sh
 axon proposals
@@ -8,8 +8,66 @@ axon tasks
 axon list
 axon condition set ID --command 'test -f ready.txt'
 axon tasks --condition-timeout 5s --trace-conditions
+axon show ID
+axon show ID --skip-conditions
 axon condition unset ID
 ```
+
+## 一覧の行と状況
+
+`axon tasks` は Issue と Group の行を同じ並びに置く平らな一覧で、Group を見出しにした木にはしない。行は [候補集合](lifecycle.md#候補集合) の浮上した未着手と着手中を合わせたものである。
+
+| 行 | 条件 |
+| --- | --- |
+| Issue | 保存値が `NotStarted` で自身と全祖先が浮上しているもの、または浮上に関係なく `InProgress` のもの |
+| Group | 保存値が `NotStarted` で自身と全祖先が浮上しているもの、または浮上に関係なく実効値が `InProgress` のもの |
+
+実効値が `InProgress` の Group は、着手中の仕事を見失わないため、`InProgress` の Issue と同じく浮上していなくても一覧に出る。祖先が `Undecided` でも、採用済みで浮上している Issue・Group は一覧に出る。祖先そのものは `Undecided` なので一覧に出ない。
+
+### Issue の行の状況
+
+| 状況 | 条件 |
+| --- | --- |
+| `Ready` | 着手候補 |
+| `InProgress` | `InProgress` |
+| `Blocked` | 上のどちらでもない。祖先の採用、または自身・祖先の依存先の完了を待つ |
+
+着手中に追加した未完了の依存先は、その Issue の行の問題として表示する。表記は [CLIと表示の契約](cli.md#一覧) に定める。`axon tasks` の Issue の行は浮上しているものだけなので、`axon show` が浮上していない `NotStarted` の Issue に示す `Unsurfaced` は行には現れない。
+
+### Group の行の状況
+
+Group の行の状況は配下から導出し、次の表を上から順に見て最初に当たるものを一つ示す。`Ready`・`InProgress`・`Blocked` の語は Issue と共有するが、Group の `Ready` は Group 自身への操作ではなく、配下に着手できる Issue があることを示す。
+
+| 状況 | 条件 | 次の一手 |
+| --- | --- | --- |
+| `Empty` | 直属の子がない | 計画を書く。最終確認が通れば完了できる場合も `Empty` で、`axon complete` の可否は変えない |
+| `Confirmable` | 最終確認が通れば `Complete` できる | 計画全体を最終確認し、`axon complete` する |
+| `Ready` | 着手候補の Issue を子孫に持つ | 子孫の Issue に着手する |
+| `InProgress` | 実効値が `InProgress` | 配下の仕事が始まっている |
+| `Blocked` | 直属の子があり、上のどれにも当たらない | 詰まっている理由を解く |
+
+`Blocked` は残余として定義し、五つの状況で Group の行を必ず分類する。Group の `InProgress` は実効 lifecycle と同じく「配下の仕事が始まっている」を表し、完了済みの子孫だけを持ち着手中の子孫がない場合も `InProgress` のままにする。
+
+### 詰まっている Group と理由
+
+完了できず、着手候補の子孫も着手中（`InProgress`）の Issue の子孫もない Group の行を、詰まっている Group とする。`Blocked` の行はすべて該当し、完了済みの子孫はあるが着手中の子孫がない `InProgress` の行と、完了できない `Empty` の行も該当する。`Confirmable` の行、`Ready` の行、完了できる `Empty` の行は、次の一手が状況から分かるため該当しない。着手中の Issue に後から追加した未完了の依存先はその Issue の行の問題とし、その Issue の祖先を詰まっているとは見なさない。
+
+詰まっている Group には、次の理由を導出する。`axon tasks` の行に限らず、`axon show` の対象になる保存値 `NotStarted` の Group にも同じ導出を使い、詰まっている Group には少なくとも一つの理由が当たる。`axon show` が示す範囲と表記は [CLIと表示の契約](cli.md#axon-show-と待ち理由) に定める。
+
+| 理由 | 条件 |
+| --- | --- |
+| 未完了の dependency | 自身、全祖先、または終了していない子孫のいずれかの依存先が `Completed` でない |
+| `Undecided` の子 | 直属の子に `Undecided` がある |
+| 未終了の子 Group | 直属の子 Group に終了していないものがある |
+| 浮上していない着手可能な子孫 | 着手可能だが浮上していない Issue を子孫に持つ |
+| `Undecided` の祖先 | 祖先に `Undecided` がある |
+| 採用済みでない祖先 | 祖先に保存値が `Undecided`・`NotStarted` 以外のもの（終了した祖先）がある、または祖先の連なりが衝突中か保存先に無い祖先で切れる（統合の結果の、終了した親の下の未終了や保存先に無い親を指す [構造の違反](storage.md#構造の違反と修復)、統合の衝突で生じる） |
+| 浮上していない祖先 | 祖先のいずれかの条件が未成立（終了した祖先とそれより下の祖先は評価しない） |
+| 自身の再浮上条件が未成立 | 全祖先が浮上していて、Group 自身の条件が未成立 |
+
+`axon tasks` の行になる Group のうち、浮上していない祖先と自身の再浮上条件が未成立という理由が当たるのは実効値が `InProgress` の行だけである。浮上して行になる Group は自身と全祖先が浮上している。理由はどの Group についても `axon show` が示す。祖先は上から評価して未成立の祖先より下は評価しないため、浮上していない祖先がある Group では自身の条件は評価されず、自身の再浮上条件が未成立という理由は付かない。終了した祖先の配下は非浮上として扱うが、終了した祖先は条件を評価しないので浮上していない祖先には当たらず、採用済みでない祖先として示す。その配下の Group にも自身の再浮上条件が未成立という理由は付かない。自身の条件だけで隠れている着手可能な子孫は、浮上していない着手可能な子孫としても示す。
+
+再浮上条件を評価しない `axon list` と `axon show --skip-conditions` は、条件をすべて成立したものとして状況と理由を導出する。着手候補の代わりに着手可能な Issue を使うため、Group の `Ready` は着手可能な Issue を子孫に持つことを指し、浮上していない着手可能な子孫、浮上していない祖先、自身の再浮上条件が未成立という理由は現れず、Issue に `Unsurfaced` も現れない。表記は [CLIと表示の契約](cli.md) に定める。
 
 ## 条件の種類
 
@@ -22,23 +80,26 @@ axon condition unset ID
 
 日時まで待つ用途は残し、日時・タイムゾーンの解釈や複合条件は外部コマンド側で表現する。Axon は日時を解釈・検証する専用の条件型を持たない。採らなかった条件の種類とその理由は [設計判断](../design/decisions.md#外部コマンドを再浮上条件にした理由) に残す。
 
-`axon condition set` は一つの shell 文字列を保存・置換し、`axon condition unset` は未設定へ戻す。どちらも終了した Entity に使え、条件を評価せず、lifecycle や履歴を変更しない。空白だけのコマンドは拒否する。
+`axon condition set` は一つの shell 文字列を保存・置換し、`axon condition unset` は未設定へ戻す。どちらも終了した Entity に使え、条件を評価せず、lifecycle を変えない。条件の設定と解除は記録として残り、`axon log` で読める。空白だけのコマンドは拒否する。
 
 ## 評価契約
 
 条件が未設定なら常に浮上する。設定済みの条件は、その時点で候補に出してよいかを判定し、表示によって消費しない。成立後も再評価し、外界が変われば未成立や判定失敗にもなりうる。日時を判定する外部コマンドのように、成立が持続する条件もこの契約に含む。
 
-再浮上条件は候補の表示にだけ使う。明示操作は lifecycle・包含・dependency の許可条件だけを使い、再浮上条件を評価しない。`axon list`・`axon show` も条件を実行せず、保存情報だけを表示する。条件の設定・訂正・解除も評価せずに行うため、壊れた条件を修復できる。
+再浮上条件は候補の表示と、`axon show` の状況・理由の表示にだけ使う。明示操作は lifecycle・包含・dependency の許可条件だけを使い、再浮上条件を評価しない。`axon list` と `axon show --skip-conditions` も条件を実行せず、保存情報だけを表示する。条件の設定・訂正・解除も評価せずに行うため、壊れた条件を修復できる。
 
 評価する範囲は次のとおりとする。
 
-- `axon proposals` は `Undecided`、`axon tasks` の浮上判定は `NotStarted` を対象とし、どちらも dependency の完了や親の着手を要求しない。終了した Entity と対象外の状態は、自身の表示のためには評価しない。`axon tasks` は `InProgress` を浮上に関係なく加えるため、`InProgress` の条件は、自身の表示のためには評価せず、子孫の候補判定に必要な祖先としてのみ評価する。候補自身ではない `InProgress` の親も、子の候補判定に必要なら評価する。
-- `--kind`・`--search` の絞り込み後に残る候補とその祖先だけを評価する。除外された候補の条件は評価しないが、残った候補の祖先なら kind が異なっても評価する。
-- 残った候補の祖先を上から評価し、祖先が非浮上ならその配下を評価しない。終了した祖先は評価せず、その配下を非浮上として扱う。
-- 一回の一覧取得で各 Entity を最大一回評価し、子や別の参照から同じ結果を共有する。次の取得では結果を引き継がない。
-- 取得開始時の保存 snapshot を使い、評価中は書込み transaction を保持しない。
+- `axon proposals` は保存値が `Undecided`、`axon tasks` の浮上判定は保存値が `NotStarted` の Issue・Group を対象とし、どちらも dependency の完了や祖先の採用を要求しない。終了した Entity と対象外の状態は、自身の表示のためには評価しない。
+- 実効値が `InProgress` の Group も保存値は `NotStarted` なので、`axon tasks` は自身の浮上判定として評価し、判定に失敗すれば一覧の取得を失敗させる。浮上していなくても行には出るが、その配下は浮上しないため着手候補にならない。
+- `InProgress` の Issue は浮上に関係なく `axon tasks` に加え、条件を評価しない。Issue は子を持たないため、祖先としても評価しない。
+- `--kind`・`--search` の絞り込みでは、残った候補とその祖先を評価し、除外された候補は自身の表示のためには評価しない。残った候補の祖先は kind が異なっても評価する。例外として `axon tasks` は、残った Group の行の状況を導出するため、その子孫の着手可能な Issue と、それらと残った Group の間にある Group を、絞り込みで除外されていても上から評価する。
+- 残った候補の祖先を上から評価し、祖先が非浮上ならその配下を評価しない。終了した祖先は評価せず、その配下を非浮上として扱う。衝突中の祖先と記録のない祖先（[構造の違反](storage.md#構造の違反と修復)）は現在値も条件も持たないので評価せず、祖先の連なりはそこで切れる。その配下は残りの連なりだけで浮上の可否を決め、着手可能にはならない（`Blocked`）。
+- `axon show ID` は、対象が `axon tasks` の行になる場合にその行が必要とする範囲だけを評価する。保存値が `NotStarted` の対象について、祖先の chain、対象自身、Group なら配下の着手可能な Issue と、それらと対象の間にある Group を上から評価する。`Undecided`・`InProgress`・終了した対象は何も評価しない。所属・依存先・依存元・子孫ツリーなど関連する Entity の行は、この範囲で得た結果だけを使い、範囲外の条件は成立したものとして状況を導出する。このため、範囲外の条件を持つ Entity は、関連する行では `Ready`・`Blocked` でも、その Entity 自身の `axon show` では `Unsurfaced` になりうる。
+- 一回の一覧取得または表示で各 Entity を最大一回評価し、子や別の参照から同じ結果を共有する。次の取得では結果を引き継がない。
+- 取得開始時に読んだ記録の集合を使い、評価中は書込み transaction を保持しない。衝突中の Entity（[保存と統合の契約](storage.md#現在値の導出)）は現在値を持たないため、どの候補集合にも入らず、`axon proposals`・`axon tasks` の行にならず、条件を評価しない（`axon list` には `Conflicted` として出る）。子孫の導出では存在しない Entity として扱い、衝突中の子だけを持つ Group の行は子のない Group として導出する。衝突中の祖先は採用済みでない祖先として扱い、その配下の Issue は着手可能にならない。
 
-必要な判定が一件でも失敗したら、一覧の取得自体をエラーとする。未成立へ丸めず、判定できた一部の候補を成功結果として stdout へ返さない。`axon tasks` でも `InProgress` だけの部分結果は返さない。
+必要な判定が一件でも失敗したら、一覧の取得または表示自体をエラーとする。未成立へ丸めず、判定できた一部の候補を成功結果として stdout へ返さない。`axon tasks` でも `InProgress` だけの部分結果は返さない。`axon show` の判定失敗の診断は、失敗した Entity と条件に加え、`--skip-conditions` で保存情報を読めることを示す。
 
 ## 外部コマンドの実行
 
@@ -62,7 +123,7 @@ axon condition unset ID
 
 ### タイムアウトと中断
 
-タイムアウトは外部コマンド1件につき既定30秒とする。`--condition-timeout` で正の有限時間を Axon の呼び出し単位で指定でき、その呼び出しで評価するすべての外部コマンドに同じ値を適用する。条件の保存値には含めない。一覧全体で30秒という制限ではない。
+タイムアウトは外部コマンド1件につき既定30秒とする。`axon proposals|tasks|show` の `--condition-timeout` で正の有限時間を Axon の呼び出し単位で指定でき、その呼び出しで評価するすべての外部コマンドに同じ値を適用する。条件の保存値には含めない。一覧全体で30秒という制限ではない。
 
 各評価を専用の process group で起動する。タイムアウトまたは Ctrl-C ではその group へ TERM を送り、1秒後も終了していなければ KILL する。同じ group の子プロセスも終了対象にし、Axon の待機を終えるだけで放置しない。タイムアウトは未成立へ丸めず判定失敗とする。Ctrl-C では終了処理を行って一覧取得を中断し、成功した候補一覧としては返さない。
 
@@ -70,7 +131,7 @@ axon condition unset ID
 
 正常終了（`0` / `1`）の stdout・stderr は、通常の候補一覧に混ぜない。判定失敗時は、対象 Entity、シェル文字列、実際の作業ディレクトリ、終了理由、取得できた stdout・stderr を診断する。タイムアウト時には適用時間と終了処理も示す。
 
-`--trace-conditions` では、実際に評価した正常終了の外部コマンドごとに Entity、作業ディレクトリ、成立可否、終了コード、stdout・stderr を stderr へ評価順に表示する。共有済みの評価結果を再利用しただけなら再表示せず、判定失敗は失敗診断だけを出す。空の出力は `(empty)` と表示する。trace の書き込み・flush が失敗した場合も、一覧取得をエラーにする。trace のための追加実行は行わず、条件編集や明示的な lifecycle 操作に評価を持ち込まない。
+`axon proposals|tasks|show` の `--trace-conditions` では、実際に評価した正常終了の外部コマンドごとに Entity、作業ディレクトリ、成立可否、終了コード、stdout・stderr を stderr へ評価順に表示する。共有済みの評価結果を再利用しただけなら再表示せず、判定失敗は失敗診断だけを出す。空の出力は `(empty)` と表示する。trace の書き込み・flush が失敗した場合も、一覧取得をエラーにする。trace のための追加実行は行わず、条件編集や明示的な lifecycle 操作に評価を持ち込まない。
 
 出力の保持・表示は次の境界とする。stdout・stderr を並行して読み取り、保持上限を超えても読み捨てて pipe の詰まりを防ぐ。保持量は stream ごとに最大64 KiBで、超過時は先頭32 KiBと末尾32 KiBを残し、その間の省略byte数を示す。失敗診断と trace に同じ上限を使う。非 UTF-8 byte は置換表示し、端末制御文字は可視 escape にする。これは秘密情報の自動除去を保証するものではない。
 
@@ -78,4 +139,4 @@ axon condition unset ID
 
 `crates/axon-core/src/lifecycle/candidates.rs` が保存から独立した候補選択と評価順・共有を担い、`src/cli/condition.rs` が外部プロセスの起動と監督を担う。
 
-検証は `cargo test`。library では候補集合と評価順・共有を boolean oracle と比較し、独立 fixture の smoke では集合、修復、非実行、worktree・管理ルート、実プロセスの終了コード、30秒の既定値、タイムアウト・Ctrl-C と子プロセスの終了、出力上限、trace の書込失敗を検査する。binary test は起動失敗と trace の flush 失敗も実プロセスで検査する。
+検証は `cargo test`。library では候補集合と評価順・共有を boolean oracle と比較し、`axon show` の評価範囲と `Unsurfaced`・理由の導出を `crates/axon-core/src/read.rs` の単体テストで検査する。独立 fixture の smoke では集合、修復、非実行、worktree・管理ルート、実プロセスの終了コード、30秒の既定値、タイムアウト・Ctrl-C と子プロセスの終了、出力上限、trace の書込失敗と、`axon show` の評価・`--skip-conditions`・判定失敗の診断を検査する。binary test は起動失敗と trace の flush 失敗も実プロセスで検査する。
