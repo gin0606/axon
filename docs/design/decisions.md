@@ -277,7 +277,7 @@ Git で追跡した保存先に求めたことは三つある。`git reset --har
 
 記録の集合を 1 file への 1 行追記で表し、`.axon/.gitattributes` の union 属性で両側の行を残す案を先に採り、Quint のモデルもその前提で書いた（[`spec/record_integration.qnt`](../../spec/record_integration.qnt) は file の bytes を扱わないため、形式の変更で変わらない）。2026-09-25 の実験で、ローカルの Git は union 属性で両側の行を残すが、GitHub の merge button（merge commit・squash・rebase）と Update branch（merge・rebase）は `.axon/.gitattributes` でも root の `.gitattributes` でも union 属性を効かせず、両側が追記した PR を常に conflict と判定して merge できないことが分かった。加えて、revert は末尾の記録だけを消せて後続の追記があると空になり、1 件だけの cherry-pick は union が直前の欠けた記録も持ち込む。GitHub 上で直接 merge するには、先にローカルで base を取り込んで push する運用が要る。
 
-記録 1 件を 1 file にすると、両側が記録を追加した branch は別 file の追加どうしなので、Git の属性なしの 3-way merge で衝突しない。同じ repository と手順で、単一 file への追記だけが conflict になることを 2026-09-25 に確認した（ローカルの merge・rebase・cherry-pick・revert と、使い捨ての private repository での GitHub の merge button 3 方式と Update branch 2 方式）。記録 ID が内容の hash なので、同名の file は同じ内容で、両側が同じ file を追加しても衝突しない。cherry-pick と revert は commit に含まれる記録 file の単位で効き、記録の集合と file の集合が一致するため、Git の add と remove がそのまま記録の追加と欠けに対応する。union 属性、`.axon/.gitattributes`、GitHub 上の merge の注意書きはいずれも不要になった。
+記録 1 件を 1 file にすると、両側が記録を追加した branch は別 file の追加どうしなので、merge の属性なしの Git の 3-way merge で衝突しない。同じ repository と手順で、単一 file への追記だけが conflict になることを 2026-09-25 に確認した（ローカルの merge・rebase・cherry-pick・revert と、使い捨ての private repository での GitHub の merge button 3 方式と Update branch 2 方式）。記録 ID が内容の hash なので、同名の file は同じ内容で、両側が同じ file を追加しても衝突しない。cherry-pick と revert は commit に含まれる記録 file の単位で効き、記録の集合と file の集合が一致するため、Git の add と remove がそのまま記録の追加と欠けに対応する。union 属性と GitHub 上の merge の注意書きは不要になった。`.axon/.gitattributes` は統合には使わず、改行変換を止める `* -text` だけを書く（[`axon init` が `.axon/` の中に file を書く理由](#axon-init-が-axon-の中に-file-を書く理由)）。
 
 費用は file 数の増加、header（format、store ID、prefix）を別 file に置くこと、書込を 1 行の追記から file の作成に変えることである。1 file 約 2.7 KB の記録 20,000 件（現在の増加速度で約 2 年分）を置いた計測（2026-09-25、APFS、git 2.54.0）では、全 file の列挙と読取が 0.31 秒、`git add` が 0.52 秒、記録 1 件を足す commit が 0.08 秒で、支障になる水準ではない。
 
@@ -327,15 +327,21 @@ cherry-pick や revert で親が欠けた記録が入ると、受け手が持つ
 
 ### `axon init` が `.axon/` の中に file を書く理由
 
-`axon init` は記録の directory、header file、`.axon/.gitignore` を作る。`.axon/.gitignore` は lock と書込途中の一時 file だけを除外し、記録と header は追跡できる。repository root の `.gitignore`・`.gitattributes`・Git config には触れない。
+`axon init` は記録の directory、header file、`.axon/.gitignore`、`.axon/.gitattributes` を作る。`.axon/.gitignore` は lock と書込途中の一時 file だけを除外し、記録と header は追跡できる。`.axon/.gitattributes` は `* -text` の 1 行だけを持つ。repository root の `.gitignore`・`.gitattributes`・Git config には触れない。
 
-以前は保存先 `.axon/state.jsonl` だけを作り、Git に関する file は作らなかった。追跡する運用には `.axon/.gitignore` と root の `.gitattributes` と driver の登録が要り、利用者が表示された手順で行っていた。記録 1 件 1 file では属性と driver が要らず、Git から除外すべきものは lock と一時 file だけになる。この除外は運用の種類によらず常に正しく、`.axon/` の中で閉じるので、`axon init` が書く。root の file を編集しないのは、無関係な行を保ちながら補完すると、競合する規則、後続の広い規則による打ち消し、上位の属性 file による上書きといった端の場合を生み続けるためである。
+以前は保存先 `.axon/state.jsonl` だけを作り、Git に関する file は作らなかった。追跡する運用には `.axon/.gitignore` と root の `.gitattributes` と driver の登録が要り、利用者が表示された手順で行っていた。記録 1 件 1 file では merge の属性と driver が要らず、Git から除外すべきものは lock と一時 file だけになる。この除外は運用の種類によらず常に正しく、`.axon/` の中で閉じるので、`axon init` が書く。root の file を編集しないのは、無関係な行を保ちながら補完すると、競合する規則、後続の広い規則による打ち消し、上位の属性 file による上書きといった端の場合を生み続けるためである。
 
-`axon init` 直後の記録と header は Git から untracked に見え、Git に無視させて使うか、追跡して branch ごとに統合するかは、表示した手順に従って利用者が選ぶ。コードは二つの運用を区別しない。
+`.axon/.gitattributes` の `* -text` は Git の改行変換から記録 file を守る（2026-09-26 の判断）。記録 ID は末尾の LF を含む file の bytes 全体の hash なので、root の `.gitattributes` の `text=auto eol=crlf` や Git の設定の `core.autocrlf=true`（Git for Windows では system の設定にある。WSL2 と Windows で同じ checkout を共有する場合など）で checkout 時に CRLF へ変わると、名前と内容の hash が一致しない破損として読取と全操作が止まる。利用者は原因に辿り着きにくいが、1 行の属性で防げ、`text` 属性を外せば `core.autocrlf` によらず変換されず、作業 tree の属性 file は深い directory のものが root のものより優先される（防げない設定は [保存と統合の契約](../reference/storage.md#保存先と初期化) にある）。以前 `.axon/.gitattributes` を作らなかったのは、union 属性が GitHub の web merge で効かず、記録 1 件 1 file にしたことで統合に属性が要らなくなったためで（[記録 1 件 1 file にした理由](#記録-1-件-1-file-にした理由)）、checkout 時の変換を止める `-text` には当てはまらない。merge・union の属性は書かない。統合は記録が別 file であることで成り立ち、属性はその前提を変えず、効かない環境があるためである。
+
+`text eol=lf` や `binary` ではなく `-text` にしたのは、Git に記録 file の bytes をどちらの方向にも変えさせないためである。`text eol=lf` も checkout 時の CRLF を止め、canonical な記録は CR を含まないので有効な記録は変わらず、`git add` 時に変換された file を LF に戻せる利点もある。それでも採らなかったのは、`git add` 時に Git が内容を正規化する規則を残し、hash の対象の bytes を Git の変換に委ねることになるためである。`binary` は `-diff -merge -text` の macro で、merge の属性を書かないという上の判断に反し、差分表示も止めて記録 file の差分を読めなくする。代わりに、`-text` の下では `git add` 時の正規化も働かないので、属性を足す前に変換された記録 file を stage するとその bytes が commit される。既存の保存先に足す手順は、これを避ける形で [保存先と worktree](../guide/storage.md#改行変換と-axongitattributes) に書いた。
+
+`axon init` 直後の header、`.axon/.gitignore`、`.axon/.gitattributes` は Git から untracked に見え、Git に無視させて使うか、追跡して branch ごとに統合するかは、表示した手順に従って利用者が選ぶ。コードは二つの運用を区別しない。
 
 採らなかった案:
 
 - `*` の 1 行だけを持つ `.axon/.gitignore` を `axon init` が作り、設定なしで無視される運用を既定にする案。Git は untracked な file を checkout・merge の上書きから保護するが、無視されている file は保護しない。無視を既定にすると、無視されている保存先がある作業 directory で `.axon/` を追跡している commit を checkout・merge したときに、警告なしに記録が置き換わる事故が起きうる状態を Axon が黙って作ることになる。lock と一時 file だけを除外すれば、既定は Git の保護を受ける untracked で、無視は利用者が承知して選ぶ操作になる。代わりに既定側に来るのは `git add -A` による意図しない commit だが、これは差分として見え、push 前なら戻せる。利用者が自分で `.axon/` を無視した場合の上書きの危険は残るため、契約と利用ガイドに注意として書く。
+- 改行変換を止める設定を利用者の Git 設定に委ね、文書に運用として書くだけにする案。設定しなかった clone では破損として全操作が止まり、原因が Git の設定にあると気づきにくい。`.axon/` の中で閉じる 1 行で防げるので、利用者に委ねる理由がない。
+- 読取で CRLF を LF に戻してから hash を照合する案。名前と内容の bytes が一致するという破損の規則を弱める。
 - 配置を選ぶ option を持つ案。無視するか追跡するかは Git 側の事実で決まり、Axon が同じ情報を option や設定として二重に持つと、両者が食い違った状態を定義する必要が生じる。
 
 ### 保存 adapter を一つにする

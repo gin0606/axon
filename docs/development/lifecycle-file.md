@@ -4,7 +4,7 @@
 
 ## 初期化と探索
 
-`axon init demo` は現在の管理 root に `.axon/records/`、`.axon/.gitignore`、`.axon/header.json` を新規作成する。Git 内では現在の worktree root、Git 外では現在 directory を対象とし、Git 外で既存管理 root 内への入れ子の `axon init` は拒否する。`.axon/` に header、記録、内容の異なる `.gitignore`、以前の形式の `state.jsonl` などがあれば、その path を示して拒否する。lock、`.tmp` で終わる file、空の `records/`、同じ内容の `.gitignore` だけなら中断した初期化の残骸として作り直す。repository root の `.gitignore`・`.gitattributes`・Git config を作成も変更もせず、stage も commit もしない。Git 内では初期化した保存先が untracked に見えることと、無視する運用・追跡する運用それぞれの手順、Axon の状態の取り消しに revert を使わないことを表示する。
+`axon init demo` は現在の管理 root に `.axon/records/`、`.axon/.gitignore`、`.axon/.gitattributes`、`.axon/header.json` を新規作成する。Git 内では現在の worktree root、Git 外では現在 directory を対象とし、Git 外で既存管理 root 内への入れ子の `axon init` は拒否する。`.axon/` に header、記録、内容の異なる `.gitignore` か `.gitattributes`、以前の形式の `state.jsonl` などがあれば、その path を示して拒否する。lock、`.tmp` で終わる file、空の `records/`、同じ内容の `.gitignore` と `.gitattributes` だけなら中断した初期化の残骸として作り直す。repository root の `.gitignore`・`.gitattributes`・Git config を作成も変更もせず、stage も commit もしない。Git 内では初期化した保存先が untracked に見えることと、無視する運用・追跡する運用それぞれの手順、Axon の状態の取り消しに revert を使わないことを表示する。
 
 ```gitignore
 # .axon/.gitignore
@@ -12,7 +12,14 @@
 *.tmp
 ```
 
-無視する運用は、利用者が `.git/info/exclude` や global の ignore file に `.axon/` の行を書いて選ぶ。追跡する運用は、利用者が `git add .axon` で記録と header を stage して commit して選ぶ。二つの運用は一つの repository では混ぜない。無視されている保存先は Git の checkout・merge の上書き保護を受けず、警告なしに置き換わる。Axon はこの混在を検出しない。理由と境界は [保存と統合の契約](../reference/storage.md#無視する運用と追跡する運用) にある。
+```gitattributes
+# .axon/.gitattributes
+* -text
+```
+
+`.axon/.gitattributes` は checkout 時の改行変換で記録 file が破損になるのを防ぐ。目的と効く範囲は [保存と統合の契約](../reference/storage.md#保存先と初期化) にある。
+
+無視する運用は、利用者が `.git/info/exclude` や global の ignore file に `.axon/` の行を書いて選ぶ。追跡する運用は、利用者が `git add .axon` で記録、header、`.axon/.gitignore`、`.axon/.gitattributes` を stage して commit して選ぶ。二つの運用は一つの repository では混ぜない。無視されている保存先は Git の checkout・merge の上書き保護を受けず、警告なしに置き換わる。Axon はこの混在を検出しない。理由と境界は [保存と統合の契約](../reference/storage.md#無視する運用と追跡する運用) にある。
 
 探索は Git 内では現在の worktree root の `.axon`、次に main worktree の `.axon` の順に見る。2 段目は linked worktree で、Git common directory が main worktree 直下の `.git` directory である場合だけ使い、bare repository に付けた worktree と submodule では使わない。各段は `header.json` があれば確定し、header がなく記録やその他の file（以前の形式の `state.jsonl` を含む）があれば破損または未知の format として停止し、中断した初期化の残骸しかない `.axon` では確定せず次へ進む。確定した保存先が破損・読取不能なら停止し、別の保存先へ fallback しない。Git 外では最寄りの `header.json` を持つ祖先で止まる。段の意味と、追跡する運用で保存先を持たない branch の linked worktree が main worktree の保存先に書く副作用は [保存と統合の契約](../reference/storage.md#探索) に定める。
 
@@ -20,7 +27,7 @@
 
 OS lock、Git index の unmerged 検査、管理 directory が通常の directory であること（symlink の拒否）の検査は、確定した保存先とそれを含む worktree に対して行う。通常 writer の lock は確定した保存先の `.axon/write.lock`、`axon init` の lock は Git 内では common Git directory の `axon-init.lock`、Git 外では管理 directory の `.axon/axon-init.lock` で、worktree をまたぐ並行初期化も直列化する。
 
-`axon init` はその OS lock 下で既存の保存先を確認し、記録の directory と `.axon/.gitignore` を作り、header を一時 file `header.json.tmp` に書いて sync し、`header.json` へ rename して directory を sync する。header の公開前に中断した保存先は未初期化のままで、再実行で作り直せる。
+`axon init` はその OS lock 下で既存の保存先を確認し、記録の directory を作り、`.axon/.gitignore` と `.axon/.gitattributes` をそれぞれ一時 file から rename で作り、header を一時 file `header.json.tmp` に書いて sync し、`header.json` へ rename して directory を sync する。header の公開前に中断した保存先は未初期化のままで、再実行で作り直せる。
 
 ## 記録 file と codec
 
@@ -58,7 +65,7 @@ rename 前の失敗は `not applied`、rename 後の directory sync の失敗は
 
 ## Git 統合と検査
 
-追跡する運用では、両側が追加した記録 file を Git が属性なしで統合する。Axon は Git から呼ばれず、`.gitattributes` も Git config も持たない。統合の結果は次の読取と `axon storage check` が検査する。
+追跡する運用では、両側が追加した記録 file を Git が merge の属性なしで統合する。Axon は Git から呼ばれず、`.axon/.gitattributes` の `* -text` 以外の属性と Git config を持たない。統合の結果は次の読取と `axon storage check` が検査する。
 
 ```sh
 axon storage check

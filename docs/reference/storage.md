@@ -55,40 +55,43 @@ gap は記録が消せないため解決記録では埋まらない。欠けた�
 - 名前が `.tmp` で終わる file は書込途中の一時 file で、読取と `axon storage check` は無視する。
 - それ以外の、名前が記録 ID の形でない file（OS が作る file を含む）、名前と内容の hash が一致しない file、名前の先頭 2 文字と違う subdirectory にある file、途中で切れた file と空の file、規則外の内容の file は保存先の破損とする。読取と `axon storage check` は衝突や違反とは別に破損として報告し、利用者が file を直すまで読取と全操作を止める。破損は Entity に属さないので、違反の免除は当てはまらない。
 
-`.axon/` 直下の header・`.gitignore`・lock 以外の file は読まず、報告もしない。header file の欠落、読めない header、未知の format は破損と同じく操作を止める。未知の format は変換しない。
+`.axon/` 直下の header・`.gitignore`・`.gitattributes`・lock 以外の file は読まず、報告もしない。header file の欠落、読めない header、未知の format は破損と同じく操作を止める。未知の format は変換しない。
 
 ## 保存先と初期化
 
-`axon init [PREFIX]` は保存先を新規作成する専用の操作とする。配置や形式を選ぶ option は持たない。`.axon/` が存在しないか、中にあるのが lock file、`.tmp` で終わる file、空の記録の directory、`axon init` が書くのと同じ内容の `.axon/.gitignore` だけの場合（中断した初期化の残骸）だけ作る。header file、記録、内容の異なる `.axon/.gitignore`、その他の file（以前の形式の保存先を含む）が一つでもあれば、内容が有効でも拒否してその path を示し、修復・暗黙の変換を行わない。
+`axon init [PREFIX]` は保存先を新規作成する専用の操作とする。配置や形式を選ぶ option は持たない。`.axon/` が存在しないか、中にあるのが lock file、`.tmp` で終わる file、空の記録の directory、`axon init` が書くのと同じ内容の `.axon/.gitignore` と `.axon/.gitattributes` だけの場合（中断した初期化の残骸）だけ作る。header file、記録、内容の異なる `.axon/.gitignore` か `.axon/.gitattributes`、その他の file（以前の形式の保存先を含む）が一つでもあれば、内容が有効でも拒否してその path を示し、修復・暗黙の変換を行わない。
 
 prefix は Entity ID の先頭に使い、ASCII の小文字英数字とハイフンだけを許す。空文字と、先頭・末尾のハイフンは受け付けない。明示した値は変換せずに検証する。省略した場合は管理 root の directory 名の ASCII 大文字を小文字にした結果を使い、それがこの規則に合わなければ保存先を作らずに失敗し、明示指定を求める。
 
-`axon init` が作るのは次の三つで、いずれも `.axon/` の中にある。初期化を直列化する lock file（[初期化の対象](#初期化の対象)。Git 内では common Git directory に残る）を除き、`.axon/` の外には何も書かず、repository root の file と Git config には触れず、stage・commit もしない。
+`axon init` が作るのは次の四つで、いずれも `.axon/` の中にある。初期化を直列化する lock file（[初期化の対象](#初期化の対象)。Git 内では common Git directory に残る）を除き、`.axon/` の外には何も書かず、repository root の file と Git config には触れず、stage・commit もしない。
 
 | path | 内容 |
 | --- | --- |
 | `.axon/records/` | 記録の directory。記録は記録 ID の先頭 2 文字の subdirectory の下に、記録 ID を file 名として置く |
 | `.axon/header.json` | header。format の識別子、store ID、prefix を持つ 1 行の JSON |
 | `.axon/.gitignore` | `*.lock` と `*.tmp` の 2 行。lock と書込途中の一時 file だけを Git から除外し、記録と header は追跡できる |
+| `.axon/.gitattributes` | `* -text` の 1 行。`.axon/` の下の file を Git の改行変換の対象から外す |
 
 store ID と prefix は header file にだけ保持する。header file が保存先の目印であり、探索と `axon init` の拒否はこれで判定する。
 
+`.axon/.gitattributes` は追跡する運用で記録 file の bytes を保つためにある。記録 ID は末尾の LF を含む file の bytes 全体の hash なので、repository root の `.gitattributes` の `text=auto eol=crlf` や Git の設定の `core.autocrlf=true`（Git for Windows では system の設定にある）のような Git の改行変換が checkout 時に LF を CRLF へ変えると、名前と内容の hash が一致しない破損になり、読取と全操作が止まる。`text` 属性を外すと Git は `core.autocrlf`・`core.eol`・`eol` 属性によらず改行を変換せず、作業 tree の属性 file は深い directory のものが優先されるので、`* -text` は root の `text` 属性も打ち消す。作業 tree の属性 file より優先される設定（repository ごとの `info/attributes`（`git rev-parse --git-path info/attributes` が示す file）で `.axon/` にかかる `text`・`text=auto`・`!text`、`.axon/.gitattributes` のない tree を属性の読み元にする `attr.tree` など）と、改行以外の変換（`filter`・`ident`・`working-tree-encoding` の属性）が `.axon/` にかかる場合は防げず、記録 file の bytes を変えて破損になる。この file は merge・union などの統合の属性を持たない。統合は属性に頼らず、衝突などは次の読取で検出する（[Git 統合の範囲](#git-統合の範囲)）。
+
 ### 無視する運用と追跡する運用
 
-Git が保存先をどう扱うかに Axon は関与しない。`axon init` の直後、header と `.axon/.gitignore` は Git から untracked に見える（空の記録の directory は Git に現れない）。header があって記録の directory がない保存先は記録のない有効な保存先で、writer が必要なときに directory を作る。Git 内での保存先の使い方は二つあり、利用者の Git の運用だけで決まる。Axon は二つを区別せず、設定にも持たない。一つの repository では、どちらか一つに揃える。
+Git が保存先を無視するか追跡するかに Axon は関与しない。`axon init` の直後、header、`.axon/.gitignore`、`.axon/.gitattributes` は Git から untracked に見える（空の記録の directory は Git に現れない）。header があって記録の directory がない保存先は記録のない有効な保存先で、writer が必要なときに directory を作る。Git 内での保存先の使い方は二つあり、利用者の Git の運用だけで決まる。Axon は二つを区別せず、設定にも持たない。一つの repository では、どちらか一つに揃える。
 
 - 無視する運用。利用者が `.git/info/exclude` や global の ignore などで `.axon/` を Git に無視させる。linked worktree には `.axon` が現れないため、下の探索順によって全 worktree が main worktree の保存先を共有し、worktree ごとに `axon init` を繰り返す必要はない。
-- 追跡する運用。利用者が `.axon/` を stage・commit する。`.axon/.gitignore` が lock と一時 file を除くので、`git add .axon` で追跡対象になるのは記録、header、`.axon/.gitignore` である。各 worktree は checkout した自分の保存先を持つ。変更は Git で取り込むまで他の worktree から見えず、同じ Issue に別々に着手できる。
+- 追跡する運用。利用者が `.axon/` を stage・commit する。`.axon/.gitignore` が lock と一時 file を除くので、`git add .axon` で追跡対象になるのは記録、header、`.axon/.gitignore`、`.axon/.gitattributes` である。各 worktree は checkout した自分の保存先を持つ。変更は Git で取り込むまで他の worktree から見えず、同じ Issue に別々に着手できる。
 
-`axon init` は Git 内では二つの運用の手順と、Axon の状態の取り消しに revert を使わないことを表示するだけで、repository の `.gitignore`・`.gitattributes`・Git config を作成も編集もしない。Git の属性や設定に頼らない。
+`axon init` は Git 内では二つの運用の手順と、Axon の状態の取り消しに revert を使わないことを表示するだけで、repository root の `.gitignore`・`.gitattributes`・Git config を作成も編集もしない。Git の属性として持つのは `.axon/.gitattributes` の改行変換の抑止だけで、統合は Git の属性や設定に頼らない。
 
 Git は untracked な file を checkout・merge の上書きから保護するが、無視されている file は保護しない。無視されている保存先がある作業 directory で、`.axon/` を追跡している commit を checkout・merge すると、Git は警告なしに file を置き換え、記録が失われる。これは無視する運用と追跡する運用を一つの repository で混ぜた場合にだけ起きる。Axon はこの混在を検出しない。
 
 ### Git 統合の範囲
 
-追跡する運用での統合は、ローカルの Git 操作（merge・rebase・cherry-pick・revert・squash）に対する契約である。両側が記録を追加した branch は、記録が別 file なので Git の属性や設定なしで衝突せず統合される。記録 ID は内容の hash なので、同名の file は同じ内容であり、両側が同じ file を追加しても衝突しない。同じ Entity への両側の操作は Git 上では衝突せず、次の読取で Axon の衝突として見える。cherry-pick と revert の効果は [記録の欠け](#記録の欠けgap) に定める。
+追跡する運用での統合は、ローカルの Git 操作（merge・rebase・cherry-pick・revert・squash）に対する契約である。両側が記録を追加した branch は、記録が別 file なので merge の属性や Git の設定なしで衝突せず統合される。記録 ID は内容の hash なので、同名の file は同じ内容であり、両側が同じ file を追加しても衝突しない。同じ Entity への両側の操作は Git 上では衝突せず、次の読取で Axon の衝突として見える。cherry-pick と revert の効果は [記録の欠け](#記録の欠けgap) に定める。
 
-ホスティングサービスの web 上の merge はこの契約の外にある。GitHub の merge button と Update branch が、この形式では属性なしで両側の記録を取り込むことを 2026-09-25 に確認している（[設計判断](../design/decisions.md#記録-1-件-1-file-にした理由)）。
+ホスティングサービスの web 上の merge はこの契約の外にある。GitHub の merge button と Update branch が、この形式では merge の属性なしで両側の記録を取り込むことを 2026-09-25 に確認している（[設計判断](../design/decisions.md#記録-1-件-1-file-にした理由)）。
 
 Git の revert で Axon の状態を取り消さない。revert は記録 file を消すだけで、後続の記録があれば gap と偽の衝突になり、状態は戻らない。Axon の状態の取り消しは `Reopen`・`Release`・`Reconsider` などの lifecycle 操作で行う。
 
@@ -99,7 +102,7 @@ Git 内では現在の repository を探索境界とし、次の順で保存先�
 1. 現在の worktree root の `.axon`。
 2. main worktree の `.axon`。現在の worktree が linked worktree で、Git common directory が main worktree 直下の `.git` directory である場合だけ探す。bare repository に付けた worktree と submodule では探さない。
 
-各段では、header file があればその保存先に確定する。header がなく、記録やその他の file（以前の形式の保存先を含む）があれば、破損または未知の format として停止する。中断した初期化の残骸（lock、`.tmp` で終わる file、空の記録の directory、`axon init` が書くのと同じ内容の `.gitignore`）しかない `.axon` では確定せず次へ進む。どの段でも確定しなければ未初期化とする。確定した保存先が破損・読取不能であれば停止し、別の保存先へ fallback しない。
+各段では、header file があればその保存先に確定する。header がなく、記録やその他の file（以前の形式の保存先を含む）があれば、破損または未知の format として停止する。中断した初期化の残骸（lock、`.tmp` で終わる file、空の記録の directory、`axon init` が書くのと同じ内容の `.gitignore` と `.gitattributes`）しかない `.axon` では確定せず次へ進む。どの段でも確定しなければ未初期化とする。確定した保存先が破損・読取不能であれば停止し、別の保存先へ fallback しない。
 
 追跡する運用で、保存先を持たない branch（`axon init` より前に分岐した branch など）の linked worktree から操作すると、2 によって main worktree の追跡対象の保存先に記録を書く。変更は main worktree の差分として見え、記録は失われないため、この副作用は許容する。main worktree で保存先を持たない branch を checkout した場合は未初期化になる。既存の store を使うには保存先を Git で取り込む。そこで `axon init` を実行すると別の store の新規作成になり、後で一つの保存先に統合できない（header が衝突し、記録は別の store のものになる）。
 
@@ -113,7 +116,7 @@ Git 外では最寄りの header file を持つ祖先を管理 root とし、中
 
 探索の 2 が働く構成の linked worktree での `axon init` は、main worktree に保存先が既にあれば拒否し、その path を示す。無視する運用では手前に保存先ができて読む先が気づかないまま切り替わり、追跡する運用では別の store ができて後で統合できなくなるためである。main worktree に保存先がない場合と、探索の 2 が働かない構成では拒否せず、作成した保存先が他の worktree からは見えないことを表示する。main worktree を判定できなかった場合は、未初期化として扱わずにエラーとする。それ以外の取り違え（読む先の思い違い、worktree の削除による保存先の消失）は利用者の運用に委ね、`axon init` は既存の保存先を壊さないことだけを保証する。
 
-`axon init` は OS lock（Git 内では common Git directory、Git 外では `.axon/` に置く lock file。file は残る）の下で既存の保存先を確認し、記録の directory と `.axon/.gitignore` を作り、最後に header file を一時 file から rename で公開する。header が公開される前に中断した保存先には記録がなく、header もないので未初期化のままであり、再実行で作り直せる。成功時は作成した header file の path を示す。
+`axon init` は OS lock（Git 内では common Git directory、Git 外では `.axon/` に置く lock file。file は残る）の下で既存の保存先を確認し、記録の directory を作り、`.axon/.gitignore` と `.axon/.gitattributes` をそれぞれ一時 file から rename で作り、最後に header file を一時 file から rename で公開する。header が公開される前に中断した保存先には記録がなく、header もないので未初期化のままであり、再実行で作り直せる。成功時は作成した header file の path を示す。
 
 ## 書込
 

@@ -183,9 +183,10 @@ fn help_exposes_lifecycle_commands() {
     assert_eq!(f.run(&["merge", "--help"]).status.code(), Some(2));
     let init_help = f.ok(&["init", "--help"]);
     for text in [
-        "Init creates .axon/records/, .axon/header.json and .axon/.gitignore, and nothing for Git",
+        "Init creates .axon/records/, .axon/header.json, .axon/.gitignore and an .axon/.gitattributes holding only \"* -text\"",
+        "which stops Git line-ending conversion of record files; it sets no merge attributes",
         "prints how to keep the store ignored or to track it",
-        "does not create or edit the repository's .gitignore, .gitattributes or Git config",
+        "does not create or edit the repository root's .gitignore, .gitattributes or Git config",
         "does not stage or commit any files",
     ] {
         assert!(init_help.contains(text), "missing from init help: {text}");
@@ -202,9 +203,14 @@ fn docs_describe_the_one_store_and_the_discovery_order() {
     let f = Fixture::new();
     let docs = unwrapped(&f.ok(&["docs"]));
     for text in [
-        // Init creates the store inside .axon/, and Git's treatment of it is the reader's.
-        ".axon/records/, .axon/header.json and an .axon/.gitignore",
-        "never creates or edits the repository's .gitignore, .gitattributes or Git config",
+        // Init creates the store inside .axon/ with only a line-ending attribute; ignoring or
+        // tracking it is the reader's choice.
+        ".axon/records/, .axon/header.json, an .axon/.gitignore",
+        "an .axon/.gitattributes holding only \"* -text\"",
+        "keeps Git line-ending conversion (core.autocrlf, eol) from turning record files into corruption",
+        "it sets no merge or union attributes",
+        "never creates or edits the repository root's .gitignore, .gitattributes or Git config",
+        "records from both sides without merge attributes or configuration",
     ] {
         assert!(docs.contains(text), "missing from docs: {text}");
     }
@@ -213,7 +219,8 @@ fn docs_describe_the_one_store_and_the_discovery_order() {
     let main = docs.find("main worktree's .axon").unwrap();
     assert!(current < main, "{docs}");
     // Neither a second storage format nor a way to choose one is described.
-    for absent in ["--backend", "axon.db"] {
+    // Only merging is described as needing no attributes.
+    for absent in ["--backend", "axon.db", "without any attributes"] {
         assert!(!docs.contains(absent), "{docs}");
     }
 }

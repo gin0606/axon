@@ -50,7 +50,7 @@ pub(super) enum Command {
     },
     /// Initialize a new management root
     #[command(
-        after_help = "PREFIX uses ASCII lowercase letters, digits and hyphens, and starts and ends with a letter or digit.\nWithout PREFIX, init lowercases the management root directory name and fails if that is not a valid prefix.\nInit creates .axon/records/, .axon/header.json and .axon/.gitignore, and nothing for Git. Inside Git it prints how to keep the store ignored or to track it; which one applies is your choice.\nInit does not create or edit the repository's .gitignore, .gitattributes or Git config, and does not stage or commit any files."
+        after_help = "PREFIX uses ASCII lowercase letters, digits and hyphens, and starts and ends with a letter or digit.\nWithout PREFIX, init lowercases the management root directory name and fails if that is not a valid prefix.\nInit creates .axon/records/, .axon/header.json, .axon/.gitignore and an .axon/.gitattributes holding only \"* -text\", which stops Git line-ending conversion of record files; it sets no merge attributes. Inside Git it prints how to keep the store ignored or to track it; which one applies is your choice.\nInit does not create or edit the repository root's .gitignore, .gitattributes or Git config, and does not stage or commit any files."
     )]
     Init {
         /// ID prefix for generated Entity IDs

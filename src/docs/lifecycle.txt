@@ -87,19 +87,26 @@ Storage and recovery
   records on every read. When the store is tracked, the committed records are the
   state of that commit; uncommitted record files stay untracked across checkout,
   reset and stash, so commit them or remove them with git clean first.
-  init creates a new management root: .axon/records/, .axon/header.json and an
-  .axon/.gitignore that excludes only locks and temporary files. Apart from its
-  lock file it writes nothing outside .axon/. One storage format; no option
-  selects the format or the location.
+  init creates a new management root: .axon/records/, .axon/header.json, an
+  .axon/.gitignore that excludes only locks and temporary files, and an
+  .axon/.gitattributes holding only "* -text". A record's ID is the hash of its
+  bytes, so that line keeps Git line-ending conversion (core.autocrlf, eol) from
+  turning record files into corruption; it sets no merge or union attributes.
+  init does not add the file to an existing store. For a tracked store without
+  it, commit the file alone (never stage record files Git already converted),
+  then delete the tracked .axon files and check them out again; the storage
+  guide (docs/guide/storage.md) gives the steps.
+  Apart from its lock file init writes nothing outside .axon/. One storage
+  format; no option selects the format or the location.
   init PREFIX sets the ID prefix: ASCII lowercase letters, digits and hyphens,
   starting and ending with a letter or digit. Without PREFIX, init lowercases the
   management root directory name and fails if that is not a valid prefix.
   Inside Git the store is untracked until you either ignore .axon/ yourself or
   track it with git add .axon; do not mix the two ways in one repository. Init
-  never creates or edits the repository's .gitignore, .gitattributes or Git
-  config, and does not stage or commit. Git merges, rebases and cherry-picks
-  records from both sides without any attributes or configuration; Axon is not
-  invoked during Git operations.
+  never creates or edits the repository root's .gitignore, .gitattributes or
+  Git config, and does not stage or commit. Git merges, rebases and cherry-picks
+  records from both sides without merge attributes or configuration; Axon is
+  not invoked during Git operations.
   Inside Git, discovery takes the current worktree root's .axon, then the
   main worktree's .axon, so linked worktrees without one of their own use
   that store. Git replaces an ignored store without warning when you check
