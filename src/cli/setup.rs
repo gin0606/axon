@@ -72,16 +72,8 @@ pub(super) fn storage(command: Storage) -> Result<Output> {
             display::human_text(reason)
         ))
     };
-    // An unmerged index comes first, and a header missing beside records follows it.
+    // An unmerged index is reported alone; the header and damage are checked once Git resolves it.
     let reported = |error: axon::Error| match error {
-        axon::Error::Unmerged { root } => match axon::location::presence(&root) {
-            Ok(axon::location::Presence::Obstructed(_)) => axon::Error::Invalid(format!(
-                "{}\n{}",
-                axon::Error::Unmerged { root: root.clone() },
-                corrupt_header(&root, "missing".into())
-            )),
-            _ => axon::Error::Unmerged { root },
-        },
         axon::Error::NotAStore { root, .. } => corrupt_header(&root, "missing".into()),
         other => other,
     };

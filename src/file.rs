@@ -277,7 +277,12 @@ impl Store {
     /// Discovery runs once per invocation; every guard reuses this location.
     pub(crate) fn at(location: Location) -> Result<Self> {
         let store = Self { location };
-        store.store()?;
+        // As in `guard`, an unmerged index is reported before the damage; only a damaged
+        // `.axon` pays for the extra look at the index.
+        if let Err(damage) = store.store() {
+            store.location.check_index()?;
+            return Err(damage);
+        }
         Ok(store)
     }
     fn root(&self) -> &Path {
@@ -502,7 +507,14 @@ impl Store {
         change: impl FnOnce(&Header, &record::Store, &record::View) -> Result<(Vec<Entry>, T)>,
         progress: &mut dyn FnMut(Progress) -> Result<()>,
     ) -> Result<T> {
-        let _lock = lock(&self.directory().join(WRITE_LOCK))?;
+        // A lock that cannot be taken is damage too, reported after an unmerged index.
+        let _lock = match lock(&self.directory().join(WRITE_LOCK)) {
+            Ok(lock) => lock,
+            Err(damage) => {
+                self.location.check_index()?;
+                return Err(damage);
+            }
+        };
         let (header, records, view) = self.read()?;
         let (entries, result) = change(&header, &records, &view)?;
         if entries.is_empty() {

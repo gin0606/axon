@@ -240,19 +240,64 @@ pub fn presence(root: &Path) -> Result<Presence> {
 }
 /// Refuses an unmerged Git index under the `.axon` of `root`, which must be inside Git.
 fn unmerged(root: &Path) -> Result<()> {
-    let out = git_command(root)
-        .args(["ls-files", "--unmerged", "--", ".axon"])
-        .output()?;
-    if !out.status.success() {
-        return Err(invalid(format!(
-            "cannot inspect Git index: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )));
+    let inspected = |out: std::process::Output| {
+        if out.status.success() {
+            Ok(out.stdout)
+        } else {
+            Err(invalid(format!(
+                "cannot inspect Git index: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )))
+        }
+    };
+    let listed = inspected(
+        git_command(root)
+            .args(["ls-files", "--unmerged", "--full-name", "-z", "--", ".axon"])
+            .output()?,
+    )?;
+    if listed.is_empty() {
+        return Ok(());
     }
-    if !out.stdout.is_empty() {
-        return Err(Error::Unmerged { root: root.into() });
+    // Each entry is `<mode> <object> <stage>\t<path>`, one per stage of the same path.
+    let mut paths: Vec<Vec<u8>> = Vec::new();
+    for entry in listed
+        .split(|&byte| byte == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        let Some(tab) = entry.iter().position(|&byte| byte == b'\t') else {
+            return Err(invalid(
+                "cannot inspect Git index: unexpected ls-files output",
+            ));
+        };
+        // Git lists the stages of one path together.
+        let path = &entry[tab + 1..];
+        if paths.last().map(Vec::as_slice) != Some(path) {
+            paths.push(path.to_vec());
+        }
     }
-    Ok(())
+    // Only a failing check pays for the worktree's name.
+    let toplevel = inspected(
+        git_command(root)
+            .args(["rev-parse", "--show-toplevel"])
+            .output()?,
+    )?;
+    let worktree = String::from_utf8_lossy(&toplevel);
+    Err(Error::Unmerged {
+        worktree: PathBuf::from(worktree.strip_suffix('\n').unwrap_or(&worktree)),
+        paths: paths.into_iter().map(path_from_bytes).collect(),
+    })
+}
+/// A path as Git printed it; outside Unix only UTF-8 survives.
+fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        PathBuf::from(std::ffi::OsString::from_vec(bytes))
+    }
+    #[cfg(not(unix))]
+    {
+        PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
+    }
 }
 /// [`settles`] inside Git. Short of a header, the candidate's index is checked first, whether
 /// its `.axon` holds other files, residue or nothing: an unmerged index there means an

@@ -18,12 +18,12 @@ Gitはuntrackedなfileをcheckout・mergeの上書きから保護するが、無
 
 writerは確定した保存先の `.axon/write.lock` のOS lock取得後に記録の集合を読み、前提を検査して新しい記録を一つ作る（`axon import apply` だけは一つのlockの下でEntityごとに一つずつ作り、途中のrename失敗はresult unknownになる）。`<記録ID>.tmp` に書いて同期し、記録IDへrenameしてdirectoryを同期する。既存の記録fileは書き直さず、置き換えず、削除しない。rename前の失敗はnot applied、rename後の同期失敗はresult unknown。同値操作は記録を作らない。記録fileとheaderを手で作成・編集・削除しない。
 
-OS lock、Git indexで `.axon/` の下のpathがunmergedでないことの検査、管理directoryがsymlinkでないことの検査は、確定した保存先とそれを含むworktreeに対して行う。無視する運用では複数のworktreeが同じ保存先と同じlockを使うため、並行mutationは直列化される。
+OS lock、Git indexで `.axon/` の下のpathがunmergedでないことの検査、管理directoryがsymlinkでないことの検査は、確定した保存先とそれを含むworktreeに対して行う。Git内では保存先の確定より前にも、headerのない段ごとに（`.axon` がない段を含む）そのworktreeのindexを検査し、unmergedなら破損・未初期化の判定や次の段へ進まずに停止する。統合が未解決なままheaderが作業treeから消えた保存先を、headerの欠落や未初期化と取り違えず、次の段の保存先へ書かないためである。無視する運用では複数のworktreeが同じ保存先と同じlockを使うため、並行mutationは直列化される。
 
 Git/editorはOS lockに従わないため、同じworktreeでcheckout/merge/editor保存とAxon書込を並行しない。
 
 ## 統合と検査
 
-Git統合時にAxonは呼ばれず、両側の記録は別fileとして残る。同じEntityへの両側の操作は衝突（headが複数）、構造の制約に反する組合せは違反、cherry-pick・revert・未commitの記録を残したcheckoutなどで親記録が欠けた記録はgap、`.axon/records/` の下の記録以外のfile（`.tmp` で終わる一時fileを除く）、名前とhashが一致しないfile、headerの欠落・読めないheader・未知のformatは破損として、次の読取と `axon storage check [ROOT]` が報告する。衝突中のEntityがあれば `axon resolve` と `axon note add` 以外の変更が拒否され、破損があれば読取を含む全操作が止まる。違反とgapは通常操作を止めない。通常操作は各前提に加えて違反を増やさないことを要し、違反に含まれるEntityには修復のために一部の固定が免除される。`axon import prepare|check|apply` は違反のある保存先でも拒否される（途中で止まった反映の再試行は `axon-kit:declaration`）。Git indexで `.axon/` の下のpathがunmergedなら内容が有効でも全操作が拒否され、Gitでの解決とstageが要る。追跡する運用のCIは保存先に `axon storage check` を実行する。
+Git統合時にAxonは呼ばれず、両側の記録は別fileとして残る。同じEntityへの両側の操作は衝突（headが複数）、構造の制約に反する組合せは違反、cherry-pick・revert・未commitの記録を残したcheckoutなどで親記録が欠けた記録はgap、`.axon/records/` の下の記録以外のfile（`.tmp` で終わる一時fileを除く）、名前とhashが一致しないfile、headerの欠落・読めないheader・未知のformatは破損として、次の読取と `axon storage check [ROOT]` が報告する。衝突中のEntityがあれば `axon resolve` と `axon note add` 以外の変更が拒否され、破損があれば読取を含む全操作が止まる。違反とgapは通常操作を止めない。通常操作は各前提に加えて違反を増やさないことを要し、違反に含まれるEntityには修復のために一部の固定が免除される。`axon import prepare|check|apply` は違反のある保存先でも拒否される（途中で止まった反映の再試行は `axon-kit:declaration`）。Git indexで `.axon/` の下のpathがunmergedなら内容が有効でも全操作が拒否され、そのpathとindexを持つworktreeを示す診断だけが出る。headerが作業treeになくても破損としては報告されず、そのworktreeでのGitでの解決とstageが要る。追跡する運用のCIは保存先に `axon storage check` を実行する。
 
 衝突と違反の解決は `axon-kit:resolve` を使い、呼び出し側がその範囲を与えていなければ拒否と理由を返す。通常操作の権限から採るheadの選択や修復へ広げない。破損は利用者がfileを直すまで解けず、改行変換が疑われる場合は診断の `Hint:` と `axon docs` の手順を呼出し側へ返す。Axonの状態の取り消しはlifecycle操作で行い、Gitのrevertに頼らない。revertは記録fileを消すだけで、後続の記録があればgapと偽の衝突になる。

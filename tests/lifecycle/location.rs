@@ -77,21 +77,20 @@ fn head_branch(root: &Path) -> String {
 fn merge_branch(root: &Path, branch: &str) -> Output {
     git_integration(root, &["merge", "--no-edit", branch])
 }
-/// Replace the index entry for the header with unresolved stages.
-fn make_index_unmerged(root: &Path) {
-    let blob =
-        String::from_utf8(git_output(root, &["hash-object", "-w", ".axon/header.json"]).stdout)
-            .unwrap();
-    let blob = blob.trim();
-    let stages = format!(
-        "100644 {blob} 1\t.axon/header.json\n100644 {blob} 2\t.axon/header.json\n100644 {blob} 3\t.axon/header.json\n"
-    );
-    git(
-        root,
-        &["update-index", "--force-remove", ".axon/header.json"],
-    );
+/// Replace the index entries for `paths` with unresolved stages of their working tree files.
+fn make_index_unmerged(root: &Path, paths: &[&str]) {
+    let mut stages = String::new();
+    for path in paths {
+        let blob =
+            String::from_utf8(git_output(root, &["hash-object", "-w", path]).stdout).unwrap();
+        let blob = blob.trim();
+        for stage in 1..=3 {
+            stages.push_str(&format!("100644 {blob} {stage}\t{path}\0"));
+        }
+        git(root, &["update-index", "--force-remove", path]);
+    }
     let mut child = isolated_git(root)
-        .args(["update-index", "--index-info"])
+        .args(["update-index", "-z", "--index-info"])
         .stdin(Stdio::piped())
         .spawn()
         .unwrap();
@@ -313,8 +312,14 @@ fn the_displayed_steps_track_the_store_and_git_merges_branches_without_configura
     }
 }
 
-const UNMERGED: &str =
-    "unmerged Git index under .axon/; resolve and stage it before normal operations";
+const UNMERGED: &str = "unmerged Git index under .axon/ in the worktree";
+/// The whole unmerged diagnostic for a header left unmerged in the index of `worktree`.
+fn unmerged_header(worktree: &Path) -> String {
+    format!(
+        "{UNMERGED} {}; resolve and stage these paths before normal operations\nUnmerged: .axon/header.json\n",
+        fs::canonicalize(worktree).unwrap().display()
+    )
+}
 /// Branches `left` and `right`, each initializing a store of its own from the returned base
 /// branch, so merging one into the other stops with the header added on both sides.
 fn conflicting_stores(f: &Fixture) -> String {
@@ -338,7 +343,10 @@ fn storage_check_reports_an_unmerged_index_with_or_without_an_explicit_root() {
     let unmerged = String::from_utf8(git_output(&f.0, &["status", "--porcelain"]).stdout).unwrap();
     assert!(unmerged.contains("AA .axon/header.json"), "{unmerged}");
     let without_root = failure(f.run(&["storage", "check"]));
-    assert!(without_root.contains(UNMERGED), "{without_root}");
+    assert!(
+        without_root.ends_with(&unmerged_header(&f.0)),
+        "{without_root}"
+    );
     for root in [".", f.0.to_str().unwrap()] {
         assert_eq!(failure(f.run(&["storage", "check", root])), without_root);
     }
@@ -365,7 +373,7 @@ fn storage_check_reports_an_unmerged_index_with_or_without_an_explicit_root() {
 }
 
 #[test]
-fn an_unmerged_index_is_reported_before_a_header_missing_from_the_working_tree() {
+fn an_unmerged_index_is_reported_alone_when_it_removed_the_header_from_the_working_tree() {
     let f = repository();
     let base = conflicting_stores(&f);
     assert!(!merge_branch(&f.0, "left").status.success());
@@ -374,13 +382,10 @@ fn an_unmerged_index_is_reported_before_a_header_missing_from_the_working_tree()
     let unmerged = String::from_utf8(git_output(&f.0, &["status", "--porcelain"]).stdout).unwrap();
     assert!(unmerged.contains("AA .axon/header.json"), "{unmerged}");
     let without_root = failure(f.run(&["storage", "check"]));
-    // The unmerged index comes first, the missing header after it.
-    let unmerged_at = without_root.find(UNMERGED);
-    let missing_at = without_root.find("Corrupt: header.json: missing");
-    assert!(
-        unmerged_at.is_some() && missing_at.is_some() && unmerged_at < missing_at,
-        "{without_root}"
-    );
+    // The header returns once Git resolves the index, so its absence is not reported as damage.
+    let diagnostic = unmerged_header(&f.0);
+    assert!(without_root.ends_with(&diagnostic), "{without_root}");
+    assert!(!without_root.contains("Corrupt"), "{without_root}");
     for root in [".", f.0.to_str().unwrap()] {
         assert_eq!(failure(f.run(&["storage", "check", root])), without_root);
     }
@@ -395,11 +400,12 @@ fn an_unmerged_index_is_reported_before_a_header_missing_from_the_working_tree()
     assert_eq!(from_outside, without_root);
     for args in [vec!["list"], vec!["capture", "--title", "rejected"]] {
         let error = failure(f.run(&args));
-        assert!(error.contains(UNMERGED), "{args:?}: {error}");
+        assert!(error.ends_with(&diagnostic), "{args:?}: {error}");
         assert!(!error.contains("not a store"), "{args:?}: {error}");
     }
     // A linked worktree without a store of its own reaches the main worktree's index, and
-    // neither falls through past that store nor initializes a second one beside it.
+    // neither falls through past that store nor initializes a second one beside it. The
+    // diagnostic names the main worktree, whose index has to be resolved.
     let linked = Fixture::new();
     git(
         &f.0,
@@ -408,7 +414,7 @@ fn an_unmerged_index_is_reported_before_a_header_missing_from_the_working_tree()
     let in_linked = |args: &[&str]| failure(command(&linked.0).args(args).output().unwrap());
     assert_eq!(in_linked(&["storage", "check"]), without_root);
     for args in [vec!["list"], vec!["init", "t"]] {
-        assert!(in_linked(&args).contains(UNMERGED), "{args:?}");
+        assert!(in_linked(&args).ends_with(&diagnostic), "{args:?}");
     }
     // Without any file under .axon there is no store to report on, only the index.
     fs::remove_dir_all(f.0.join(".axon")).unwrap();
@@ -416,14 +422,95 @@ fn an_unmerged_index_is_reported_before_a_header_missing_from_the_working_tree()
         let mut args = vec!["storage", "check"];
         args.extend(root);
         let error = failure(f.run(&args));
-        assert!(error.contains(UNMERGED), "{args:?}: {error}");
-        assert!(!error.contains("Corrupt"), "{args:?}: {error}");
+        assert!(error.ends_with(&diagnostic), "{args:?}: {error}");
     }
-    assert!(failure(f.run(&["list"])).contains(UNMERGED));
+    assert!(failure(f.run(&["list"])).ends_with(&diagnostic));
     for args in [vec!["list"], vec!["init", "t"]] {
-        assert!(in_linked(&args).contains(UNMERGED), "{args:?}");
+        assert!(in_linked(&args).ends_with(&diagnostic), "{args:?}");
     }
     assert!(!linked.0.join(".axon").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn unmerged_paths_are_named_from_the_worktree_top_one_line_each() {
+    let f = repository();
+    // A store below the worktree top, checked as an explicit root.
+    let made = Fixture::new();
+    made.init();
+    let axon = f.0.join("sub/.axon");
+    fs::create_dir_all(axon.join("records")).unwrap();
+    fs::copy(header(&made.0), axon.join("header.json")).unwrap();
+    let forged = "sub/.axon/x\nCorrupt: header.json: missing";
+    fs::write(f.0.join(forged), "").unwrap();
+    make_index_unmerged(&f.0, &["sub/.axon/header.json", forged]);
+    let error = failure(f.run(&["storage", "check", "sub"]));
+    // A newline in a path cannot pass for a line of the report.
+    assert!(
+        error.ends_with(&format!(
+            "{UNMERGED} {}; resolve and stage these paths before normal operations\nUnmerged: sub/.axon/header.json\nUnmerged: sub/.axon/x\\nCorrupt: header.json: missing\n",
+            fs::canonicalize(&f.0).unwrap().display()
+        )),
+        "{error}"
+    );
+    assert!(
+        !error.lines().any(|line| line.starts_with("Corrupt")),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_unmerged_index_is_reported_before_a_damaged_store_with_a_header() {
+    let f = repository();
+    f.init();
+    make_index_unmerged(&f.0, &[".axon/header.json"]);
+    let records = f.0.join(".axon/records");
+    fs::remove_dir_all(&records).unwrap();
+    fs::write(&records, "").unwrap();
+    for args in [vec!["storage", "check"], vec!["list"]] {
+        let error = failure(f.run(&args));
+        assert!(error.ends_with(&unmerged_header(&f.0)), "{args:?}: {error}");
+    }
+    // A write lock that cannot be taken is damage as well.
+    fs::remove_file(&records).unwrap();
+    fs::create_dir(&records).unwrap();
+    fs::create_dir(f.0.join(".axon/write.lock")).unwrap();
+    let error = failure(f.run(&["capture", "--title", "rejected"]));
+    assert!(error.ends_with(&unmerged_header(&f.0)), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn unmerged_paths_that_are_not_utf8_stay_apart() {
+    let f = repository();
+    f.init();
+    let blob =
+        String::from_utf8(git_output(&f.0, &["hash-object", "-w", ".axon/header.json"]).stdout)
+            .unwrap();
+    let mut stages = Vec::new();
+    for last in [0xfe_u8, 0xff] {
+        for stage in 1..=3 {
+            stages.extend(format!("100644 {} {stage}\t.axon/a", blob.trim()).as_bytes());
+            stages.extend([last, 0]);
+        }
+    }
+    let mut child = isolated_git(&f.0)
+        .args(["update-index", "-z", "--index-info"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    child.stdin.take().unwrap().write_all(&stages).unwrap();
+    assert!(child.wait().unwrap().success());
+    let error = failure(f.run(&["list"]));
+    assert_eq!(
+        error
+            .lines()
+            .filter(|line| line.starts_with("Unmerged: "))
+            .count(),
+        2,
+        "{error}"
+    );
 }
 
 #[test]
@@ -449,14 +536,22 @@ fn a_linked_worktree_with_an_unmerged_headerless_store_does_not_fall_through_to_
             fs::remove_dir_all(if records.exists() { records } else { axon }).unwrap();
         }
         let without_root = run(&["storage", "check"]);
-        assert!(without_root.contains(UNMERGED), "{without_root}");
-        // A header missing beside records is reported for this worktree's `.axon`.
-        let missing = format!("{}/.axon", fs::canonicalize(&linked.0).unwrap().display());
-        assert_eq!(without_root.contains(&missing), records, "{without_root}");
-        assert_eq!(without_root.contains("Corrupt"), records, "{without_root}");
+        // The diagnostic names this worktree, whose index is unmerged, whether or not records
+        // remain beside the missing header.
+        assert!(
+            without_root.ends_with(&unmerged_header(&linked.0)),
+            "{records}: {without_root}"
+        );
+        assert!(
+            !without_root.contains("Corrupt"),
+            "{records}: {without_root}"
+        );
         assert_eq!(run(&["storage", "check", "."]), without_root);
         for args in [vec!["list"], vec!["capture", "--title", "rejected"]] {
-            assert!(run(&args).contains(UNMERGED), "{args:?}");
+            assert!(
+                run(&args).ends_with(&unmerged_header(&linked.0)),
+                "{args:?}"
+            );
         }
     }
     assert!(!f.ok(&["list"]).contains("rejected"));
@@ -993,11 +1088,16 @@ fn a_branch_without_the_tracked_store_writes_the_main_worktrees_files() {
             .any(|line| line == "?? .axon/records/" || line.starts_with("?? .axon/records/")),
         "the accepted side effect shows as a new record file in the main worktree: {status}"
     );
-    // The index check follows the store, not the worktree the command ran in.
-    make_index_unmerged(&f.0);
+    // The index check follows the store, not the worktree the command ran in, and the
+    // diagnostic names the main worktree and each of its unmerged paths once.
+    make_index_unmerged(&f.0, &[".axon/header.json", ".axon/.gitignore"]);
+    let diagnostic = format!(
+        "{UNMERGED} {}; resolve and stage these paths before normal operations\nUnmerged: .axon/.gitignore\nUnmerged: .axon/header.json\n",
+        fs::canonicalize(&f.0).unwrap().display()
+    );
     for args in [vec!["list"], vec!["note", "add", &id, "-m", "rejected"]] {
         let error = failure(command(&linked.0).args(args).output().unwrap());
-        assert!(error.contains("unmerged"), "{error}");
+        assert!(error.ends_with(&diagnostic), "{error}");
     }
 }
 

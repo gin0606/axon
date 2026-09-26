@@ -109,7 +109,7 @@ Git 内では現在の repository を探索境界とし、次の順で保存先�
 
 通常操作の OS lock、Git index の unmerged 検査、管理 directory が通常の directory であることの検査（symlink の拒否）は、現在の worktree ではなく、確定した保存先と、それを含む worktree に対して行う。保存先の確定より前の unmerged 検査は、次の段落のとおり header のない段に対して行う。
 
-Git 内では、header file のない段ごとに、header の有無による確定と破損・未知の format・未初期化の判定より先に、その段の worktree の Git index で `.axon/` の下に unmerged な path があるかを検査する（`.axon` に記録などがある場合、残骸しかない場合、`.axon` が存在しない場合のいずれも）。unmerged なら次の段へ進まずに停止し、unmerged を報告する。統合が未解決なまま header が作業 tree から消えた保存先では、header の欠落や未初期化より Git での解決と stage が要ることを示し、その worktree が追跡する保存先を飛ばして次の段の保存先を使わないためである。header file のある段では保存先に確定し、その保存先の unmerged 検査は読取の前に行う。
+Git 内では、header file のない段ごとに、header の有無による確定と破損・未知の format・未初期化の判定より先に、その段の worktree の Git index で `.axon/` の下に unmerged な path があるかを検査する（`.axon` に記録などがある場合、残骸しかない場合、`.axon` が存在しない場合のいずれも）。unmerged なら次の段へ進まずに停止し、unmerged を報告する。統合が未解決なまま header が作業 tree から消えた保存先では、header の欠落や未初期化より Git での解決と stage が要ることを示し、その worktree が追跡する保存先を飛ばして次の段の保存先を使わないためである。unmerged の報告は、unmerged な path と、その index を持つ worktree の path を示す単独の診断で、header が作業 tree になくても header の欠落を破損として併記しない。header の有無と破損は、Git での解決と stage の後の探索と読取で判定するためである。linked worktree から main worktree の index で止まった場合も、どの worktree で解決するかが分かる。header file のある段では保存先に確定し、その保存先の unmerged 検査は読取の前に行う。
 
 Git 外では最寄りの header file を持つ祖先を管理 root とし、中断した初期化の残骸しかない `.axon` では探索を止めない。header がなく記録やその他の file がある `.axon` は破損または未知の format として停止する。
 
