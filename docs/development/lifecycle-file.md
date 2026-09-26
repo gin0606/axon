@@ -74,7 +74,7 @@ axon resolve ID --head RECORD_ID -r '残作業のある側を採る'
 axon storage check
 ```
 
-`axon storage check [ROOT]` は破損、衝突、違反、gap を報告し、破損・衝突・違反のいずれかがあれば非 0 で終了する（gap は情報）。破損があれば記録から導出する検査は行わない。引数なしでは探索で確定した保存先、`ROOT` を与えればその管理 root を探索せずに検査する。条件コマンドを実行せず、保存先を変更しない。
+`axon storage check [ROOT]` は破損、衝突、違反、gap を報告し、破損・衝突・違反のいずれかがあれば非 0 で終了する（gap は情報）。破損があれば記録から導出する検査は行わない。引数なしでは探索で確定した保存先、`ROOT` を与えればその管理 root を探索せずに検査する。`ROOT` の指定が省くのは探索だけで、Git の扱い（unmerged index の検査、探索が拒否する Git の境界のエラー）は探索と同じ。条件コマンドを実行せず、保存先を変更しない。
 
 `axon resolve ID --head RECORD_ID` は通常の writer と同じ lock と境界で解決記録を一つ書く。head の一覧は保存先の現在の記録から計算し、指定した記録 ID が対象 Entity の head でなければ拒否する。解決記録の後に残る違反は通常操作で直す。cherry-pick と revert による gap の扱いと、偽の衝突の解決は [保存と統合の契約](../reference/storage.md#記録の欠けgap) に定める。
 

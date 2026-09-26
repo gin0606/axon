@@ -875,9 +875,9 @@ fn valid_store_with_unmerged_index_rejects_normal_operations() {
     assert!(failure(f.run(&["list"])).contains("unmerged"));
     failure(f.run(&["start", &id]));
     assert_eq!(f.record_files(), before);
-    // An explicit root is checked without Git.
-    let check = f.run(&["storage", "check", f.0.to_str().unwrap()]);
-    assert!(check.status.success());
+    // An explicit root inside the worktree checks the index as discovery does.
+    let error = failure(f.run(&["storage", "check", f.0.to_str().unwrap()]));
+    assert!(error.contains("unmerged"), "{error}");
     git(&f.0, &["add", ".axon"]);
     f.ok(&["start", &id]);
 }

@@ -14,7 +14,8 @@ use std::{
 pub struct Location {
     /// The directory holding the selected `.axon`.
     pub root: PathBuf,
-    /// The current worktree root; the management root outside Git.
+    /// The worktree root: the current one after discovery, the one holding an explicit root
+    /// otherwise; the management root outside Git.
     pub worktree: PathBuf,
     git: Option<Git>,
 }
@@ -58,6 +59,14 @@ struct Discovered {
     root: PathBuf,
     common: PathBuf,
     git_dir: PathBuf,
+}
+impl Git {
+    fn of(found: Discovered) -> Result<Self> {
+        Ok(Self {
+            linked: fs::canonicalize(&found.git_dir)? != fs::canonicalize(&found.common)?,
+            common: found.common,
+        })
+    }
 }
 /// The worktree root, the common directory and the Git directory, from a single rev-parse.
 fn git(cwd: &Path) -> Result<Option<Discovered>> {
@@ -236,9 +245,10 @@ pub fn obstructed_root(cwd: &Path) -> Result<Option<PathBuf>> {
     let cwd = fs::canonicalize(cwd)?;
     let candidates = match git(&cwd)? {
         Some(found) => {
-            let mut roots = vec![found.root];
-            if fs::canonicalize(&found.git_dir)? != fs::canonicalize(&found.common)?
-                && let Some(main) = main_worktree(&found.common)?
+            let mut roots = vec![found.root.clone()];
+            let git = Git::of(found)?;
+            if git.linked
+                && let Some(main) = main_worktree(&git.common)?
             {
                 roots.push(main);
             }
@@ -273,11 +283,9 @@ impl Location {
     pub fn discover(cwd: &Path, init: bool) -> Result<Self> {
         let cwd = fs::canonicalize(cwd)?;
         if let Some(found) = git(&cwd)? {
-            let git = Git {
-                linked: fs::canonicalize(&found.git_dir)? != fs::canonicalize(&found.common)?,
-                common: found.common,
-            };
-            let mut root = found.root.clone();
+            let worktree = found.root.clone();
+            let git = Git::of(found)?;
+            let mut root = worktree.clone();
             // A directory that is not a store stops here; only an absent store falls through
             // to the main worktree's.
             if !init
@@ -290,7 +298,7 @@ impl Location {
             }
             return Ok(Self {
                 root,
-                worktree: found.root,
+                worktree,
                 git: Some(git),
             });
         }
@@ -322,13 +330,21 @@ impl Location {
         }
     }
     /// A management root given explicitly, without discovery: what `axon storage check ROOT`
-    /// inspects. Git is not consulted.
+    /// inspects. Git is consulted as in discovery, so inside a Git worktree its index is
+    /// checked and a Git boundary discovery rejects is an error here too.
     pub fn explicit(root: &Path) -> Result<Self> {
         let root = fs::canonicalize(root)?;
+        let Some(found) = git(&root)? else {
+            return Ok(Self {
+                worktree: root.clone(),
+                root,
+                git: None,
+            });
+        };
         Ok(Self {
-            worktree: root.clone(),
             root,
-            git: None,
+            worktree: found.root.clone(),
+            git: Some(Git::of(found)?),
         })
     }
     pub(crate) fn header(&self) -> PathBuf {

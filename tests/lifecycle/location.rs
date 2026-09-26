@@ -314,6 +314,50 @@ fn the_displayed_steps_track_the_store_and_git_merges_branches_without_configura
 }
 
 #[test]
+fn storage_check_reports_an_unmerged_index_with_or_without_an_explicit_root() {
+    let f = repository();
+    let base = head_branch(&f.0);
+    for branch in ["left", "right"] {
+        git(&f.0, &["checkout", "-q", &base]);
+        git(&f.0, &["checkout", "-qb", branch]);
+        f.init();
+        f.accepted(branch);
+        track_store(&f.0);
+        git_commit(&f.0, &["-qm", branch]);
+    }
+    // Both sides created the header, so the merge stops with it added on both.
+    assert!(!merge_branch(&f.0, "left").status.success());
+    let unmerged = String::from_utf8(git_output(&f.0, &["status", "--porcelain"]).stdout).unwrap();
+    assert!(unmerged.contains("AA .axon/header.json"), "{unmerged}");
+    let expected = "unmerged Git index under .axon/; resolve and stage it before normal operations";
+    let without_root = failure(f.run(&["storage", "check"]));
+    assert!(without_root.contains(expected), "{without_root}");
+    for root in [".", f.0.to_str().unwrap()] {
+        assert_eq!(failure(f.run(&["storage", "check", root])), without_root);
+    }
+    let outside = Fixture::new();
+    outside.init();
+    // The index checked is ROOT's, whichever directory the command runs in.
+    let from_outside = failure(
+        command(&outside.0)
+            .args(["storage", "check", f.0.to_str().unwrap()])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(from_outside, without_root);
+    // A Git boundary that discovery rejects is rejected for an explicit root too.
+    let error = failure(f.run(&["storage", "check", ".git"]));
+    assert!(error.contains("Git discovery failed"), "{error}");
+    // A root outside Git is not checked against the index of the directory the command runs in.
+    let check = f.run(&["storage", "check", outside.0.to_str().unwrap()]);
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+}
+
+#[test]
 fn init_outside_git_creates_the_store_without_git_guidance() {
     let f = Fixture::new();
     let output = f.ok(&["init", "t"]);
