@@ -4,7 +4,7 @@
 
 ## 初期化と探索
 
-`axon init demo` は現在の管理 root に `.axon/records/`、`.axon/.gitignore`、`.axon/.gitattributes`、`.axon/header.json` を新規作成する。Git 内では現在の worktree root、Git 外では現在 directory を対象とし、Git 外で既存管理 root 内への入れ子の `axon init` は拒否する。`.axon/` に header、記録、内容の異なる `.gitignore` か `.gitattributes`、以前の形式の `state.jsonl` などがあれば、その path を示して拒否する。lock、`.tmp` で終わる file、空の `records/`、同じ内容の `.gitignore` と `.gitattributes` だけなら中断した初期化の残骸として作り直す。repository root の `.gitignore`・`.gitattributes`・Git config を作成も変更もせず、stage も commit もしない。Git 内では初期化した保存先が untracked に見えることと、無視する運用・追跡する運用それぞれの手順、Axon の状態の取り消しに revert を使わないことを表示する。
+`axon init demo` は現在の管理 root に `.axon/records/`、`.axon/.gitignore`、`.axon/.gitattributes`、`.axon/header.json` を新規作成する。Git 内では現在の worktree root、Git 外では現在 directory を対象とし、Git 外で既存管理 root 内への入れ子の `axon init` は拒否する。`.axon/` に header、記録、内容の異なる `.gitignore` か `.gitattributes`、以前の形式の `state.jsonl` などがあれば、その path を示して拒否する。lock、`.tmp` で終わる file、空の `records/`、同じ内容（CRLF を LF と読んで比べる）の `.gitignore` と `.gitattributes` だけなら中断した初期化の残骸として作り直し、CRLF を含む file は `axon init` が書く内容で置き換える。repository root の `.gitignore`・`.gitattributes`・Git config を作成も変更もせず、stage も commit もしない。Git 内では初期化した保存先が untracked に見えることと、無視する運用・追跡する運用それぞれの手順、Axon の状態の取り消しに revert を使わないことを表示する。
 
 ```gitignore
 # .axon/.gitignore

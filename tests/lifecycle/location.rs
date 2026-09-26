@@ -408,14 +408,50 @@ fn init_reuses_the_residue_of_an_interrupted_initialization_and_refuses_anything
         fs::read_to_string(directory.join(".gitignore")).unwrap(),
         "*.lock\n*.tmp\n"
     );
-    // Anything else, valid or not, is refused with its path and left as it is.
+    // Line endings do not make residue foreign: `core.autocrlf=true` turns a tracked ignore
+    // file CRLF when no attributes file came with it, and an attributes file may arrive CRLF
+    // too. The retry replaces them with init's bytes, so the store is not tracked with CRLF.
+    for files in [
+        &[(".gitignore", "*.lock\r\n*.tmp\r\n")][..],
+        &[
+            (".gitignore", "*.lock\r\n*.tmp\r\n"),
+            (".gitattributes", "* -text\r\n"),
+        ],
+    ] {
+        let f = repository();
+        let directory = f.0.join(".axon");
+        fs::create_dir_all(directory.join("records")).unwrap();
+        for (name, content) in files {
+            fs::write(directory.join(name), content).unwrap();
+        }
+        assert!(failure(f.run(&["list"])).contains("not initialized"));
+        f.ok(&["init", "t"]);
+        assert_eq!(
+            management_entries(&f.0),
+            [".gitattributes", ".gitignore", "header.json", "records"]
+        );
+        assert_eq!(
+            fs::read_to_string(directory.join(".gitignore")).unwrap(),
+            "*.lock\n*.tmp\n"
+        );
+        assert_eq!(
+            fs::read_to_string(directory.join(".gitattributes")).unwrap(),
+            "* -text\n"
+        );
+        assert!(f.ok(&["list"]).is_empty());
+    }
+    // Anything else, valid or not, is refused with its path and left as it is. Only a CRLF
+    // pair counts as LF: a lone CR is a different content.
     for (name, content) in [
         (
             "state.jsonl",
             "{\"format\":\"axon-file/v1\",\"prefix\":\"t\"}\n",
         ),
         (".gitignore", "# mine\n*\n"),
+        (".gitignore", "# mine\r\n*\r\n"),
         (".gitattributes", "* text=auto\n"),
+        (".gitattributes", "* text=auto\r\n"),
+        (".gitattributes", "* -text\r"),
         ("records/ab/not-a-record", "x"),
         ("axon.db", "\x00\x01leftover bytes"),
     ] {
@@ -700,6 +736,7 @@ fn discovery_settles_on_a_header_and_never_falls_back_from_one() {
         "empty",
         "lock",
         "residue",
+        "crlf-residue",
         "earlier-format",
         "corrupt-header",
         "own-store",
@@ -718,6 +755,12 @@ fn discovery_settles_on_a_header_and_never_falls_back_from_one() {
                 fs::write(linked.0.join(".axon/.gitignore"), "*.lock\n*.tmp\n").unwrap();
                 fs::write(linked.0.join(".axon/.gitattributes"), "* -text\n").unwrap();
                 fs::write(linked.0.join(".axon/header.json.tmp"), "partial").unwrap();
+            }
+            // Both files after Git line-ending conversion.
+            "crlf-residue" => {
+                fs::create_dir(linked.0.join(".axon/records")).unwrap();
+                fs::write(linked.0.join(".axon/.gitignore"), "*.lock\r\n*.tmp\r\n").unwrap();
+                fs::write(linked.0.join(".axon/.gitattributes"), "* -text\r\n").unwrap();
             }
             "earlier-format" => fs::write(linked.0.join(".axon/state.jsonl"), b"old\n").unwrap(),
             "corrupt-header" => fs::write(header(&linked.0), b"not a header\n").unwrap(),

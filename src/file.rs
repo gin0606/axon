@@ -24,7 +24,8 @@ pub const GITIGNORE: &str = "*.lock\n*.tmp\n";
 /// line endings, which would change the bytes a record ID is the hash of. No merge attribute.
 pub const GITATTRIBUTES: &str = "* -text\n";
 /// The files `axon init` writes inside `.axon/` besides the header and the record directory,
-/// by name and content. Discovery treats a file with exactly this content as residue.
+/// by name and content. Discovery treats a file with this content, CRLF read as LF, as residue;
+/// init rewrites such a file with CRLF to this content.
 pub const STORE_FILES: [(&str, &str); 2] =
     [(".gitignore", GITIGNORE), (".gitattributes", GITATTRIBUTES)];
 /// The one line a report adds when a record file is its record with CRLF line endings: one
@@ -183,6 +184,10 @@ fn is_converted_record(bytes: &[u8], id: &RecordId) -> bool {
     if !bytes.contains(&b'\r') {
         return false;
     }
+    RecordId::of(&crlf_as_lf(bytes)) == *id
+}
+/// `bytes` with each CRLF read as LF, undoing a Git line-ending conversion. A lone CR stays.
+pub(crate) fn crlf_as_lf(bytes: &[u8]) -> Vec<u8> {
     let mut restored = Vec::with_capacity(bytes.len());
     for (index, &byte) in bytes.iter().enumerate() {
         if byte == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
@@ -190,7 +195,7 @@ fn is_converted_record(bytes: &[u8], id: &RecordId) -> bool {
         }
         restored.push(byte);
     }
-    RecordId::of(&restored) == *id
+    restored
 }
 /// What one read of the store found: the header, every record, and the files that are not
 /// records. A read with corruption is not usable for derivation.

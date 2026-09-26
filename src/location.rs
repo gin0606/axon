@@ -219,7 +219,7 @@ pub fn presence(root: &Path) -> Result<Presence> {
             }
         } else if let Some((_, written)) = STORE_FILES.iter().find(|(file, _)| name == *file) {
             fs::symlink_metadata(&path)?.file_type().is_file()
-                && fs::read(&path)? == written.as_bytes()
+                && file::crlf_as_lf(&fs::read(&path)?) == written.as_bytes()
         } else {
             false
         };
@@ -424,7 +424,16 @@ impl Location {
             fs::create_dir_all(directory.join(RECORDS_DIRECTORY))?;
             for (name, content) in STORE_FILES {
                 let path = directory.join(name);
-                if !present(&path)? {
+                // Residue with CRLF line endings is replaced: under `* -text` Git would stage
+                // it as is. Anything else already there is left alone.
+                let replace = match file::optional_bytes(&path)? {
+                    None => true,
+                    Some(bytes) => {
+                        bytes != content.as_bytes()
+                            && file::crlf_as_lf(&bytes) == content.as_bytes()
+                    }
+                };
+                if replace {
                     let temp = file::temporary(&path, content.as_bytes())?;
                     fs::rename(&temp, &path)?;
                 }

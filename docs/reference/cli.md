@@ -142,7 +142,7 @@ Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへ
 
 衝突中のEntityが一つでもある保存先では、`axon resolve` と `axon note add` 以外の変更コマンドを拒否し、衝突中のEntityのIDと `axon resolve` を診断に示す。破損のある保存先では読取を含む全コマンド（`axon storage check`、および保存先を開かないコマンドを除く）を拒否し、破損したfileのpathと理由を診断に示す。改行変換が疑われるfile（[保存先の破損](storage.md#保存先の破損)）があれば、`axon storage check` と同じ案内を診断の末尾に添える。
 
-`axon init [PREFIX]` は `.axon/records/`、`.axon/header.json`、`.axon/.gitignore`、`* -text` の1行だけの `.axon/.gitattributes`（記録fileをGitの改行変換から外す。mergeやunionの属性は書かない。[保存と統合の契約](storage.md#保存先と初期化)）を作り、成功時は作成したheaderのpathを示す。Git内ではさらに、保存先がuntrackedに見えること、無視する運用（`.git/info/exclude` などに `.axon/` を書く）と追跡する運用（`git add .axon` してcommitする）の手順、Axonの状態の取り消しにrevertを使わないことを表示する。repository rootのfileとGit configを作成も編集もせず、stage・commitもしない。`.axon/` に中断した初期化の残骸（lock、`.tmp` で終わるfile、空の記録のdirectory、同じ内容の `.gitignore` と `.gitattributes`）以外の何か（header、記録、内容の異なる `.gitignore` か `.gitattributes`、以前の形式のfile）があれば拒否し、そのpathを示す。
+`axon init [PREFIX]` は `.axon/records/`、`.axon/header.json`、`.axon/.gitignore`、`* -text` の1行だけの `.axon/.gitattributes`（記録fileをGitの改行変換から外す。mergeやunionの属性は書かない。[保存と統合の契約](storage.md#保存先と初期化)）を作り、成功時は作成したheaderのpathを示す。Git内ではさらに、保存先がuntrackedに見えること、無視する運用（`.git/info/exclude` などに `.axon/` を書く）と追跡する運用（`git add .axon` してcommitする）の手順、Axonの状態の取り消しにrevertを使わないことを表示する。repository rootのfileとGit configを作成も編集もせず、stage・commitもしない。`.axon/` に中断した初期化の残骸（lock、`.tmp` で終わるfile、空の記録のdirectory、CRLFをLFと読んで同じ内容の `.gitignore` と `.gitattributes`。CRLFのものは `axon init` が書く内容で置き換える）以外の何か（header、記録、内容の異なる `.gitignore` か `.gitattributes`、以前の形式のfile）があれば拒否し、そのpathを示す。
 
 ## 計画全体の取得と一括編集
 
