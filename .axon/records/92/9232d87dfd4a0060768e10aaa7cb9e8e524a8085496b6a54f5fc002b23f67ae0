@@ -1,0 +1,1 @@
+{"entity":"axon-bvm1rk","record":"note","parents":[],"nonce":"9381fd7da000398f93dee08f782aa922","at":"2026-09-15T11:43:29.797067Z","recorder":{"actor":"codex","data":{"session_id":"01a0a4e0-365f-7051-98f2-a757edfc1c88"}},"reason":null,"body":"旧形式の保存先から移行した記録: この Group は 2026-09-15T11:43:29.797067Z に codex が `axon start` した。新形式では Group の `Start` を記録しないため、この Note に写した。"}
