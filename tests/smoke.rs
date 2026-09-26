@@ -508,6 +508,46 @@ fn concurrent_branches_are_read_as_a_conflict_that_stops_ordinary_operations() {
     assert_eq!(left.records().notes_of(&eid("t-item")).len(), 5);
 }
 #[test]
+fn log_lists_each_concurrent_branch_together_with_one_branch_boundary() {
+    let f = Fixture::new();
+    f.init();
+    f.publish(vec![registration(&f.records(), "t-item")]);
+    let left = Fixture::new();
+    let right = Fixture::new();
+    for side in [&left, &right] {
+        fs::create_dir(side.0.join(".axon")).unwrap();
+        fs::copy(f.header(), side.header()).unwrap();
+        merge_records(&f.0, &side.0);
+    }
+    // Several records per side, so that the sides can interleave unless kept together.
+    for (side, name) in [(&left, "left"), (&right, "right")] {
+        for n in 1..=3 {
+            side.ok(&["start", "t-item"]);
+            side.ok(&["release", "t-item", "-r", &format!("{name} {n}")]);
+        }
+    }
+    merge_records(&right.0, &left.0);
+    merge_records(&left.0, &right.0);
+    let log = left.ok(&["log", "t-item"]);
+    assert_eq!(log, right.ok(&["log", "t-item"]));
+    assert!(log.contains("Conflicted: 2 heads"), "{log}");
+    assert_eq!(log.matches("Concurrent branch").count(), 1, "{log}");
+    let at = |text: &str| log.find(text).unwrap_or_else(|| panic!("{text}: {log}"));
+    let boundary = at("Concurrent branch");
+    let (first, second) = if at("left 1") < at("right 1") {
+        ("left", "right")
+    } else {
+        ("right", "left")
+    };
+    let positions: Vec<_> = [first, second]
+        .iter()
+        .flat_map(|name| (1..=3).map(move |n| format!("{name} {n}")))
+        .map(|text| at(&text))
+        .collect();
+    assert!(positions.is_sorted(), "{log}");
+    assert!(positions[2] < boundary && boundary < positions[3], "{log}");
+}
+#[test]
 fn unsupported_corrupt_and_earlier_format_stores_are_rejected_without_changes() {
     for kind in ["wrong-format", "corrupt-header", "earlier-format"] {
         let f = Fixture::new();

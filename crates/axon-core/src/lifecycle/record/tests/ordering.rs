@@ -194,3 +194,122 @@ fn notes_are_ordered_by_time_before_id() {
         .collect();
     assert_eq!(all, vec![earlier_id, later_id]);
 }
+
+#[test]
+fn history_lists_each_concurrent_branch_together_before_the_resolution() {
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    let created = r0.head("i3");
+    let mine = vec![r0.op("i3", Start), r0.op("i3", Release), r0.op("i3", Start)];
+    let theirs = vec![
+        r1.op_as("i3", Start, "other"),
+        r1.op_as("i3", Release, "other"),
+        r1.op_as("i3", Start, "other"),
+    ];
+    r0.sync(&r1);
+    let (first, second) = if mine[0] < theirs[0] {
+        (&mine, &theirs)
+    } else {
+        (&theirs, &mine)
+    };
+    let branches: Vec<_> = std::iter::once(created)
+        .chain(first.iter().cloned())
+        .chain(second.iter().cloned())
+        .collect();
+    let order = |store: &Store| -> Vec<RecordId> {
+        store
+            .history(&id("i3"))
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id.clone())
+            .collect()
+    };
+    let reversed = |store: &Store| {
+        let mut copy = Store::new();
+        let entries: Vec<_> = store.entries().map(|(_, e)| e.clone()).collect();
+        for entry in entries.into_iter().rev() {
+            copy.insert(entry).unwrap();
+        }
+        copy
+    };
+    // Conflicted: one branch runs to its head before the other starts.
+    assert_eq!(r0.heads("i3").len(), 2);
+    assert_eq!(order(&r0.store), branches);
+    assert_eq!(order(&reversed(&r0.store)), branches);
+    // Merged by a resolution: it comes last, after both branches.
+    let resolve = r0.resolve("i3", &mine[2]);
+    let mut resolved = branches.clone();
+    resolved.push(resolve);
+    assert_eq!(order(&r0.store), resolved);
+    assert_eq!(order(&reversed(&r0.store)), resolved);
+    // The only switch between branches is the only place with no causal link to the previous.
+    let unordered = resolved
+        .windows(2)
+        .filter(|pair| !r0.store.precedes(&pair[0], &pair[1]))
+        .count();
+    assert_eq!(unordered, 1);
+}
+
+/// Chosen so that the IDs place another branch between the two records of the inner fork.
+const FORK_ACTOR: &str = "fork1";
+
+#[test]
+fn history_moves_to_the_smallest_waiting_record_when_a_branch_ends() {
+    // Three branches from the creation, one of which forks again after its first record.
+    let mut r0 = Replica::new("r0");
+    r0.op("i3", Start);
+    let mut fork = Replica::from("fork", &r0.store);
+    let sibling = r0.op("i3", Release);
+    let forked = fork.op_as("i3", Release, FORK_ACTOR);
+    let mut r1 = Replica::new("r1");
+    r1.op_as("i3", Start, "b");
+    r1.op_as("i3", Release, "b");
+    let mut r2 = Replica::new("r2");
+    r2.op_as("i3", Start, "c");
+    for other in [&fork, &r1, &r2] {
+        r0.sync(other);
+    }
+    let order: Vec<_> = r0
+        .store
+        .history(&id("i3"))
+        .unwrap()
+        .into_iter()
+        .map(|(id, record)| (id.clone(), record.parents.clone()))
+        .collect();
+    assert_eq!(order.len(), 7);
+    // Each step follows the rule: the smallest child of the previous record whose parents
+    // are listed, or else the smallest record whose parents are listed.
+    let mut fallbacks_with_choice = 0;
+    for i in 1..order.len() {
+        let listed: BTreeSet<_> = order[..i].iter().map(|(id, _)| id).collect();
+        let listable: Vec<_> = order[i..]
+            .iter()
+            .filter(|(_, parents)| parents.iter().all(|p| listed.contains(p)))
+            .collect();
+        let continuing: Vec<_> = listable
+            .iter()
+            .filter(|(_, parents)| parents.contains(&order[i - 1].0))
+            .map(|(id, _)| id)
+            .collect();
+        let expected = if continuing.is_empty() {
+            if listable.len() > 1 {
+                fallbacks_with_choice += 1;
+            }
+            listable.iter().map(|(id, _)| id).min()
+        } else {
+            continuing.into_iter().min()
+        };
+        assert_eq!(expected, Some(&order[i].0), "position {i}");
+    }
+    assert!(fallbacks_with_choice >= 2, "{fallbacks_with_choice}");
+    // Another branch comes between the two records that fork from the same record, so
+    // resuming the nearest sibling would not give this order.
+    let at = |record: &RecordId| order.iter().position(|(id, _)| id == record).unwrap();
+    assert!(at(&sibling).abs_diff(at(&forked)) > 1, "{order:?}");
+    // Parents always come first.
+    for (i, (listed, _)) in order.iter().enumerate() {
+        for (listed_after, _) in &order[i + 1..] {
+            assert!(!r0.store.precedes(listed_after, listed));
+        }
+    }
+}

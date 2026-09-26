@@ -82,7 +82,7 @@ Groupの場合は、この共通表示の末尾へ短い集計と全子孫のツ
 
 `axon note list ID` は指定EntityのNote本文を全文で、各行を2 spaceで字下げして、日時・actor・記録ID（Note ID）とともに日時順に表示する。Noteは因果を持たないため、同じ日時のNoteは記録ID順で固定する。`axon note show ID NOTE_ID` は同じEntityの個別Noteの原文を、字下げせずに取得する。`axon note add ID …` は追記し、編集・削除は設けない。衝突中のEntityにもNoteを追加できる。
 
-`axon log ID` はEntityの記録（Note以外）を読む入口とする。lifecycle遷移は変更前後の状態、日時、記録者、任意の理由を人が読める形で示す。文面編集・所属変更・dependencyの増減・条件の設定と解除も一行ずつ示し、`axon import apply` が書いた記録は `Declaration applied` として変わった項目を示す。種類の変換はlifecycle遷移と区別し、`Converted: Issue → Group` のように変換前後の種類とともに示す。解決記録は `Resolved` として、採ったheadの記録IDと、その現在値のlifecycle・種類を示し、退けたheadは通常表示に列挙しない。記録は因果順で、直前の記録と先後関係がない箇所には `Concurrent branch` と表示し、並行する分岐を時刻で逐次操作へ並べ替えない。親記録が保存先にない記録には `parent missing` を付し、変更前の状態は不明として示す。Entityが衝突中なら末尾にheadの数を示す。内部の因果辺や記録IDの羅列を通常表示へ出さない。
+`axon log ID` はEntityの記録（Note以外）を読む入口とする。lifecycle遷移は変更前後の状態、日時、記録者、任意の理由を人が読める形で示す。文面編集・所属変更・dependencyの増減・条件の設定と解除も一行ずつ示し、`axon import apply` が書いた記録は `Declaration applied` として変わった項目を示す。種類の変換はlifecycle遷移と区別し、`Converted: Issue → Group` のように変換前後の種類とともに示す。解決記録は `Resolved` として、採ったheadの記録IDと、その現在値のlifecycle・種類を示し、退けたheadは通常表示に列挙しない。記録は因果順で、並行する分岐は枝ごとにまとめて並べる。直前の記録を親に持ち、保存先にある親をすべて示し終えた記録があればそれを続け、無ければ示せる記録へ移る。どちらも候補が複数なら記録IDの小さいものを先にするので、枝の間の順序は記録IDで固定され、保存先の file の並びに依存しない。直前の記録と先後関係がない箇所、つまり枝の切り替わりには `Concurrent branch` と表示し、並行する分岐を時刻で逐次操作へ並べ替えない。親記録が保存先にない記録には `parent missing` を付し、変更前の状態は不明として示す。Entityが衝突中なら末尾にheadの数を示す。内部の因果辺や記録IDの羅列を通常表示へ出さない。
 
 `axon note list ID --recorder-details`・`axon log ID --recorder-details` は保存済みdataを併記し、通常表示はactorのみとする。`axon actor` は現在環境で検出できたactor、未取得なら `—` を表示し、保存を行わない。取得の契約は [記録者連携](../development/lifecycle-recorder.md) を参照する。
 

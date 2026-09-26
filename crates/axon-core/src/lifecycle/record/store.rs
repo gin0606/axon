@@ -80,9 +80,11 @@ impl Store {
         View::derive(self)
     }
 
-    /// The Entity's records other than Notes in causal order. Concurrent records are ordered
-    /// by ID for a stable presentation only; `precedes` is the ordering relation. A parent
-    /// missing from the set (a gap) does not order anything.
+    /// The Entity's records other than Notes in causal order, keeping each concurrent branch
+    /// together: the next record is the smallest-ID child of the previous record whose present
+    /// parents are all listed, or else the smallest-ID record that can be listed. The order is for a
+    /// stable presentation only; `precedes` is the ordering relation. A parent missing from
+    /// the set (a gap) does not order anything.
     pub fn history(&self, entity: &EntityId) -> Result<Vec<(&RecordId, &Record)>> {
         let records: BTreeMap<&RecordId, &Record> = self
             .records()
@@ -106,13 +108,19 @@ impl Store {
             }
         }
         let mut order = Vec::new();
-        while let Some(id) = ready.pop_first() {
+        let mut next = None;
+        while let Some(id) = next.take().or_else(|| ready.pop_first()) {
             order.push((id, records[id]));
+            // Children are indexed in ID order, so the first one unblocked is the smallest.
             for child in children.get(id).into_iter().flatten() {
                 let count = pending.get_mut(child).expect("indexed child");
                 *count -= 1;
                 if *count == 0 {
-                    ready.insert(child);
+                    if next.is_none() {
+                        next = Some(*child);
+                    } else {
+                        ready.insert(*child);
+                    }
                 }
             }
         }

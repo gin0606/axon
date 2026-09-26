@@ -847,7 +847,8 @@ pub struct RecordEntry<'a> {
     pub parent_missing: bool,
 }
 
-/// The Entity's records other than Notes in causal order, concurrent records by ID.
+/// The Entity's records other than Notes in the order of `Store::history`: causal, with each
+/// concurrent branch kept together.
 pub fn history<'a>(store: &'a Store, id: &EntityId) -> Result<Vec<RecordEntry<'a>>> {
     let mut previous: Option<&RecordId> = None;
     store
