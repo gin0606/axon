@@ -312,8 +312,9 @@ impl Store {
         Ok(())
     }
     fn guard(&self) -> Result<()> {
-        self.store()?;
-        self.location.check_index()
+        // An unmerged index explains a damaged `.axon` better than the damage does.
+        self.location.check_index()?;
+        self.store()
     }
     /// Reads the header and every record file, collecting what is not a record instead of
     /// stopping at the first; `read` requires an intact store.

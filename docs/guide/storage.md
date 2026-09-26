@@ -49,11 +49,11 @@ Git内では現在のrepositoryの中だけを探し、次の順で保存先を�
 1. 現在のworktree rootの `.axon`。
 2. main worktreeの `.axon`。現在のworktreeがlinked worktreeで、Git common directoryがmain worktree直下の `.git` directoryである場合だけ探します。bare repositoryに付けたworktreeとsubmoduleでは探しません。
 
-各段では `header.json` があればそこに決まり、中断した初期化の残骸しかない `.axon` では次へ進みます。headerがないのに記録や以前の形式のfileがあれば停止します。決まった保存先が破損・読取不能であれば停止し、別の保存先へは切り替えません。Git外では最寄りの保存先を祖先から探します。
+各段では `header.json` があればそこに決まります。Git内でheaderのない段では、まずそのworktreeのGit indexを調べ、`.axon/` の下にunmergedなpathがあれば次へ進まずに停止してunmergedを示します。そうでなければ、中断した初期化の残骸しかない `.axon` では次へ進み、headerがないのに記録や以前の形式のfileがあれば停止します。決まった保存先が破損・読取不能であれば停止し、別の保存先へは切り替えません。Git外では最寄りの保存先を祖先から探します。
 
 追跡する運用では、保存先を持たないbranch（`axon init` より前に分岐したbranchなど）のlinked worktreeから操作すると、2によってmain worktreeの追跡対象の保存先に記録を書きます。変更はmain worktreeの差分として見え、記録は失われないため、この副作用は許容しています。
 
-linked worktreeでの `axon init` は、main worktreeに保存先が既にあれば拒否します。無視する運用では手前に作られた保存先へ読み書きが気づかないまま切り替わり、追跡する運用では別のstoreができて後から統合できなくなるためです。main worktreeに保存先がなければ作成し、他のworktreeからは見えないことを表示します。
+linked worktreeでの `axon init` は、main worktreeに保存先が既にあれば拒否します。無視する運用では手前に作られた保存先へ読み書きが気づかないまま切り替わり、追跡する運用では別のstoreができて後から統合できなくなるためです。main worktreeに保存先がなければ作成し、他のworktreeからは見えないことを表示します。ただしmain worktreeのGit indexで `.axon/` の下がunmergedなら拒否します。
 
 試用には既存の保存先の外にある独立directoryを使ってください。初期化・writerの失敗境界・統合の検査と解決の手順は [file保存とGit統合](../development/lifecycle-file.md)、保存先の判別と統合の契約は [保存と統合の契約](../reference/storage.md) を参照してください。
 

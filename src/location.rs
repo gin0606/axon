@@ -1,6 +1,6 @@
 //! Storage discovery keeps Git boundaries and never falls back from a store it found.
 use crate::{
-    error::{Result, invalid, validate_prefix},
+    error::{Error, Result, invalid, validate_prefix},
     file::{self, HEADER_FILE, RECORDS_DIRECTORY, STORE_FILES, is_temporary},
     lifecycle::record::{Header, encode_header},
 };
@@ -238,32 +238,34 @@ pub fn presence(root: &Path) -> Result<Presence> {
     }
     Ok(Presence::Absent)
 }
-/// The management root whose `.axon` stopped discovery: the first candidate in discovery
-/// order (the current worktree root, then the main worktree's; outside Git each ancestor of
-/// `cwd`) that holds records or foreign files without a header, unless a store comes first.
-pub fn obstructed_root(cwd: &Path) -> Result<Option<PathBuf>> {
-    let cwd = fs::canonicalize(cwd)?;
-    let candidates = match git(&cwd)? {
-        Some(found) => {
-            let mut roots = vec![found.root.clone()];
-            let git = Git::of(found)?;
-            if git.linked
-                && let Some(main) = main_worktree(&git.common)?
-            {
-                roots.push(main);
-            }
-            roots
-        }
-        None => cwd.ancestors().map(Path::to_path_buf).collect(),
-    };
-    for root in candidates {
-        match presence(&root)? {
-            Presence::Absent => {}
-            Presence::Store => return Ok(None),
-            Presence::Obstructed(_) => return Ok(Some(root)),
-        }
+/// Refuses an unmerged Git index under the `.axon` of `root`, which must be inside Git.
+fn unmerged(root: &Path) -> Result<()> {
+    let out = git_command(root)
+        .args(["ls-files", "--unmerged", "--", ".axon"])
+        .output()?;
+    if !out.status.success() {
+        return Err(invalid(format!(
+            "cannot inspect Git index: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
     }
-    Ok(None)
+    if !out.stdout.is_empty() {
+        return Err(Error::Unmerged { root: root.into() });
+    }
+    Ok(())
+}
+/// [`settles`] inside Git. Short of a header, the candidate's index is checked first, whether
+/// its `.axon` holds other files, residue or nothing: an unmerged index there means an
+/// integration left unresolved, which explains a missing header better than "not a store" or
+/// "not initialized", and a store this worktree tracks is not skipped for another one. With a
+/// header, the store's own guard checks the index before anything is read.
+fn settles_in_git(root: &Path) -> Result<bool> {
+    // An unreadable `.axon` is reported by `settles`, after the index.
+    if let Ok(Presence::Store) = presence(root) {
+        return Ok(true);
+    }
+    unmerged(root)?;
+    settles(root)
 }
 /// Whether a header settles discovery here. Records without a header, or any other file,
 /// stop discovery: they are not silently skipped for a store further away.
@@ -271,11 +273,10 @@ fn settles(root: &Path) -> Result<bool> {
     match presence(root)? {
         Presence::Absent => Ok(false),
         Presence::Store => Ok(true),
-        Presence::Obstructed(path) => Err(invalid(format!(
-            "{} is not a store: no {HEADER_FILE} beside {}; an earlier format or a foreign file is not converted",
-            root.join(".axon").display(),
-            path.display()
-        ))),
+        Presence::Obstructed(file) => Err(Error::NotAStore {
+            root: root.to_path_buf(),
+            file,
+        }),
     }
 }
 impl Location {
@@ -286,13 +287,13 @@ impl Location {
             let worktree = found.root.clone();
             let git = Git::of(found)?;
             let mut root = worktree.clone();
-            // A directory that is not a store stops here; only an absent store falls through
-            // to the main worktree's.
+            // An unmerged index or a directory that is not a store stops here; only an absent
+            // store falls through to the main worktree's.
             if !init
-                && !settles(&root)?
+                && !settles_in_git(&root)?
                 && git.linked
                 && let Some(main) = main_worktree(&git.common)?
-                && settles(&main)?
+                && settles_in_git(&main)?
             {
                 root = main;
             }
@@ -354,24 +355,20 @@ impl Location {
     pub fn initialized(&self) -> Result<bool> {
         present(&self.header())
     }
+    /// Refuses an unmerged Git index under `.axon/`; outside Git there is no index to check.
     pub fn check_index(&self) -> Result<()> {
         if self.git.is_some() {
-            let out = git_command(&self.root)
-                .args(["ls-files", "--unmerged", "--", ".axon"])
-                .output()?;
-            if !out.status.success() {
-                return Err(invalid("cannot inspect Git index"));
-            }
-            if !out.stdout.is_empty() {
-                return Err(invalid(
-                    "unmerged Git index under .axon/; resolve and stage it before normal operations",
-                ));
-            }
+            unmerged(&self.root)?;
         }
         Ok(())
     }
+    /// Inside Git an unmerged index is reported before a missing header, as in discovery.
     pub fn open(&self) -> Result<file::Store> {
-        if !settles(&self.root)? {
+        let settled = match self.git {
+            Some(_) => settles_in_git(&self.root)?,
+            None => settles(&self.root)?,
+        };
+        if !settled {
             return Err(invalid("not initialized; run axon init"));
         }
         file::Store::at(self.clone())
@@ -427,12 +424,14 @@ impl Location {
         if linked_worktree
             && let Some(git) = &self.git
             && let Some(main) = main_worktree(&git.common)?
-            && settles(&main)?
         {
-            return Err(invalid(format!(
-                "the main worktree already holds a store at {}; this worktree uses it, and init never creates a second store beside it",
-                main.join(".axon").display()
-            )));
+            // A store whose header an unresolved merge removed is still the main worktree's.
+            if settles_in_git(&main)? {
+                return Err(invalid(format!(
+                    "the main worktree already holds a store at {}; this worktree uses it, and init never creates a second store beside it",
+                    main.join(".axon").display()
+                )));
+            }
         }
         prepare()?;
         let header = self.header();

@@ -107,7 +107,9 @@ Git 内では現在の repository を探索境界とし、次の順で保存先�
 
 追跡する運用で、保存先を持たない branch（`axon init` より前に分岐した branch など）の linked worktree から操作すると、2 によって main worktree の追跡対象の保存先に記録を書く。変更は main worktree の差分として見え、記録は失われないため、この副作用は許容する。main worktree で保存先を持たない branch を checkout した場合は未初期化になる。既存の store を使うには保存先を Git で取り込む。そこで `axon init` を実行すると別の store の新規作成になり、後で一つの保存先に統合できない（header が衝突し、記録は別の store のものになる）。
 
-通常操作の OS lock、Git index の unmerged 検査、管理 directory が通常の directory であることの検査（symlink の拒否）は、現在の worktree ではなく、確定した保存先と、それを含む worktree に対して行う。
+通常操作の OS lock、Git index の unmerged 検査、管理 directory が通常の directory であることの検査（symlink の拒否）は、現在の worktree ではなく、確定した保存先と、それを含む worktree に対して行う。保存先の確定より前の unmerged 検査は、次の段落のとおり header のない段に対して行う。
+
+Git 内では、header file のない段ごとに、header の有無による確定と破損・未知の format・未初期化の判定より先に、その段の worktree の Git index で `.axon/` の下に unmerged な path があるかを検査する（`.axon` に記録などがある場合、残骸しかない場合、`.axon` が存在しない場合のいずれも）。unmerged なら次の段へ進まずに停止し、unmerged を報告する。統合が未解決なまま header が作業 tree から消えた保存先では、header の欠落や未初期化より Git での解決と stage が要ることを示し、その worktree が追跡する保存先を飛ばして次の段の保存先を使わないためである。header file のある段では保存先に確定し、その保存先の unmerged 検査は読取の前に行う。
 
 Git 外では最寄りの header file を持つ祖先を管理 root とし、中断した初期化の残骸しかない `.axon` では探索を止めない。header がなく記録やその他の file がある `.axon` は破損または未知の format として停止する。
 
@@ -115,7 +117,7 @@ Git 外では最寄りの header file を持つ祖先を管理 root とし、中
 
 `axon init` は探索の 2 を使わず、Git 内では現在の worktree root、Git 外では現在 directory を対象とする。Git 外では既存管理 root 内の入れ子初期化を拒否する。
 
-探索の 2 が働く構成の linked worktree での `axon init` は、main worktree に保存先が既にあれば拒否し、その path を示す。無視する運用では手前に保存先ができて読む先が気づかないまま切り替わり、追跡する運用では別の store ができて後で統合できなくなるためである。main worktree に保存先がない場合と、探索の 2 が働かない構成では拒否せず、作成した保存先が他の worktree からは見えないことを表示する。main worktree を判定できなかった場合は、未初期化として扱わずにエラーとする。それ以外の取り違え（読む先の思い違い、worktree の削除による保存先の消失）は利用者の運用に委ね、`axon init` は既存の保存先を壊さないことだけを保証する。
+探索の 2 が働く構成の linked worktree での `axon init` は、main worktree に保存先が既にあれば拒否し、その path を示す。無視する運用では手前に保存先ができて読む先が気づかないまま切り替わり、追跡する運用では別の store ができて後で統合できなくなるためである。main worktree に保存先がない場合と、探索の 2 が働かない構成では拒否せず、作成した保存先が他の worktree からは見えないことを表示する。ただし main worktree の Git index で `.axon/` の下に unmerged な path があれば、統合が未解決なまま header が消えた main worktree の保存先がありうるため、unmerged として拒否する。main worktree を判定できなかった場合は、未初期化として扱わずにエラーとする。それ以外の取り違え（読む先の思い違い、worktree の削除による保存先の消失）は利用者の運用に委ね、`axon init` は既存の保存先を壊さないことだけを保証する。
 
 `axon init` は OS lock（Git 内では common Git directory、Git 外では `.axon/` に置く lock file。file は残る）の下で既存の保存先を確認し、記録の directory を作り、`.axon/.gitignore` と `.axon/.gitattributes` をそれぞれ一時 file から rename で作り、最後に header file を一時 file から rename で公開する。header が公開される前に中断した保存先には記録がなく、header もないので未初期化のままであり、再実行で作り直せる。成功時は作成した header file の path を示す。
 

@@ -72,27 +72,27 @@ pub(super) fn storage(command: Storage) -> Result<Output> {
             display::human_text(reason)
         ))
     };
+    // An unmerged index comes first, and a header missing beside records follows it.
+    let reported = |error: axon::Error| match error {
+        axon::Error::Unmerged { root } => match axon::location::presence(&root) {
+            Ok(axon::location::Presence::Obstructed(_)) => axon::Error::Invalid(format!(
+                "{}\n{}",
+                axon::Error::Unmerged { root: root.clone() },
+                corrupt_header(&root, "missing".into())
+            )),
+            _ => axon::Error::Unmerged { root },
+        },
+        axon::Error::NotAStore { root, .. } => corrupt_header(&root, "missing".into()),
+        other => other,
+    };
     let cwd = std::env::current_dir()?;
     let location = match root {
         Some(root) => Location::explicit(&root)?,
         // Discovery stops at a `.axon` without a header; for the check that directory is
-        // the store to report on. A failing probe does not replace the discovery error.
-        None => match Location::discover(&cwd, false) {
-            Ok(location) => location,
-            Err(error) => {
-                return Err(match axon::location::obstructed_root(&cwd).ok().flatten() {
-                    Some(here) => corrupt_header(&here, "missing".into()),
-                    None => error,
-                });
-            }
-        },
+        // the store to report on.
+        None => Location::discover(&cwd, false).map_err(reported)?,
     };
-    // A header missing beside records is corruption; the residue of an interrupted
-    // initialization is not a store at all.
-    if let axon::location::Presence::Obstructed(_) = axon::location::presence(&location.root)? {
-        return Err(corrupt_header(&location.root, "missing".into()));
-    }
-    let store = location.open()?;
+    let store = location.open().map_err(reported)?;
     let loaded = store.load().map_err(|error| match error {
         axon::Error::Invalid(text) if text.starts_with(axon::file::CORRUPT_HEADER) => {
             corrupt_header(&location.root, text)

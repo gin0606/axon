@@ -354,7 +354,7 @@ Git 内では、現在の worktree root の `.axon` を先に、次に main work
 
 追跡する運用で、保存先を持たない branch (`axon init` より前に分岐した branch、orphan branch) の linked worktree から操作すると、main worktree の追跡対象の保存先に記録を書く。これは許容した。変更は main worktree の差分として見え、記録は失われない。防ぐには運用の種類の判別か、保存先を持たない worktree での操作の一律な拒否が要るが、前者は上の理由で持たず、後者は無視する運用の共有そのものを止めてしまう。
 
-lock、unmerged index の検査、symlink の拒否は、現在の worktree ではなく確定した保存先の側で行う。lock を現在の worktree 側で取ると、共有する保存先への並行 writer が直列化されない。unmerged index の検査を現在の worktree に対して行うと、main worktree の保存先に書く場合に検査が黙って効かなくなる。
+lock、unmerged index の検査、symlink の拒否は、現在の worktree ではなく確定した保存先の側で行う。lock を現在の worktree 側で取ると、共有する保存先への並行 writer が直列化されない。unmerged index の検査を現在の worktree に対して行うと、main worktree の保存先に書く場合に検査が黙って効かなくなる。保存先の確定より前には、header のない段ごとにその worktree の unmerged index を検査する。統合が未解決なまま header が作業 tree から消えた保存先を、header の欠落や未初期化と報告しても利用者は Git での解決に辿り着けず、その worktree が追跡する保存先を飛ばして main worktree の保存先に書いてしまうためである。代わりに、保存先を持たない linked worktree から main worktree の保存先を使う操作ごとに Git の呼出しが一回増える。
 
 linked worktree での `axon init` は、main worktree に保存先が既にあれば拒否する。無視する運用では、手前に保存先ができて読む先が気づかないまま切り替わる。追跡する運用でも、別の store ID の保存先ができて後で統合できなくなるため、ほぼ常に誤りである。それ以外の取り違えは利用者の運用に委ね、`axon init` は既存の保存先を壊さないことだけを保証する。
 

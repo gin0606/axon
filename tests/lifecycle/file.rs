@@ -1645,8 +1645,9 @@ fn git_worktree_operations_start_few_git_processes() {
             .collect()
     };
     // Discovery runs one rev-parse, and one more only from a linked worktree without a store of
-    // its own, which has to look at the main worktree. Reads check the index once, writes twice.
-    for (worktree, rev_parse) in [(&f.0, 1), (&linked.0, 2)] {
+    // its own, which checks its own index and then looks at the main worktree. Reads check the
+    // store's index once, writes twice.
+    for (worktree, rev_parse, own_index) in [(&f.0, 1, 0), (&linked.0, 2, 1)] {
         for (args, unmerged) in [
             (vec!["list"], 1),
             (vec!["proposals"], 1),
@@ -1658,7 +1659,7 @@ fn git_worktree_operations_start_few_git_processes() {
             let observed = calls(worktree, &args);
             assert_eq!(
                 observed.len(),
-                rev_parse + unmerged,
+                rev_parse + own_index + unmerged,
                 "{args:?}: {observed:?}"
             );
             assert_eq!(
@@ -1674,7 +1675,7 @@ fn git_worktree_operations_start_few_git_processes() {
                     .iter()
                     .filter(|call| call.contains("ls-files --unmerged"))
                     .count(),
-                unmerged,
+                own_index + unmerged,
                 "{args:?}: {observed:?}"
             );
         }

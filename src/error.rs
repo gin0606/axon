@@ -1,5 +1,6 @@
 //! Errors shared by storage adapters and their callers.
 use crate::lifecycle;
+use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -11,6 +12,17 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Core(#[from] lifecycle::Error),
+    /// Git's index has unmerged paths under the `.axon` of the management root `root`.
+    #[error("unmerged Git index under .axon/; resolve and stage it before normal operations")]
+    Unmerged { root: PathBuf },
+    /// A `.axon` holding `file` but no header stopped discovery at `root`.
+    #[error(
+        "{} is not a store: no {} beside {}; an earlier format or a foreign file is not converted",
+        .root.join(".axon").display(),
+        crate::file::HEADER_FILE,
+        .file.display()
+    )]
+    NotAStore { root: PathBuf, file: PathBuf },
 }
 pub type Result<T> = std::result::Result<T, Error>;
 pub(crate) fn invalid(message: impl Into<String>) -> Error {
