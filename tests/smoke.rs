@@ -604,6 +604,42 @@ fn log_finishes_a_nested_fork_before_moving_to_another_branch() {
     assert!(lines[inner + 1].starts_with("Concurrent branch"), "{log}");
 }
 #[test]
+fn log_names_an_edit_record_without_field_changes_and_its_reason() {
+    let f = Fixture::new();
+    f.init();
+    let created = registration(&f.records(), "t-item");
+    let mut parent = created.id().unwrap();
+    f.publish(vec![created]);
+    // Edit records with the parent's own values, as a storage migration may write them, and
+    // an edit that changes the title and carries a reason, which keeps its display.
+    for (reason, title) in [
+        (Some("copied from the earlier format"), "t-item"),
+        (None, "t-item"),
+        (Some("retitled"), "renamed"),
+    ] {
+        let edit = Entry::Record(record::Record {
+            entity: eid("t-item"),
+            kind: record::RecordKind::Edit,
+            parents: BTreeSet::from([parent]),
+            at: Utc::now(),
+            recorder: None,
+            reason: reason.map(Into::into),
+            after: current(title),
+        });
+        parent = edit.id().unwrap();
+        f.publish(vec![edit]);
+    }
+    let log = f.ok(&["log", "t-item"]);
+    let lines: Vec<_> = log.lines().collect();
+    assert_eq!(lines.len(), 4, "{log}");
+    assert!(
+        lines[1].ends_with("Edited: no field changes  Reason: copied from the earlier format"),
+        "{log}"
+    );
+    assert!(lines[2].ends_with("Edited: no field changes"), "{log}");
+    assert!(lines[3].ends_with("Edited: title"), "{log}");
+}
+#[test]
 fn unsupported_corrupt_and_earlier_format_stores_are_rejected_without_changes() {
     for kind in ["wrong-format", "corrupt-header", "earlier-format"] {
         let f = Fixture::new();
