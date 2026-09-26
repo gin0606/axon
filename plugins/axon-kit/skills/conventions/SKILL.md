@@ -13,16 +13,16 @@ code表記でない英単語はAxonの操作を指さない。field名、記録�
 
 ## 対象環境を固定する
 
-呼び出し側が指定したrepositoryまたは管理rootで操作する。binaryが指定されていればそれを使い、指定がなければその環境の `axon` を発見し、`axon --version` と `axon --help` を確認する。`axon tasks|accept|cancel|reopen` の有無と必要なleaf helpの構文をこのpluginの契約と照合して、実行ファイルとworking directoryを以後の操作で固定する。別repositoryのソースcheckoutは不要。このplugin内のreferenceと選択したCLIの `axon docs`・helpで手順を完結させる。
+呼び出し側が指定したrepositoryまたは管理rootで操作する。binaryが指定されていればそれを使い、指定がなければその環境の `axon` を発見し、`axon --version` と `axon --help` を確認する。`axon tasks|accept|cancel|reopen|resolve|convert`・`axon storage check` の有無と必要なleaf helpの構文をこのpluginの契約と照合して、実行ファイルとworking directoryを以後の操作で固定する。別repositoryのソースcheckoutは不要。このplugin内のreferenceと選択したCLIの `axon docs`・helpで手順を完結させる。
 
-コマンドやschemaが非対応なら観測したversion・構文・対象を返す。別のbinaryへの切替や、SQL・JSONLの直接編集で操作を代替しない。実保存先の境界は [保存操作](references/mutations.md) に従う。
+コマンドやschemaが非対応なら観測したversion・構文・対象を返す。別のbinaryへの切替や、記録fileやheaderの直接編集で操作を代替しない。実保存先の境界は [保存操作](references/mutations.md) に従う。
 
 ## 必要な契約を読む
 
 - Entity・候補・情報を解釈する前に [モデルと参照](references/model.md)。
 - mutation前に [保存操作と再試行](references/mutations.md)。
 - 新規登録前に [作成と照合](references/creation.md)。
-- 初期化またはfile障害では [保存先と復旧](references/storage.md)。
+- 初期化、統合後の検査、file障害では [保存先と復旧](references/storage.md)。
 
 対象、採用判断、作業選択、実装・review・commitの権限は呼び出し側workflowが与える。CLIが操作を受け付けることも権限の根拠ではない。与えられた効果は重ねて確認せず実行できるが、意味を変える未確定な判断は呼び出し側へ返す。
 

@@ -47,4 +47,4 @@ description: Axonの操作契約の上に、自律実行とユーザー判断の
 
 入力と現在状態を照合でき、同じ効果へ収束する再試行は自律して行う。結果不明、競合、重複作成の可能性、rollback、補償操作、別の最終状態が必要な場合は停止し、観測済みの状態と必要な判断を示す。
 
-選択された保存先へのmutationだけがsandboxに拒否された場合は、そのmutation commandだけをホストの許可機構で再実行する。保存先は探索で決まり、無視する運用ではcurrent worktree外にあるmain worktreeの`.axon/state.jsonl`、追跡する運用ではcurrent worktreeのGit管理対象の`.axon/state.jsonl`になり得る。後者では変更がGitの差分として現れるため、Axon操作の権限をGitのstage、commit、merge、破棄の権限へ広げず、変更artifactを呼び出し元へ返す。別worktreeの未統合snapshotや未調整の実作業はcurrent worktreeから観測できない。読み取りcommandや他のprogramまで権限を広げない。再実行できなければ観測できた適用範囲を返す。`Result unknown`は成功でも未適用でもないため、不明な保存結果を未反映と断定しない。
+選択された保存先へのmutationだけがsandboxに拒否された場合は、そのmutation commandだけをホストの許可機構で再実行する。保存先は探索で決まり、無視する運用ではcurrent worktree外にあるmain worktreeの`.axon/`、追跡する運用ではcurrent worktreeのGit管理対象の`.axon/`（保存先を持たないbranchのlinked worktreeではmain worktreeの`.axon/`）になり得る。後者では変更がGitの差分として現れるため、Axon操作の権限をGitのstage、commit、merge、破棄の権限へ広げず、変更artifactを呼び出し元へ返す。別worktreeの未統合の記録や未調整の実作業はcurrent worktreeから観測できない。読み取りcommandや他のprogramまで権限を広げない。再実行できなければ観測できた適用範囲を返す。`Result unknown`は成功でも未適用でもないため、不明な保存結果を未反映と断定しない。
