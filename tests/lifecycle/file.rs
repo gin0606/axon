@@ -632,6 +632,43 @@ fn storage_check_reports_conflicts_violations_and_gaps_by_severity() {
 }
 
 #[test]
+fn log_of_a_gapped_entity_starts_with_its_creation() {
+    // Start then release, and the Start's file is removed as a revert leaves it. The Release
+    // is then listable at once; the log still starts with the creation, whatever the IDs.
+    let f = Fixture::new();
+    f.init();
+    let kind_of = |relative: &PathBuf| -> String {
+        let bytes = fs::read(f.records_dir().join(relative)).unwrap();
+        let row: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        row["operation"]
+            .as_str()
+            .or_else(|| row["record"].as_str())
+            .unwrap()
+            .into()
+    };
+    let (id, start) = (0..64)
+        .find_map(|n| {
+            let id = f.accepted(&format!("gapped {n}"));
+            f.ok(&["start", &id]);
+            f.ok(&["release", &id]);
+            let paths = record_paths_of(&f.0, &id);
+            let find = |kind: &str| paths.iter().find(|p| kind_of(p) == kind).unwrap().clone();
+            let (created, start, release) = (find("created"), find("start"), find("release"));
+            (file_name(&release) < file_name(&created)).then_some((id, start))
+        })
+        .expect("some Release has a smaller record ID than its creation");
+    fs::remove_file(f.records_dir().join(&start)).unwrap();
+    let log = f.ok(&["log", &id]);
+    let lines: Vec<_> = log.lines().collect();
+    assert!(lines[0].contains("Created: NotStarted"), "{log}");
+    assert!(lines[1].starts_with("Concurrent branch"), "{log}");
+    assert!(
+        lines[2].contains("unknown → NotStarted  parent missing"),
+        "{log}"
+    );
+}
+
+#[test]
 fn tracked_worktrees_merge_record_files_without_merge_attributes_or_configuration() {
     let f = Fixture::new();
     git(&f.0, &["init", "-q"]);

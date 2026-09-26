@@ -562,6 +562,48 @@ fn log_lists_each_concurrent_branch_together_with_one_branch_boundary() {
     assert!(positions[2] < boundary && boundary < positions[3], "{log}");
 }
 #[test]
+fn log_finishes_a_nested_fork_before_moving_to_another_branch() {
+    let f = Fixture::new();
+    f.init();
+    f.publish(vec![registration(&f.records(), "t-item")]);
+    let copy = |from: &Fixture| {
+        let side = Fixture::new();
+        fs::create_dir(side.0.join(".axon")).unwrap();
+        fs::copy(from.header(), side.header()).unwrap();
+        merge_records(&from.0, &side.0);
+        side
+    };
+    // One side starts and then forks into two releases; the other side starts and releases.
+    let left = copy(&f);
+    let right = copy(&f);
+    left.ok(&["start", "t-item"]);
+    let fork = copy(&left);
+    left.ok(&["release", "t-item", "-r", "left inner"]);
+    fork.ok(&["release", "t-item", "-r", "fork inner"]);
+    right.ok(&["start", "t-item"]);
+    right.ok(&["release", "t-item", "-r", "right outer"]);
+    merge_records(&fork.0, &left.0);
+    merge_records(&right.0, &left.0);
+    let log = left.ok(&["log", "t-item"]);
+    assert!(log.contains("Conflicted: 3 heads"), "{log}");
+    // Two switches, one per branch end, and the two inner releases stay next to each other.
+    // The record IDs vary per run; the unit tests of the history order pin the IDs apart.
+    assert_eq!(log.matches("Concurrent branch").count(), 2, "{log}");
+    let lines: Vec<_> = log.lines().collect();
+    let at = |text: &str| {
+        lines
+            .iter()
+            .position(|line| line.contains(text))
+            .unwrap_or_else(|| panic!("{text}: {log}"))
+    };
+    let (inner, other) = (
+        at("left inner").min(at("fork inner")),
+        at("left inner").max(at("fork inner")),
+    );
+    assert_eq!(other - inner, 2, "{log}");
+    assert!(lines[inner + 1].starts_with("Concurrent branch"), "{log}");
+}
+#[test]
 fn unsupported_corrupt_and_earlier_format_stores_are_rejected_without_changes() {
     for kind in ["wrong-format", "corrupt-header", "earlier-format"] {
         let f = Fixture::new();

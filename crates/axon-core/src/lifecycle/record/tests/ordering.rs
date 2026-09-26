@@ -216,22 +216,7 @@ fn history_lists_each_concurrent_branch_together_before_the_resolution() {
         .chain(first.iter().cloned())
         .chain(second.iter().cloned())
         .collect();
-    let order = |store: &Store| -> Vec<RecordId> {
-        store
-            .history(&id("i3"))
-            .unwrap()
-            .into_iter()
-            .map(|(id, _)| id.clone())
-            .collect()
-    };
-    let reversed = |store: &Store| {
-        let mut copy = Store::new();
-        let entries: Vec<_> = store.entries().map(|(_, e)| e.clone()).collect();
-        for entry in entries.into_iter().rev() {
-            copy.insert(entry).unwrap();
-        }
-        copy
-    };
+    let order = |store: &Store| history_ids(store, "i3");
     // Conflicted: one branch runs to its head before the other starts.
     assert_eq!(r0.heads("i3").len(), 2);
     assert_eq!(order(&r0.store), branches);
@@ -250,11 +235,29 @@ fn history_lists_each_concurrent_branch_together_before_the_resolution() {
     assert_eq!(unordered, 1);
 }
 
+fn history_ids(store: &Store, entity: &str) -> Vec<RecordId> {
+    store
+        .history(&id(entity))
+        .unwrap()
+        .into_iter()
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+fn reversed(store: &Store) -> Store {
+    let mut copy = Store::new();
+    let entries: Vec<_> = store.entries().map(|(_, e)| e.clone()).collect();
+    for entry in entries.into_iter().rev() {
+        copy.insert(entry).unwrap();
+    }
+    copy
+}
+
 /// Chosen so that the IDs place another branch between the two records of the inner fork.
 const FORK_ACTOR: &str = "fork1";
 
 #[test]
-fn history_moves_to_the_smallest_waiting_record_when_a_branch_ends() {
+fn history_returns_to_the_nearest_fork_when_a_branch_ends() {
     // Three branches from the creation, one of which forks again after its first record.
     let mut r0 = Replica::new("r0");
     r0.op("i3", Start);
@@ -277,39 +280,171 @@ fn history_moves_to_the_smallest_waiting_record_when_a_branch_ends() {
         .map(|(id, record)| (id.clone(), record.parents.clone()))
         .collect();
     assert_eq!(order.len(), 7);
-    // Each step follows the rule: the smallest child of the previous record whose parents
-    // are listed, or else the smallest record whose parents are listed.
-    let mut fallbacks_with_choice = 0;
+    // Each step follows the rule: the smallest listable child of the previous record, or else
+    // of the most recently listed record that has one, or else the smallest listable record.
+    let mut returns_with_choice = 0;
     for i in 1..order.len() {
         let listed: BTreeSet<_> = order[..i].iter().map(|(id, _)| id).collect();
         let listable: Vec<_> = order[i..]
             .iter()
             .filter(|(_, parents)| parents.iter().all(|p| listed.contains(p)))
             .collect();
-        let continuing: Vec<_> = listable
-            .iter()
-            .filter(|(_, parents)| parents.contains(&order[i - 1].0))
-            .map(|(id, _)| id)
-            .collect();
+        let children_of = |parent: &RecordId| -> Vec<&RecordId> {
+            listable
+                .iter()
+                .filter(|(_, parents)| parents.contains(parent))
+                .map(|(id, _)| id)
+                .collect()
+        };
+        let continuing = children_of(&order[i - 1].0);
         let expected = if continuing.is_empty() {
-            if listable.len() > 1 {
-                fallbacks_with_choice += 1;
+            let resumed = order[..i - 1]
+                .iter()
+                .rev()
+                .map(|(id, _)| children_of(id))
+                .find(|children| !children.is_empty());
+            if resumed.is_some() && listable.len() > 1 {
+                returns_with_choice += 1;
             }
-            listable.iter().map(|(id, _)| id).min()
+            resumed
+                .unwrap_or_else(|| listable.iter().map(|(id, _)| id).collect())
+                .into_iter()
+                .min()
         } else {
             continuing.into_iter().min()
         };
         assert_eq!(expected, Some(&order[i].0), "position {i}");
     }
-    assert!(fallbacks_with_choice >= 2, "{fallbacks_with_choice}");
-    // Another branch comes between the two records that fork from the same record, so
-    // resuming the nearest sibling would not give this order.
+    assert!(returns_with_choice >= 2, "{returns_with_choice}");
+    // The two records that fork from the same record are listed next to each other, although
+    // the IDs place another branch between them.
     let at = |record: &RecordId| order.iter().position(|(id, _)| id == record).unwrap();
-    assert!(at(&sibling).abs_diff(at(&forked)) > 1, "{order:?}");
-    // Parents always come first.
+    assert_eq!(at(&sibling).abs_diff(at(&forked)), 1, "{order:?}");
+    let (low, high) = (sibling.clone().min(forked.clone()), sibling.max(forked));
+    assert!(
+        order.iter().any(|(id, parents)| !parents.is_empty()
+            && low < *id
+            && *id < high
+            && at(id) > at(&high)),
+        "{order:?}"
+    );
+    // Parents always come first. Without merge records, a branch switch follows only the end
+    // of a branch.
     for (i, (listed, _)) in order.iter().enumerate() {
         for (listed_after, _) in &order[i + 1..] {
             assert!(!r0.store.precedes(listed_after, listed));
         }
     }
+    let ids: Vec<_> = order.iter().map(|(id, _)| id.clone()).collect();
+    let switches: Vec<_> = ids
+        .windows(2)
+        .filter(|pair| !r0.store.precedes(&pair[0], &pair[1]))
+        .map(|pair| pair[0].clone())
+        .collect();
+    let ends: Vec<_> = order
+        .iter()
+        .filter(|(id, _)| !order.iter().any(|(_, parents)| parents.contains(id)))
+        .map(|(id, _)| id.clone())
+        .collect();
+    assert_eq!(switches.len(), ends.len() - 1, "{order:?}");
+    assert!(switches.iter().all(|end| ends.contains(end)), "{order:?}");
+    assert_eq!(history_ids(&reversed(&r0.store), "i3"), ids);
+}
+
+#[test]
+fn history_finishes_a_nested_fork_before_the_next_branch() {
+    // C → S0 → {R0, RF} and C → SB → RB, with actors chosen so that SB's ID falls between R0
+    // and RF: listing the smallest waiting record would put SB and RB between them.
+    let build = |fork_actor: &str, other_actor: &str| {
+        let mut r0 = Replica::new("r0");
+        let created = r0.head("i3");
+        let s0 = r0.op("i3", Start);
+        let mut fork = Replica::from("fork", &r0.store);
+        let r0_release = r0.op("i3", Release);
+        let rf = fork.op_as("i3", Release, fork_actor);
+        let mut other = Replica::new("r1");
+        let sb = other.op_as("i3", Start, other_actor);
+        let rb = other.op_as("i3", Release, other_actor);
+        r0.sync(&fork);
+        r0.sync(&other);
+        let (first, second) = (r0_release.clone().min(rf.clone()), r0_release.max(rf));
+        (r0.store, [created, s0, first, second, sb, rb])
+    };
+    let (store, [created, s0, first, second, sb, rb]) = (0..64)
+        .flat_map(|f| (0..64).map(move |o| (format!("f{f}"), format!("o{o}"))))
+        .map(|(f, o)| build(&f, &o))
+        .find(|(_, [_, s0, first, second, sb, _])| s0 < sb && first < sb && sb < second)
+        .expect("some actors place SB between the two records of the inner fork");
+    let expected = vec![created, s0, first, second, sb, rb];
+    assert_eq!(history_ids(&store, "i3"), expected);
+    assert_eq!(history_ids(&reversed(&store), "i3"), expected);
+    // Concurrent branches start only after R0 and RF, the ends of the inner fork.
+    let unordered: Vec<_> = expected
+        .windows(2)
+        .enumerate()
+        .filter(|(_, pair)| !store.precedes(&pair[0], &pair[1]))
+        .map(|(i, _)| i + 1)
+        .collect();
+    assert_eq!(unordered, vec![3, 4]);
+}
+
+#[test]
+fn history_starts_with_the_creation_record_before_a_gap_root() {
+    // C → S → R with S missing: R has a parent missing from the set. Actors are chosen so that
+    // R's ID is below C's, so ID order alone would start the history before the creation.
+    let (store, created, gap_root) = (0..256)
+        .map(|n| {
+            let mut r = Replica::new("r0");
+            let created = r.head("i3");
+            let start = r.op_as("i3", Start, &format!("a{n}"));
+            let release = r.op_as("i3", Release, &format!("a{n}"));
+            let kept: Vec<_> = r
+                .store
+                .entries()
+                .filter(|(id, _)| **id != start)
+                .map(|(_, e)| e.clone())
+                .collect();
+            let mut store = Store::new();
+            for entry in kept {
+                store.insert(entry).unwrap();
+            }
+            (store, created, release)
+        })
+        .find(|(_, created, gap_root)| gap_root < created)
+        .expect("some actor gives the gap root a smaller ID than the creation");
+    let expected = vec![created, gap_root];
+    assert_eq!(history_ids(&store, "i3"), expected);
+    assert_eq!(history_ids(&reversed(&store), "i3"), expected);
+}
+
+#[test]
+fn history_returns_to_an_open_fork_before_a_gap_root() {
+    // C → {A, B}, and C → S → R → R2 with S missing, so R is a gap root. Actors are chosen so
+    // that R's ID is below A's and B's: the fork of C still finishes before the gap branch.
+    let (store, expected) = (0..64)
+        .flat_map(|b| (0..64).map(move |g| (format!("b{b}"), format!("g{g}"))))
+        .map(|(b, g)| {
+            let mut r0 = Replica::new("r0");
+            let created = r0.head("i3");
+            let a = r0.op("i3", Start);
+            let mut other = Replica::new("r1");
+            let b = other.op_as("i3", Start, &b);
+            let mut gapped = Replica::new("r2");
+            let start = gapped.op_as("i3", Start, &g);
+            let gap_root = gapped.op_as("i3", Release, &g);
+            let after_gap = gapped.op_as("i3", Start, &g);
+            r0.sync(&other);
+            let mut store = r0.store.clone();
+            for (id, entry) in gapped.store.entries() {
+                if *id != start && !store.contains(id) {
+                    store.insert(entry.clone()).unwrap();
+                }
+            }
+            let (first, second) = (a.clone().min(b.clone()), a.max(b));
+            (store, vec![created, first, second, gap_root, after_gap])
+        })
+        .find(|(_, order)| order[3] < order[1])
+        .expect("some actors give the gap root a smaller ID than both children of the creation");
+    assert_eq!(history_ids(&store, "i3"), expected);
+    assert_eq!(history_ids(&reversed(&store), "i3"), expected);
 }

@@ -88,10 +88,13 @@ impl Store {
     }
 
     /// The Entity's records other than Notes in causal order, keeping each concurrent branch
-    /// together: the next record is the smallest-ID child of the previous record whose present
-    /// parents are all listed, or else the smallest-ID record that can be listed. The order is for a
-    /// stable presentation only; `precedes` is the ordering relation. A parent missing from
-    /// the set (a gap) does not order anything.
+    /// together. A record can be listed once its present parents are all listed. The next
+    /// record is the smallest-ID listable child of the previous record; failing that, the
+    /// smallest-ID listable child of the most recently listed record that still has one (depth
+    /// first, so a nested fork finishes before another branch); failing that, the smallest-ID
+    /// creation record, then the smallest-ID record whose parents are all missing (a gap). The
+    /// order is for a stable presentation only; `precedes` is the ordering relation. A parent
+    /// missing from the set does not order anything.
     pub fn history(&self, entity: &EntityId) -> Result<Vec<(&RecordId, &Record)>> {
         let records: BTreeMap<&RecordId, &Record> = self
             .records()
@@ -99,7 +102,8 @@ impl Store {
             .collect();
         let mut pending = BTreeMap::new();
         let mut children: BTreeMap<&RecordId, Vec<&RecordId>> = BTreeMap::new();
-        let mut ready = BTreeSet::new();
+        // Roots sort creation records (no parents at all) before gap roots, then by ID.
+        let mut roots = BTreeSet::new();
         for (id, record) in &records {
             let present: Vec<_> = record
                 .parents
@@ -111,23 +115,24 @@ impl Store {
             }
             pending.insert(*id, present.len());
             if present.is_empty() {
-                ready.insert(*id);
+                roots.insert((!record.parents.is_empty(), *id));
             }
         }
         let mut order = Vec::new();
-        let mut next = None;
-        while let Some(id) = next.take().or_else(|| ready.pop_first()) {
+        // Listable records waiting behind the records listed so far: the top is the smallest
+        // listable child of the most recently listed record that still has one.
+        let mut waiting: Vec<&RecordId> = Vec::new();
+        while let Some(id) = waiting
+            .pop()
+            .or_else(|| roots.pop_first().map(|(_, id)| id))
+        {
             order.push((id, records[id]));
-            // Children are indexed in ID order, so the first one unblocked is the smallest.
-            for child in children.get(id).into_iter().flatten() {
+            // Children are indexed in ID order; pushed in reverse, the smallest is on top.
+            for child in children.get(id).into_iter().flatten().rev() {
                 let count = pending.get_mut(child).expect("indexed child");
                 *count -= 1;
                 if *count == 0 {
-                    if next.is_none() {
-                        next = Some(*child);
-                    } else {
-                        ready.insert(*child);
-                    }
+                    waiting.push(child);
                 }
             }
         }
