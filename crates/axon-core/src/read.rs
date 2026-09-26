@@ -190,15 +190,16 @@ impl<'a> View<'a> {
             })
             .collect()
     }
-    /// The known but unsettled (conflicted) parent that ends the settled ancestor chain.
+    /// The parent that ends the settled ancestor chain because it has no current value: a
+    /// conflicted one, or one the store does not hold.
     fn unsettled_ancestor(&self, id: &EntityId) -> Option<EntityId> {
         let chain = self.view.ancestors(id);
         let last = chain.last().unwrap_or(id);
         let parent = self.current(last)?.parent.clone()?;
-        (self.is_known(&parent) && !self.view.is_settled(&parent)).then_some(parent)
+        (!self.view.is_settled(&parent)).then_some(parent)
     }
     /// Ancestors that keep the Entity from starting: the unadopted settled ones, then the
-    /// conflicted ancestor that ends the chain, if any.
+    /// conflicted or missing ancestor that ends the chain, if any.
     fn unadopted_ancestors(&self, id: &EntityId) -> Vec<EntityId> {
         let mut found = self.unadopted_settled_ancestors(id);
         found.extend(self.unsettled_ancestor(id));
@@ -453,7 +454,12 @@ impl<'a> View<'a> {
                 &known,
             )?,
             unsurfaced_ancestors: self
-                .owned_rows(unsurfaced_ancestor.into_iter().collect(), known)?,
+                .owned_rows(unsurfaced_ancestor.into_iter().collect(), &known)?,
+            unsettled_ancestors: self
+                .unsettled_ancestor(group)
+                .iter()
+                .map(|ancestor| self.related_with(ancestor, &known))
+                .collect::<std::result::Result<Vec<_>, E>>()?,
         }))
     }
 }
@@ -500,8 +506,9 @@ pub enum PrerequisiteOperation {
 #[derive(Debug)]
 pub struct Prerequisites<'a> {
     pub operation: PrerequisiteOperation,
-    /// Ancestors whose stored lifecycle is not NotStarted, and a conflicted ancestor.
-    pub ancestors: Vec<Row<'a>>,
+    /// Ancestors whose stored lifecycle is not NotStarted, then the conflicted or missing
+    /// ancestor that ends the chain, which has no row when the store does not hold it.
+    pub ancestors: Vec<Related<'a>>,
     /// Unmet dependencies, including ones the store does not hold.
     pub dependencies: Vec<Related<'a>>,
     pub ancestor_dependencies: Vec<Related<'a>>,
@@ -526,6 +533,9 @@ pub struct Stall<'a> {
     pub undecided_ancestors: Vec<Row<'a>>,
     /// The ancestor whose unsatisfied condition keeps the Group from surfacing.
     pub unsurfaced_ancestors: Vec<Row<'a>>,
+    /// The conflicted or missing ancestor that ends the chain: not adopted, having no current
+    /// value, and without a row when the store does not hold it.
+    pub unsettled_ancestors: Vec<Related<'a>>,
 }
 
 #[derive(Debug)]
@@ -554,7 +564,8 @@ pub struct Head<'a> {
     pub parent_missing: bool,
 }
 
-/// An Entity named by a violation, with its row when it is known.
+/// An Entity named by a violation, a prerequisite or a stall reason, with its row when the
+/// store holds it.
 #[derive(Debug)]
 pub struct Related<'a> {
     pub id: EntityId,
@@ -682,7 +693,10 @@ fn detail_from<'a, E: From<Error>>(
                 } else {
                     PrerequisiteOperation::Complete
                 },
-                ancestors: view.owned_rows(unadopted, known)?,
+                ancestors: unadopted
+                    .iter()
+                    .map(related)
+                    .collect::<std::result::Result<Vec<_>, E>>()?,
                 dependencies: unmet
                     .into_iter()
                     .map(related)
@@ -1041,7 +1055,7 @@ mod tests {
             assert_eq!(value.row.status, Status::Blocked);
             let prerequisites = value.prerequisites.unwrap();
             assert_eq!(prerequisites.operation, PrerequisiteOperation::Start);
-            assert_eq!(ids(&prerequisites.ancestors), ["parent"]);
+            assert_eq!(related_ids(&prerequisites.ancestors), ["parent"]);
             assert_eq!(related_ids(&prerequisites.dependencies), ["dependency"]);
             assert!(prerequisites.ancestor_dependencies.is_empty());
         });
@@ -1858,7 +1872,7 @@ mod tests {
         assert_eq!(value.row.status, Status::Blocked);
         assert!(value.row.invalid);
         let prerequisites = value.prerequisites.unwrap();
-        assert_eq!(ids(&prerequisites.ancestors), ["plan"]);
+        assert_eq!(related_ids(&prerequisites.ancestors), ["plan"]);
         assert!(prerequisites.unsurfaced_ancestors.is_empty());
         // With conditions evaluated, the terminal ancestor hides it as the tasks row would.
         let value = detail_with::<Error>(&view, &id("late"), |_, _| Ok(true)).unwrap();
@@ -1893,7 +1907,10 @@ mod tests {
         let view = View::new(&f.store, &derived);
         assert_eq!(view.status(&id("work")), Status::Blocked);
         let detail = detail(&view, &id("work")).unwrap();
-        assert_eq!(ids(&detail.prerequisites.unwrap().ancestors), ["plan"]);
+        assert_eq!(
+            related_ids(&detail.prerequisites.unwrap().ancestors),
+            ["plan"]
+        );
         assert_eq!(
             detail.parent.as_ref().unwrap().row.as_ref().unwrap().status,
             Status::Conflicted
@@ -1915,6 +1932,120 @@ mod tests {
         assert_eq!(ids(&rows), ["outer", "work"]);
         assert_eq!(rows[1].status, Status::Blocked);
         assert_eq!(calls, ["outer"]);
+    }
+
+    #[test]
+    fn a_missing_ancestor_is_named_without_a_row_as_the_reason_its_descendants_wait() {
+        let mut f = Fixture::new();
+        f.create("outer", Kind::Group, None, &[], 1);
+        f.create("plan", Kind::Group, Some("outer"), &[], 2);
+        f.create("work", Kind::Issue, Some("plan"), &[], 3);
+        // The registration of the outer Group vanishes, as a revert of its file leaves it.
+        let mut alone = Fixture::new();
+        for (_, entry) in f.store.entries() {
+            if entry.entity().as_ref() != "outer" {
+                alone.store.insert(entry.clone()).unwrap();
+            }
+        }
+        let derived = alone.derived();
+        assert_eq!(
+            derived.violations().iter().collect::<Vec<_>>(),
+            [&record::Violation {
+                entity: id("plan"),
+                kind: ViolationKind::UnknownParent
+            }]
+        );
+        let view = View::new(&alone.store, &derived);
+        let rows =
+            candidates::<Error>(&view, CandidateList::Tasks, |_| true, |_, _| Ok(true), None)
+                .unwrap();
+        assert_eq!(ids(&rows), ["plan", "work"]);
+        assert!(rows.iter().all(|row| row.status == Status::Blocked));
+        let evaluated = |name: &str| detail_with::<Error>(&view, &id(name), |_, _| Ok(true));
+        for work in [
+            detail(&view, &id("work")).unwrap(),
+            evaluated("work").unwrap(),
+        ] {
+            assert_eq!(work.row.status, Status::Blocked);
+            let prerequisites = work.prerequisites.unwrap();
+            assert_eq!(prerequisites.operation, PrerequisiteOperation::Start);
+            assert_eq!(related_ids(&prerequisites.ancestors), ["outer"]);
+            assert!(prerequisites.ancestors[0].row.is_none());
+        }
+        // The Group the missing ancestor contains is stalled for the same reason.
+        for plan in [
+            detail(&view, &id("plan")).unwrap(),
+            evaluated("plan").unwrap(),
+        ] {
+            assert_eq!(plan.row.status, Status::Blocked);
+            let stall = plan.stall.unwrap();
+            assert_eq!(related_ids(&stall.unsettled_ancestors), ["outer"]);
+            assert!(stall.unsettled_ancestors[0].row.is_none());
+            assert!(stall.undecided_ancestors.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_missing_ancestor_is_named_as_a_complete_prerequisite_of_work_in_progress() {
+        let mut f = Fixture::new();
+        f.create("outer", Kind::Group, None, &[], 1);
+        f.create("work", Kind::Issue, Some("outer"), &[], 2);
+        f.perform("work", Operation::Start);
+        let mut alone = Fixture::new();
+        for (_, entry) in f.store.entries() {
+            if entry.entity().as_ref() != "outer" {
+                alone.store.insert(entry.clone()).unwrap();
+            }
+        }
+        let derived = alone.derived();
+        let view = View::new(&alone.store, &derived);
+        let work = detail(&view, &id("work")).unwrap();
+        let prerequisites = work.prerequisites.unwrap();
+        assert_eq!(prerequisites.operation, PrerequisiteOperation::Complete);
+        assert_eq!(related_ids(&prerequisites.ancestors), ["outer"]);
+        assert!(prerequisites.ancestors[0].row.is_none());
+    }
+
+    #[test]
+    fn a_conflicted_ancestor_is_the_stall_reason_of_a_group_below_it() {
+        let mut f = Fixture::new();
+        f.create("outer", Kind::Group, None, &[], 1);
+        f.create("plan", Kind::Group, Some("outer"), &[], 2);
+        f.create("work", Kind::Issue, Some("plan"), &[], 3);
+        // Two sides rename the outer Group differently.
+        let mut other = Fixture {
+            store: f.store.clone(),
+            clock: std::cell::Cell::new(500),
+        };
+        let record = other
+            .store
+            .write(&id("outer"), Some("theirs".into()), None, other.tick())
+            .unwrap()
+            .unwrap();
+        other.insert(record);
+        let record = f
+            .store
+            .write(&id("outer"), Some("ours".into()), None, f.tick())
+            .unwrap()
+            .unwrap();
+        f.insert(record);
+        f.store.absorb(&other.store);
+        let derived = f.derived();
+        assert!(derived.is_conflicted(&id("outer")));
+        let view = View::new(&f.store, &derived);
+        let plan = detail(&view, &id("plan")).unwrap();
+        assert_eq!(plan.row.status, Status::Blocked);
+        let stall = plan.stall.unwrap();
+        assert_eq!(related_ids(&stall.unsettled_ancestors), ["outer"]);
+        assert_eq!(
+            stall.unsettled_ancestors[0].row.as_ref().unwrap().status,
+            Status::Conflicted
+        );
+        let work = detail(&view, &id("work")).unwrap();
+        assert_eq!(
+            related_ids(&work.prerequisites.unwrap().ancestors),
+            ["outer"]
+        );
     }
 
     #[test]

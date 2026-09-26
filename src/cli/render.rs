@@ -108,12 +108,15 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
     let parent_named_below = !details
         && value.parent.as_ref().is_some_and(|parent| {
             let named = |rows: &[read::Row<'_>]| rows.iter().any(|r| *r.id == parent.id);
+            let related = |items: &[read::Related<'_>]| items.iter().any(|r| r.id == parent.id);
             value
                 .prerequisites
                 .as_ref()
-                .is_some_and(|p| named(&p.ancestors) || named(&p.unsurfaced_ancestors))
+                .is_some_and(|p| related(&p.ancestors) || named(&p.unsurfaced_ancestors))
                 || value.stall.as_ref().is_some_and(|s| {
-                    named(&s.undecided_ancestors) || named(&s.unsurfaced_ancestors)
+                    named(&s.undecided_ancestors)
+                        || named(&s.unsurfaced_ancestors)
+                        || related(&s.unsettled_ancestors)
                 })
         });
     if let Some(parent) = value.parent.as_ref().filter(|_| !parent_named_below) {
@@ -163,7 +166,7 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
             })
         ));
         for ancestor in &prerequisites.ancestors {
-            out.push_str(&format!("Ancestor must be adopted: {}", row(ancestor)));
+            out.push_str(&format!("Ancestor must be adopted: {}", row_of(ancestor)));
         }
         for dependency in &prerequisites.dependencies {
             out.push_str(&format!("Dependency must complete: {}", row_of(dependency)));
@@ -211,6 +214,9 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
         }
         for ancestor in &stall.undecided_ancestors {
             out.push_str(&format!("Undecided ancestor: {}", row(ancestor)));
+        }
+        for ancestor in &stall.unsettled_ancestors {
+            out.push_str(&format!("Ancestor must be adopted: {}", row_of(ancestor)));
         }
         for ancestor in &stall.unsurfaced_ancestors {
             out.push_str(&format!("Unsurfaced ancestor: {}", row(ancestor)));

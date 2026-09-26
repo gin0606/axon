@@ -1263,6 +1263,52 @@ fn a_child_registered_beside_a_completed_group_is_a_violation_that_reopen_repair
 }
 
 #[test]
+fn an_issue_below_a_group_whose_parent_registration_is_missing_names_that_ancestor() {
+    let f = Fixture::new();
+    f.init();
+    let capture = |args: &[&str]| -> String {
+        f.ok(&[&["capture", "--accept"], args].concat())
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .into()
+    };
+    let outer = capture(&["--kind", "group", "--title", "outer"]);
+    let plan = capture(&["--kind", "group", "--title", "plan", "--parent", &outer]);
+    let work = capture(&["--title", "work", "--parent", &plan]);
+    // The outer Group's records vanish, as a cherry-pick or revert of its files leaves them.
+    for relative in record_paths_of(&f.0, &outer) {
+        fs::remove_file(f.records_dir().join(relative)).unwrap();
+    }
+    let show = f.ok(&["show", &work]);
+    assert!(
+        show.starts_with(&format!("{work}  Issue  Blocked  work\n")),
+        "{show}"
+    );
+    assert!(
+        show.contains(&format!(
+            "Required to start\nAncestor must be adopted: {outer}  (missing)\n"
+        )),
+        "{show}"
+    );
+    let show = f.ok(&["show", &plan]);
+    assert!(
+        show.contains(&format!(
+            "Stalled\nAncestor must be adopted: {outer}  (missing)\n"
+        )),
+        "{show}"
+    );
+    // The parent line is left to the reason that already names the missing parent.
+    assert!(!show.contains("Parent:"), "{show}");
+    let tasks = f.ok(&["tasks"]);
+    assert!(
+        tasks.contains(&format!("{plan}  Group  Blocked+Invalid  plan"))
+            && tasks.contains(&format!("{work}  Issue  Blocked  work")),
+        "{tasks}"
+    );
+}
+
+#[test]
 fn resolve_shows_the_violation_the_chosen_head_leaves_behind() {
     let f = Fixture::new();
     git(&f.0, &["init", "-q"]);
