@@ -158,8 +158,8 @@ fn git_output(path: &Path, args: &[&str]) -> Output {
 fn git(path: &Path, args: &[&str]) {
     success(git_output(path, args));
 }
-/// A commit with a fixed identity and no hooks; `args` follows `commit`.
-fn git_commit(path: &Path, args: &[&str]) {
+/// Git with a fixed identity and no hooks, for the operations that create commits.
+fn git_integration(path: &Path, args: &[&str]) -> Output {
     let mut all = vec![
         "-c",
         "user.name=Test",
@@ -167,10 +167,24 @@ fn git_commit(path: &Path, args: &[&str]) {
         "user.email=test@example.com",
         "-c",
         "core.hooksPath=/dev/null",
-        "commit",
     ];
     all.extend_from_slice(args);
-    git(path, &all);
+    git_output(path, &all)
+}
+/// A commit with a fixed identity and no hooks; `args` follows `commit`.
+fn git_commit(path: &Path, args: &[&str]) {
+    let mut all = vec!["commit"];
+    all.extend_from_slice(args);
+    success(git_integration(path, &all));
+}
+/// A linked worktree on a new branch cut from the main worktree's HEAD.
+fn add_worktree(main: &Path, name: &str) -> Fixture {
+    let linked = Fixture::new();
+    git(
+        main,
+        &["worktree", "add", "-qb", name, linked.0.to_str().unwrap()],
+    );
+    linked
 }
 /// The ignored operation, as `axon init` displays it: the shown line, added to the ignore file
 /// of this repository alone. The isolated template may carry no `info` directory yet.

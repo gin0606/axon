@@ -79,6 +79,13 @@ impl Store {
     pub fn view(&self) -> Result<View> {
         View::derive(self)
     }
+    /// The view of the set with `entry` added, without adding it: what a reader sees once the
+    /// record is published. An entry the set already holds is the same record and adds nothing.
+    pub fn view_with(&self, entry: &Entry) -> Result<View> {
+        let id = RecordId::of(&encode(entry)?);
+        let extra = (!self.contains(&id)).then_some((&id, entry));
+        View::derive_with(self, extra)
+    }
 
     /// The Entity's records other than Notes in causal order, keeping each concurrent branch
     /// together: the next record is the smallest-ID child of the previous record whose present

@@ -170,6 +170,44 @@ pub(super) fn log(value: String, recorder_details: bool) -> Result<Output> {
     };
     result(text, "No records.", String::new())
 }
+/// `axon resolve [ID]`: the conflicted Entities (or the one named) with their heads.
+pub(super) fn conflicts(value: Option<String>) -> Result<Output> {
+    let opened = Read::open()?;
+    let text = {
+        let view = opened.read();
+        let ids: Vec<_> = match &value {
+            Some(value) => {
+                let id = resolve(&opened.view, value)?;
+                if !opened.view.is_conflicted(&id) {
+                    return Err(axon::Error::Invalid(format!(
+                        "Entity {id} is not conflicted"
+                    )));
+                }
+                vec![opened.view.key(&id).expect("conflicted Entity is known")]
+            }
+            // Creation order, as every listing.
+            None => opened
+                .view
+                .in_creation_order()
+                .into_iter()
+                .filter(|id| opened.view.is_conflicted(id))
+                .collect(),
+        };
+        render::conflicts(&view, &ids)
+    };
+    // The notice covers what the listing does not show: the conflicts it left out, the
+    // violations and the gaps.
+    let shown = if value.is_some() {
+        1
+    } else {
+        opened.view.conflicted().len()
+    };
+    result(
+        text,
+        "No conflicted Entities.",
+        opened.notice_excluding(shown),
+    )
+}
 pub(super) fn list_notes(value: String, recorder_details: bool) -> Result<Output> {
     let opened = Read::open()?;
     let text = {

@@ -20,7 +20,7 @@ Gitはuntrackedなfileをcheckout・mergeの上書きから保護しますが、
 
 ## 改行変換と `.axon/.gitattributes`
 
-記録IDは記録fileのbytes全体のhashなので、Gitの改行変換（repository rootの `* text=auto eol=crlf`、Git for Windowsのsystemの設定にある `core.autocrlf=true` など）がcheckout時にLFをCRLFへ変えると、保存先の破損として読取と全操作が止まります。`axon init` が書く `.axon/.gitattributes` の `* -text` がこの変換を止めます。mergeやunionの属性は持たず、統合には関わりません。防げない設定（repositoryごとの `info/attributes` での `text` 属性の指定、`filter`・`ident`・`working-tree-encoding` の属性など）を含む規則は [保存と統合の契約](../reference/storage.md#保存先と初期化) にあります。
+記録IDは記録fileのbytes全体のhashなので、Gitの改行変換（repository rootの `* text=auto eol=crlf`、Git for Windowsのsystemの設定にある `core.autocrlf=true` など）がcheckout時にLFをCRLFへ変えると、保存先の破損として読取と全操作が止まります。`axon init` が書く `.axon/.gitattributes` の `* -text` がこの変換を止めます。この属性のない保存先が変換されたときは、読取と `axon storage check` が破損の報告に、改行を戻せば名前と一致するfileであることと、改行変換の可能性とこの節への案内を添えます。mergeやunionの属性は持たず、統合には関わりません。防げない設定（repositoryごとの `info/attributes` での `text` 属性の指定、`filter`・`ident`・`working-tree-encoding` の属性など）を含む規則は [保存と統合の契約](../reference/storage.md#保存先と初期化) にあります。
 
 `axon init` は既存の保存先に `.axon/.gitattributes` を足しません。このfileのない保存先を追跡している既存のrepositoryでは、管理rootで次のように足してcommitします。このfileのない保存先を無視する運用から追跡する運用へ移すときは、`.axon/` を無視する設定（`.git/info/exclude` などの行）を外し、`* -text` の1行の `.axon/.gitattributes` を書いてから `git add .axon` で保存先全体をcommitします。ほかのcloneやworktreeも同じく無視する設定を外してから取り込んでください（二つの運用を混ぜた場合の上書きは上に書いたとおりです）。無視していた保存先はGitが取り出していないので、下の手順は要りません。コマンドはPOSIXのshell（WindowsではGit Bash）で実行します。`git check-attr` が `text: unset` を示せば属性は効いています。
 

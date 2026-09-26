@@ -134,13 +134,13 @@ Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへ
 
 衝突・違反・記録の欠け（gap）・保存先の破損の意味は [保存と統合の契約](storage.md) に従う。
 
-`axon storage check [ROOT]` は、引数なしでは探索で確定した保存先（探索がheaderのない `.axon` で止まればその保存先をheaderの欠落として報告する）、`ROOT` を与えればその管理rootを探索せずに検査し、破損・衝突・違反・gapを種類ごとに一行ずつ示す。破損は `.axon/records/` からの相対pathと理由（記録IDの形でない名前、名前と内容のhashの不一致、名前と違うsubdirectory、途中で切れた・空の内容、読めないJSONと規則外の内容、headerの欠落・未知のformat）、衝突はEntityの行とheadの数、違反はEntityの行と種類、gapはEntityの行と親の欠けた記録ID（記録のないEntityのNoteも同じ節に示す）を示す。名前が `.tmp` で終わるfileは報告しない。破損があれば記録から導出する検査は行わない。破損・衝突・違反のいずれかがあれば終了1、gapだけなら情報として示して終了0、何もなければ短い確認をstderrに出して終了0。保存先を変更せず、条件コマンドを実行しない。
+`axon storage check [ROOT]` は、引数なしでは探索で確定した保存先（探索がheaderのない `.axon` で止まればその保存先をheaderの欠落として報告する）、`ROOT` を与えればその管理rootを探索せずに検査し、破損・衝突・違反・gapを種類ごとに一行ずつ示す。破損は `.axon/records/` からの相対pathと理由（記録IDの形でない名前、名前と内容のhashの不一致、名前と違うsubdirectory、途中で切れた・空の内容、読めないJSONと規則外の内容、headerの欠落・未知のformat。内容のCRLFをLFに戻すと名前のhashと一致するfileは、理由にその旨を書き、報告の末尾に改行変換の可能性と [保存先とworktree](../guide/storage.md#改行変換と-axongitattributes) への案内を一行添える）、衝突はEntityの行とheadの数、違反はEntityの行と種類、gapはEntityの行と親の欠けた記録ID（記録のないEntityのNoteも同じ節に示す）を示す。名前が `.tmp` で終わるfileは報告しない。破損があれば記録から導出する検査は行わない。破損・衝突・違反のいずれかがあれば終了1、gapだけなら情報として示して終了0、何もなければ短い確認をstderrに出して終了0。保存先を変更せず、条件コマンドを実行しない。
 
-`axon resolve` は衝突中の全Entityを、`axon resolve ID` は指定したEntityを対象に、Entityの行と各headを示す。headの行は記録ID、日時、actor、記録の種類（lifecycle遷移なら操作名）、その現在値のlifecycle・種類・タイトルを持ち、親記録が保存先にないheadには `parent missing; likely newer`（片方は親記録が欠けていて新しい可能性が高い）を付す。衝突していないEntityを指定した場合は、衝突していないことを示して終了1。保存先を変更しない。
+`axon resolve` は衝突中の全Entityを作成日時順（同時刻はID順）に、`axon resolve ID` は指定したEntityを対象に、Entityの行と各headを示す。衝突中のEntityがなければ一覧0件と同じくstdoutに行を出さず、短い案内をstderrへ出して終了0。headの行は記録ID、日時、actor、記録の種類（lifecycle遷移なら操作名）、その現在値のlifecycle・種類・タイトルを持ち、親記録が保存先にないheadには `parent missing; likely newer`（片方は親記録が欠けていて新しい可能性が高い）を付す。衝突していないEntityを指定した場合は、衝突していないことを示して終了1。保存先を変更しない。
 
-`axon resolve ID --head RECORD_ID` は指定したheadの現在値を採る解決記録を書く。`RECORD_ID` は対象Entityのheadの完全な記録IDで、headでなければ拒否する。`-r/--reason` は他の状態変更と同じ規則で記録に保存する。成功出力は完全なEntity IDが先頭で、採ったheadと解決後の状況を短く示す。解決の後に残る違反は `axon show` の `Invalid` と `axon storage check` で読み、通常操作で直す。
+`axon resolve ID --head RECORD_ID` は指定したheadの現在値を採る解決記録を書く。`RECORD_ID` は対象Entityのheadの完全な記録IDで、headでなければ拒否する。`-r/--reason` は他の状態変更と同じ規則で記録に保存する。成功出力は完全なEntity IDが先頭で、採ったheadと解決後の状況（他の変更コマンドと同じく条件は評価せず、違反に含まれれば `+Invalid` を付す）を短く示す。解決の後に残る違反は `axon show` の `Invalid` と `axon storage check` で読み、通常操作で直す。
 
-衝突中のEntityが一つでもある保存先では、`axon resolve` と `axon note add` 以外の変更コマンドを拒否し、衝突中のEntityのIDと `axon resolve` を診断に示す。破損のある保存先では読取を含む全コマンド（`axon storage check`、および保存先を開かないコマンドを除く）を拒否し、破損したfileのpathを診断に示す。
+衝突中のEntityが一つでもある保存先では、`axon resolve` と `axon note add` 以外の変更コマンドを拒否し、衝突中のEntityのIDと `axon resolve` を診断に示す。破損のある保存先では読取を含む全コマンド（`axon storage check`、および保存先を開かないコマンドを除く）を拒否し、破損したfileのpathと理由を診断に示す。改行変換が疑われるfile（[保存先の破損](storage.md#保存先の破損)）があれば、`axon storage check` と同じ案内を診断の末尾に添える。
 
 `axon init [PREFIX]` は `.axon/records/`、`.axon/header.json`、`.axon/.gitignore`、`* -text` の1行だけの `.axon/.gitattributes`（記録fileをGitの改行変換から外す。mergeやunionの属性は書かない。[保存と統合の契約](storage.md#保存先と初期化)）を作り、成功時は作成したheaderのpathを示す。Git内ではさらに、保存先がuntrackedに見えること、無視する運用（`.git/info/exclude` などに `.axon/` を書く）と追跡する運用（`git add .axon` してcommitする）の手順、Axonの状態の取り消しにrevertを使わないことを表示する。repository rootのfileとGit configを作成も編集もせず、stage・commitもしない。`.axon/` に中断した初期化の残骸（lock、`.tmp` で終わるfile、空の記録のdirectory、同じ内容の `.gitignore` と `.gitattributes`）以外の何か（header、記録、内容の異なる `.gitignore` か `.gitattributes`、以前の形式のfile）があれば拒否し、そのpathを示す。
 

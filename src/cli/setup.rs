@@ -101,13 +101,13 @@ pub(super) fn storage(command: Storage) -> Result<Output> {
     })?;
     if !loaded.is_intact() {
         let lines: Vec<_> = loaded
-            .corruption
-            .iter()
-            .map(|c| format!("Corrupt: {}", display::human_text(c.line())))
+            .corruption_lines("Corrupt: ")
+            .into_iter()
+            .map(display::human_text)
             .collect();
         return Err(axon::Error::Invalid(format!(
             "{} corrupt files under {}; records are not derived until they are repaired\n{}",
-            lines.len(),
+            loaded.corruption.len(),
             display::human_text(store.records_path().display()),
             lines.join("\n")
         )));

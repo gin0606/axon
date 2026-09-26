@@ -20,6 +20,17 @@ pub const WRITE_LOCK: &str = "write.lock";
 pub const TEMPORARY_SUFFIX: &str = ".tmp";
 /// The ignore file `axon init` writes beside the records: locks and temporary files only.
 pub const GITIGNORE: &str = "*.lock\n*.tmp\n";
+/// The attributes file `axon init` writes beside the records: it keeps Git from converting
+/// line endings, which would change the bytes a record ID is the hash of. No merge attribute.
+pub const GITATTRIBUTES: &str = "* -text\n";
+/// The files `axon init` writes inside `.axon/` besides the header and the record directory,
+/// by name and content. Discovery treats a file with exactly this content as residue.
+pub const STORE_FILES: [(&str, &str); 2] =
+    [(".gitignore", GITIGNORE), (".gitattributes", GITATTRIBUTES)];
+/// The one line a report adds when a record file is its record with CRLF line endings: one
+/// wording for a store without the attributes file init writes, one for a store that has it.
+pub const LINE_ENDING_HINT_WITHOUT_ATTRIBUTES: &str = "Hint: Git line-ending conversion is likely: .axon/.gitattributes with \"* -text\" is missing from the store. Do not stage the converted files; axon docs (Storage and recovery) gives the repair and the storage guide (docs/guide/storage.md, line-ending conversion) the details";
+pub const LINE_ENDING_HINT_WITH_ATTRIBUTES: &str = "Hint: Git line-ending conversion is likely: the files were checked out before .axon/.gitattributes existed, or it lacks \"* -text\" or a setting overrides it. Do not stage the converted files; axon docs (Storage and recovery) gives the repair and the storage guide (docs/guide/storage.md, line-ending conversion) the details";
 
 pub(crate) fn read_regular(path: &Path) -> Result<Vec<u8>> {
     if !fs::symlink_metadata(path)?.file_type().is_file() {
@@ -157,12 +168,29 @@ pub struct Corruption {
     /// Relative to `.axon/records/`.
     pub path: PathBuf,
     pub reason: String,
+    /// The content is the record named by the file with CRLF line endings: what a Git
+    /// line-ending conversion leaves behind.
+    pub converted_line_endings: bool,
 }
 impl Corruption {
     /// The one line every report shows for this file: its path and the reason.
     pub fn line(&self) -> String {
         format!("{}: {}", self.path.display(), self.reason)
     }
+}
+/// Whether `bytes` are the record named `id` with every LF turned into CRLF.
+fn is_converted_record(bytes: &[u8], id: &RecordId) -> bool {
+    if !bytes.contains(&b'\r') {
+        return false;
+    }
+    let mut restored = Vec::with_capacity(bytes.len());
+    for (index, &byte) in bytes.iter().enumerate() {
+        if byte == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+            continue;
+        }
+        restored.push(byte);
+    }
+    RecordId::of(&restored) == *id
 }
 /// What one read of the store found: the header, every record, and the files that are not
 /// records. A read with corruption is not usable for derivation.
@@ -173,21 +201,44 @@ pub struct Loaded {
     /// The derived view, when the set is intact.
     pub view: Option<record::View>,
     pub corruption: Vec<Corruption>,
+    /// Whether `.axon/.gitattributes` is known to be absent, checked only when a converted
+    /// record was found: it decides the wording of the line-ending hint. A check that fails
+    /// does not claim the file is missing.
+    pub attributes_missing: bool,
 }
 impl Loaded {
     pub fn is_intact(&self) -> bool {
         self.corruption.is_empty()
     }
+    /// The lines a report shows for the corrupt files, each behind `prefix`, followed by
+    /// the line-ending hint when one of them is a converted record.
+    pub fn corruption_lines(&self, prefix: &str) -> Vec<String> {
+        let mut lines: Vec<_> = self
+            .corruption
+            .iter()
+            .map(|c| format!("{prefix}{}", c.line()))
+            .collect();
+        if self.corruption.iter().any(|c| c.converted_line_endings) {
+            lines.push(
+                if self.attributes_missing {
+                    LINE_ENDING_HINT_WITHOUT_ATTRIBUTES
+                } else {
+                    LINE_ENDING_HINT_WITH_ATTRIBUTES
+                }
+                .into(),
+            );
+        }
+        lines
+    }
     fn usable(self) -> Result<(Header, record::Store, record::View)> {
-        if let Some(view) = self.view
-            && self.corruption.is_empty()
+        if self.corruption.is_empty()
+            && let Some(view) = self.view
         {
             return Ok((self.header, self.records, view));
         }
-        let lines: Vec<_> = self.corruption.iter().map(Corruption::line).collect();
         Err(invalid(format!(
             "corrupt record files under .axon/records/; repair them before any operation:\n{}",
-            lines.join("\n")
+            self.corruption_lines("").join("\n")
         )))
     }
 }
@@ -275,10 +326,11 @@ impl Store {
         let mut records = record::Store::new();
         let mut corruption = Vec::new();
         let base = self.records_path();
-        let mut corrupt = |path: &Path, reason: String| {
+        let mut corrupt = |path: &Path, reason: String, converted_line_endings: bool| {
             corruption.push(Corruption {
                 path: path.strip_prefix(&base).unwrap_or(path).to_path_buf(),
                 reason,
+                converted_line_endings,
             });
         };
         let entries = match fs::read_dir(&base) {
@@ -290,6 +342,7 @@ impl Store {
                     records,
                     view,
                     corruption,
+                    attributes_missing: false,
                 });
             }
             Err(e) => {
@@ -316,8 +369,8 @@ impl Store {
                 Ok(meta) if meta.file_type().is_dir() => {
                     subdirectories.push((name.to_string_lossy().into_owned(), path));
                 }
-                Ok(_) => corrupt(&path, "not a record subdirectory".into()),
-                Err(e) => corrupt(&path, format!("unreadable: {e}")),
+                Ok(_) => corrupt(&path, "not a record subdirectory".into(), false),
+                Err(e) => corrupt(&path, format!("unreadable: {e}"), false),
             }
         }
         subdirectories.sort();
@@ -325,13 +378,13 @@ impl Store {
         // corruption, and the scan goes on to list the rest.
         for (subdirectory, path) in subdirectories {
             if !is_hex_name(&subdirectory, 2) {
-                corrupt(&path, "not a record subdirectory".into());
+                corrupt(&path, "not a record subdirectory".into(), false);
                 continue;
             }
             let mut files: Vec<_> = match fs::read_dir(&path).and_then(Iterator::collect) {
                 Ok(files) => files,
                 Err(e) => {
-                    corrupt(&path, format!("unreadable: {e}"));
+                    corrupt(&path, format!("unreadable: {e}"), false);
                     continue;
                 }
             };
@@ -347,38 +400,46 @@ impl Store {
                 match regular {
                     Ok(true) => {}
                     Ok(false) => {
-                        corrupt(&file_path, "not a regular file".into());
+                        corrupt(&file_path, "not a regular file".into(), false);
                         continue;
                     }
                     Err(e) => {
-                        corrupt(&file_path, format!("unreadable: {e}"));
+                        corrupt(&file_path, format!("unreadable: {e}"), false);
                         continue;
                     }
                 }
                 if !is_hex_name(&name, RECORD_ID_LENGTH) {
-                    corrupt(&file_path, "name is not a record ID".into());
+                    corrupt(&file_path, "name is not a record ID".into(), false);
                     continue;
                 }
                 if !name.starts_with(&subdirectory) {
-                    corrupt(&file_path, "subdirectory differs from the ID".into());
+                    corrupt(&file_path, "subdirectory differs from the ID".into(), false);
                     continue;
                 }
                 let id = RecordId::try_from(name.as_str())?;
                 let bytes = match fs::read(&file_path) {
                     Ok(bytes) => bytes,
                     Err(e) => {
-                        corrupt(&file_path, format!("unreadable: {e}"));
+                        corrupt(&file_path, format!("unreadable: {e}"), false);
                         continue;
                     }
                 };
-                // One decode: the ID it computes is compared with the file name.
+                // One decode: the ID it computes is compared with the file name. A file
+                // that is its record with CRLF line endings is reported as such: Git converted
+                // it, and the reader does not restore it.
                 match records.insert_bytes(&bytes) {
                     Ok(actual) if actual == id => {}
+                    _ if is_converted_record(&bytes, &id) => corrupt(
+                        &file_path,
+                        "CRLF line endings; with LF the content hashes to the name".into(),
+                        true,
+                    ),
                     Ok(actual) => corrupt(
                         &file_path,
                         format!("content whose hash is {actual}, not the name"),
+                        false,
                     ),
-                    Err(e) => corrupt(&file_path, e.to_string()),
+                    Err(e) => corrupt(&file_path, e.to_string(), false),
                 }
             }
         }
@@ -399,6 +460,7 @@ impl Store {
                         corruption.push(Corruption {
                             path: Path::new(id.subdirectory()).join(id.as_ref()),
                             reason: error.to_string(),
+                            converted_line_endings: false,
                         });
                     }
                     None
@@ -407,11 +469,14 @@ impl Store {
         } else {
             None
         };
+        let attributes_missing = corruption.iter().any(|c| c.converted_line_endings)
+            && crate::location::present(&self.directory().join(".gitattributes")).is_ok_and(|p| !p);
         Ok(Loaded {
             header,
             records,
             view,
             corruption,
+            attributes_missing,
         })
     }
     /// The header, the record set and its derived view of an intact store.

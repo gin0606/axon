@@ -25,13 +25,18 @@ pub(super) fn status_label(status: read::Status) -> &'static str {
         read::Status::Conflicted => "Conflicted",
     }
 }
-fn situation(value: &read::Row<'_>) -> String {
+/// The situation column of a row without decoration: the status, `+Invalid` when the Entity
+/// is in a violation.
+pub(super) fn situation_label(value: &read::Row<'_>) -> String {
     let label = status_label(value.status);
     if value.invalid {
-        display::situation(&format!("{label}+Invalid"))
+        format!("{label}+Invalid")
     } else {
-        display::situation(label)
+        label.into()
     }
+}
+fn situation(value: &read::Row<'_>) -> String {
+    display::situation(&situation_label(value))
 }
 pub(super) fn row(value: &read::Row<'_>) -> String {
     format!(
@@ -77,6 +82,21 @@ pub(super) fn head(head: &read::Head<'_>) -> String {
             String::new()
         }
     )
+}
+/// The listing of `axon resolve`: each conflicted Entity's row followed by its heads, the
+/// Entities in the given (creation) order and separated by a blank line.
+pub(super) fn conflicts(view: &read::View<'_>, ids: &[&EntityId]) -> String {
+    let mut out = String::new();
+    for (index, id) in ids.iter().enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        out.push_str(&row(&view.row(id, None)));
+        for entry in view.heads(id) {
+            out.push_str(&head(&entry));
+        }
+    }
+    out
 }
 pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
     let mut out = row(&value.row);
@@ -383,13 +403,12 @@ fn describe(entry: &read::RecordEntry<'_>) -> String {
             Some(command) => format!("Condition set: {}", display::line(command)),
             None => "Condition unset".into(),
         },
-        RecordKind::Convert => format!(
-            "Converted: {:?} → {:?}",
+        RecordKind::Convert => converted(
             match after.kind {
                 Kind::Issue => Kind::Group,
                 Kind::Group => Kind::Issue,
             },
-            after.kind
+            after.kind,
         ),
         RecordKind::Import => {
             let changed: Vec<&str> = match before {
@@ -412,6 +431,10 @@ fn describe(entry: &read::RecordEntry<'_>) -> String {
             after.lifecycle, after.kind
         ),
     }
+}
+/// A conversion as `convert` confirms it and `log` shows it.
+pub(super) fn converted(before: Kind, after: Kind) -> String {
+    format!("Converted: {before:?} → {after:?}")
 }
 pub(super) fn log_line(entry: &read::RecordEntry<'_>, recorder_details: bool) -> String {
     format!(
@@ -462,7 +485,8 @@ any ignore rule outside .axon that covers the directory, then stage and commit
 the store; .axon/.gitignore already excludes locks and temporary files:
        git add .axon
        git commit -m \"Track the Axon store\"
-Git merges records from both sides without any attributes or configuration.
+Git merges records from both sides without merge attributes or configuration;
+.axon/.gitattributes only keeps Git from converting their line endings.
 Undo Axon state with lifecycle commands such as reopen and release, not with
 git revert: reverting a commit only removes record files.
 ",
@@ -631,11 +655,11 @@ pub fn render_root_help() -> String {
         ),
         (
             "Text & relationships",
-            &["write", "parent", "dep", "condition", "import"],
+            &["write", "parent", "dep", "condition", "convert", "import"],
         ),
         (
             "Setup & utilities",
-            &["init", "storage", "completion", "docs", "help"],
+            &["init", "storage", "resolve", "completion", "docs", "help"],
         ),
     ];
     let mut text = format!(

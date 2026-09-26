@@ -14,6 +14,11 @@ Lifecycle
   cancel terminates unfinished work; reconsider returns Cancelled to Undecided.
   reopen returns Completed to NotStarted unless a Completed dependent remains.
   Notes can be appended even after work is terminal.
+  convert ID --kind issue|group changes the kind of an Undecided or NotStarted
+  Entity (release an InProgress Issue first; a Group with children stays a
+  Group) and nothing else. A Group's description states the outcome of the whole
+  plan and what its final review confirms, so reread it after converting. The
+  kind is not a lifecycle transition and takes no --reason.
 
 A Group is never started or released. A NotStarted Group is InProgress while a direct
 child is InProgress or Completed (a NotStarted child Group passes this up from its own
@@ -93,9 +98,20 @@ Storage and recovery
   bytes, so that line keeps Git line-ending conversion (core.autocrlf, eol) from
   turning record files into corruption; it sets no merge or union attributes.
   init does not add the file to an existing store. For a tracked store without
-  it, commit the file alone (never stage record files Git already converted),
-  then delete the tracked .axon files and check them out again; the storage
-  guide (docs/guide/storage.md) gives the steps.
+  it, commit the file alone from the management root:
+    printf '* -text\n' > .axon/.gitattributes
+    git add .axon/.gitattributes
+    git commit -m 'Stop line-ending conversion of the Axon store' -- .axon/.gitattributes
+  Then, in every clone and worktree that uses the store (also one whose records
+  were converted although the file exists), stop Axon and take the tracked
+  files out of the index again from the management root:
+    git ls-files -z -- .axon | xargs -0 rm --
+    git checkout -- .axon
+    git ls-files --eol -- .axon
+  Never stage record files Git already converted (git add .axon, git add -A,
+  commit -a or stash would commit the CRLF bytes for every clone); the last
+  line must show i/lf and w/lf for every file. The storage guide
+  (docs/guide/storage.md) explains the cases where w/crlf or i/crlf remains.
   Apart from its lock file init writes nothing outside .axon/. One storage
   format; no option selects the format or the location.
   init PREFIX sets the ID prefix: ASCII lowercase letters, digits and hyphens,
@@ -112,7 +128,9 @@ Storage and recovery
   that store. Git replaces an ignored store without warning when you check
   out or merge a commit that tracks it. Outside Git, the nearest management
   root is used. Corrupt record files and unmerged index entries are errors; no
-  fallback or automatic conversion runs.
+  fallback or automatic conversion runs. A record file that is its record with
+  CRLF line endings is reported as such, with a hint that Git converted it and a
+  pointer to the storage guide; the file is not repaired.
   help, docs, actor, completion and version do not require a store.
 
   Preserve retained artifacts on errors. Applied, Not applied and Result unknown

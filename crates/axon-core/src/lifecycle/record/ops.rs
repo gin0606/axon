@@ -12,7 +12,7 @@ impl Store {
         if !view.conflicted().is_empty() {
             let ids: Vec<_> = view.conflicted().iter().map(ToString::to_string).collect();
             return Err(invalid(format!(
-                "conflicted Entities block every operation except resolve and note: {}",
+                "conflicted Entities block every operation except resolve and note add; list their heads with axon resolve: {}",
                 ids.join(", ")
             )));
         }
@@ -123,7 +123,9 @@ impl Store {
                 return Err(invalid("release the InProgress Issue before converting it"));
             }
             Lifecycle::Completed | Lifecycle::Cancelled => {
-                return Err(invalid("a terminal Entity is not converted"));
+                return Err(invalid(
+                    "a Completed or Cancelled Entity is not converted; reopen or reconsider it first",
+                ));
             }
         }
         if kind == Kind::Issue && !view.children(id).is_empty() {
@@ -298,9 +300,7 @@ fn without_new_violations_or_cycle(store: &Store, view: &View, record: Record) -
 }
 
 fn view_after(store: &Store, record: &Record) -> Result<View> {
-    let entry = Entry::Record(record.clone());
-    let id = RecordId::of(&super::encode(&entry)?);
-    View::derive_with(store, Some((&id, &entry)))
+    store.view_with(&Entry::Record(record.clone()))
 }
 
 fn reject_new_violations(view: &View, after: &View) -> Result<()> {

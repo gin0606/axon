@@ -90,6 +90,12 @@ fn run(command: Command) -> Result<Output> {
         Command::Cancel(args) => write::transition(args, Operation::Cancel),
         Command::Reconsider(args) => write::transition(args, Operation::Reconsider),
         Command::Reopen(args) => write::transition(args, Operation::Reopen),
+        Command::Convert { id, kind } => write::convert(id, kind.kind()),
+        Command::Resolve { id, head, reason } => match (id, head) {
+            (Some(id), Some(head)) => write::resolve_conflict(id, head, reason),
+            (id, None) => read::conflicts(id),
+            (None, Some(_)) => unreachable!("clap requires ID with --head"),
+        },
     }
 }
 

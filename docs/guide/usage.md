@@ -24,7 +24,7 @@
 
 登録は `axon capture` だけです。`axon capture --title '懸念' -m '内容'` は未判断のIssue、`axon capture --accept --title '仕事' -m '目的と完了条件'` は未着手の採用済みIssueを登録します。`--kind group` を足すとGroupになり、`--kind` と `--accept` は自由に組み合わせられます。作成時の `--parent G` と繰り返せる `--needs B` で関係を付けられます。
 
-未判断を採用するには `axon accept ID`、未着手の採用を撤回するには `axon withdraw ID`。Issueの作業は `axon start ID`、中断は `axon release ID -r '理由'`、完了は `axon complete ID`、取りやめは `axon cancel ID -r '理由'`、取りやめの再検討は `axon reconsider ID`、完了の取消は `axon reopen ID -r '理由'`。`axon reopen` は完了したEntityを未着手へ戻します。完了済みの依存元がある場合は拒否されるため、先に依存元を`axon reopen`してください。IssueとGroupの種類は `axon convert ID --kind group` / `axon convert ID --kind issue` で変換します。結果は `axon note add ID -m '結果'` へ残し、本文変更は `axon write ID --title '題名' -m '本文'` で行います。
+未判断を採用するには `axon accept ID`、未着手の採用を撤回するには `axon withdraw ID`。Issueの作業は `axon start ID`、中断は `axon release ID -r '理由'`、完了は `axon complete ID`、取りやめは `axon cancel ID -r '理由'`、取りやめの再検討は `axon reconsider ID`、完了の取消は `axon reopen ID -r '理由'`。`axon reopen` は完了したEntityを未着手へ戻します。完了済みの依存元がある場合は拒否されるため、先に依存元を`axon reopen`してください。IssueとGroupの種類は `axon convert ID --kind group` / `axon convert ID --kind issue` で変換します。Groupの本文は計画全体の成果と最終確認の対象を表すので、Issueの本文をそのままGroupにしたときは本文を読み直し、必要なら `axon write` で整えてください。変換はlifecycle遷移ではないため `-r/--reason` を受け付けません。結果は `axon note add ID -m '結果'` へ残し、本文変更は `axon write ID --title '題名' -m '本文'` で行います。
 
 ## Groupと関係
 

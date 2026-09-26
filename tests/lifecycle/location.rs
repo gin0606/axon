@@ -63,14 +63,6 @@ fn repository() -> Fixture {
     git_commit(&f.0, &["-q", "--allow-empty", "-m", "base"]);
     f
 }
-fn add_worktree(main: &Path, name: &str) -> Fixture {
-    let linked = Fixture::new();
-    git(
-        main,
-        &["worktree", "add", "-qb", name, linked.0.to_str().unwrap()],
-    );
-    linked
-}
 fn created(output: &str) -> String {
     output.split_whitespace().next().unwrap().into()
 }
@@ -83,20 +75,7 @@ fn head_branch(root: &Path) -> String {
 }
 /// A merge that may leave conflicts, with a fixed identity and no hooks.
 fn merge_branch(root: &Path, branch: &str) -> Output {
-    git_output(
-        root,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "-c",
-            "core.hooksPath=/dev/null",
-            "merge",
-            "--no-edit",
-            branch,
-        ],
-    )
+    git_integration(root, &["merge", "--no-edit", branch])
 }
 /// Replace the index entry for the header with unresolved stages.
 fn make_index_unmerged(root: &Path) {
@@ -141,16 +120,20 @@ fn init_creates_the_store_files_only_and_leaves_them_untracked() {
         output.starts_with(&format!("Initialized {}\n", header(&f.0).display())),
         "{output}"
     );
-    // The records directory, the header and the ignore file are the whole of what init
-    // leaves behind: no lock or temporary file from the initialization.
+    // The records directory, the header, the ignore file and the attributes file are the
+    // whole of what init leaves behind: no lock or temporary file from the initialization.
     assert_eq!(
         management_entries(&f.0),
-        [".gitignore", "header.json", "records"]
+        [".gitattributes", ".gitignore", "header.json", "records"]
     );
     assert!(header(&f.0).is_file());
     assert_eq!(
         fs::read_to_string(f.0.join(".axon/.gitignore")).unwrap(),
         "*.lock\n*.tmp\n"
+    );
+    assert_eq!(
+        fs::read_to_string(f.0.join(".axon/.gitattributes")).unwrap(),
+        "* -text\n"
     );
     assert_eq!(fs::read_dir(f.0.join(".axon/records")).unwrap().count(), 0);
     // Both operations are explained, and neither is applied.
@@ -173,14 +156,19 @@ fn init_creates_the_store_files_only_and_leaves_them_untracked() {
         ["git add .axon", "git commit -m \"Track the Axon store\""]
     );
     assert!(output.contains("not with\ngit revert"), "{output}");
-    for absent in [
-        "merge=axon",
-        "merge.axon.driver",
-        ".gitattributes",
-        "state.jsonl",
-    ] {
+    for absent in ["merge=axon", "merge.axon.driver", "union", "state.jsonl"] {
         assert!(!output.contains(absent), "{absent}: {output}");
     }
+    // The only attributes file the output speaks of is the store's own.
+    assert_eq!(
+        output.matches(".gitattributes").count(),
+        output.matches(".axon/.gitattributes").count(),
+        "{output}"
+    );
+    assert!(
+        output.contains(".axon/.gitattributes only keeps Git from converting their line endings"),
+        "{output}"
+    );
     // Files the user owns keep their bytes, and absent ones stay absent.
     assert_eq!(
         fs::read(f.0.join(".gitignore")).unwrap(),
@@ -292,7 +280,11 @@ fn the_displayed_steps_track_the_store_and_git_merges_branches_without_configura
     let tracked =
         String::from_utf8(git_output(&f.0, &["ls-tree", "-r", "--name-only", "HEAD"]).stdout)
             .unwrap();
-    for path in [".axon/header.json", ".axon/.gitignore"] {
+    for path in [
+        ".axon/header.json",
+        ".axon/.gitignore",
+        ".axon/.gitattributes",
+    ] {
         assert!(tracked.lines().any(|line| line == path), "{tracked}");
     }
     assert_eq!(tracked.matches(".axon/records/").count(), 2);
@@ -330,7 +322,13 @@ fn init_outside_git_creates_the_store_without_git_guidance() {
     // Outside Git the init lock has no common directory to live in and stays beside the store.
     assert_eq!(
         management_entries(&f.0),
-        [".gitignore", "axon-init.lock", "header.json", "records"]
+        [
+            ".gitattributes",
+            ".gitignore",
+            "axon-init.lock",
+            "header.json",
+            "records"
+        ]
     );
 }
 
@@ -362,11 +360,13 @@ fn init_in_a_subdirectory_creates_the_store_at_the_repository_root() {
 
 #[test]
 fn init_reuses_the_residue_of_an_interrupted_initialization_and_refuses_anything_else() {
-    // Residue: locks, temporary files, an empty records directory and the same ignore file.
+    // Residue: locks, temporary files, an empty records directory and the same ignore and
+    // attributes files.
     let f = repository();
     let directory = f.0.join(".axon");
     fs::create_dir_all(directory.join("records/ab")).unwrap();
     fs::write(directory.join(".gitignore"), "*.lock\n*.tmp\n").unwrap();
+    fs::write(directory.join(".gitattributes"), "* -text\n").unwrap();
     fs::write(directory.join("write.lock"), "").unwrap();
     fs::write(directory.join("header.json.tmp"), "partial").unwrap();
     fs::write(directory.join("records/ab/something.tmp"), "partial").unwrap();
@@ -377,7 +377,37 @@ fn init_reuses_the_residue_of_an_interrupted_initialization_and_refuses_anything
         fs::read_to_string(directory.join(".gitignore")).unwrap(),
         "*.lock\n*.tmp\n"
     );
+    assert_eq!(
+        fs::read_to_string(directory.join(".gitattributes")).unwrap(),
+        "* -text\n"
+    );
     assert!(f.ok(&["list"]).is_empty());
+    // An initialization interrupted between the two files leaves the ignore file alone; the
+    // retry adds the attributes file and keeps the ignore file.
+    let f = repository();
+    let directory = f.0.join(".axon");
+    fs::create_dir_all(directory.join("records")).unwrap();
+    fs::write(directory.join(".gitignore"), "*.lock\n*.tmp\n").unwrap();
+    fs::write(directory.join("write.lock"), "").unwrap();
+    f.ok(&["init", "t"]);
+    assert_eq!(
+        management_entries(&f.0),
+        [
+            ".gitattributes",
+            ".gitignore",
+            "header.json",
+            "records",
+            "write.lock"
+        ]
+    );
+    assert_eq!(
+        fs::read_to_string(directory.join(".gitattributes")).unwrap(),
+        "* -text\n"
+    );
+    assert_eq!(
+        fs::read_to_string(directory.join(".gitignore")).unwrap(),
+        "*.lock\n*.tmp\n"
+    );
     // Anything else, valid or not, is refused with its path and left as it is.
     for (name, content) in [
         (
@@ -385,6 +415,7 @@ fn init_reuses_the_residue_of_an_interrupted_initialization_and_refuses_anything
             "{\"format\":\"axon-file/v1\",\"prefix\":\"t\"}\n",
         ),
         (".gitignore", "# mine\n*\n"),
+        (".gitattributes", "* text=auto\n"),
         ("records/ab/not-a-record", "x"),
         ("axon.db", "\x00\x01leftover bytes"),
     ] {
@@ -685,6 +716,7 @@ fn discovery_settles_on_a_header_and_never_falls_back_from_one() {
             "residue" => {
                 fs::create_dir(linked.0.join(".axon/records")).unwrap();
                 fs::write(linked.0.join(".axon/.gitignore"), "*.lock\n*.tmp\n").unwrap();
+                fs::write(linked.0.join(".axon/.gitattributes"), "* -text\n").unwrap();
                 fs::write(linked.0.join(".axon/header.json.tmp"), "partial").unwrap();
             }
             "earlier-format" => fs::write(linked.0.join(".axon/state.jsonl"), b"old\n").unwrap(),

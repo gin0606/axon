@@ -54,6 +54,7 @@ gap は記録が消せないため解決記録では埋まらない。欠けた�
 
 - 名前が `.tmp` で終わる file は書込途中の一時 file で、読取と `axon storage check` は無視する。
 - それ以外の、名前が記録 ID の形でない file（OS が作る file を含む）、名前と内容の hash が一致しない file、名前の先頭 2 文字と違う subdirectory にある file、途中で切れた file と空の file、規則外の内容の file は保存先の破損とする。読取と `axon storage check` は衝突や違反とは別に破損として報告し、利用者が file を直すまで読取と全操作を止める。破損は Entity に属さないので、違反の免除は当てはまらない。
+- 名前と内容の hash が一致しない file のうち、内容の CRLF を LF に戻すと名前の hash と一致するものは、Git の改行変換が疑われる破損として、その file の理由にその旨を書き、報告の末尾に改行変換の可能性と [保存先と worktree](../guide/storage.md#改行変換と-axongitattributes) への案内を一行添える。読取は内容を戻さず、破損として止める扱いは変えない。
 
 `.axon/` 直下の header・`.gitignore`・`.gitattributes`・lock 以外の file は読まず、報告もしない。header file の欠落、読めない header、未知の format は破損と同じく操作を止める。未知の format は変換しない。
 

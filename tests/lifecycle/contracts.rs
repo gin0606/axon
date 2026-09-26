@@ -402,11 +402,11 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
         ),
         (
             "Text & relationships",
-            &["write", "parent", "dep", "condition", "import"],
+            &["write", "parent", "dep", "condition", "convert", "import"],
         ),
         (
             "Setup & utilities",
-            &["init", "storage", "completion", "docs", "help"],
+            &["init", "storage", "resolve", "completion", "docs", "help"],
         ),
     ];
     let mut previous = 0;
@@ -836,6 +836,34 @@ fn tty_decoration_preserves_text_and_does_not_style_user_content() {
             assert!(colored.contains("  USER_TITLE\n"));
         }
     }
+    // A confirmation that carries a derived situation is decorated once, not escaped.
+    let records = f.records();
+    let heads: Vec<_> = (0..2)
+        .map(|_| {
+            Entry::Record(
+                records
+                    .perform(
+                        &eid(&id),
+                        axon::lifecycle::Operation::Start,
+                        None,
+                        context(),
+                    )
+                    .unwrap(),
+            )
+        })
+        .collect();
+    let head = heads[0].id().unwrap().to_string();
+    f.publish(heads);
+    let args = ["resolve", &id, "--head", &head];
+    let colored = terminal_output(&f, &args, false);
+    assert!(
+        colored.contains('\x1b') && !colored.contains("\\x1b"),
+        "{colored}"
+    );
+    assert_eq!(
+        strip_sgr(&colored),
+        format!("{id}  Resolved: {head}  InProgress\n")
+    );
 }
 
 #[test]
@@ -1236,6 +1264,79 @@ fn reopen_returns_completed_work_and_groups_are_never_started_or_released() {
     assert!(docs.contains("reopen returns Completed to NotStarted"));
     assert!(docs.contains("A Group is never started or released"));
     assert!(f.ok(&["reopen", "--help"]).contains("Completed dependents"));
+}
+
+#[test]
+fn convert_changes_only_the_kind_of_unstarted_work_and_takes_no_reason() {
+    let f = Fixture::new();
+    f.ok(&["init", "t"]);
+    let dependency = f.accepted("Dependency");
+    let issue = f.ok(&[
+        "capture",
+        "--title",
+        "Work",
+        "-m",
+        "body",
+        "--needs",
+        &dependency,
+    ]);
+    let issue = created(&issue).to_owned();
+    f.ok(&["condition", "set", &issue, "--command", "true"]);
+    f.ok(&["note", "add", &issue, "-m", "kept"]);
+    // Undecided converts; the same kind again is No changes without a record.
+    assert_eq!(
+        f.ok(&["convert", &issue, "--kind", "group"]),
+        format!("{issue}  Converted: Issue → Group\n")
+    );
+    let files = f.record_files();
+    assert_eq!(
+        f.ok(&["convert", &issue, "--kind", "group"]),
+        format!("{issue}  No changes  Kind: Group\n")
+    );
+    assert_eq!(f.record_files(), files);
+    let show = f.ok(&["show", &issue, "--details", "--skip-conditions"]);
+    assert!(
+        show.contains(&format!("{issue}  Group  Undecided  Work")),
+        "{show}"
+    );
+    assert!(show.contains("1 notes") && show.contains("body") && show.contains(&dependency));
+    assert!(show.contains("Condition: true"), "{show}");
+    assert!(f.ok(&["log", &issue]).contains("Converted: Issue → Group"));
+    // A conversion is not a lifecycle transition, so there is no reason to record.
+    assert_eq!(
+        f.run(&["convert", &issue, "--kind", "issue", "-r", "why"])
+            .status
+            .code(),
+        Some(2)
+    );
+    // NotStarted converts back; InProgress needs a release first; a Group with children and
+    // a terminal Entity are not converted.
+    f.ok(&["accept", &issue]);
+    f.ok(&["convert", &issue, "--kind", "issue"]);
+    f.ok(&["start", &dependency]);
+    f.ok(&["complete", &dependency]);
+    f.ok(&["start", &issue]);
+    let rejected = failure(f.run(&["convert", &issue, "--kind", "group"]));
+    assert!(rejected.contains("release"), "{rejected}");
+    f.ok(&["release", &issue]);
+    f.ok(&["convert", &issue, "--kind", "group"]);
+    let child = f.ok(&[
+        "capture", "--accept", "--title", "Child", "--parent", &issue,
+    ]);
+    let child = created(&child).to_owned();
+    let rejected = failure(f.run(&["convert", &issue, "--kind", "issue"]));
+    assert!(rejected.contains(&child), "{rejected}");
+    f.ok(&["start", &child]);
+    f.ok(&["complete", &child]);
+    f.ok(&["complete", &issue]);
+    let rejected = failure(f.run(&["convert", &issue, "--kind", "issue"]));
+    assert!(rejected.contains("reopen or reconsider"), "{rejected}");
+    let rejected = failure(f.run(&["convert", &dependency, "--kind", "group"]));
+    assert!(rejected.contains("reopen or reconsider"), "{rejected}");
+    assert!(
+        f.ok(&["convert", "--help"])
+            .contains("reread an Issue's description after converting it")
+    );
 }
 
 #[test]

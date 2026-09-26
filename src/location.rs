@@ -1,7 +1,7 @@
 //! Storage discovery keeps Git boundaries and never falls back from a store it found.
 use crate::{
     error::{Result, invalid, validate_prefix},
-    file::{self, GITIGNORE, HEADER_FILE, RECORDS_DIRECTORY, is_temporary},
+    file::{self, HEADER_FILE, RECORDS_DIRECTORY, STORE_FILES, is_temporary},
     lifecycle::record::{Header, encode_header},
 };
 use std::{
@@ -217,9 +217,9 @@ pub fn presence(root: &Path) -> Result<Presence> {
                 Some(file) => return Ok(Presence::Obstructed(file)),
                 None => true,
             }
-        } else if name == ".gitignore" {
+        } else if let Some((_, written)) = STORE_FILES.iter().find(|(file, _)| name == *file) {
             fs::symlink_metadata(&path)?.file_type().is_file()
-                && fs::read(&path)? == GITIGNORE.as_bytes()
+                && fs::read(&path)? == written.as_bytes()
         } else {
             false
         };
@@ -360,9 +360,9 @@ impl Location {
         }
         file::Store::at(self.clone())
     }
-    /// Creates `.axon/records/`, `.axon/.gitignore` and, last, the header under the
-    /// initialization lock. Anything but the residue of an interrupted initialization is
-    /// refused with its path.
+    /// Creates `.axon/records/`, `.axon/.gitignore`, `.axon/.gitattributes` and, last, the
+    /// header under the initialization lock. Anything but the residue of an interrupted
+    /// initialization is refused with its path.
     pub fn init(&self, prefix: &str) -> Result<Initialized> {
         validate_prefix(prefix)?;
         let directory = self.root.join(".axon");
@@ -422,13 +422,15 @@ impl Location {
         let header = self.header();
         let result = (|| -> Result<Initialized> {
             fs::create_dir_all(directory.join(RECORDS_DIRECTORY))?;
-            let ignore = directory.join(".gitignore");
-            if !present(&ignore)? {
-                let temp = file::temporary(&ignore, GITIGNORE.as_bytes())?;
-                fs::rename(&temp, &ignore)?;
+            for (name, content) in STORE_FILES {
+                let path = directory.join(name);
+                if !present(&path)? {
+                    let temp = file::temporary(&path, content.as_bytes())?;
+                    fs::rename(&temp, &path)?;
+                }
             }
-            // The record directory and the ignore file are durable before the header, which
-            // marks the store, is published.
+            // The record directory, the ignore file and the attributes file are durable before
+            // the header, which marks the store, is published.
             file::sync_directory(&directory)?;
             let bytes = encode_header(&Header::new(prefix)?)?;
             let temp = file::temporary(&header, &bytes)?;

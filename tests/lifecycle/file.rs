@@ -130,16 +130,20 @@ fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() 
     let stray = f.records_dir().join("notes.txt");
     let forged = f.records_dir().join("00").join("0".repeat(64));
     fs::create_dir_all(forged.parent().unwrap()).unwrap();
+    let edited = String::from_utf8(good.clone())
+        .unwrap()
+        .replacen("\"title\":\"job\"", "\"title\":\"jobs\"", 1)
+        .into_bytes();
+    // A file that is another content with CRLF line endings is not a converted record.
+    let edited_crlf = String::from_utf8(edited.clone())
+        .unwrap()
+        .replace('\n', "\r\n")
+        .into_bytes();
     for (label, corrupt) in [
         ("hash", &good[..good.len() - 2].to_vec()),
         ("empty", &Vec::new()),
-        (
-            "edited",
-            &String::from_utf8(good.clone())
-                .unwrap()
-                .replacen("\"title\":\"job\"", "\"title\":\"jobs\"", 1)
-                .into_bytes(),
-        ),
+        ("edited", &edited),
+        ("edited-crlf", &edited_crlf),
     ] {
         fs::write(&record, corrupt).unwrap();
         fs::write(&stray, b"kept").unwrap();
@@ -168,6 +172,14 @@ fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() 
             !error.contains("Conflicted:") && !error.contains("Violation:"),
             "{label}: corruption is reported alone, before any derivation: {error}"
         );
+        // None of these is a converted record, so no line-ending diagnosis appears.
+        assert!(
+            !error.contains("CRLF") && !error.contains("line-ending"),
+            "{label}: {error}"
+        );
+        if label == "edited-crlf" {
+            assert!(error.contains("not canonical"), "{label}: {error}");
+        }
         assert_eq!(fs::read(&stray).unwrap(), b"kept");
     }
     fs::write(&record, &good).unwrap();
@@ -279,6 +291,7 @@ fn storage_check_treats_initialization_residue_as_uninitialized() {
     let f = Fixture::new();
     fs::create_dir_all(f.0.join(".axon/records")).unwrap();
     fs::write(f.0.join(".axon/.gitignore"), "*.lock\n*.tmp\n").unwrap();
+    fs::write(f.0.join(".axon/.gitattributes"), "* -text\n").unwrap();
     fs::write(f.0.join(".axon/header.json.tmp"), "partial").unwrap();
     for args in [
         vec!["storage", "check"],
@@ -619,7 +632,7 @@ fn storage_check_reports_conflicts_violations_and_gaps_by_severity() {
 }
 
 #[test]
-fn tracked_worktrees_merge_record_files_without_attributes_or_configuration() {
+fn tracked_worktrees_merge_record_files_without_merge_attributes_or_configuration() {
     let f = Fixture::new();
     git(&f.0, &["init", "-q"]);
     f.init();
@@ -627,11 +640,17 @@ fn tracked_worktrees_merge_record_files_without_attributes_or_configuration() {
     let other = f.accepted("other");
     track_store(&f.0);
     git_commit(&f.0, &["-qm", "base"]);
-    // Only records, the header and the ignore file are tracked.
+    // Only records, the header, the ignore file and the attributes file are tracked.
     let tracked =
         String::from_utf8(git_output(&f.0, &["ls-tree", "-r", "--name-only", "HEAD"]).stdout)
             .unwrap();
-    assert!(tracked.contains(".axon/header.json") && tracked.contains(".axon/.gitignore"));
+    for path in [
+        ".axon/header.json",
+        ".axon/.gitignore",
+        ".axon/.gitattributes",
+    ] {
+        assert!(tracked.lines().any(|line| line == path), "{tracked}");
+    }
     assert!(!tracked.contains("write.lock"));
     assert_eq!(tracked.matches(".axon/records/").count(), 2);
     let a = Fixture::new();
@@ -656,22 +675,9 @@ fn tracked_worktrees_merge_record_files_without_attributes_or_configuration() {
         git_commit(&branch.0, &["-qm", "branch"]);
     }
     assert!(
-        git_output(
-            &a.0,
-            &[
-                "-c",
-                "user.name=Test",
-                "-c",
-                "user.email=test@example.com",
-                "-c",
-                "core.hooksPath=/dev/null",
-                "merge",
-                "--no-edit",
-                "b",
-            ],
-        )
-        .status
-        .success()
+        git_integration(&a.0, &["merge", "--no-edit", "b"])
+            .status
+            .success()
     );
     assert!(git_output(&a.0, &["ls-files", "-u"]).stdout.is_empty());
     assert_eq!(a.records().notes_of(&eid(&id)).len(), 2);
@@ -738,20 +744,7 @@ fn concurrent_work_on_one_issue_merges_in_git_and_reads_as_a_conflict() {
     b.ok(&["note", "add", &id, "-m", "remaining branch evidence"]);
     commit(&a.0, "finish");
     commit(&b.0, "release");
-    let merge = git_output(
-        &a.0,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "-c",
-            "core.hooksPath=/dev/null",
-            "merge",
-            "--no-edit",
-            "remaining",
-        ],
-    );
+    let merge = git_integration(&a.0, &["merge", "--no-edit", "remaining"]);
     assert!(
         merge.status.success(),
         "{}",
@@ -782,6 +775,38 @@ fn concurrent_work_on_one_issue_merges_in_git_and_reads_as_a_conflict() {
     failure(a.run(&["complete", &group]));
     a.ok(&["note", "add", &id, "-m", "seen the conflict"]);
     assert!(!a.ok(&["tasks"]).contains(&id));
+    // Taking the Completed head settles the Issue at that value; the Group reads its child
+    // again, both branches' Notes stay, and ordinary operations resume.
+    let listing = a.ok(&["resolve", &id]);
+    let completed = head_line(&listing, "Complete  Completed  Issue  job")
+        .split("  ")
+        .next()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        a.ok(&[
+            "resolve",
+            &id,
+            "--head",
+            &completed,
+            "-r",
+            "the work was finished"
+        ]),
+        format!("{id}  Resolved: {completed}  Completed\n")
+    );
+    consistent(&a);
+    assert!(a.ok(&["show", &id]).contains("Issue  Completed  job"));
+    let group_show = a.ok(&["show", &group]);
+    assert!(
+        group_show.contains("Group  Confirmable  delivery")
+            && group_show.contains("1/1 terminal (1 completed, 0 cancelled)"),
+        "{group_show}"
+    );
+    let notes = a.ok(&["note", "list", &id]);
+    assert!(
+        notes.contains("completed branch evidence") && notes.contains("remaining branch evidence")
+    );
+    a.ok(&["complete", &group]);
 }
 
 #[test]
@@ -819,6 +844,600 @@ fn valid_store_with_unmerged_index_rejects_normal_operations() {
     git(&f.0, &["add", ".axon"]);
     f.ok(&["start", &id]);
 }
+/// Stages and commits the store, as the tracked operation does after every step.
+fn commit_store(path: &Path, message: &str) -> String {
+    git(path, &["add", ".axon"]);
+    git_commit(path, &["-qm", message]);
+    String::from_utf8(git_output(path, &["rev-parse", "HEAD"]).stdout)
+        .unwrap()
+        .trim()
+        .to_owned()
+}
+/// A tracked store with one accepted Issue, committed on the main worktree's branch.
+fn tracked_repository(title: &str) -> (Fixture, String) {
+    let f = Fixture::new();
+    git(&f.0, &["init", "-q"]);
+    f.init();
+    let id = f.accepted(title);
+    commit_store(&f.0, "base");
+    (f, id)
+}
+/// The record IDs of the head lines in a `resolve` listing.
+fn listed_heads(listing: &str) -> Vec<String> {
+    listing
+        .lines()
+        .filter_map(|line| line.split("  ").next())
+        .filter(|first| first.len() == 64)
+        .map(str::to_owned)
+        .collect()
+}
+/// The head line of a `resolve` listing that carries the given text.
+fn head_line<'a>(listing: &'a str, text: &str) -> &'a str {
+    listing
+        .lines()
+        .find(|line| line.contains(text))
+        .unwrap_or_else(|| panic!("no head line with {text:?} in:\n{listing}"))
+}
+fn consistent(f: &Fixture) {
+    let check = f.run(&["storage", "check"]);
+    assert!(
+        check.status.success() && check.stdout.is_empty(),
+        "{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert!(String::from_utf8_lossy(&check.stderr).contains("consistent"));
+}
+fn unmerged_paths(path: &Path) -> Vec<u8> {
+    git_output(path, &["ls-files", "-u"]).stdout
+}
+
+#[test]
+fn rebase_keeps_records_of_different_issues_and_the_same_issue_reads_as_a_conflict_that_resolve_settles()
+ {
+    let (f, x) = tracked_repository("x");
+    // Registered after x under an ID that sorts before it, so that creation order and ID
+    // order disagree.
+    let y = "t-00000000".to_owned();
+    f.publish(vec![Entry::Record(
+        f.records()
+            .create(eid(&y), current("y"), context())
+            .unwrap(),
+    )]);
+    assert!(y < x);
+    commit_store(&f.0, "y");
+    let a = add_worktree(&f.0, "a");
+    let b = add_worktree(&f.0, "b");
+    a.ok(&["start", &x]);
+    commit_store(&a.0, "start x");
+    b.ok(&["start", &y]);
+    commit_store(&b.0, "start y");
+    // Work on different Issues rebases unattended and reads as both.
+    let rebase = git_integration(&b.0, &["rebase", "-q", "a"]);
+    assert!(
+        rebase.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebase.stderr)
+    );
+    assert!(unmerged_paths(&b.0).is_empty());
+    consistent(&b);
+    for id in [&x, &y] {
+        assert!(b.ok(&["show", id]).contains("InProgress"), "{id}");
+    }
+    // The same Issues started on both sides rebase without a Git conflict and read as Axon
+    // conflicts with two heads each, which stops every ordinary operation.
+    let c = add_worktree(&f.0, "c");
+    c.ok(&["start", &x]);
+    c.ok(&["start", &y]);
+    commit_store(&c.0, "start x and y again");
+    let rebase = git_integration(&c.0, &["rebase", "-q", "b"]);
+    assert!(
+        rebase.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebase.stderr)
+    );
+    assert!(unmerged_paths(&c.0).is_empty());
+    let error = failure(c.run(&["storage", "check"]));
+    assert!(error.contains("2 problems"), "{error}");
+    for (id, title) in [(&x, "x"), (&y, "y")] {
+        assert!(
+            error.contains(&format!(
+                "Conflicted: {id}  Issue  Conflicted  {title}  2 heads"
+            )),
+            "{error}"
+        );
+    }
+    assert!(failure(c.run(&["release", &x])).contains("resolve"));
+    // The listing shows every conflicted Entity, each row followed by its own heads and the
+    // Entities separated by a blank line; with an ID, that Entity alone.
+    let listing = c.ok(&["resolve"]);
+    let blocks: Vec<&str> = listing.split("\n\n").collect();
+    assert_eq!(blocks.len(), 2, "{listing}");
+    for (block, (id, title)) in blocks.iter().zip([(&x, "x"), (&y, "y")]) {
+        assert!(
+            block.starts_with(&format!("{id}  Issue  Conflicted  {title}\n")),
+            "{listing}"
+        );
+        assert_eq!(listed_heads(block).len(), 2, "{listing}");
+        assert_eq!(
+            block
+                .matches(&format!("Start  InProgress  Issue  {title}"))
+                .count(),
+            2,
+            "{listing}"
+        );
+    }
+    assert!(!listing.contains("parent missing"), "{listing}");
+    assert_eq!(c.ok(&["resolve", &x]), format!("{}\n", blocks[0]));
+    assert_eq!(c.ok(&["resolve", &y]), blocks[1]);
+    let listing = c.ok(&["resolve", &x]);
+    let heads = listed_heads(&listing);
+    assert_eq!(
+        c.ok(&["show", &x])
+            .lines()
+            .filter(|line| heads.iter().any(|head| line.starts_with(head)))
+            .count(),
+        2,
+        "show lists the same heads"
+    );
+    // Only a head of the Entity can be chosen; a head needs an ID and a reason a head.
+    let files = c.record_files();
+    let error = failure(c.run(&["resolve", &x, "--head", &"0".repeat(64)]));
+    assert!(error.contains("not a head"), "{error}");
+    assert_eq!(
+        c.run(&["resolve", &x, "-r", "no head"]).status.code(),
+        Some(2)
+    );
+    assert_eq!(
+        c.run(&["resolve", "--head", &heads[0]]).status.code(),
+        Some(2)
+    );
+    assert_eq!(c.record_files(), files);
+    let resolved = c.ok(&["resolve", &x, "--head", &heads[0], "-r", "keep this side"]);
+    assert_eq!(
+        resolved,
+        format!("{x}  Resolved: {}  InProgress\n", heads[0])
+    );
+    assert_eq!(c.record_files().len(), files.len() + 1);
+    // The other Entity stays conflicted and keeps blocking ordinary operations until it is
+    // resolved as well.
+    let remaining = c.ok(&["resolve"]);
+    assert!(
+        remaining.starts_with(&format!("{y}  Issue  Conflicted  y\n")) && !remaining.contains(&x),
+        "{remaining}"
+    );
+    let error = failure(c.run(&["release", &x]));
+    assert!(error.contains(&y) && error.contains("resolve"), "{error}");
+    let y_head = listed_heads(&remaining).remove(0);
+    c.ok(&["resolve", &y, "--head", &y_head]);
+    consistent(&c);
+    assert!(c.ok(&["show", &x]).contains("Issue  InProgress  x"));
+    let log = c.ok(&["log", &x]);
+    assert!(
+        log.contains(&format!(
+            "Resolved: {}  InProgress  Issue  Reason: keep this side",
+            heads[0]
+        )),
+        "{log}"
+    );
+    let none = c.run(&["resolve"]);
+    assert!(none.status.success() && none.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&none.stderr).contains("No conflicted Entities"));
+    assert!(failure(c.run(&["resolve", &x])).contains("not conflicted"));
+    c.ok(&["release", &x]);
+}
+
+#[test]
+fn cherry_pick_of_a_later_commit_reports_a_gap_and_a_false_conflict_until_the_rest_arrives() {
+    let (f, x) = tracked_repository("x");
+    let y = f.accepted("y");
+    commit_store(&f.0, "y");
+    let a = add_worktree(&f.0, "a");
+    a.ok(&["start", &y]);
+    let start_y = commit_store(&a.0, "start y");
+    a.ok(&["start", &x]);
+    let start = commit_store(&a.0, "start");
+    a.ok(&["release", &x]);
+    let release = commit_store(&a.0, "release");
+    // A commit whose record continues a record both sides have picks cleanly beside work on
+    // another Entity, and nothing is reported.
+    f.ok(&["note", "add", &x, "-m", "meanwhile"]);
+    commit_store(&f.0, "note");
+    let pick = git_integration(&f.0, &["cherry-pick", &start_y]);
+    assert!(
+        pick.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pick.stderr)
+    );
+    assert!(unmerged_paths(&f.0).is_empty());
+    consistent(&f);
+    assert!(f.ok(&["show", &y]).contains("Issue  InProgress  y"));
+    // Picking the release without the start it continues brings one record file whose parent
+    // is missing: it stands beside the registration as a head.
+    let pick = git_integration(&f.0, &["cherry-pick", &release]);
+    assert!(
+        pick.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pick.stderr)
+    );
+    let error = failure(f.run(&["storage", "check"]));
+    assert!(error.contains(&format!("Conflicted: {x}")), "{error}");
+    assert!(
+        error.contains(&format!("Missing parent records: {x}")),
+        "{error}"
+    );
+    let listing = f.ok(&["resolve", &x]);
+    let newer = head_line(&listing, "parent missing; likely newer");
+    assert!(newer.contains("Release  NotStarted  Issue  x"), "{newer}");
+    assert!(
+        !head_line(&listing, "created").contains("parent missing"),
+        "{listing}"
+    );
+    let newer = newer.split("  ").next().unwrap().to_owned();
+    assert_eq!(
+        f.ok(&["resolve", &x, "--head", &newer]),
+        format!("{x}  Resolved: {newer}  Ready\n")
+    );
+    // Settled at the newer value; the gap stays as information and stops nothing.
+    let check = f.run(&["storage", "check"]);
+    assert!(check.status.success());
+    let report = String::from_utf8(check.stdout).unwrap();
+    assert!(
+        report.contains(&format!("Missing parent records: {x}")),
+        "{report}"
+    );
+    assert!(!report.contains("Conflicted"), "{report}");
+    assert!(f.ok(&["show", &x]).contains("Issue  Ready  x"));
+    commit_store(&f.0, "resolve");
+    // The missing record arrives: the value does not change and the gap closes.
+    let pick = git_integration(&f.0, &["cherry-pick", &start]);
+    assert!(
+        pick.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pick.stderr)
+    );
+    consistent(&f);
+    assert!(f.ok(&["show", &x]).contains("Issue  Ready  x"));
+    assert!(!f.ok(&["log", &x]).contains("parent missing"));
+}
+
+#[test]
+fn revert_of_a_continued_commit_reports_a_gap_and_of_an_uncontinued_commit_nothing() {
+    let (f, x) = tracked_repository("x");
+    f.ok(&["start", &x]);
+    let start = commit_store(&f.0, "start");
+    let start_record = record_paths_of(&f.0, &x)
+        .into_iter()
+        .find(|relative| {
+            fs::read_to_string(f.records_dir().join(relative))
+                .unwrap()
+                .contains("\"operation\":\"start\"")
+        })
+        .unwrap();
+    f.ok(&["release", &x]);
+    commit_store(&f.0, "release");
+    // Reverting the start removes its file; the release that continues it is left with a
+    // missing parent and stands beside the registration as a head.
+    let revert = git_integration(&f.0, &["revert", "--no-edit", &start]);
+    assert!(
+        revert.status.success(),
+        "{}",
+        String::from_utf8_lossy(&revert.stderr)
+    );
+    assert!(!f.records_dir().join(&start_record).exists());
+    let error = failure(f.run(&["storage", "check"]));
+    assert!(error.contains(&format!("Conflicted: {x}")), "{error}");
+    assert!(
+        error.contains(&format!("Missing parent records: {x}")),
+        "{error}"
+    );
+    let show = f.ok(&["show", &x]);
+    assert!(show.contains("Issue  Conflicted  x"), "{show}");
+    assert!(show.contains("parent missing; likely newer"), "{show}");
+    let listing = f.ok(&["resolve", &x]);
+    let newer = head_line(&listing, "likely newer")
+        .split("  ")
+        .next()
+        .unwrap()
+        .to_owned();
+    f.ok(&["resolve", &x, "--head", &newer]);
+    commit_store(&f.0, "resolve");
+    let check = f.run(&["storage", "check"]);
+    assert!(check.status.success());
+    assert!(
+        String::from_utf8_lossy(&check.stdout).contains("Missing parent records"),
+        "the gap remains as information"
+    );
+    // The reverted file comes back from history and the gap closes.
+    git(
+        &f.0,
+        &[
+            "checkout",
+            &start,
+            "--",
+            &format!(".axon/records/{}", start_record.display()),
+        ],
+    );
+    commit_store(&f.0, "restore");
+    consistent(&f);
+    assert!(f.ok(&["show", &x]).contains("Issue  Ready  x"));
+    // A commit whose record nothing continues reverts without any report; the state is
+    // simply the one before it.
+    f.ok(&["start", &x]);
+    let again = commit_store(&f.0, "start again");
+    assert!(f.ok(&["show", &x]).contains("InProgress"));
+    let revert = git_integration(&f.0, &["revert", "--no-edit", &again]);
+    assert!(
+        revert.status.success(),
+        "{}",
+        String::from_utf8_lossy(&revert.stderr)
+    );
+    consistent(&f);
+    assert!(f.ok(&["show", &x]).contains("Issue  Ready  x"));
+    assert!(!f.ok(&["log", &x]).contains("parent missing"));
+}
+
+#[test]
+fn squash_merge_adds_the_records_of_a_branch_without_a_report() {
+    let (f, x) = tracked_repository("x");
+    let y = f.accepted("y");
+    commit_store(&f.0, "y");
+    let a = add_worktree(&f.0, "a");
+    a.ok(&["start", &x]);
+    commit_store(&a.0, "start");
+    a.ok(&["note", "add", &x, "-m", "evidence"]);
+    commit_store(&a.0, "note");
+    // Work on another Issue meanwhile on the receiving side.
+    f.ok(&["start", &y]);
+    commit_store(&f.0, "start y");
+    let squash = git_integration(&f.0, &["merge", "--squash", "a"]);
+    assert!(
+        squash.status.success(),
+        "{}",
+        String::from_utf8_lossy(&squash.stderr)
+    );
+    assert!(unmerged_paths(&f.0).is_empty());
+    git_commit(&f.0, &["-qm", "squashed"]);
+    consistent(&f);
+    for (id, title) in [(&x, "x"), (&y, "y")] {
+        assert!(
+            f.ok(&["show", id])
+                .contains(&format!("Issue  InProgress  {title}"))
+        );
+    }
+    assert!(f.ok(&["note", "list", &x]).contains("evidence"));
+    assert!(!f.ok(&["log", &x]).contains("Concurrent branch"));
+}
+
+#[test]
+fn a_child_registered_beside_a_completed_group_is_a_violation_that_reopen_repairs() {
+    let f = Fixture::new();
+    git(&f.0, &["init", "-q"]);
+    f.init();
+    let group = f
+        .ok(&["capture", "--kind", "group", "--accept", "--title", "plan"])
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    commit_store(&f.0, "base");
+    let a = add_worktree(&f.0, "a");
+    let b = add_worktree(&f.0, "b");
+    a.ok(&["complete", &group]);
+    commit_store(&a.0, "complete");
+    let child = b
+        .ok(&[
+            "capture", "--accept", "--title", "child", "--parent", &group,
+        ])
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    commit_store(&b.0, "child");
+    let merge = git_integration(&a.0, &["merge", "--no-edit", "b"]);
+    assert!(
+        merge.status.success(),
+        "{}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
+    assert!(unmerged_paths(&a.0).is_empty());
+    // Both sides were valid; together they leave an unfinished child under a Completed Group.
+    let error = failure(a.run(&["storage", "check"]));
+    assert!(error.contains("1 problems"), "{error}");
+    assert!(
+        error.contains(&format!("Violation: {child}"))
+            && error.contains("unfinished under a terminal parent"),
+        "{error}"
+    );
+    let show = a.ok(&["show", &child]);
+    assert!(show.contains("+Invalid"), "{show}");
+    assert!(
+        show.contains("Invalid\nunfinished under a terminal parent"),
+        "{show}"
+    );
+    // Reopening the Group is the ordinary operation that removes the violation.
+    a.ok(&["reopen", &group]);
+    consistent(&a);
+    assert!(a.ok(&["show", &child]).contains("Issue  Ready  child"));
+    assert!(a.ok(&["show", &group]).contains("Group  Ready  plan"));
+}
+
+#[test]
+fn resolve_shows_the_violation_the_chosen_head_leaves_behind() {
+    let f = Fixture::new();
+    git(&f.0, &["init", "-q"]);
+    f.init();
+    let group = f
+        .ok(&["capture", "--kind", "group", "--accept", "--title", "plan"])
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    let x = f.accepted("x");
+    commit_store(&f.0, "base");
+    let a = add_worktree(&f.0, "a");
+    let b = add_worktree(&f.0, "b");
+    a.ok(&["complete", &group]);
+    a.ok(&["start", &x]);
+    commit_store(&a.0, "complete the plan and start x");
+    b.ok(&["parent", "set", &x, "--parent", &group]);
+    commit_store(&b.0, "move x into the plan");
+    assert!(
+        git_integration(&a.0, &["merge", "--no-edit", "b"])
+            .status
+            .success()
+    );
+    // Taking the move leaves x unfinished under the Completed Group: the confirmation shows
+    // the situation with the violation, like every listing does.
+    let listing = a.ok(&["resolve", &x]);
+    let moved = head_line(&listing, "parent  NotStarted")
+        .split("  ")
+        .next()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        a.ok(&["resolve", &x, "--head", &moved]),
+        format!("{x}  Resolved: {moved}  Blocked+Invalid\n")
+    );
+    let error = failure(a.run(&["storage", "check"]));
+    assert!(
+        error.contains(&format!("Violation: {x}  Issue  Blocked+Invalid  x")),
+        "{error}"
+    );
+    a.ok(&["reopen", &group]);
+    consistent(&a);
+}
+
+/// A clone whose checkout converts line endings, as Git for Windows does by default.
+fn clone_with_autocrlf(source: &Path) -> Fixture {
+    let clone = Fixture::new();
+    git(
+        source,
+        &[
+            "clone",
+            "-q",
+            "-c",
+            "core.autocrlf=true",
+            source.to_str().unwrap(),
+            clone.0.to_str().unwrap(),
+        ],
+    );
+    clone
+}
+fn eol_lines(root: &Path) -> String {
+    String::from_utf8(git_output(root, &["ls-files", "--eol", "--", ".axon"]).stdout).unwrap()
+}
+
+#[test]
+fn the_attributes_file_keeps_a_checkout_with_autocrlf_from_corrupting_the_store() {
+    let (f, x) = tracked_repository("x");
+    let clone = clone_with_autocrlf(&f.0);
+    let eol = eol_lines(&clone.0);
+    assert!(eol.contains(".axon/.gitattributes"), "{eol}");
+    assert!(
+        eol.lines()
+            .all(|line| line.contains("w/lf") && line.contains("attr/-text")),
+        "{eol}"
+    );
+    assert!(clone.ok(&["list"]).contains(&x));
+    consistent(&clone);
+    // Records written in the clone stay readable there.
+    clone.ok(&["start", &x]);
+    consistent(&clone);
+}
+
+#[test]
+fn a_tracked_store_without_the_attributes_file_reads_as_corrupt_with_the_line_ending_hint() {
+    let f = Fixture::new();
+    git(&f.0, &["init", "-q"]);
+    f.init();
+    fs::remove_file(f.0.join(".axon/.gitattributes")).unwrap();
+    let x = f.accepted("x");
+    f.accepted("y");
+    commit_store(&f.0, "base");
+    let clone = clone_with_autocrlf(&f.0);
+    let eol = eol_lines(&clone.0);
+    assert_eq!(
+        eol.lines()
+            .filter(|line| line.contains("w/crlf") && line.contains(".axon/records/"))
+            .count(),
+        2,
+        "{eol}"
+    );
+    let files = clone.record_files();
+    let relative = files[0].clone();
+    let converted = fs::read(clone.records_dir().join(&relative)).unwrap();
+    assert!(converted.ends_with(b"\r\n"));
+    // Every read and write stops as corruption; the report names the file, says that the
+    // content is the record with CRLF line endings, and points at the guide.
+    for args in [
+        vec!["list"],
+        vec!["show", &x],
+        vec!["start", &x],
+        vec!["note", "add", &x, "-m", "rejected"],
+        vec!["storage", "check"],
+    ] {
+        let error = failure(clone.run(&args));
+        for text in [
+            "corrupt",
+            relative.to_str().unwrap(),
+            "CRLF line endings; with LF the content hashes to the name",
+            "Git line-ending conversion is likely",
+            "docs/guide/storage.md",
+        ] {
+            assert!(
+                error.contains(text),
+                "{args:?}: missing {text:?} in {error}"
+            );
+        }
+    }
+    // Every converted file is listed with the reason; the hint follows once, at the end.
+    let error = failure(clone.run(&["storage", "check"]));
+    assert!(error.contains("2 corrupt files"), "{error}");
+    for relative in &files {
+        assert!(
+            error.contains(&format!("Corrupt: {}: CRLF", relative.display())),
+            "{error}"
+        );
+    }
+    assert_eq!(
+        error
+            .matches("Git line-ending conversion is likely")
+            .count(),
+        1
+    );
+    assert!(error.trim_end().ends_with("the details"), "{error}");
+    assert!(error.contains("is missing from the store"), "{error}");
+    assert_eq!(
+        fs::read(clone.records_dir().join(&relative)).unwrap(),
+        converted,
+        "the reader does not repair the file"
+    );
+    // The guide's repair: commit the attributes file alone, then take the tracked files out of
+    // the index again.
+    fs::write(clone.0.join(".axon/.gitattributes"), "* -text\n").unwrap();
+    git(&clone.0, &["add", ".axon/.gitattributes"]);
+    git_commit(
+        &clone.0,
+        &[
+            "-qm",
+            "Stop line-ending conversion",
+            "--",
+            ".axon/.gitattributes",
+        ],
+    );
+    let tracked =
+        String::from_utf8(git_output(&clone.0, &["ls-files", "--", ".axon"]).stdout).unwrap();
+    for path in tracked.lines() {
+        fs::remove_file(clone.0.join(path)).unwrap();
+    }
+    git(&clone.0, &["checkout", "--", ".axon"]);
+    let eol = eol_lines(&clone.0);
+    assert!(eol.lines().all(|line| line.contains("w/lf")), "{eol}");
+    assert!(clone.ok(&["list"]).contains(&x));
+    consistent(&clone);
+}
+
 #[cfg(unix)]
 fn git_on_path() -> PathBuf {
     std::env::split_paths(&std::env::var_os("PATH").unwrap())

@@ -105,14 +105,18 @@ fn conversion_is_rejected_while_in_progress_terminal_or_with_children() {
     r.op("i3", Start);
     assert!(error(r.store.convert(&id("i3"), Kind::Group, r.tick())).contains("release"));
     r.op("i3", Complete);
-    assert!(error(r.store.convert(&id("i3"), Kind::Group, r.tick())).contains("terminal"));
+    assert!(
+        error(r.store.convert(&id("i3"), Kind::Group, r.tick())).contains("reopen or reconsider")
+    );
     let rejected = error(r.store.convert(&id("g0"), Kind::Issue, r.tick()));
     assert!(
         rejected.contains("children") && rejected.contains("i1"),
         "{rejected}"
     );
     r.op("g2", Cancel);
-    assert!(error(r.store.convert(&id("g2"), Kind::Issue, r.tick())).contains("terminal"));
+    assert!(
+        error(r.store.convert(&id("g2"), Kind::Issue, r.tick())).contains("reopen or reconsider")
+    );
 }
 
 /// Judging every record by the Entity's current kind would reject both histories above; the

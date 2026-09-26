@@ -2,14 +2,14 @@ use super::{
     Output, Publication,
     args::{Body, Change, Condition, Create, Dependency, Import, Parent},
     display, output,
-    render::{confirmation, declaration_changes, declaration_ids},
+    render::{confirmation, converted, declaration_changes, declaration_ids, situation_label},
     store::{context, fresh_entity_id, open, resolve},
 };
 use axon::{
     Result,
     lifecycle::{
-        Context, EntityId, Lifecycle, Operation,
-        record::{Current, Entry, Record, Store, View},
+        Context, EntityId, Kind, Lifecycle, Operation,
+        record::{Current, Entry, Record, RecordId, Store, View},
     },
 };
 use chrono::Utc;
@@ -317,6 +317,48 @@ fn resolve_dependency(view: &View, id: &EntityId, value: &str) -> Result<Option<
                 .join(", ")
         ))),
     }
+}
+pub(super) fn convert(value: String, kind: Kind) -> Result<Output> {
+    mutate(|records, view| {
+        let id = resolve(view, &value)?;
+        let record = records.convert(&id, kind, context())?;
+        let text = confirmation(
+            &id,
+            &match &record {
+                Some(record) => converted(
+                    view.current(&id).expect("settled Entity").kind,
+                    record.after.kind,
+                ),
+                None => format!("No changes  Kind: {kind:?}"),
+            },
+        );
+        Ok((record, text))
+    })
+}
+/// `axon resolve ID --head RECORD_ID`: one resolve record that takes the head's value. The
+/// situation after it (with `+Invalid` when a violation remains) is derived from the record
+/// set with the new record added, without evaluating conditions.
+pub(super) fn resolve_conflict(
+    value: String,
+    head: String,
+    reason: Option<String>,
+) -> Result<Output> {
+    mutate(|records, view| {
+        let id = resolve(view, &value)?;
+        let head = RecordId::try_from(head.as_str())?;
+        let record = records.resolve(&id, &head, reason, context())?;
+        // The situation is read from a set that holds the new record, so that the store and
+        // the view derived from it agree.
+        let mut after = records.clone();
+        after.insert(Entry::Record(record.clone()))?;
+        let derived = after.view()?;
+        let key = derived.key(&id).expect("resolved Entity is known");
+        let situation = situation_label(&axon::read::View::new(&after, &derived).row(key, None));
+        Ok((
+            Some(record),
+            confirmation(&id, &format!("Resolved: {head}  {situation}")),
+        ))
+    })
 }
 pub(super) fn transition(args: Change, operation: Operation) -> Result<Output> {
     mutate(|records, view| {

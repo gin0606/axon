@@ -114,6 +114,30 @@ To read saved information without running any condition, add --skip-conditions; 
     Reconsider(Change),
     /// Return a Completed Entity to NotStarted; rejected while Completed dependents remain
     Reopen(Change),
+    /// Convert an unstarted Entity between Issue and Group without changing anything else
+    #[command(
+        after_help = "Example: axon convert ID --kind group\nOnly an Undecided or NotStarted Entity converts; release an InProgress Issue first, and a Group with children is not converted to an Issue. Lifecycle, parent, dependencies, text, condition and Notes stay as they are. Converting to the kind the Entity already has is No changes. The kind is not a lifecycle transition, so there is no --reason.\nA Group's description states the outcome of the whole plan and what its final review confirms, so reread an Issue's description after converting it."
+    )]
+    Convert {
+        id: String,
+        /// The kind to convert to
+        #[arg(long, value_enum)]
+        kind: EntityKind,
+    },
+    /// List conflicted Entities with their heads, or resolve one by taking a head's value
+    #[command(
+        after_help = "Example: axon resolve\n         axon resolve ID --head RECORD_ID -r 'keep the side with remaining work'\nWithout ID every conflicted Entity is listed; with ID alone, that Entity. Each head line has the record ID, time, actor, record kind, and the lifecycle, kind and title of that head. A head whose parent record is missing is marked \"parent missing; likely newer\": a cherry-pick or revert left a gap, and that head is probably the later record.\nWith ID and --head RECORD_ID (a complete record ID from the listing) a resolve record takes that head's value and joins every head; the Entity is settled at once. Violations that remain are shown by axon show and axon storage check and repaired with ordinary commands."
+    )]
+    Resolve {
+        /// The conflicted Entity; without it every conflicted Entity is listed
+        id: Option<String>,
+        /// The complete record ID of the head whose value the Entity takes
+        #[arg(long, value_name = "RECORD_ID", requires = "id")]
+        head: Option<String>,
+        /// Why this head is taken: one line, stored in the resolve record like other reasons
+        #[arg(short, long, requires = "head")]
+        reason: Option<String>,
+    },
     /// Edit title or description without changing lifecycle
     Write {
         id: String,
@@ -442,6 +466,8 @@ pub fn operation_label(command: &Command) -> String {
         Command::Cancel(c) => ("cancel", Some(&c.id)),
         Command::Reconsider(c) => ("reconsider", Some(&c.id)),
         Command::Reopen(c) => ("reopen", Some(&c.id)),
+        Command::Convert { id, .. } => ("convert", Some(id)),
+        Command::Resolve { id, .. } => ("resolve", id.as_deref()),
         Command::Condition {
             command: Condition::Set { id, .. },
         } => ("condition set", Some(id)),

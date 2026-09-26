@@ -92,7 +92,12 @@ impl Read {
     }
     /// The stderr notice a list or detail carries when the store is not clean.
     pub(super) fn notice(&self) -> String {
-        let conflicted = self.view.conflicted().len();
+        self.notice_excluding(0)
+    }
+    /// The notice for a read that shows `shown` of the conflicted Entities itself: the
+    /// other conflicts, the violations and the gaps.
+    pub(super) fn notice_excluding(&self, shown: usize) -> String {
+        let conflicted = self.view.conflicted().len().saturating_sub(shown);
         let violations = self.view.violations().len();
         let gaps = self.view.gaps().len() + self.view.noted_only().len();
         if conflicted + violations + gaps == 0 {
