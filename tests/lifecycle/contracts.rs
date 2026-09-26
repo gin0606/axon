@@ -6,25 +6,13 @@ fn created(text: &str) -> &str {
 fn suffix(id: &str) -> &str {
     id.rsplit('-').next().unwrap()
 }
-fn snapshot(f: &Fixture) -> Snapshot {
-    axon::location::Location::discover(&f.0, false)
-        .unwrap()
-        .open()
-        .unwrap()
-        .read()
-        .unwrap()
-        .1
+fn snapshot(f: &Fixture) -> Store {
+    f.records()
 }
+/// Registers an Issue under a fixed ID through the library, as an existing six-character ID
+/// or a foreign prefix would appear in a store.
 fn seed(f: &Fixture, id: &str) {
-    axon::location::Location::discover(&f.0, false)
-        .unwrap()
-        .open()
-        .unwrap()
-        .update(|_, s| {
-            s.create(eid(id), Kind::Issue, current(id), context())?;
-            Ok(())
-        })
-        .unwrap();
+    f.publish(vec![registration(&f.records(), id)]);
 }
 
 #[test]
@@ -38,7 +26,7 @@ fn short_ids_and_suffixes_work_across_mutations() {
     let dep = f.accepted("Prerequisite");
     for id in [group, &dep] {
         assert!(id.starts_with("project-"));
-        assert_eq!(suffix(id).len(), 6);
+        assert_eq!(suffix(id).len(), 8);
         assert!(
             suffix(id)
                 .bytes()
@@ -109,8 +97,14 @@ fn short_ids_and_suffixes_work_across_mutations() {
     assert!(log.contains("InProgress → Completed"));
     assert!(log.contains("Completed → NotStarted"));
     assert!(!f.0.join("observed").exists());
+    // Six-character IDs from earlier stores stay valid and resolve like any other.
     seed(&f, "project-0000zz");
     seed(&f, "project-1111zz");
+    assert!(
+        f.ok(&["show", "project-0000zz"])
+            .starts_with("project-0000zz  Issue  Ready")
+    );
+    f.ok(&["start", "project-1111zz"]);
     let before = snapshot(&f);
     let error = failure(f.run(&["start", "zz"]));
     assert!(error.starts_with("Error: zz start:"));
@@ -293,8 +287,7 @@ fn no_op_confirmation_uses_locked_state_and_keeps_snapshot_and_bytes() {
     let b = f.accepted("Needs");
     f.ok(&["dep", "add", &a, "--needs", &b]);
     let before = snapshot(&f);
-    let path = f.0.join(".axon/state.jsonl");
-    let bytes = fs::read(&path).unwrap();
+    let files = f.record_files();
     for args in [
         vec!["write", &a, "--title", "Text"],
         vec!["parent", "unset", &a],
@@ -304,8 +297,16 @@ fn no_op_confirmation_uses_locked_state_and_keeps_snapshot_and_bytes() {
         let out = f.ok(&args);
         assert!(out.starts_with(&a) && out.contains("No changes"));
         assert_eq!(snapshot(&f), before);
-        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(f.record_files(), files);
     }
+    // A terminal Entity rejects an edit even to its own values: its text is fixed.
+    f.ok(&["start", &b]);
+    f.ok(&["complete", &b]);
+    let rejected = failure(f.run(&["write", &b, "--title", "Needs"]));
+    assert!(rejected.contains("fixed"), "{rejected}");
+    let rejected = failure(f.run(&["write", &b, "-m", ""]));
+    assert!(rejected.contains("fixed"), "{rejected}");
+    assert_eq!(f.record_files().len(), files.len() + 2);
     assert!(
         f.ok(&["write", &a, "--title", "Text", "-m", "new description"])
             .contains("Description updated")
@@ -329,17 +330,11 @@ fn file_flags_share_spelling_and_preserve_text() {
     for flag in ["-F", "--file"] {
         let output = f.ok(&["capture", "--title", "Text", flag, path]);
         let id = created(&output);
-        assert_eq!(
-            snapshot(&f).entity(&eid(id)).unwrap().current.description,
-            body
-        );
+        assert_eq!(f.current(id).description, body);
         assert!(f.ok(&["show", id]).contains(shown));
         f.ok(&["write", id, "--description", "temporary"]);
         f.ok(&["write", id, flag, path]);
-        assert_eq!(
-            snapshot(&f).entity(&eid(id)).unwrap().current.description,
-            body
-        );
+        assert_eq!(f.current(id).description, body);
         assert!(f.ok(&["show", id]).contains(shown));
         f.ok(&["note", "add", id, flag, path]);
         assert!(f.ok(&["note", "list", id]).contains(shown));
@@ -411,7 +406,7 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
         ),
         (
             "Setup & utilities",
-            &["init", "storage", "merge", "completion", "docs", "help"],
+            &["init", "storage", "completion", "docs", "help"],
         ),
     ];
     let mut previous = 0;
@@ -618,7 +613,13 @@ fn multi_line_text_is_indented_so_it_cannot_imitate_records_or_sections() {
     let notes = f.ok(&["note", "list", &group]);
     let headings = notes
         .lines()
-        .filter(|line| line.starts_with("record-"))
+        .filter(|line| {
+            line.len() > 64
+                && line.as_bytes()[..64]
+                    .iter()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                && line.as_bytes()[64] == b' '
+        })
         .count();
     assert_eq!(headings, 2, "{notes}");
     assert!(notes.contains("  forged"), "{notes}");
@@ -640,7 +641,7 @@ fn stores_with_a_prefix_outside_the_rule_are_rejected_without_changes() {
     let f = Fixture::new();
     f.ok(&["init", "project"]);
     f.ok(&["capture", "--accept", "--title", "Work"]);
-    let path = f.0.join(".axon/state.jsonl");
+    let path = f.header();
     let text = fs::read_to_string(&path).unwrap();
     fs::write(
         &path,
@@ -671,10 +672,10 @@ fn a_default_prefix_lowercases_the_management_root_directory_name() {
             .unwrap(),
     );
     assert!(output.starts_with("plan-2-"), "{output}");
-    let (prefix, saved) =
-        axon::file::decode(&fs::read(directory.join(".axon/state.jsonl")).unwrap()).unwrap();
-    assert_eq!(prefix, "plan-2");
-    let id = saved.entities().next().unwrap().id.to_string();
+    let header =
+        record::decode_header(&fs::read(directory.join(".axon/header.json")).unwrap()).unwrap();
+    assert_eq!(header.prefix, "plan-2");
+    let id = output.split_whitespace().next().unwrap().to_string();
     assert!(
         success(
             command(&directory)
@@ -709,6 +710,32 @@ fn non_pipe_output_failure_identifies_applied_storage() {
     let error = String::from_utf8_lossy(&out.stderr);
     assert!(error.contains("Applied:") && error.contains("storage applied; output failed"));
     assert!(f.ok(&["list"]).contains("Retained"));
+    // A mutation that wrote nothing does not claim a publication when its output fails.
+    let id = f
+        .ok(&["list"])
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+    let mut sockets = [0; 2];
+    assert_eq!(
+        unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_DGRAM, 0, sockets.as_mut_ptr()) },
+        0
+    );
+    assert_eq!(unsafe { libc::close(sockets[0]) }, 0);
+    let writer = unsafe { OwnedFd::from_raw_fd(sockets[1]) };
+    let out = f
+        .command()
+        .args(["write", &id, "--title", "Retained"])
+        .stdout(Stdio::from(writer))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let error = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        error.contains("output failed") && !error.contains("storage applied"),
+        "{error}"
+    );
 }
 
 #[cfg(unix)]
@@ -957,47 +984,53 @@ fn note_search_literal_excerpts_and_scope_match() {
         assert_eq!(f.run(&args).status.code(), Some(2));
     }
     assert!(!f.0.join("observed").exists());
-    assert_eq!(snapshot(&f).notes(&eid(&a)).unwrap()[5].body, cases[5].0);
+    assert_eq!(snapshot(&f).notes_of(&eid(&a))[5].1.body, cases[5].0);
 }
 
 #[test]
-fn note_search_preserves_entity_ties_and_concurrent_causal_order() {
+fn note_search_orders_entities_by_creation_and_notes_by_time_then_record_id() {
     let f = Fixture::new();
     f.ok(&["init", "q"]);
-    let mut store = axon::location::Location::discover(&f.0, false)
-        .unwrap()
-        .open()
+    let records = f.records();
+    let at = context();
+    let mut older = at.clone();
+    older.at -= chrono::Duration::days(1);
+    // Both Entities are registered at the same instant, so their IDs order them.
+    let entries = ["q-zzzzzz", "q-aaaaaa"]
+        .into_iter()
+        .map(|id| Entry::Record(records.create(eid(id), current(id), at.clone()).unwrap()))
+        .collect();
+    f.publish(entries);
+    let records = f.records();
+    let id = eid("q-aaaaaa");
+    let mut entries = Vec::new();
+    let mut expected: Vec<(chrono::DateTime<Utc>, axon::lifecycle::RecordId)> = Vec::new();
+    for (body, when) in [
+        ("find first", &at),
+        ("find left", &older),
+        ("find right", &older),
+        ("find last", &older),
+    ] {
+        let note = records
+            .add_note(&id, body.into(), None, when.clone())
+            .unwrap();
+        let entry = Entry::Note(note);
+        let note_id = axon::lifecycle::RecordId::of(&axon::lifecycle::encode(&entry).unwrap());
+        expected.push((when.at, note_id));
+        entries.push(entry);
+    }
+    let other = records
+        .add_note(&eid("q-zzzzzz"), "find other".into(), None, at.clone())
         .unwrap();
-    let mut expected = Vec::new();
-    store
-        .update(|_, s| {
-            let at = context();
-            for id in ["q-zzzzzz", "q-aaaaaa"] {
-                s.create(eid(id), Kind::Issue, current(id), at.clone())?;
-            }
-            let id = eid("q-aaaaaa");
-            let first = s.add_note(&id, "find first".into(), at.clone())?;
-            let mut right = s.clone();
-            let mut older = at.clone();
-            older.at -= chrono::Duration::days(1);
-            let left_id = s.add_note(&id, "find left".into(), older.clone())?;
-            let right_id = right.add_note(&id, "find right".into(), older.clone())?;
-            let choices = s.entities().map(|e| (e.id.clone(), Side::Left)).collect();
-            *s = s.integrate(&right, &choices, None, at.clone())?;
-            let last = s.add_note(&id, "find last".into(), older)?;
-            let other = s.add_note(&eid("q-zzzzzz"), "find other".into(), at)?;
-            let mut concurrent = [left_id, right_id];
-            concurrent.sort();
-            expected = vec![
-                first,
-                concurrent[0].clone(),
-                concurrent[1].clone(),
-                last,
-                other,
-            ];
-            Ok(())
-        })
-        .unwrap();
+    let other_entry = Entry::Note(other);
+    let other_id = axon::lifecycle::RecordId::of(&axon::lifecycle::encode(&other_entry).unwrap());
+    entries.push(other_entry);
+    f.publish(entries);
+    // Within an Entity, Notes are ordered by time and then by record ID; the same-time
+    // Notes have no causal order, so their IDs decide.
+    expected.sort();
+    let mut expected: Vec<String> = expected.into_iter().map(|(_, id)| id.to_string()).collect();
+    expected.push(other_id.to_string());
     let output = f
         .command()
         .env("TZ", "UTC")
@@ -1007,10 +1040,7 @@ fn note_search_preserves_entity_ties_and_concurrent_causal_order() {
     let rows = success(output);
     assert_eq!(rows.lines().count(), expected.len());
     for (row, id) in rows.lines().zip(expected) {
-        assert!(
-            row.contains(&id.to_string()) && row.contains("+00:00"),
-            "{row}"
-        );
+        assert!(row.contains(&id) && row.contains("+00:00"), "{row}");
     }
 }
 

@@ -1,7 +1,7 @@
 use super::display;
 use axon::{
     Result,
-    lifecycle::{Entity, Kind, Lifecycle},
+    lifecycle::{EntityId, Kind, Lifecycle},
     read,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -43,19 +43,14 @@ pub(super) enum Command {
     Actor,
     /// Write an unstyled shell completion script to stdout
     Completion { shell: clap_complete::Shell },
-    /// Merge snapshots through a retained review workspace
-    Merge {
-        #[command(subcommand)]
-        command: Merge,
-    },
-    /// Validate stored snapshots without running conditions
+    /// Check the store for corrupt files, conflicts, violations and missing records
     Storage {
         #[command(subcommand)]
         command: Storage,
     },
     /// Initialize a new management root
     #[command(
-        after_help = "PREFIX uses ASCII lowercase letters, digits and hyphens, and starts and ends with a letter or digit.\nWithout PREFIX, init lowercases the management root directory name and fails if that is not a valid prefix.\nInit creates .axon/state.jsonl and nothing for Git. Inside Git it prints how to keep the store ignored or to track it; which one applies is your choice.\nInit does not create or edit .gitignore or .gitattributes files or Git config, and does not stage or commit any files."
+        after_help = "PREFIX uses ASCII lowercase letters, digits and hyphens, and starts and ends with a letter or digit.\nWithout PREFIX, init lowercases the management root directory name and fails if that is not a valid prefix.\nInit creates .axon/records/, .axon/header.json and .axon/.gitignore, and nothing for Git. Inside Git it prints how to keep the store ignored or to track it; which one applies is your choice.\nInit does not create or edit the repository's .gitignore, .gitattributes or Git config, and does not stage or commit any files."
     )]
     Init {
         /// ID prefix for generated Entity IDs
@@ -96,7 +91,7 @@ To read saved information without running any condition, add --skip-conditions; 
         #[command(subcommand)]
         command: Notes,
     },
-    /// Read state changes and integrations
+    /// Read the records of an Entity: state changes, edits, relationships, conversions and resolutions
     Log {
         id: String,
         /// Include the stored recorder data as JSON
@@ -167,35 +162,13 @@ pub(super) enum Docs {
 }
 #[derive(Subcommand)]
 pub(super) enum Storage {
-    Check { snapshot: PathBuf },
-}
-#[derive(Subcommand)]
-#[command(
-    after_help = "Example: axon merge prepare --base base.jsonl --ours ours.jsonl --theirs theirs.jsonl --output .axon/state.jsonl --workspace .axon/merge-review\nEdit choices in resolution.json, then run axon merge check WORKSPACE and axon merge apply WORKSPACE.\nGit driver configuration, staging and commits are separate user operations. Retain the workspace for recovery."
-)]
-pub(super) enum Merge {
-    /// Retain inputs and prepare conflicts and resolution choices without publishing
-    Prepare {
-        #[arg(long)]
-        base: PathBuf,
-        #[arg(long)]
-        ours: PathBuf,
-        #[arg(long)]
-        theirs: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-        #[arg(long)]
-        workspace: PathBuf,
-    },
-    /// Validate resolution choices and the complete candidate
-    Check { workspace: PathBuf },
-    /// Recheck validated inputs and output before publishing
-    Apply { workspace: PathBuf },
-    /// Git merge driver: %O %A %B; preserve %A and fail on conflicts
-    Driver {
-        base: PathBuf,
-        ours: PathBuf,
-        theirs: PathBuf,
+    /// Report corrupt files, conflicted Entities, structural violations and missing parent records
+    #[command(
+        after_help = "Without ROOT the store found by discovery is checked; with ROOT that management root is checked without discovery.\nCorrupt files, conflicts and violations exit 1; missing parent records (gaps) are reported as information and exit 0.\nNo condition runs and nothing is written."
+    )]
+    Check {
+        /// The management root holding .axon/ to check instead of the discovered store
+        root: Option<PathBuf>,
     },
 }
 #[derive(Args)]
@@ -317,7 +290,7 @@ pub(super) enum Dependency {
 pub(super) enum Notes {
     /// Search all Note bodies, including terminal Entities, without running conditions
     #[command(
-        after_help = "Matches case-sensitive literal text without trimming or Unicode normalization. Prints one line per Note: complete Entity and Note IDs, local timestamp and an escaped excerpt around the first match. Entity creation order and Note causal order are preserved. Read the original with axon note show ID NOTE_ID. No matches succeeds with empty stdout. For a query beginning with a hyphen use: axon note search -- '--text'."
+        after_help = "Matches case-sensitive literal text without trimming or Unicode normalization. Prints one line per Note: complete Entity and Note IDs, local timestamp and an escaped excerpt around the first match. Entities are listed in creation order and Notes in time order (record ID order at the same time). Read the original with axon note show ID NOTE_ID. No matches succeeds with empty stdout. For a query beginning with a hyphen use: axon note search -- '--text'."
     )]
     Search {
         #[arg(value_parser = clap::builder::NonEmptyStringValueParser::new())]
@@ -361,8 +334,8 @@ impl EntityKind {
             Self::Group => Kind::Group,
         }
     }
-    fn matches(self, entity: &Entity) -> bool {
-        self.kind() == entity.kind
+    fn matches(self, kind: Kind) -> bool {
+        self.kind() == kind
     }
 }
 #[derive(Clone, Copy, ValueEnum)]
@@ -394,12 +367,17 @@ pub struct Selection {
     pub search: Option<String>,
 }
 impl Selection {
-    pub fn matches(&self, entity: &Entity) -> bool {
-        self.kind.is_none_or(|k| k.matches(entity))
+    /// Whether the Entity's presented value (its current value, or its first head's while
+    /// conflicted) matches the kind and search filters.
+    pub fn matches(&self, view: &read::View<'_>, id: &EntityId) -> bool {
+        let Some(current) = view.presented(id) else {
+            return false;
+        };
+        self.kind.is_none_or(|k| k.matches(current.kind))
             && self
                 .search
                 .as_ref()
-                .is_none_or(|query| !read::matches_in(entity, query).is_empty())
+                .is_none_or(|query| !read::matches_in(current, query).is_empty())
     }
 }
 #[derive(Args)]
@@ -414,14 +392,16 @@ pub struct ListOptions {
     pub(super) terminal: Option<bool>,
 }
 impl ListOptions {
-    pub fn matches(&self, view: &read::View<'_>, entity: &Entity) -> bool {
-        self.selection.matches(entity)
+    /// A conflicted Entity has no lifecycle, so a lifecycle or terminal filter leaves it out.
+    pub fn matches(&self, view: &read::View<'_>, id: &EntityId) -> bool {
+        self.selection.matches(view, id)
             && self
                 .lifecycle
-                .is_none_or(|l| l.state() == view.effective(entity))
-            && self
-                .terminal
-                .is_none_or(|terminal| terminal != entity.current.lifecycle.editable())
+                .is_none_or(|l| view.effective(id) == Some(l.state()))
+            && self.terminal.is_none_or(|terminal| {
+                view.current(id)
+                    .is_some_and(|c| terminal != c.lifecycle.editable())
+            })
     }
 }
 pub fn parse_timeout(value: &str) -> std::result::Result<Duration, String> {
@@ -494,7 +474,6 @@ pub fn operation_label(command: &Command) -> String {
         Command::Tasks(_) => ("tasks", None),
         Command::Proposals(_) => ("proposals", None),
         Command::Init { .. } => ("init", None),
-        Command::Merge { .. } => ("merge", None),
         Command::Storage { .. } => ("storage check", None),
         Command::Docs { .. } => ("docs", None),
         Command::Import { .. } => ("import", None),

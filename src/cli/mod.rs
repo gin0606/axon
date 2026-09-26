@@ -41,7 +41,6 @@ fn run(command: Command) -> Result<Output> {
         Command::Completion { shell } => setup::completion(shell),
         Command::Init { prefix } => setup::init(prefix),
         Command::Storage { command } => setup::storage(command),
-        Command::Merge { command } => setup::merge(command),
         Command::Import { command } => write::import(command),
         Command::Export { ids } => read::export(ids),
         Command::List(options) => read::list(options),

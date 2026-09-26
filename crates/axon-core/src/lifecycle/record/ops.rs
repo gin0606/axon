@@ -39,7 +39,8 @@ impl Store {
         let view = self.settled_view()?;
         perform_in(self, &view, id, operation, reason, context)
     }
-    /// Edits title and description of an unfinished Entity. None when nothing changes.
+    /// Edits title and description of an unfinished Entity. None when nothing changes; a
+    /// terminal Entity is rejected before that, even for its own values.
     pub fn write(
         &self,
         id: &EntityId,
@@ -159,8 +160,12 @@ impl Store {
             }
             Ok(())
         };
-        let record = write_in(&view, id, Some(title), Some(description), context.clone())?;
-        apply(&mut scratch, record)?;
+        let title = (before.title != title).then_some(title);
+        let description = (before.description != description).then_some(description);
+        if title.is_some() || description.is_some() {
+            let record = write_in(&view, id, title, description, context.clone())?;
+            apply(&mut scratch, record)?;
+        }
         for target in before.needs.difference(&needs) {
             let view = scratch.view()?;
             let record = remove_dependency_in(&view, id, target, context.clone())?;
@@ -397,6 +402,9 @@ fn write_in(
     context: Context,
 ) -> Result<Option<Record>> {
     let current = view.require_settled(id)?;
+    if current.is_terminal() {
+        return Err(invalid("terminal text is fixed"));
+    }
     let mut after = current.clone();
     if let Some(title) = title {
         after.title = title;
@@ -406,9 +414,6 @@ fn write_in(
     }
     if after == *current {
         return Ok(None);
-    }
-    if current.is_terminal() {
-        return Err(invalid("terminal text is fixed"));
     }
     after.validate()?;
     Ok(Some(follow(

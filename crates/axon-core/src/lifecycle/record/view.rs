@@ -2,6 +2,7 @@ use super::model::{Current, Entry, Record, RecordId, RecordKind};
 use super::store::Store;
 use super::{EntityId, Kind, Lifecycle, Operation, Result};
 use crate::lifecycle::invalid;
+use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A settled Entity: exactly one head, whose value is the Entity's current value.
@@ -57,6 +58,9 @@ pub struct View {
     conflicted: BTreeSet<EntityId>,
     gaps: BTreeMap<EntityId, BTreeSet<RecordId>>,
     noted_only: BTreeSet<EntityId>,
+    created: BTreeMap<EntityId, DateTime<Utc>>,
+    /// Known Entities in creation order, ties by ID.
+    order: Vec<EntityId>,
     children: BTreeMap<EntityId, Vec<EntityId>>,
     working: BTreeSet<EntityId>,
     violations: BTreeSet<Violation>,
@@ -81,6 +85,8 @@ impl View {
         let mut gaps: BTreeMap<EntityId, BTreeSet<RecordId>> = BTreeMap::new();
         let mut in_degree: BTreeMap<&RecordId, usize> = BTreeMap::new();
         let mut children_of: BTreeMap<&RecordId, Vec<&RecordId>> = BTreeMap::new();
+        let mut created_at: BTreeMap<&EntityId, DateTime<Utc>> = BTreeMap::new();
+        let mut earliest: BTreeMap<&EntityId, DateTime<Utc>> = BTreeMap::new();
         for (id, entry) in store.entries().chain(extra) {
             let record = match entry {
                 Entry::Note(note) => {
@@ -90,6 +96,15 @@ impl View {
                 Entry::Record(record) => record,
             };
             by_entity.entry(&record.entity).or_default().push(id);
+            let first = if record.kind == RecordKind::Created {
+                &mut created_at
+            } else {
+                &mut earliest
+            };
+            first
+                .entry(&record.entity)
+                .and_modify(|at| *at = (*at).min(record.at))
+                .or_insert(record.at);
             let mut present = 0;
             for parent_id in &record.parents {
                 referenced.insert(parent_id);
@@ -166,18 +181,38 @@ impl View {
             .filter(|entity| !heads.contains_key(*entity))
             .cloned()
             .collect();
+        // The creation time of an Entity whose created record is missing is its earliest
+        // record's, so every known Entity has a place in creation order.
+        let created: BTreeMap<EntityId, DateTime<Utc>> = heads
+            .keys()
+            .map(|entity| {
+                let at = created_at
+                    .get(entity)
+                    .or_else(|| earliest.get(entity))
+                    .copied()
+                    .expect("a known Entity has a record");
+                (entity.clone(), at)
+            })
+            .collect();
         let mut children: BTreeMap<EntityId, Vec<EntityId>> = BTreeMap::new();
         for (id, entity) in &settled {
             if let Some(parent) = &entity.current.parent {
                 children.entry(parent.clone()).or_default().push(id.clone());
             }
         }
+        for siblings in children.values_mut() {
+            siblings.sort_by(|a, b| (&created[a], a).cmp(&(&created[b], b)));
+        }
+        let mut order: Vec<EntityId> = created.keys().cloned().collect();
+        order.sort_by(|a, b| (&created[a], a).cmp(&(&created[b], b)));
         let mut view = Self {
             heads,
             settled,
             conflicted,
             gaps,
             noted_only,
+            created,
+            order,
             children,
             working: BTreeSet::new(),
             violations: BTreeSet::new(),
@@ -327,8 +362,21 @@ impl View {
     pub fn known(&self) -> impl Iterator<Item = &EntityId> {
         self.heads.keys()
     }
+    /// The creation time of a known Entity: its created record's, or its earliest record's
+    /// when the created record is missing.
+    pub fn created_at(&self, id: &EntityId) -> Option<DateTime<Utc>> {
+        self.created.get(id).copied()
+    }
+    /// Known Entities in creation order, ties by ID: the order every list shows.
+    pub fn in_creation_order(&self) -> Vec<&EntityId> {
+        self.order.iter().collect()
+    }
     pub fn is_known(&self, id: &EntityId) -> bool {
         self.heads.contains_key(id)
+    }
+    /// The view's own reference to a known ID.
+    pub fn key(&self, id: &EntityId) -> Option<&EntityId> {
+        self.heads.get_key_value(id).map(|(key, _)| key)
     }
     /// The heads of a known Entity: records that are nobody's parent.
     pub fn heads(&self, id: &EntityId) -> Option<&BTreeSet<RecordId>> {
@@ -386,22 +434,22 @@ impl View {
         }
         self.current(id).map(|current| current.lifecycle)
     }
-    /// Settled direct children.
+    /// Settled direct children in creation order.
     pub fn children(&self, id: &EntityId) -> &[EntityId] {
         self.children.get(id).map_or(&[], Vec::as_slice)
     }
-    /// Settled descendants, parents before children; a containment cycle ends the walk.
+    /// Settled descendants in tree order (siblings by creation, parents first); an Entity is
+    /// visited once, so a containment cycle ends the walk.
     pub fn descendants(&self, id: &EntityId) -> Vec<EntityId> {
         let mut found = Vec::new();
         let mut seen = BTreeSet::from([id.clone()]);
-        let mut pending = vec![id.clone()];
-        while let Some(parent) = pending.pop() {
-            for child in self.children(&parent) {
-                if seen.insert(child.clone()) {
-                    found.push(child.clone());
-                    pending.push(child.clone());
-                }
+        let mut pending: Vec<&EntityId> = self.children(id).iter().rev().collect();
+        while let Some(child) = pending.pop() {
+            if !seen.insert(child.clone()) {
+                continue;
             }
+            found.push(child.clone());
+            pending.extend(self.children(child).iter().rev());
         }
         found
     }
@@ -603,6 +651,34 @@ impl View {
         }
         Ok(())
     }
+}
+
+/// The records that do not continue their present parents: a parent that is a Note or
+/// belongs to another Entity, or a value the record's kind may not produce from it. These
+/// are the corruption `derive` rejects, listed per record so an adapter can report each
+/// file.
+pub(super) fn record_problems(store: &Store) -> Vec<(RecordId, crate::lifecycle::Error)> {
+    let mut problems = Vec::new();
+    for (id, record) in store.records() {
+        for parent_id in &record.parents {
+            let Some(parent) = store.get(parent_id) else {
+                continue;
+            };
+            let problem = match parent.as_record() {
+                None => Err(invalid("its parent record is a Note")),
+                Some(parent) if parent.entity != record.entity => Err(invalid(format!(
+                    "its parent record belongs to {}",
+                    parent.entity
+                ))),
+                Some(parent) => continues(parent_id, parent, record),
+            };
+            if let Err(error) = problem {
+                problems.push((id.clone(), error));
+                break;
+            }
+        }
+    }
+    problems
 }
 
 /// Whether a record with a present parent changes only what its kind may change. A

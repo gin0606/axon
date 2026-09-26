@@ -12,7 +12,7 @@
 
 Issue/Groupは共通の `<prefix>-<ランダム8文字>` namespaceを使う。乱数部分は小文字Crockford Base32で紛らわしいi/l/o/uを除く。連番やkind、優先順位の意味を持たせず、同じ保存先で衝突したら再生成する。IDは不透明な文字列として扱い、乱数部分の長さで検証しない。乱数部分が6文字の既存のIDもそのまま有効である。prefixはASCII小文字の `a-z`、数字、ハイフンだけを許し、空、先頭のハイフン、末尾のハイフンは拒否する。Entity ID全体も同じ文字種に限り、保存先の読取とdeclarationの入力で、それ以外の文字を含むIDを拒否する。この文字種に限ることで、完全IDをshellでquoteせずに渡せる。`axon init PREFIX` の明示値は変換せず検証する。省略時は管理rootのdirectory名のASCII大文字を小文字化した結果を使い、規則に合わなければ保存先を作らずに失敗し、`axon init PREFIX` での明示を求める。小文字化以外の自動補正はしない。
 
-全Entity入力は完全IDまたは一意なsuffixを受け付ける。入力が保存済みの完全IDと一致すれば、それが別のIDの末尾であっても、そのEntityに解決する。対象だけでなく`parent`/`needs`も同じ規則。曖昧なときは候補IDを示して拒否し、保存を変更しない。mutationではlock取得後のsnapshotで解決する。記録ID（Note IDを含む）は記録の内容のhashで、小文字16進64文字の完全なIDだけを受け付け、suffixでは解決しない（[記録](storage.md#記録)）。
+全Entity入力は完全IDまたは一意なsuffixを受け付ける。入力が保存済みの完全IDと一致すれば、それが別のIDの末尾であっても、そのEntityに解決する。対象だけでなく`parent`/`needs`も同じ規則。曖昧なときは候補IDを示して拒否し、保存を変更しない。mutationではlock取得後に読んだ記録の集合で解決する。`axon dep rm` の `--needs` は、対象Entityの依存先の中の完全ID、保存済みの完全ID、対象Entityの依存先の中の一意なsuffix、通常の解決の順に解決するため、保存先に存在しない依存先（[依存先の不在の違反](storage.md#構造の違反と修復)）も外せる。依存先の中で曖昧なら拒否する。記録ID（Note IDを含む）は記録の内容のhashで、小文字16進64文字の完全なIDだけを受け付け、suffixでは解決しない（[記録](storage.md#記録)）。
 
 option値の先頭hyphenは `--description='--text'` のように渡す。構文は `axon help <COMMAND PATH>` で確認できる。
 
@@ -134,7 +134,7 @@ Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへ
 
 衝突・違反・記録の欠け（gap）・保存先の破損の意味は [保存と統合の契約](storage.md) に従う。
 
-`axon storage check [ROOT]` は、引数なしでは探索で確定した保存先、`ROOT` を与えればその管理rootを探索せずに検査し、破損・衝突・違反・gapを種類ごとに一行ずつ示す。破損は `.axon/records/` からの相対pathと理由（記録IDの形でない名前、名前と内容のhashの不一致、名前と違うsubdirectory、途中で切れた・空の内容、読めないJSONと規則外の内容、headerの欠落・未知のformat）、衝突はEntityの行とheadの数、違反はEntityの行と種類、gapはEntityの行と親の欠けた記録ID（記録のないEntityのNoteも同じ節に示す）を示す。名前が `.tmp` で終わるfileは報告しない。破損があれば記録から導出する検査は行わない。破損・衝突・違反のいずれかがあれば終了1、gapだけなら情報として示して終了0、何もなければ短い確認をstderrに出して終了0。保存先を変更せず、条件コマンドを実行しない。
+`axon storage check [ROOT]` は、引数なしでは探索で確定した保存先（探索がheaderのない `.axon` で止まればその保存先をheaderの欠落として報告する）、`ROOT` を与えればその管理rootを探索せずに検査し、破損・衝突・違反・gapを種類ごとに一行ずつ示す。破損は `.axon/records/` からの相対pathと理由（記録IDの形でない名前、名前と内容のhashの不一致、名前と違うsubdirectory、途中で切れた・空の内容、読めないJSONと規則外の内容、headerの欠落・未知のformat）、衝突はEntityの行とheadの数、違反はEntityの行と種類、gapはEntityの行と親の欠けた記録ID（記録のないEntityのNoteも同じ節に示す）を示す。名前が `.tmp` で終わるfileは報告しない。破損があれば記録から導出する検査は行わない。破損・衝突・違反のいずれかがあれば終了1、gapだけなら情報として示して終了0、何もなければ短い確認をstderrに出して終了0。保存先を変更せず、条件コマンドを実行しない。
 
 `axon resolve` は衝突中の全Entityを、`axon resolve ID` は指定したEntityを対象に、Entityの行と各headを示す。headの行は記録ID、日時、actor、記録の種類（lifecycle遷移なら操作名）、その現在値のlifecycle・種類・タイトルを持ち、親記録が保存先にないheadには `parent missing; likely newer`（片方は親記録が欠けていて新しい可能性が高い）を付す。衝突していないEntityを指定した場合は、衝突していないことを示して終了1。保存先を変更しない。
 
@@ -173,7 +173,7 @@ CLIが生成するhelp・ラベル・診断は英語。利用者のタイトル�
 
 ## mutationの結果
 
-成功確認は完全IDが先頭。Created、Note ID recorded、状態遷移の結果、実際に変わったtitle/本文/parent/dependency/conditionを短く示す。保存処理が返した結果を使い、lock前の読取から更新を推定しない。`axon write`・関係・条件・種類の変換の同値操作はNo changesの成功で、保存状態・履歴を変えない。現在と同じ種類への `axon convert` は、変換の前提を検査せずNo changesとする。同値lifecycle遷移は拒否される。
+成功確認は完全IDが先頭。Created、Note ID recorded、状態遷移の結果、実際に変わったtitle/本文/parent/dependency/conditionを短く示す。保存処理が返した結果を使い、lock前の読取から更新を推定しない。`axon write`・関係・条件・種類の変換の同値操作はNo changesの成功で、保存状態・履歴を変えない。例外として、終了した（`Completed`・`Cancelled`）Entityへの `axon write` は、指定した値が現在の値と同じでも文面が固定されていることを理由に拒否する。現在と同じ種類への `axon convert` は、変換の前提を検査せずNo changesとする。同値lifecycle遷移は拒否される。
 
 成功はstdout/終了0、アプリケーションの拒否・失敗はError:を含むstderr/終了1。Clapの構文エラーは既定のerror:/Usage構造と終了2。原因、判明している対象・操作を示し、曖昧なFailedだけで済ませない。
 

@@ -1,21 +1,19 @@
-//! Lifecycle records and in-memory operations, independent of SQL and I/O.
+//! Lifecycle records and in-memory operations, independent of I/O.
 //!
-//! Ordinary operations enforce lifecycle, containment and dependency constraints.
-//! Three-way merging preserves records and validates whole-plan selections.
-//! Durable publication belongs to the storage adapters.
+//! `record` derives every current value from the immutable record set and produces the one
+//! record an ordinary operation adds; `candidates` selects and evaluates candidates. Durable
+//! publication belongs to the storage adapters.
 mod candidates;
-mod codec;
-mod merge;
 mod model;
 pub mod record;
-mod relations;
-mod snapshot;
 
 pub use candidates::{CandidateList, Surfacing, candidates, candidates_filtered, list_candidates};
-pub use codec::{decode, encode};
-pub use merge::MergePlan;
 pub use model::*;
-pub use snapshot::Snapshot;
+pub use record::{
+    Current, Entry, HEADER_FORMAT, Header, NONCE_LENGTH, Nonce, Note, RECORD_ID_LENGTH, Record,
+    RecordId, RecordKind, Settled, Store, View, Violation, ViolationKind, decode, decode_as,
+    decode_header, encode, encode_header, new_entity_id,
+};
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -25,6 +23,3 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub(crate) fn invalid(message: impl Into<String>) -> Error {
     Error(message.into())
 }
-
-#[cfg(test)]
-mod tests;

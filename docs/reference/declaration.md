@@ -131,7 +131,7 @@ fingerprint には declaration が見せる項目だけを含める。記録 ID 
 
 ## `axon export`
 
-`axon export ID...` は一貫した snapshot から selector の和集合を編集集合として選び、canonical YAML を stdout へ出す。編集集合の各 Entity は現在値と `base` を持ち、`key` は null になる。取得した直後は `key` を復元できないため、参照はすべて ID 参照になる。`references` は編集集合外の参照先から計算する。保存先を変更せず、再浮上条件を実行しない。
+`axon export ID...` は一貫した記録の集合から selector の和集合を編集集合として選び、canonical YAML を stdout へ出す。編集集合の各 Entity は現在値と `base` を持ち、`key` は null になる。取得した直後は `key` を復元できないため、参照はすべて ID 参照になる。`references` は編集集合外の参照先から計算する。参照先が保存先に存在しない（親の不在・依存先の不在の違反）場合はその参照を `references` に載せずに出し、`prepare`・`check`・`apply` はその不在を診断して拒否する。選んだ Group の子が衝突中なら、その子を含めずに出すのではなく拒否する。保存先を変更せず、再浮上条件を実行しない。
 
 新規計画の雛形は`axon docs declaration --example`で取得する。新規 Group 一件、その子 Issue 二件、子 Issue 間の dependency 一本を含む完全な YAML だけを stdout に出し、`id` と `base` は null、`lifecycle` は `not-started` とする。`axon docs declaration`は field、新規と既存の違い、`prepare` → `check` → `apply` → 再 `check` の手順を説明する。両者は保存先を開かず、管理 root、ネットワーク、ソース checkout に依存しない。引数なしの`axon docs`は状態モデルと基本の workflow を説明し、declaration の説明へ案内する。
 
@@ -158,7 +158,7 @@ description の全文差分は file 自体の git diff に任せ、CLI では変
 
 ## 再試行
 
-結果不明、または保存成功後の file 更新失敗のあとは、同じ file を再度 `apply` できる。`check` と `apply` は、`base` の不一致や新規 Entity の割り当て済み ID の存在を競合と判定する前に、Entity ごとに適用済み判定を行う。編集集合の各 Entity について、保存先の現在値が declaration の最終値（title、description、parent、outgoing dependency、kind、lifecycle。新規 Entity は割り当て済み ID で存在し宣言した初期 lifecycle であること）に完全一致すればその Entity は適用済みとして扱い、`base` に一致すれば（新規 Entity ならその ID が存在しなければ）未適用として残りの差分を適用し、どちらでもなければ競合として file 全体を拒否する。全 Entity が適用済みなら保存先を no-op とし、file の rewrite だけを完了する。公開の途中で process が失われた場合に一部の記録だけが公開されていても、この判定で残りを反映できる。途中の状態が違反を含むことがある（片方だけ反映された dependency の入れ替えなど）ため、この再試行に限り、`check` と `apply` は違反のある保存先の拒否を残りの反映で消える違反には適用せず、最終値の候補が違反を持たないことを同じ検査で確認して反映する。`prepare` で ID を確定しているため、再実行で同じ Entity が二度作られることはない。
+結果不明、または保存成功後の file 更新失敗のあとは、同じ file を再度 `apply` できる。`check` と `apply` は、`base` の不一致や新規 Entity の割り当て済み ID の存在を競合と判定する前に、Entity ごとに適用済み判定を行う。編集集合の各 Entity について、保存先の現在値が declaration の最終値（title、description、parent、outgoing dependency、kind、lifecycle。新規 Entity は割り当て済み ID で存在し宣言した初期 lifecycle であること）に完全一致すればその Entity は適用済みとして扱い、`base` に一致すれば（新規 Entity ならその ID が存在しなければ）未適用として残りの差分を適用し、どちらでもなければ競合として file 全体を拒否する。全 Entity が適用済みなら保存先を no-op とし、file の rewrite だけを完了する。公開の途中で process が失われた場合に一部の記録だけが公開されていても、この判定で残りを反映できる。途中の状態が違反を含むことがある（片方だけ反映された dependency の入れ替えなど）ため、この再試行に限り、`check` と `apply` は違反のある保存先の拒否を残りの反映で消える違反には適用せず、最終値の候補が違反を持たないことを同じ検査で確認して反映する。全 Entity が適用済みの再試行は保存先に記録を足さないため、他の writer が後から作った違反があっても拒否せず、file の rewrite を完了する。`prepare` で ID を確定しているため、再実行で同じ Entity が二度作られることはない。
 
 ## 拒否する入力と失敗の区別
 

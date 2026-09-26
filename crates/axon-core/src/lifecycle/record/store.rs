@@ -68,6 +68,11 @@ impl Store {
             .iter()
             .filter_map(|(id, entry)| entry.as_note().map(|note| (id, note)))
     }
+    /// The records that do not continue their present parent record, with the reason each
+    /// is corruption. Empty for every set a writer produced.
+    pub fn problems(&self) -> Vec<(RecordId, crate::lifecycle::Error)> {
+        super::view::record_problems(self)
+    }
     /// Derives heads, conflicts, current values, gaps and violations from the whole set.
     /// Fails only on corruption that no writer produces: a parent that is a Note or belongs to
     /// another Entity, a causal cycle, or a record that does not continue its parent.

@@ -152,13 +152,13 @@ fn help_exposes_lifecycle_commands() {
         "withdraw",
         "cancel",
         "reconsider",
-        "merge",
         "storage",
         "export",
         "import",
     ] {
         assert!(help.contains(name));
     }
+    assert!(!help.contains("merge"));
     let rejected = f.run(&["no-such-command"]);
     assert_eq!(rejected.status.code(), Some(2));
     assert!(failure(rejected).contains("unrecognized subcommand"));
@@ -175,16 +175,17 @@ fn help_exposes_lifecycle_commands() {
     assert!(docs.contains("axon proposals"));
     for args in [
         vec!["init", "--help"],
-        vec!["merge", "--help"],
+        vec!["storage", "check", "--help"],
         vec!["note", "list", "--help"],
     ] {
         f.ok(&args);
     }
+    assert_eq!(f.run(&["merge", "--help"]).status.code(), Some(2));
     let init_help = f.ok(&["init", "--help"]);
     for text in [
-        "Init creates .axon/state.jsonl and nothing for Git",
+        "Init creates .axon/records/, .axon/header.json and .axon/.gitignore, and nothing for Git",
         "prints how to keep the store ignored or to track it",
-        "does not create or edit .gitignore or .gitattributes files or Git config",
+        "does not create or edit the repository's .gitignore, .gitattributes or Git config",
         "does not stage or commit any files",
     ] {
         assert!(init_help.contains(text), "missing from init help: {text}");

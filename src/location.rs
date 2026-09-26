@@ -1,12 +1,11 @@
-//! Storage discovery keeps Git boundaries and never falls back from an artifact.
+//! Storage discovery keeps Git boundaries and never falls back from a store it found.
 use crate::{
     error::{Result, invalid, validate_prefix},
-    file,
-    lifecycle::Snapshot,
+    file::{self, GITIGNORE, HEADER_FILE, RECORDS_DIRECTORY, is_temporary},
+    lifecycle::record::{Header, encode_header},
 };
 use std::{
-    fs::{self, File, OpenOptions},
-    io::Write,
+    fs::{self, OpenOptions},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -31,7 +30,7 @@ pub struct Initialized {
     /// A store in a linked worktree is not the one other worktrees fall back to.
     pub linked_worktree: bool,
 }
-pub(crate) fn present(path: &Path) -> Result<bool> {
+pub fn present(path: &Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -161,10 +160,113 @@ fn main_worktree(common: &Path) -> Result<Option<PathBuf>> {
         canonical(&root)? == canonical(parent)? && canonical(&main_common)? == canonical(common)?;
     Ok(same.then_some(root))
 }
-/// A canonical snapshot or an initialization marker settles discovery; an empty `.axon` or a
-/// lock alone does not.
+/// What a `.axon` directory holds for discovery and initialization.
+pub enum Presence {
+    /// No `.axon`, or only the residue of an interrupted initialization.
+    Absent,
+    /// A header file: a store.
+    Store,
+    /// Something else: records without a header, an earlier format, a foreign file.
+    Obstructed(PathBuf),
+}
+/// The first file in the records directory that is not residue (empty subdirectories and
+/// temporary files are), if any.
+fn first_record_file(path: &Path) -> Result<Option<PathBuf>> {
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        if is_temporary(&entry.file_name()) {
+            continue;
+        }
+        if !entry.file_type()?.is_dir() {
+            return Ok(Some(entry.path()));
+        }
+        for inner in fs::read_dir(entry.path())? {
+            let inner = inner?;
+            if !is_temporary(&inner.file_name()) {
+                return Ok(Some(inner.path()));
+            }
+        }
+    }
+    Ok(None)
+}
+/// Classifies the `.axon` of a management root. A directory that is not a regular directory
+/// is an error.
+pub fn presence(root: &Path) -> Result<Presence> {
+    let directory = root.join(".axon");
+    if !present(&directory)? {
+        return Ok(Presence::Absent);
+    }
+    if !fs::symlink_metadata(&directory)?.file_type().is_dir() {
+        return Err(invalid("management directory is not a regular directory"));
+    }
+    if present(&directory.join(HEADER_FILE))? {
+        return Ok(Presence::Store);
+    }
+    for entry in fs::read_dir(&directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let text = name.to_string_lossy();
+        let path = entry.path();
+        let residue = if text.ends_with(".lock") || is_temporary(&name) {
+            true
+        } else if name == RECORDS_DIRECTORY {
+            if !entry.file_type()?.is_dir() {
+                return Ok(Presence::Obstructed(path));
+            }
+            match first_record_file(&path)? {
+                Some(file) => return Ok(Presence::Obstructed(file)),
+                None => true,
+            }
+        } else if name == ".gitignore" {
+            fs::symlink_metadata(&path)?.file_type().is_file()
+                && fs::read(&path)? == GITIGNORE.as_bytes()
+        } else {
+            false
+        };
+        if !residue {
+            return Ok(Presence::Obstructed(path));
+        }
+    }
+    Ok(Presence::Absent)
+}
+/// The management root whose `.axon` stopped discovery: the first candidate in discovery
+/// order (the current worktree root, then the main worktree's; outside Git each ancestor of
+/// `cwd`) that holds records or foreign files without a header, unless a store comes first.
+pub fn obstructed_root(cwd: &Path) -> Result<Option<PathBuf>> {
+    let cwd = fs::canonicalize(cwd)?;
+    let candidates = match git(&cwd)? {
+        Some(found) => {
+            let mut roots = vec![found.root];
+            if fs::canonicalize(&found.git_dir)? != fs::canonicalize(&found.common)?
+                && let Some(main) = main_worktree(&found.common)?
+            {
+                roots.push(main);
+            }
+            roots
+        }
+        None => cwd.ancestors().map(Path::to_path_buf).collect(),
+    };
+    for root in candidates {
+        match presence(&root)? {
+            Presence::Absent => {}
+            Presence::Store => return Ok(None),
+            Presence::Obstructed(_) => return Ok(Some(root)),
+        }
+    }
+    Ok(None)
+}
+/// Whether a header settles discovery here. Records without a header, or any other file,
+/// stop discovery: they are not silently skipped for a store further away.
 fn settles(root: &Path) -> Result<bool> {
-    Ok(present(&root.join(".axon/state.jsonl"))? || present(&root.join(".axon/init.pending"))?)
+    match presence(root)? {
+        Presence::Absent => Ok(false),
+        Presence::Store => Ok(true),
+        Presence::Obstructed(path) => Err(invalid(format!(
+            "{} is not a store: no {HEADER_FILE} beside {}; an earlier format or a foreign file is not converted",
+            root.join(".axon").display(),
+            path.display()
+        ))),
+    }
 }
 impl Location {
     /// `init` targets the current worktree and never the store a linked worktree would share.
@@ -176,9 +278,11 @@ impl Location {
                 common: found.common,
             };
             let mut root = found.root.clone();
+            // A directory that is not a store stops here; only an absent store falls through
+            // to the main worktree's.
             if !init
-                && git.linked
                 && !settles(&root)?
+                && git.linked
                 && let Some(main) = main_worktree(&git.common)?
                 && settles(&main)?
             {
@@ -217,49 +321,54 @@ impl Location {
             ))
         }
     }
-    pub(crate) fn state(&self) -> PathBuf {
-        self.root.join(".axon/state.jsonl")
+    /// A management root given explicitly, without discovery: what `axon storage check ROOT`
+    /// inspects. Git is not consulted.
+    pub fn explicit(root: &Path) -> Result<Self> {
+        let root = fs::canonicalize(root)?;
+        Ok(Self {
+            worktree: root.clone(),
+            root,
+            git: None,
+        })
     }
-    /// Whether the canonical snapshot exists; an incomplete initialization is an error.
+    pub(crate) fn header(&self) -> PathBuf {
+        self.root.join(".axon").join(HEADER_FILE)
+    }
+    /// Whether the header file exists.
     pub fn initialized(&self) -> Result<bool> {
-        let marker = self.root.join(".axon/init.pending");
-        if present(&marker)? {
-            return Err(invalid(format!(
-                "incomplete initialization at {}; preserve retained artifacts before manual recovery",
-                marker.display()
-            )));
-        }
-        present(&self.state())
+        present(&self.header())
     }
     pub fn check_index(&self) -> Result<()> {
         if self.git.is_some() {
             let out = git_command(&self.root)
-                .args(["ls-files", "--unmerged", "--", ".axon/state.jsonl"])
+                .args(["ls-files", "--unmerged", "--", ".axon"])
                 .output()?;
             if !out.status.success() {
                 return Err(invalid("cannot inspect Git index"));
             }
             if !out.stdout.is_empty() {
                 return Err(invalid(
-                    "unmerged Git index for .axon/state.jsonl; validate resolution and stage it before normal operations",
+                    "unmerged Git index under .axon/; resolve and stage it before normal operations",
                 ));
             }
         }
         Ok(())
     }
     pub fn open(&self) -> Result<file::Store> {
-        if !self.initialized()? {
+        if !settles(&self.root)? {
             return Err(invalid("not initialized; run axon init"));
         }
         file::Store::at(self.clone())
     }
+    /// Creates `.axon/records/`, `.axon/.gitignore` and, last, the header under the
+    /// initialization lock. Anything but the residue of an interrupted initialization is
+    /// refused with its path.
     pub fn init(&self, prefix: &str) -> Result<Initialized> {
         validate_prefix(prefix)?;
-        let destination = self.state();
-        let directory = destination.parent().unwrap();
+        let directory = self.root.join(".axon");
         let prepare = || -> Result<()> {
-            fs::create_dir_all(directory)?;
-            if !fs::symlink_metadata(directory)?.file_type().is_dir() {
+            fs::create_dir_all(&directory)?;
+            if !fs::symlink_metadata(&directory)?.file_type().is_dir() {
                 return Err(invalid("management directory is not a regular directory"));
             }
             Ok(())
@@ -267,10 +376,10 @@ impl Location {
         // Inside Git the lock lives in the common directory, so a rejected init leaves no
         // `.axon` behind in this worktree.
         let lock_root = match &self.git {
-            Some(git) => &git.common,
+            Some(git) => git.common.clone(),
             None => {
                 prepare()?;
-                directory
+                directory.clone()
             }
         };
         let lock = OpenOptions::new()
@@ -281,10 +390,20 @@ impl Location {
             .open(lock_root.join("axon-init.lock"))?;
         lock.lock()?;
         self.check_index()?;
-        if self.initialized()? {
-            return Err(invalid(
-                "already initialized; init never repairs or replaces an existing store",
-            ));
+        match presence(&self.root)? {
+            Presence::Absent => {}
+            Presence::Store => {
+                return Err(invalid(
+                    "already initialized; init never repairs or replaces an existing store",
+                ));
+            }
+            Presence::Obstructed(path) => {
+                return Err(invalid(format!(
+                    "{} is not empty: {} is not a store file that init creates; an earlier format is not converted, and init never repairs or replaces an existing store",
+                    directory.display(),
+                    path.display()
+                )));
+            }
         }
         let linked_worktree = self.git.as_ref().is_some_and(|git| git.linked);
         // Worktrees without a store of their own read the main worktree's. A second store here
@@ -295,37 +414,37 @@ impl Location {
             && settles(&main)?
         {
             return Err(invalid(format!(
-                "the main worktree already holds a store or an incomplete initialization at {}; this worktree uses it, and init never creates a second store beside it",
+                "the main worktree already holds a store at {}; this worktree uses it, and init never creates a second store beside it",
                 main.join(".axon").display()
             )));
         }
         prepare()?;
-        let pending = directory.join("init.pending");
-        let temp = directory.join(format!(".axon-{:032x}.tmp", rand::random::<u128>()));
+        let header = self.header();
         let result = (|| -> Result<Initialized> {
-            let mut marker = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&pending)?;
-            writeln!(marker, "{}", temp.display())?;
-            marker.sync_all()?;
-            File::open(directory)?.sync_all()?;
-            let mut output = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temp)?;
-            output.write_all(&file::encode(prefix, &Snapshot::empty())?)?;
-            output.sync_all()?;
-            fs::hard_link(&temp, &destination)?;
-            File::open(directory)?.sync_all()?;
-            fs::remove_file(&temp)?;
-            fs::remove_file(&pending)?;
-            File::open(directory)?.sync_all()?;
+            fs::create_dir_all(directory.join(RECORDS_DIRECTORY))?;
+            let ignore = directory.join(".gitignore");
+            if !present(&ignore)? {
+                let temp = file::temporary(&ignore, GITIGNORE.as_bytes())?;
+                fs::rename(&temp, &ignore)?;
+            }
+            // The record directory and the ignore file are durable before the header, which
+            // marks the store, is published.
+            file::sync_directory(&directory)?;
+            let bytes = encode_header(&Header::new(prefix)?)?;
+            let temp = file::temporary(&header, &bytes)?;
+            fs::rename(&temp, &header)?;
+            file::sync_directory(&directory)?;
             Ok(Initialized {
                 git: self.git.is_some(),
                 linked_worktree,
             })
         })();
-        result.map_err(|e| invalid(format!("initialization failed at {}: {e}; result may be partial; retain {}, {} and {} for inspection", directory.display(), pending.display(), temp.display(), destination.display())))
+        result.map_err(|e| {
+            invalid(format!(
+                "initialization failed at {}: {e}; without {} the store is not initialized and init can be retried, with it the store exists but its directory entry may not be durable yet",
+                directory.display(),
+                header.display()
+            ))
+        })
     }
 }

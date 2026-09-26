@@ -24,6 +24,13 @@ pub use view::{Settled, View, Violation, ViolationKind};
 
 pub use super::{Context, EntityId, Error, Kind, Lifecycle, Operation, Recorder, Result, StoreId};
 
+impl Entry {
+    /// The ID this record has once encoded: the hash of its canonical bytes.
+    pub fn id(&self) -> Result<RecordId> {
+        Ok(RecordId::of(&encode(self)?))
+    }
+}
+
 /// A new Entity ID with an 8-character random part in lowercase Crockford Base32 (`i`, `l`,
 /// `o` and `u` excluded). Existing 6-character IDs stay valid; IDs are opaque strings. Fails
 /// on a prefix outside the ID's character rules.
