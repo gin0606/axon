@@ -1,4 +1,5 @@
 /target
+/mutants.out*
 /mise.local.toml
 /_apalache-out/
 *.itf.json
