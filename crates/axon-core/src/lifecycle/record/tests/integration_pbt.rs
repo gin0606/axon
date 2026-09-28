@@ -315,8 +315,10 @@ proptest! {
 
     #[test]
     fn generated_cycles_reject_new_edges_and_allow_repair(
-        waiting in any::<bool>(), chord in any::<bool>(), reverse in any::<bool>()
+        reverse in any::<bool>()
     ) {
+      for waiting in [false, true] {
+       for chord in [false, true] {
         let mut r0 = Replica::new("r0");
         let mut r1 = Replica::new("r1");
         r0.create("i4", Kind::Issue, Lifecycle::NotStarted, None);
@@ -341,17 +343,21 @@ proptest! {
         r0.remove_dep(b, c);
         check_graph(&r0);
         prop_assert!(r0.view().is_valid());
+       }
+      }
     }
 
     #[test]
-    fn generated_second_cycle_and_inherited_dependency(extra_waiter in any::<bool>()) {
+    fn generated_second_cycle_and_inherited_dependency(actor in "[a-z]{1,6}") {
+      for extra_waiter in [false, true] {
         let mut r0 = Replica::new("r0");
         let mut r1 = Replica::new("r1");
         r0.create("i4", Kind::Issue, Lifecycle::NotStarted, None);
         r0.create("i5", Kind::Issue, Lifecycle::NotStarted, None);
         r1.sync(&r0);
-        r0.op_as("i1", Start, "left");
-        r1.op_as("i1", Start, if extra_waiter { "left" } else { "right" });
+        let left = format!("left-{actor}");
+        r0.op_as("i1", Start, &left);
+        r1.op_as("i1", Start, if extra_waiter { &left } else { "right" });
         r0.add_dep("g2", "i3");
         r1.add_dep("i3", "g2");
         r0.sync(&r1);
@@ -377,6 +383,7 @@ proptest! {
         r0.remove_dep("i4", "g0");
         check_graph(&r0);
         prop_assert!(r0.view().is_valid());
+      }
     }
 
     #[test]

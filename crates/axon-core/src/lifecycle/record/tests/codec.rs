@@ -596,8 +596,8 @@ proptest! {
     #[test]
     fn generated_wrong_entity_or_kind_parent_is_rejected(
         suffix in "[a-z]{1,8}",
-        wrong_entity in any::<bool>(),
     ) {
+      for wrong_entity in [false, true] {
         let mut replica = Replica::new("r0");
         let parent = if wrong_entity {
             replica.head("g0")
@@ -615,5 +615,6 @@ proptest! {
         prop_assert!(decode(&bytes).is_ok());
         replica.store.insert(Entry::Record(record)).unwrap();
         prop_assert!(replica.store.view().is_err());
+      }
     }
 }

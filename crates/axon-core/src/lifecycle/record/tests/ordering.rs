@@ -191,7 +191,8 @@ proptest! {
     }
 
     #[test]
-    fn generated_foreign_record_and_note_parents_are_rejected(seed in any::<u16>(), note_parent in any::<bool>(), branches in prop::collection::vec(any::<bool>(), 0..4)) {
+    fn generated_foreign_record_and_note_parents_are_rejected(seed in any::<u16>(), branches in prop::collection::vec(any::<bool>(), 0..4)) {
+      for note_parent in [false, true] {
         let mut store = generated_dag(seed, 1, false, &branches);
         let parent = if note_parent {
             store.notes_of(&id("g0"))[0].0.clone()
@@ -205,6 +206,7 @@ proptest! {
         store.insert(Entry::Record(record)).unwrap();
         prop_assert!(store.view().is_err());
         prop_assert!(generated_dag(seed, 0, false, &branches).view().is_ok());
+      }
     }
 }
 

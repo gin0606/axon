@@ -489,26 +489,27 @@ proptest! {
     fn generated_visible_fingerprint_fields_change_it(
         title in "[a-zA-Z]{1,20}",
         description in declaration_text(),
-        selector in 0usize..7,
     ) {
-        let mut value = current(Kind::Issue, &title);
-        value.description = description;
-        let entity = id("demo-a");
-        let base = fingerprint(&entity, &value);
-        let mut other_id = entity.clone();
-        match selector {
-            0 => value.title.push('!'),
-            1 => value.description.push('!'),
-            2 => value.lifecycle = Lifecycle::Completed,
-            3 => value.parent = Some(id("parent")),
-            4 => { value.needs.insert(id("needs")); },
-            5 => value.kind = Kind::Group,
-            _ => other_id = id("other"),
+        for selector in 0..7 {
+            let mut value = current(Kind::Issue, &title);
+            value.description = description.clone();
+            let entity = id("demo-a");
+            let base = fingerprint(&entity, &value);
+            let mut other_id = entity.clone();
+            match selector {
+                0 => value.title.push('!'),
+                1 => value.description.push('!'),
+                2 => value.lifecycle = Lifecycle::Completed,
+                3 => value.parent = Some(id("parent")),
+                4 => { value.needs.insert(id("needs")); },
+                5 => value.kind = Kind::Group,
+                _ => other_id = id("other"),
+            }
+            prop_assert_ne!(base, fingerprint(&other_id, &value), "selector {}", selector);
+            let unchanged = fingerprint(&other_id, &value);
+            value.condition = Some("exit 1".into());
+            prop_assert_eq!(unchanged, fingerprint(&other_id, &value), "selector {}", selector);
         }
-        prop_assert_ne!(base, fingerprint(&other_id, &value));
-        let unchanged = fingerprint(&other_id, &value);
-        value.condition = Some("exit 1".into());
-        prop_assert_eq!(unchanged, fingerprint(&other_id, &value));
     }
 
     #[test]
@@ -1181,8 +1182,8 @@ proptest! {
     #[test]
     fn generated_invalid_stores_keep_fresh_plans_out_but_allow_repairing_retries(
         title in "[A-Za-z][A-Za-z0-9]{0,12}",
-        conflicted_child in any::<bool>(),
     ) {
+      for conflicted_child in [false, true] {
         let mut f = Fixture::new();
         f.create("g", Kind::Group);
         f.create("a", Kind::Issue);
@@ -1206,6 +1207,7 @@ proptest! {
         prop_assert!(fresh.prepare(&f.store, "demo").unwrap_err().to_string().contains("conflicted"));
         prop_assert_eq!(&f.store, &before);
         prop_assert_eq!(input, fresh.serialize(&f.view()).unwrap());
+      }
 
         for missing_parent in [false, true] {
             let mut source = Fixture::new();
