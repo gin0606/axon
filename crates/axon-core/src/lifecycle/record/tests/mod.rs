@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod codec;
 mod conversion;
+mod integration_pbt;
 mod operations;
 mod ordering;
 mod rules;
