@@ -855,13 +855,16 @@ mod publication_tests {
         #![proptest_config(ProptestConfig::with_cases(24))]
         #[test]
         fn generated_publication_failure_matches_published_files(
-            (count, existing, stop, missing_temp) in (3usize..7).prop_flat_map(|count| {
-                (Just(count), prop::collection::vec(any::<bool>(), count), 1..count - 1, any::<bool>())
+            (count, existing, middle) in (3usize..7).prop_flat_map(|count| {
+                (Just(count), prop::collection::vec(any::<bool>(), count), 1..count - 1)
             })
         ) {
+          for scenario in 0..4 {
             let (root, mut store) = fixture();
-            let mut existing = existing;
-            existing[0] = false;
+            let mut existing = existing.clone();
+            let stop = if scenario == 0 || scenario == 3 { 0 } else { middle };
+            let missing_temp = scenario < 2;
+            existing[0] = scenario == 3;
             existing[stop] = !missing_temp;
             existing[count - 1] = true;
             let entries = records(count);
@@ -909,6 +912,7 @@ mod publication_tests {
             prop_assert_eq!(temporary_files(&store), 0);
             drop(store);
             fs::remove_dir_all(root).unwrap();
+          }
         }
     }
 

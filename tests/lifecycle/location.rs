@@ -720,6 +720,7 @@ proptest! {
         crlf in any::<bool>(),
         foreign in 0u8..4,
     ) {
+      for (parts, crlf, foreign) in [(parts, crlf, foreign), (vec![true; 4], true, 0)] {
         let f = Fixture::new();
         let directory = f.0.join(".axon");
         fs::create_dir_all(directory.join("records/ab")).unwrap();
@@ -760,6 +761,7 @@ proptest! {
             prop_assert_eq!(fs::read(directory.join(".gitattributes")).unwrap(), b"* -text\n");
             prop_assert!(f.ok(&["list"]).is_empty());
         }
+      }
     }
 }
 

@@ -1110,9 +1110,9 @@ proptest! {
     fn generated_plan_edits_survive_partial_publication_and_retry(
         title in "[A-Za-z][A-Za-z0-9]{0,12}",
         reverse in any::<bool>(),
-        published in 0usize..4,
     ) {
         for relationship in 0..5 {
+          for published in 0..=3 {
             let mut f = Fixture::new();
             for (name, kind) in [("g", Kind::Group), ("x", Kind::Issue), ("a", Kind::Issue), ("b", Kind::Issue)] {
                 f.create(name, kind);
@@ -1170,6 +1170,7 @@ proptest! {
             let original_view = original.view().unwrap();
             prop_assert_eq!(settled.current(&id("x")), original_view.current(&id("x")));
             prop_assert!(d.check(&input, &f.store, context_at(9000)).unwrap().records.is_empty());
+          }
         }
     }
 }
