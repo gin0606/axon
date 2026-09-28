@@ -122,6 +122,7 @@ pub fn cli_color() -> clap::ColorChoice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn timestamp_uses_the_given_offset_and_numeric_offset_format() {
@@ -140,5 +141,27 @@ mod tests {
             human_text("normal 日本語\n\t\r\0\u{1b}\u{7f}\u{85}\u{9f}"),
             "normal 日本語\n\\t\\r\\x00\\x1b\\x7f\\x85\\x9f"
         );
+    }
+
+    proptest! {
+        #[test]
+        fn generated_text_escapes_controls_without_losing_other_characters(
+            characters in prop::collection::vec(any::<char>(), 0..80)
+        ) {
+            let input: String = characters.iter().collect();
+            let expected: String = characters.iter().map(|c| match c {
+                '\n' => "\n".to_string(),
+                '\t' => "\\t".to_string(),
+                '\r' => "\\r".to_string(),
+                '\0'..='\u{1f}' | '\u{7f}'..='\u{9f}' => format!("\\x{:02x}", *c as u32),
+                _ => c.to_string(),
+            }).collect();
+            prop_assert_eq!(human_text(&input), expected.as_str());
+            prop_assert_eq!(line(&input), expected.replace('\n', "\\n"));
+            let block_expected = expected.split('\n').map(|line| {
+                if line.is_empty() { String::new() } else { format!("  {line}") }
+            }).collect::<Vec<_>>().join("\n");
+            prop_assert_eq!(block(&input), block_expected);
+        }
     }
 }

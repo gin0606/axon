@@ -383,6 +383,7 @@ mod tests {
     use super::*;
     use axon::lifecycle::record::Kind;
     use chrono::Utc;
+    use proptest::prelude::*;
 
     #[test]
     fn a_removal_resolves_among_the_dependencies_before_the_store() {
@@ -438,5 +439,42 @@ mod tests {
             .to_string();
         assert!(error.contains("ambiguous dependency"), "{error}");
         assert_eq!(found("nothing"), None);
+    }
+
+    proptest! {
+        #[test]
+        fn dependency_suffixes_use_only_the_owned_set(tail in "[a-z0-9]{3,8}") {
+            let owned = format!("owned-{tail}");
+            let twin = format!("twin-{tail}");
+            let foreign = format!("foreign-{owned}");
+            let user = "owner-user";
+            let mut store = Store::new();
+            let context = || Context { at: Utc::now(), recorder: None };
+            for (id, needs) in [
+                (owned.as_str(), vec![]),
+                (twin.as_str(), vec![]),
+                (foreign.as_str(), vec![]),
+                (user, vec![owned.as_str(), twin.as_str()]),
+            ] {
+                let record = store.create(id.to_owned().try_into().unwrap(), Current {
+                    kind: Kind::Issue,
+                    lifecycle: Lifecycle::NotStarted,
+                    owner: None,
+                    title: id.into(),
+                    description: String::new(),
+                    condition: None,
+                    parent: None,
+                    needs: needs.into_iter().map(|n| n.to_owned().try_into().unwrap()).collect(),
+                }, context()).unwrap();
+                store.insert(Entry::Record(record)).unwrap();
+            }
+            let view = store.view().unwrap();
+            let user = EntityId::try_from(user.to_owned()).unwrap();
+            prop_assert_eq!(resolve_dependency(&view, &user, &owned).unwrap().as_ref().map(ToString::to_string), Some(owned.clone()));
+            prop_assert_eq!(resolve_dependency(&view, &user, &foreign).unwrap(), None);
+            prop_assert_eq!(resolve_dependency(&view, &user, &format!("d-{tail}")).unwrap().as_ref().map(ToString::to_string), Some(owned));
+            prop_assert!(resolve_dependency(&view, &user, &tail).unwrap_err().to_string().contains("ambiguous dependency"));
+            prop_assert_eq!(resolve_dependency(&view, &user, "missing").unwrap(), None);
+        }
     }
 }

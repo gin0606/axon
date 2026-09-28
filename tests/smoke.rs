@@ -1492,6 +1492,8 @@ mod location;
 #[path = "lifecycle/workflow.rs"]
 mod workflow;
 
+#[path = "lifecycle/cli_properties.rs"]
+mod cli_properties;
 #[path = "lifecycle/contracts.rs"]
 mod contracts;
 

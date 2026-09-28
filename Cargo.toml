@@ -26,3 +26,4 @@ serde_json = { version = "1.0", features = ["arbitrary_precision", "float_roundt
 thiserror = "2.0.20"
 
 [dev-dependencies]
+proptest = "1.11.0"

@@ -101,6 +101,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "libc",
+ "proptest",
  "rand 0.10.2",
  "serde_json",
  "thiserror",
