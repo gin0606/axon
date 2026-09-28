@@ -41,24 +41,26 @@ proptest! {
     #[test]
     fn generated_prefixes_keep_the_store_boundary(
         middle in "[a-z0-9-]{0,12}",
-        invalid in prop::sample::select(vec!["", "-bad", "bad-", "Upper", "space here", "under_score", "日本語", "tab\there"]),
     ) {
         let valid = format!("a{middle}z");
         let good = Fixture::new();
         prop_assert!(good.run(&["init", &valid]).status.success());
         let header = record::decode_header(&fs::read(good.header()).unwrap()).unwrap();
         prop_assert_eq!(header.prefix, valid);
-        let bad = Fixture::new();
-        let out = bad.run(&["init", "--", invalid]);
-        prop_assert_eq!(out.status.code(), Some(1));
-        prop_assert!(!bad.header().exists());
-        let mut header: serde_json::Value = serde_json::from_slice(&fs::read(good.header()).unwrap()).unwrap();
-        header["prefix"] = invalid.into();
-        let corrupt = serde_json::to_vec(&header).unwrap();
-        fs::write(good.header(), &corrupt).unwrap();
-        for args in [vec!["list"], vec!["capture", "--title", "Work"]] {
-            prop_assert_eq!(good.run(&args).status.code(), Some(1));
-            prop_assert_eq!(fs::read(good.header()).unwrap(), corrupt.as_slice());
+        let original = fs::read(good.header()).unwrap();
+        for invalid in ["", "-bad", "bad-", "Upper", "space here", "under_score", "日本語", "tab\there"] {
+            let bad = Fixture::new();
+            let out = bad.run(&["init", "--", invalid]);
+            prop_assert_eq!(out.status.code(), Some(1));
+            prop_assert!(!bad.header().exists());
+            let mut header: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            header["prefix"] = invalid.into();
+            let corrupt = serde_json::to_vec(&header).unwrap();
+            fs::write(good.header(), &corrupt).unwrap();
+            for args in [vec!["list"], vec!["capture", "--title", "Work"]] {
+                prop_assert_eq!(good.run(&args).status.code(), Some(1));
+                prop_assert_eq!(fs::read(good.header()).unwrap(), corrupt.as_slice());
+            }
         }
     }
 
@@ -274,12 +276,12 @@ proptest! {
 
     #[test]
     fn condition_capture_keeps_byte_edges_and_utf8_boundary(
-        exit in prop::sample::select(vec![0, 23]),
         marker in prop::sample::select(vec!["日", "語"]),
     ) {
         let f = Fixture::new();
         f.init();
         let id = f.accepted("condition output");
+        for exit in [0, 23] {
         for size in [65535usize, 65536, 65537, 80000] {
             let payload = format!("{}{}{}", "A".repeat(32767), marker, "B".repeat(size - 32770));
             fs::write(f.0.join("condition-output"), &payload).unwrap();
@@ -297,6 +299,7 @@ proptest! {
             };
             prop_assert_eq!(diagnostic.matches(&expected).count(), 2);
             prop_assert_eq!(diagnostic.matches("bytes omitted").count(), if omitted == 0 { 0 } else { 2 });
+        }
         }
     }
 }

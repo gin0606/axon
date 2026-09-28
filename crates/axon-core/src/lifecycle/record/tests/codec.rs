@@ -446,16 +446,19 @@ proptest! {
 
     #[test]
     fn generated_entries_keep_canonical_bytes_and_hash(
-        body in prop_oneof![Just("日本語\n🚀".to_string()), any::<String>()],
-        number in prop::sample::select(vec!["0", "-1", "1.0", "1e+5", "12345678901234567890123456789"]),
+        body in any::<String>(),
         json in json_value(),
     ) {
         let (store, ids) = store_with_every_kind();
+        for (body, number) in [
+            (body.as_str(), "0"), ("日本語\n🚀", "-1"), (body.as_str(), "1.0"),
+            ("日本語\n🚀", "1e+5"), (body.as_str(), "12345678901234567890123456789"),
+        ] {
         for id in &ids {
             let mut entry = store.get(id).unwrap().clone();
             match &mut entry {
-                Entry::Record(record) => record.after.description = body.clone(),
-                Entry::Note(note) => note.body = if body.trim().is_empty() { "note".into() } else { body.clone() },
+                Entry::Record(record) => record.after.description = body.into(),
+                Entry::Note(note) => note.body = if body.trim().is_empty() { "note".into() } else { body.into() },
             }
             if let Entry::Note(note) = &mut entry {
                 note.recorder = Some(Recorder {
@@ -475,14 +478,18 @@ proptest! {
             prop_assert_eq!(&decode_as(&expected_id, &bytes).unwrap(), &decoded);
             prop_assert_eq!(encode(&decoded).unwrap(), bytes);
         }
+        }
     }
 
     #[test]
-    fn generated_record_damage_is_rejected(damage in 0usize..5) {
+    fn generated_record_damage_is_rejected(body in "[a-z]{1,12}") {
         let (store, ids) = store_with_every_kind();
         for id in &ids {
-        let bytes = encode(store.get(id).unwrap()).unwrap();
+        let mut entry = store.get(id).unwrap().clone();
+        if let Entry::Record(record) = &mut entry { record.after.description = body.clone(); }
+        let bytes = encode(&entry).unwrap();
         let text = String::from_utf8(bytes.clone()).unwrap();
+        for damage in 0..5 {
         let bad = match damage {
             0 => text.replacen("\"entity\":\"i3\",", "", 1),
             1 => text.replacen("\"entity\":\"i3\"", "\"entity\":123", 1),
@@ -495,17 +502,18 @@ proptest! {
         prop_assert_ne!(altered.clone(), id.clone());
         prop_assert!(decode_as(id, bad.as_bytes()).is_err());
         }
+        }
     }
 
     #[test]
     fn generated_headers_round_trip_and_reject_damage(
         prefix in "[a-z][a-z0-9-]{0,15}[a-z0-9]",
-        damage in 0usize..4,
     ) {
         let header = Header::new(&prefix).unwrap();
         let bytes = encode_header(&header).unwrap();
         prop_assert_eq!(decode_header(&bytes).unwrap(), header);
         let text = String::from_utf8(bytes).unwrap();
+        for damage in 0..4 {
         let bad = match damage {
             0 => text.replacen(HEADER_FORMAT, "unknown/v2", 1),
             1 => text.replacen("\"prefix\":", "\"other\":", 1),
@@ -513,6 +521,11 @@ proptest! {
             _ => text.replacen("\"format\":", "\"format\":null,\"format\":", 1),
         };
         prop_assert!(decode_header(bad.as_bytes()).is_err(), "{bad}");
+        }
+        for bad_prefix in ["", "-bad", "bad-", "Upper", "space here", "under_score", "日本語"] {
+            let bad = text.replacen(&format!("\"prefix\":\"{prefix}\""), &format!("\"prefix\":\"{bad_prefix}\""), 1);
+            prop_assert!(decode_header(bad.as_bytes()).is_err(), "{bad}");
+        }
     }
 
     #[test]

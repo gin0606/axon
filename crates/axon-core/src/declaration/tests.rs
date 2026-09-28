@@ -418,17 +418,7 @@ fn declaration_doc_example_has_identical_canonical_bytes() {
 }
 
 fn declaration_text() -> impl Strategy<Value = String> {
-    prop_oneof![
-        Just("null".to_string()),
-        Just("TRUE".to_string()),
-        Just("2026-01-01".to_string()),
-        Just("0x12".to_string()),
-        Just("é 日本語 🚀".to_string()),
-        Just("line\r\nnext".to_string()),
-        Just("line\nnext\n".to_string()),
-        Just("\u{2028}\u{2029}\0".to_string()),
-        proptest::string::string_regex("[a-zA-Z0-9 #,:\\[\\]{}\\t\\n]{0,60}").unwrap(),
-    ]
+    proptest::string::string_regex("[a-zA-Z0-9 #,:\\[\\]{}\\t\\n]{0,60}").unwrap()
 }
 
 proptest! {
@@ -441,46 +431,58 @@ proptest! {
         key in "k[a-z0-9-]{0,20}",
         reverse in any::<bool>(),
     ) {
-        let mut d = example();
-        d.groups[0].title = title;
-        d.groups[0].description = description;
-        d.issues[0].key = Some(key.clone());
-        d.issues[1].needs = vec![Reference::key(&key)];
-        if reverse { d.issues.reverse(); }
-        let yaml = d.serialize(&empty_view()).unwrap();
-        let parsed = parse(&yaml).unwrap();
-        prop_assert_eq!(parsed.serialize(&empty_view()).unwrap(), yaml);
-        prop_assert_eq!(parsed.groups[0].description.as_str(), d.groups[0].description.as_str());
-        prop_assert_eq!(parsed.issues.iter().map(|issue| issue.key.as_deref()).collect::<Vec<_>>(), [Some(key.as_str()), Some("second")]);
-        prop_assert_eq!(parsed.issues.iter().map(|issue| issue.needs.len()).sum::<usize>(), 1);
+        for value in [description.as_str(), "null", "TRUE", "2026-01-01", "0x12", "é 日本語 🚀", "line\r\nnext", "line\nnext\n", "\u{2028}\u{2029}\0"] {
+            let mut d = example();
+            d.groups[0].title = title.clone();
+            d.groups[0].description = value.into();
+            d.issues[0].key = Some(key.clone());
+            d.issues[1].needs = vec![Reference::key(&key)];
+            if reverse { d.issues.reverse(); }
+            let yaml = d.serialize(&empty_view()).unwrap();
+            let parsed = parse(&yaml).unwrap();
+            prop_assert_eq!(parsed.serialize(&empty_view()).unwrap(), yaml);
+            prop_assert_eq!(parsed.groups[0].description.as_str(), value);
+            prop_assert_eq!(parsed.issues.iter().map(|issue| issue.key.as_deref()).collect::<Vec<_>>(), [Some(key.as_str()), Some("second")]);
+            prop_assert_eq!(parsed.issues.iter().map(|issue| issue.needs.len()).sum::<usize>(), 1);
+        }
     }
 
     #[test]
     fn generated_yaml_damage_is_rejected(
-        replacement in prop::sample::select(vec!["null", "true", "123", "{}"]),
-        field in prop::sample::select(vec!["schema", "groups", "issues", "references"]),
+        title in "[a-zA-Z]{1,12}",
     ) {
-        let yaml = example().serialize(&empty_view()).unwrap();
-        let line = yaml.lines().find(|line| line.starts_with(&format!("{field}:"))).unwrap();
-        let bad = yaml.replacen(line, &format!("{field}: {replacement}"), 1);
-        prop_assert!(parse(&bad).is_err(), "{bad}");
-        let duplicate = yaml.replacen(line, &format!("{line}\n{line}"), 1);
-        prop_assert!(parse(&duplicate).is_err(), "{duplicate}");
+        let mut d = example();
+        d.groups[0].title = title;
+        let yaml = d.serialize(&empty_view()).unwrap();
+        for field in ["schema", "groups", "issues", "references"] {
+            let line = yaml.lines().find(|line| line.starts_with(&format!("{field}:"))).unwrap();
+            for replacement in ["null", "true", "123", "{}"] {
+                let bad = yaml.replacen(line, &format!("{field}: {replacement}"), 1);
+                prop_assert!(parse(&bad).is_err(), "{bad}");
+            }
+            let duplicate = yaml.replacen(line, &format!("{line}\n{line}"), 1);
+            prop_assert!(parse(&duplicate).is_err(), "{duplicate}");
+        }
     }
 
     #[test]
     fn generated_record_field_damage_is_rejected(
-        field in prop::sample::select(vec!["key", "lifecycle", "title", "description", "parent", "needs"]),
-        damage in prop::sample::select(vec!["missing", "duplicate", "wrong-type"]),
+        title in "[a-zA-Z]{1,12}",
     ) {
-        let yaml = example().serialize(&empty_view()).unwrap();
-        let line = yaml.lines().find(|line| line.starts_with(&format!("    {field}:"))).unwrap();
-        let bad = match damage {
-            "missing" => yaml.replacen(&format!("{line}\n"), "", 1),
-            "duplicate" => yaml.replacen(line, &format!("{line}\n{line}"), 1),
-            _ => yaml.replacen(line, &format!("    {field}: {{ bad: value }}"), 1),
-        };
-        prop_assert!(parse(&bad).is_err(), "{field}/{damage}: {bad}");
+        let mut d = example();
+        d.groups[0].title = title;
+        let yaml = d.serialize(&empty_view()).unwrap();
+        for field in ["key", "lifecycle", "title", "description", "parent", "needs"] {
+            let line = yaml.lines().find(|line| line.starts_with(&format!("    {field}:"))).unwrap();
+            for damage in ["missing", "duplicate", "wrong-type"] {
+                let bad = match damage {
+                    "missing" => yaml.replacen(&format!("{line}\n"), "", 1),
+                    "duplicate" => yaml.replacen(line, &format!("{line}\n{line}"), 1),
+                    _ => yaml.replacen(line, &format!("    {field}: {{ bad: value }}"), 1),
+                };
+                prop_assert!(parse(&bad).is_err(), "{field}/{damage}: {bad}");
+            }
+        }
     }
 
     #[test]
