@@ -1,6 +1,7 @@
 use super::*;
-use crate::lifecycle::record::{Context, Entry, Operation, RecordKind, Store};
+use crate::lifecycle::record::{Context, Entry, Operation, RecordKind, Recorder, Store};
 use chrono::{TimeZone, Utc};
+use proptest::prelude::*;
 fn id(s: &str) -> EntityId {
     s.to_owned().try_into().unwrap()
 }
@@ -414,6 +415,119 @@ fn declaration_doc_example_has_identical_canonical_bytes() {
         f.create(name, Kind::Issue);
     }
     assert_eq!(d.serialize(&f.view()).unwrap(), text);
+}
+
+fn declaration_text() -> impl Strategy<Value = String> {
+    prop_oneof![
+        Just("null".to_string()),
+        Just("TRUE".to_string()),
+        Just("2026-01-01".to_string()),
+        Just("0x12".to_string()),
+        Just("é 日本語 🚀".to_string()),
+        Just("line\r\nnext".to_string()),
+        Just("line\nnext\n".to_string()),
+        Just("\u{2028}\u{2029}\0".to_string()),
+        proptest::string::string_regex("[a-zA-Z0-9 #,:\\[\\]{}\\t\\n]{0,60}").unwrap(),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn generated_declarations_parse_and_rewrite_canonically(
+        title in "[a-zA-Z][a-zA-Z0-9]{0,30}",
+        description in declaration_text(),
+        key in "k[a-z0-9-]{0,20}",
+        reverse in any::<bool>(),
+    ) {
+        let mut d = example();
+        d.groups[0].title = title;
+        d.groups[0].description = description;
+        d.issues[0].key = Some(key.clone());
+        d.issues[1].needs = vec![Reference::key(&key)];
+        if reverse { d.issues.reverse(); }
+        let yaml = d.serialize(&empty_view()).unwrap();
+        let parsed = parse(&yaml).unwrap();
+        prop_assert_eq!(parsed.serialize(&empty_view()).unwrap(), yaml);
+        prop_assert_eq!(parsed.groups[0].description.as_str(), d.groups[0].description.as_str());
+        prop_assert_eq!(parsed.issues.iter().map(|issue| issue.key.as_deref()).collect::<Vec<_>>(), [Some(key.as_str()), Some("second")]);
+        prop_assert_eq!(parsed.issues.iter().map(|issue| issue.needs.len()).sum::<usize>(), 1);
+    }
+
+    #[test]
+    fn generated_yaml_damage_is_rejected(
+        replacement in prop::sample::select(vec!["null", "true", "123", "{}"]),
+        field in prop::sample::select(vec!["schema", "groups", "issues", "references"]),
+    ) {
+        let yaml = example().serialize(&empty_view()).unwrap();
+        let line = yaml.lines().find(|line| line.starts_with(&format!("{field}:"))).unwrap();
+        let bad = yaml.replacen(line, &format!("{field}: {replacement}"), 1);
+        prop_assert!(parse(&bad).is_err(), "{bad}");
+        let duplicate = yaml.replacen(line, &format!("{line}\n{line}"), 1);
+        prop_assert!(parse(&duplicate).is_err(), "{duplicate}");
+    }
+
+    #[test]
+    fn generated_record_field_damage_is_rejected(
+        field in prop::sample::select(vec!["key", "lifecycle", "title", "description", "parent", "needs"]),
+        damage in prop::sample::select(vec!["missing", "duplicate", "wrong-type"]),
+    ) {
+        let yaml = example().serialize(&empty_view()).unwrap();
+        let line = yaml.lines().find(|line| line.starts_with(&format!("    {field}:"))).unwrap();
+        let bad = match damage {
+            "missing" => yaml.replacen(&format!("{line}\n"), "", 1),
+            "duplicate" => yaml.replacen(line, &format!("{line}\n{line}"), 1),
+            _ => yaml.replacen(line, &format!("    {field}: {{ bad: value }}"), 1),
+        };
+        prop_assert!(parse(&bad).is_err(), "{field}/{damage}: {bad}");
+    }
+
+    #[test]
+    fn generated_visible_fingerprint_fields_change_it(
+        title in "[a-zA-Z]{1,20}",
+        description in declaration_text(),
+        selector in 0usize..7,
+    ) {
+        let mut value = current(Kind::Issue, &title);
+        value.description = description;
+        let entity = id("demo-a");
+        let base = fingerprint(&entity, &value);
+        let mut other_id = entity.clone();
+        match selector {
+            0 => value.title.push('!'),
+            1 => value.description.push('!'),
+            2 => value.lifecycle = Lifecycle::Completed,
+            3 => value.parent = Some(id("parent")),
+            4 => { value.needs.insert(id("needs")); },
+            5 => value.kind = Kind::Group,
+            _ => other_id = id("other"),
+        }
+        prop_assert_ne!(base, fingerprint(&other_id, &value));
+        let unchanged = fingerprint(&other_id, &value);
+        value.condition = Some("exit 1".into());
+        prop_assert_eq!(unchanged, fingerprint(&other_id, &value));
+    }
+
+    #[test]
+    fn generated_notes_and_recorders_do_not_change_fingerprint(
+        actor in "[a-z]{1,12}",
+        note in "[a-zA-Z0-9]{1,30}",
+    ) {
+        let entity = id("demo-a");
+        let value = current(Kind::Issue, "title");
+        let base = fingerprint(&entity, &value);
+        let mut store = Store::new();
+        let record = store.create(entity.clone(), value, Context {
+            at: context().at,
+            recorder: Some(Recorder { actor, data: Default::default() }),
+        }).unwrap();
+        store.insert(Entry::Record(record)).unwrap();
+        prop_assert_eq!(base.as_str(), fingerprint(&entity, store.view().unwrap().current(&entity).unwrap()));
+        let note = store.add_note(&entity, note, None, context_at(1001)).unwrap();
+        store.insert(Entry::Note(note)).unwrap();
+        prop_assert_eq!(base, fingerprint(&entity, store.view().unwrap().current(&entity).unwrap()));
+    }
 }
 
 #[test]
