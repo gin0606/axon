@@ -1,5 +1,4 @@
 use super::*;
-use proptest::prelude::*;
 
 fn excerpt(before: &str, query: &str, after: &str) -> String {
     let left: Vec<char> = before.chars().collect();

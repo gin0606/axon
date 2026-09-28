@@ -1,6 +1,5 @@
 //! Where `axon init` puts a store, and which store an operation reaches inside Git.
 use super::*;
-use proptest::prelude::*;
 
 fn header(root: &Path) -> PathBuf {
     root.join(".axon/header.json")

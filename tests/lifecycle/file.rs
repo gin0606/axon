@@ -1,7 +1,6 @@
 //! The record directory under real processes and real Git: concurrency, corruption, the index
 //! guard, tracked worktrees merging record files, and what `axon storage check` reports.
 use super::*;
-use proptest::prelude::*;
 
 /// The record files of an Entity's records, by the `entity` key of their JSON.
 fn record_paths_of(root: &Path, entity: &str) -> Vec<PathBuf> {
