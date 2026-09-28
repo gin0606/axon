@@ -450,6 +450,54 @@ fn declaration_prepare_escapes_control_characters_in_output_paths() {
 
 #[cfg(unix)]
 #[test]
+fn declaration_import_keeps_newlines_in_paths_out_of_success_headers() {
+    let f = Fixture::new();
+    f.ok(&["init", "demo"]);
+    let path = f.0.join("plan\u{1b}\n.yaml");
+    fs::write(&path, f.ok(&["docs", "declaration", "--example"])).unwrap();
+    let before = snapshot(&f);
+    let displayed_path = path
+        .to_str()
+        .unwrap()
+        .replace('\u{1b}', "\\x1b")
+        .replace('\n', "\\n");
+
+    let prepared = f.ok(&["import", "prepare", path.to_str().unwrap()]);
+    assert!(!prepared.contains('\u{1b}'));
+    assert_eq!(
+        prepared.lines().next().unwrap(),
+        format!("Prepared {displayed_path}. Storage unchanged.")
+    );
+    let declaration = declaration::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+    for record in declaration.records() {
+        let mapping = format!(
+            "{} -> {}",
+            record.key.as_ref().unwrap(),
+            record.id.as_ref().unwrap()
+        );
+        assert!(prepared.lines().any(|line| line == mapping));
+    }
+    assert_eq!(snapshot(&f), before);
+
+    let applied = f.ok(&["import", "apply", path.to_str().unwrap()]);
+    assert!(!applied.contains('\u{1b}'));
+    assert_eq!(
+        applied.lines().next().unwrap(),
+        format!("Applied: storage applied; declaration updated: {displayed_path}")
+    );
+    for record in declaration.records() {
+        let mapping = format!(
+            "{} -> {}",
+            record.key.as_ref().unwrap(),
+            record.id.as_ref().unwrap()
+        );
+        assert!(applied.lines().any(|line| line == mapping));
+    }
+    assert_eq!(f.record_files().len(), declaration.records().count());
+}
+
+#[cfg(unix)]
+#[test]
 fn declaration_prepare_reports_applied_file_when_output_fails() {
     use std::os::fd::{FromRawFd, OwnedFd};
     let f = Fixture::new();

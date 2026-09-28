@@ -45,7 +45,7 @@ pub(super) fn import(command: Import) -> Result<Output> {
                     } else {
                         "storage unchanged (no-op)"
                     },
-                    file.display(),
+                    display::line(file.display()),
                     declaration_ids(&outcome.new_ids)
                 )),
                 publication: if outcome.changed {
@@ -84,7 +84,7 @@ pub(super) fn import(command: Import) -> Result<Output> {
                     axon::declaration_file::rewrite(file, &bytes, text.as_bytes())?;
                     format!(
                         "Prepared {}. Storage unchanged.\n{}",
-                        file.display(),
+                        display::line(file.display()),
                         declaration_ids(&declaration.assigned_new_ids())
                     )
                 }
