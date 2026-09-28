@@ -208,6 +208,37 @@ proptest! {
         prop_assert!(generated_dag(seed, 0, false, &branches).view().is_ok());
       }
     }
+
+    #[test]
+    fn generated_notes_are_ordered_by_time_even_when_ids_reverse(seed in any::<usize>()) {
+        let make = |body: String, at| Note {
+            entity: id("i3"),
+            nonce: "0123456789abcdef0123456789abcdef".try_into().unwrap(),
+            at,
+            recorder: ctx(40, "r0").recorder,
+            reason: None,
+            body,
+        };
+        let earlier = make("earlier".into(), ctx(40, "r0").at);
+        let earlier_id = RecordId::of(&encode(&Entry::Note(earlier.clone())).unwrap());
+        let candidates: Vec<_> = (0..64)
+            .map(|index| make(format!("later {index}"), ctx(50, "r0").at))
+            .filter(|note| RecordId::of(&encode(&Entry::Note(note.clone())).unwrap()) < earlier_id)
+            .collect();
+        let later = candidates[seed % candidates.len()].clone();
+        let later_id = RecordId::of(&encode(&Entry::Note(later.clone())).unwrap());
+        prop_assert!(later_id < earlier_id);
+        for notes in [[later.clone(), earlier.clone()], [earlier.clone(), later.clone()]] {
+            let mut store = Replica::new("r0").store;
+            for note in notes {
+                store.insert(Entry::Note(note)).unwrap();
+            }
+            let order: Vec<_> = store.notes_of(&id("i3")).iter().map(|(id, note)| (note.body.clone(), (*id).clone())).collect();
+            prop_assert_eq!(order, vec![(earlier.body.clone(), earlier_id.clone()), (later.body.clone(), later_id.clone())]);
+            let all: Vec<_> = store.all_notes().iter().map(|(id, _)| (*id).clone()).collect();
+            prop_assert_eq!(all, vec![earlier_id.clone(), later_id.clone()]);
+        }
+    }
 }
 
 #[test]
@@ -356,49 +387,6 @@ fn corrupt_parent_links_are_rejected_by_derivation() {
     // reported instead of looping.
     let view = r.store.view().unwrap();
     assert!(view.is_valid());
-}
-
-#[test]
-fn notes_are_ordered_by_time_before_id() {
-    let r = Replica::new("r0");
-    let make = |body: &str, seconds: i64| Note {
-        entity: id("i3"),
-        nonce: Nonce::try_from("0123456789abcdef0123456789abcdef").unwrap(),
-        at: ctx(seconds, "r0").at,
-        recorder: ctx(seconds, "r0").recorder,
-        reason: None,
-        body: body.into(),
-    };
-    let note_id = |note: &Note| RecordId::of(&encode(&Entry::Note(note.clone())).unwrap());
-    // Find a pair whose later Note has the smaller ID, so that ID order alone would be wrong.
-    let earlier = make("earlier", 40);
-    let later = (0..64)
-        .map(|n| make(&format!("later {n}"), 50))
-        .find(|later| note_id(later) < note_id(&earlier))
-        .expect("some body hashes below the earlier Note");
-    let (earlier_id, later_id) = (note_id(&earlier), note_id(&later));
-    assert!(later_id < earlier_id);
-    let mut store = r.store.clone();
-    store.insert(Entry::Note(later.clone())).unwrap();
-    store.insert(Entry::Note(earlier.clone())).unwrap();
-    let order: Vec<_> = store
-        .notes_of(&id("i3"))
-        .iter()
-        .map(|(id, n)| (n.body.clone(), (*id).clone()))
-        .collect();
-    assert_eq!(
-        order,
-        vec![
-            ("earlier".into(), earlier_id.clone()),
-            (later.body.clone(), later_id.clone())
-        ]
-    );
-    let all: Vec<_> = store
-        .all_notes()
-        .iter()
-        .map(|(id, _)| (*id).clone())
-        .collect();
-    assert_eq!(all, vec![earlier_id, later_id]);
 }
 
 #[test]

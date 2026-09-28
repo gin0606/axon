@@ -135,20 +135,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn human_text_preserves_newlines_and_unicode_but_escapes_terminal_controls() {
-        assert_eq!(
-            human_text("normal 日本語\n\t\r\0\u{1b}\u{7f}\u{85}\u{9f}"),
-            "normal 日本語\n\\t\\r\\x00\\x1b\\x7f\\x85\\x9f"
-        );
-    }
-
     proptest! {
         #[test]
         fn generated_text_escapes_controls_without_losing_other_characters(
             characters in prop::collection::vec(any::<char>(), 0..80)
         ) {
-            let input: String = characters.iter().collect();
+            let input = format!("normal 日本語\n\t\r\0\u{1b}\u{7f}\u{85}\u{9f}{}", characters.iter().collect::<String>());
+            let prefix = "normal 日本語\n\\t\\r\\x00\\x1b\\x7f\\x85\\x9f";
             let expected: String = characters.iter().map(|c| match c {
                 '\n' => "\n".to_string(),
                 '\t' => "\\t".to_string(),
@@ -156,6 +149,7 @@ mod tests {
                 '\0'..='\u{1f}' | '\u{7f}'..='\u{9f}' => format!("\\x{:02x}", *c as u32),
                 _ => c.to_string(),
             }).collect();
+            let expected = format!("{prefix}{expected}");
             prop_assert_eq!(human_text(&input), expected.as_str());
             prop_assert_eq!(line(&input), expected.replace('\n', "\\n"));
             let block_expected = expected.split('\n').map(|line| {

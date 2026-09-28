@@ -1677,40 +1677,40 @@ mod tests {
         assert!(hollow.stall.unwrap().own_condition_unsatisfied.is_empty());
     }
 
-    #[test]
-    fn descendants_are_preorder_with_sibling_structure_and_terminal_counts() {
-        let mut f = Fixture::new();
-        f.create("root", Kind::Group, None, &[], 1);
-        f.create("subgroup", Kind::Group, Some("root"), &[], 3);
-        f.create("first", Kind::Issue, Some("root"), &[], 2);
-        f.create("nested", Kind::Issue, Some("subgroup"), &[], 4);
-        f.perform("first", Operation::Cancel);
-        f.perform("nested", Operation::Start);
-        f.perform("nested", Operation::Complete);
-        inspect(&f, "root", |value| {
-            let tree = value.descendants.unwrap();
-            assert_eq!(
-                tree.entries
-                    .iter()
-                    .map(|e| e.row.id.to_string())
-                    .collect::<Vec<_>>(),
-                ["first", "subgroup", "nested"]
-            );
-            assert_eq!(tree.entries[1].row.status, Status::Confirmable);
-            assert!(!tree.entries[0].last);
-            assert!(tree.entries[1].last);
-            assert_eq!(tree.entries[2].ancestor_last, [true]);
-            assert_eq!((tree.completed, tree.cancelled), (1, 1));
-            assert!(!tree.awaiting_confirmation);
-        });
-        f.perform("subgroup", Operation::Complete);
-        inspect(&f, "root", |value| {
-            assert!(value.descendants.unwrap().awaiting_confirmation)
-        });
-    }
-
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn generated_nested_group_moves_from_confirmable_to_awaiting_confirmation(
+            start in 1i64..1_000_000,
+            gaps in prop::array::uniform3(1i64..100),
+        ) {
+            let mut f = Fixture::new();
+            f.create("root", Kind::Group, None, &[], start);
+            let first_at = start + gaps[0];
+            let subgroup_at = first_at + gaps[1];
+            let nested_at = subgroup_at + gaps[2];
+            f.create("subgroup", Kind::Group, Some("root"), &[], subgroup_at);
+            f.create("first", Kind::Issue, Some("root"), &[], first_at);
+            f.create("nested", Kind::Issue, Some("subgroup"), &[], nested_at);
+            f.perform("first", Operation::Cancel);
+            f.perform("nested", Operation::Start);
+            f.perform("nested", Operation::Complete);
+            let derived = f.derived();
+            let view = View::new(&f.store, &derived);
+            let tree = detail(&view, &id("root")).unwrap().descendants.unwrap();
+            prop_assert_eq!(tree.entries.iter().map(|entry| entry.row.id.to_string()).collect::<Vec<_>>(), ["first", "subgroup", "nested"]);
+            prop_assert_eq!(tree.entries[1].row.status, Status::Confirmable);
+            prop_assert!(!tree.entries[0].last);
+            prop_assert!(tree.entries[1].last);
+            prop_assert_eq!(tree.entries[2].ancestor_last.as_slice(), [true]);
+            prop_assert_eq!((tree.completed, tree.cancelled), (1, 1));
+            prop_assert!(!tree.awaiting_confirmation);
+            f.perform("subgroup", Operation::Complete);
+            let derived = f.derived();
+            let view = View::new(&f.store, &derived);
+            prop_assert!(detail(&view, &id("root")).unwrap().descendants.unwrap().awaiting_confirmation);
+        }
 
         #[test]
         fn generated_prerequisites_order_known_and_missing_dependencies(
