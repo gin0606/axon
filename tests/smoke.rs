@@ -7,6 +7,7 @@ use axon::{
     location::Location,
 };
 use chrono::Utc;
+use proptest::prelude::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -958,6 +959,52 @@ fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation
     set_condition(&f, &root, "exit 23");
     assert!(failure(f.run(&["tasks"])).contains("exit status: 23"));
     assert!(failure(f.run(&["proposals"])).contains("exit status: 23"));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(8))]
+
+    #[test]
+    fn generated_cli_candidates_match_structured_reads_and_condition_calls(
+        children in 0usize..5,
+        open in any::<bool>(),
+    ) {
+        let f = Fixture::new();
+        f.init();
+        let root = new_entity(&f, &["capture", "--kind", "group", "--accept", "--title", "root"]);
+        set_condition(&f, &root, "echo root >> observations; test -f open");
+        let gate = (children > 0).then(|| f.accepted("gate"));
+        for index in 0..children {
+            let title = format!("child-{index}");
+            let mut args = vec!["capture", "--accept", "--title", title.as_str(), "--parent", root.as_str()];
+            if index == 0 { args.extend(["--needs", gate.as_ref().unwrap().as_str()]); }
+            let child = new_entity(&f, &args);
+            set_condition(&f, &child, &format!("echo {title} >> observations"));
+        }
+        if open { fs::write(f.0.join("open"), "").unwrap(); }
+        let store = f.records();
+        let derived = store.view().unwrap();
+        let view = axon::read::View::new(&store, &derived);
+        let structured = axon::read::candidates::<axon::lifecycle::Error>(
+            &view, axon::lifecycle::CandidateList::Tasks, |_| true,
+            |entity, _| Ok(entity != &eid(&root) || open), None,
+        ).unwrap();
+        let expected_calls = if open {
+            std::iter::once("root".to_owned()).chain((0..children).map(|index| format!("child-{index}"))).collect::<Vec<_>>()
+        } else { vec!["root".to_owned()] };
+        for invocation in 1..=2 {
+            let output = f.ok(&["tasks"]);
+            for (line, row) in output.lines().zip(&structured) {
+                let fields: Vec<_> = line.split_whitespace().collect();
+                prop_assert_eq!(fields[0], row.id.as_ref());
+                prop_assert_eq!(fields[2], format!("{:?}", row.status));
+            }
+            prop_assert_eq!(output.lines().count(), structured.len());
+            let calls = fs::read_to_string(f.0.join("observations")).unwrap();
+            let expected = expected_calls.iter().map(|call| format!("{call}\n")).collect::<String>().repeat(invocation);
+            prop_assert_eq!(calls, expected);
+        }
+    }
 }
 
 #[test]
