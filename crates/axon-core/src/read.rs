@@ -1002,6 +1002,7 @@ mod tests {
     use super::*;
     use crate::lifecycle::record::{Entry, Recorder};
     use chrono::{TimeZone, Utc};
+    use proptest::prelude::*;
 
     fn id(value: &str) -> EntityId {
         value.to_owned().try_into().unwrap()
@@ -1968,6 +1969,99 @@ mod tests {
         right.perform("item", Operation::Cancel);
         left.store.absorb(&right.store);
         assert_eq!(heads_of(&left.store), [false, false]);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn generated_gap_heads_follow_parent_paths(seed in any::<u16>(), branches in prop::collection::vec(any::<bool>(), 0..4)) {
+            let item = id("item");
+            let mut base = Fixture::new();
+            base.create("item", Kind::Issue, None, &[], seed as i64 + 10);
+            let created = base.store.view().unwrap().head(&item).unwrap().clone();
+            let mut left = Fixture { store: base.store.clone(), clock: std::cell::Cell::new(seed as i64 + 100) };
+            left.perform("item", Operation::Start);
+            let start = left.store.view().unwrap().head(&item).unwrap().clone();
+            left.perform("item", Operation::Release);
+            let released = left.store.view().unwrap().head(&item).unwrap().clone();
+            let mut right = Fixture { store: base.store.clone(), clock: std::cell::Cell::new(seed as i64 + 200) };
+            right.perform("item", Operation::Cancel);
+            let cancelled = right.store.view().unwrap().head(&item).unwrap().clone();
+            left.store.absorb(&right.store);
+            let resolved = left.store.resolve(&item, &released, None, context(seed as i64 + 300)).unwrap();
+            let resolved = left.store.insert(Entry::Record(resolved)).unwrap();
+
+            let without = |source: &Store, omitted: &[RecordId]| {
+                let mut store = Store::new();
+                for (record_id, record) in source.records() {
+                    if !omitted.contains(record_id) {
+                        store.insert(Entry::Record(record.clone())).unwrap();
+                    }
+                }
+                store
+            };
+            let mut true_left = Fixture { store: left.store.clone(), clock: std::cell::Cell::new(seed as i64 + 400) };
+            let mut true_right = Fixture { store: left.store.clone(), clock: std::cell::Cell::new(seed as i64 + 500) };
+            true_left.perform("item", Operation::Start);
+            true_right.perform("item", Operation::Cancel);
+            true_left.store.absorb(&true_right.store);
+            let true_conflict = without(&true_left.store, std::slice::from_ref(&start));
+            prop_assert_eq!(true_conflict.view().unwrap().heads(&item).unwrap().len(), 2);
+
+            let mut later = Fixture { store: left.store.clone(), clock: std::cell::Cell::new(seed as i64 + 600) };
+            later.perform("item", Operation::Start);
+            later.perform("item", Operation::Release);
+            later.perform("item", Operation::Start);
+            let last = later.store.view().unwrap().head(&item).unwrap().clone();
+            let mut false_conflict = without(&left.store, std::slice::from_ref(&start));
+            false_conflict.insert(Entry::Record(later.store.record(&last).unwrap().clone())).unwrap();
+            prop_assert_eq!(false_conflict.view().unwrap().heads(&item).unwrap().len(), 2);
+
+            let mut branched = left.store.clone();
+            for (index, extend) in branches.iter().enumerate() {
+                let mut fork = Fixture { store: left.store.clone(), clock: std::cell::Cell::new(seed as i64 + 700 + index as i64 * 10) };
+                fork.perform("item", Operation::Start);
+                if *extend {
+                    fork.perform("item", Operation::Release);
+                }
+                branched.absorb(&fork.store);
+            }
+            let cases = [
+                (left.store.clone(), false),
+                (without(&left.store, std::slice::from_ref(&start)), true),
+                (without(&left.store, std::slice::from_ref(&released)), true),
+                (without(&left.store, &[created.clone(), start.clone()]), true),
+                (true_conflict, true),
+                (false_conflict, true),
+            ].into_iter().chain(std::iter::once((without(&branched, std::slice::from_ref(&start)), true)));
+            for (store, has_gap) in cases {
+                let derived = store.view().unwrap();
+                let view = View::new(&store, &derived);
+                let records: Vec<_> = store.records().filter(|(_, record)| record.entity == item).collect();
+                let oldest = records.iter().filter(|(_, record)| record.kind == RecordKind::Created)
+                    .min_by_key(|(record_id, record)| (record.at, *record_id))
+                    .or_else(|| records.iter().filter(|(_, record)| record.parents.iter().all(|parent| !store.contains(parent)))
+                        .min_by_key(|(record_id, record)| (record.at, *record_id)))
+                    .unwrap().0;
+                for head in view.heads(&item) {
+                    let mut pending = vec![head.id];
+                    let mut seen = BTreeSet::new();
+                    while let Some(record_id) = pending.pop() {
+                        if seen.insert(record_id) && let Some(record) = store.record(record_id) {
+                            pending.extend(record.parents.iter());
+                        }
+                    }
+                    let expected = derived.gaps().contains_key(&item)
+                        && (head.record.parents.iter().any(|parent| !store.contains(parent))
+                            || !seen.contains(oldest));
+                    prop_assert_eq!(head.likely_newer, expected);
+                }
+                prop_assert_eq!(derived.gaps().contains_key(&item), has_gap);
+            }
+            prop_assert!(left.store.contains(&cancelled));
+            prop_assert!(left.store.contains(&resolved));
+        }
     }
 
     #[test]

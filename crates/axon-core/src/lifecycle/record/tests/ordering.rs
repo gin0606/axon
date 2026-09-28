@@ -3,6 +3,210 @@
 //! to the derivation; the adapter's file listing is checked in its own fixtures.
 use super::*;
 use Operation::*;
+use proptest::prelude::*;
+
+fn expected_history(store: &Store, entity: &str) -> Vec<RecordId> {
+    let records: BTreeMap<_, _> = store
+        .records()
+        .filter(|(_, record)| record.entity == id(entity))
+        .collect();
+    let mut remaining: BTreeSet<_> = records.keys().copied().collect();
+    let mut listed = Vec::new();
+    while !remaining.is_empty() {
+        let ready: Vec<_> = remaining
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                records[*candidate]
+                    .parents
+                    .iter()
+                    .all(|parent| !records.contains_key(parent) || listed.contains(&parent))
+            })
+            .collect();
+        assert!(!ready.is_empty(), "generated DAG must be acyclic");
+        let next = listed
+            .iter()
+            .rev()
+            .find_map(|parent| {
+                ready
+                    .iter()
+                    .copied()
+                    .find(|candidate| records[*candidate].parents.contains(*parent))
+            })
+            .unwrap_or_else(|| {
+                ready
+                    .iter()
+                    .copied()
+                    .min_by_key(|candidate| (!records[*candidate].parents.is_empty(), *candidate))
+                    .unwrap()
+            });
+        remaining.remove(next);
+        listed.push(next);
+    }
+    listed.into_iter().cloned().collect()
+}
+
+fn generated_dag(seed: u16, gap: usize, resolve: bool, branches: &[bool]) -> Store {
+    let mut main = Replica::new("r0");
+    main.op("i3", Start);
+    let mut inner = Replica::from("inner", &main.store);
+    main.clock.set(-100);
+    main.op("i3", Release);
+    inner.op_as("i3", Release, &format!("inner{seed}"));
+    let created = main.store.history(&id("i3")).unwrap()[0].0.clone();
+    let (outer, missing) = (0..256)
+        .map(|index| {
+            let mut outer = Replica::new("outer");
+            let who = format!("outer{seed}-{index}");
+            let missing = outer.op_as("i3", Start, &who);
+            outer.op_as("i3", Release, &who);
+            (outer, missing)
+        })
+        .find(|(outer, _)| outer.head("i3") < created)
+        .unwrap();
+    main.sync(&inner);
+    main.sync(&outer);
+    for (index, extend) in branches.iter().enumerate() {
+        let mut branch = Replica::new("branch");
+        let who = format!("branch{seed}-{index}");
+        branch.op_as("i3", Start, &who);
+        if *extend {
+            branch.op_as("i3", Release, &who);
+        }
+        main.sync(&branch);
+    }
+    if resolve {
+        let chosen = main.heads("i3").first().unwrap().clone();
+        main.resolve("i3", &chosen);
+    }
+    let same_time = ctx(seed as i64, "note");
+    for (index, (entity, body)) in [("i3", "z"), ("g0", "a"), ("i3", "a")]
+        .into_iter()
+        .enumerate()
+    {
+        let note = Note {
+            entity: id(entity),
+            nonce: format!("{:032x}", seed as u128 * 1000 + index as u128)
+                .try_into()
+                .unwrap(),
+            at: same_time.at,
+            recorder: same_time.recorder.clone(),
+            reason: None,
+            body: format!("{body}{seed}"),
+        };
+        main.store.insert(Entry::Note(note)).unwrap();
+    }
+    let timed_note = |body: String, at| Note {
+        entity: id("i3"),
+        nonce: "0123456789abcdef0123456789abcdef".try_into().unwrap(),
+        at,
+        recorder: ctx(40, "r0").recorder,
+        reason: None,
+        body,
+    };
+    let earlier = timed_note("earlier".into(), ctx(40, "r0").at);
+    let earlier_id = RecordId::of(&encode(&Entry::Note(earlier.clone())).unwrap());
+    let later = (0..64)
+        .map(|index| timed_note(format!("later {index}"), ctx(50, "r0").at))
+        .find(|note| RecordId::of(&encode(&Entry::Note(note.clone())).unwrap()) < earlier_id)
+        .unwrap();
+    main.store.insert(Entry::Note(earlier)).unwrap();
+    main.store.insert(Entry::Note(later)).unwrap();
+    let mut store = Store::new();
+    for (record_id, entry) in main.store.entries() {
+        if gap != 0 || *record_id != missing {
+            store.insert(entry.clone()).unwrap();
+        }
+    }
+    store
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn generated_dags_preserve_causal_history_and_note_order(seed in any::<u16>(), shift in any::<usize>(), branches in prop::collection::vec(any::<bool>(), 0..4)) {
+        for gap in 0..2 {
+            for resolve in [false, true] {
+                let store = generated_dag(seed, gap, resolve, &branches);
+                let expected = expected_history(&store, "i3");
+                let mut entries: Vec<_> = store.entries().map(|(_, entry)| entry.clone()).collect();
+                let reference_view = store.view().unwrap();
+                let notes: Vec<_> = store.notes().map(|(id, note)| (id.clone(), note.entity.clone(), note.at)).collect();
+                let mut expected_notes = notes.clone();
+                expected_notes.sort_by_key(|(id, _, at)| (*at, id.clone()));
+                let actual_all: Vec<_> = store.all_notes().iter().map(|(id, note)| ((*id).clone(), note.entity.clone(), note.at)).collect();
+                prop_assert_eq!(actual_all, expected_notes.clone());
+                for entity in ["i3", "g0"] {
+                    let actual: Vec<_> = store.notes_of(&id(entity)).iter().map(|(id, _)| (*id).clone()).collect();
+                    let filtered: Vec<_> = expected_notes.iter().filter(|(_, owner, _)| owner == &id(entity)).map(|(id, _, _)| id.clone()).collect();
+                    prop_assert_eq!(actual, filtered);
+                }
+                for record_id in &expected {
+                    let record = store.record(record_id).unwrap();
+                    for parent in &record.parents {
+                        if store.contains(parent) {
+                            prop_assert!(store.precedes(parent, record_id));
+                            prop_assert!(expected.iter().position(|id| id == parent) < expected.iter().position(|id| id == record_id));
+                        }
+                    }
+                }
+                for before in &expected {
+                    for after in &expected {
+                        let mut pending: Vec<_> = store.record(after).unwrap().parents.iter().collect();
+                        let mut seen = BTreeSet::new();
+                        while let Some(parent) = pending.pop() {
+                            if seen.insert(parent) && let Some(record) = store.record(parent) {
+                                pending.extend(&record.parents);
+                            }
+                        }
+                        prop_assert_eq!(store.precedes(before, after), before != after && seen.contains(before));
+                    }
+                }
+                let reversed_time = expected.windows(2).any(|pair| {
+                    let first = store.record(&pair[0]).unwrap();
+                    let second = store.record(&pair[1]).unwrap();
+                    first.at > second.at
+                });
+                prop_assert!(reversed_time);
+                for _ in 0..3 {
+                    let offset = shift % entries.len();
+                    entries.rotate_left(offset);
+                    entries.reverse();
+                    let mut reordered = Store::new();
+                    for entry in &entries {
+                        reordered.insert(entry.clone()).unwrap();
+                    }
+                    prop_assert_eq!(reordered.view().unwrap(), reference_view.clone());
+                    prop_assert_eq!(history_ids(&reordered, "i3"), expected.clone());
+                    prop_assert_eq!(reordered.all_notes(), store.all_notes());
+                    for entity in ["i3", "g0"] {
+                        prop_assert_eq!(reordered.notes_of(&id(entity)), store.notes_of(&id(entity)));
+                    }
+                }
+                prop_assert_eq!(history_ids(&store, "i3"), expected);
+                prop_assert_eq!(reference_view.gaps().contains_key(&id("i3")), gap == 0);
+            }
+        }
+    }
+
+    #[test]
+    fn generated_foreign_record_and_note_parents_are_rejected(seed in any::<u16>(), note_parent in any::<bool>(), branches in prop::collection::vec(any::<bool>(), 0..4)) {
+        let mut store = generated_dag(seed, 1, false, &branches);
+        let parent = if note_parent {
+            store.notes_of(&id("g0"))[0].0.clone()
+        } else {
+            store.history(&id("g0")).unwrap()[0].0.clone()
+        };
+        let mut record = store.record(&store.history(&id("i3")).unwrap()[0].0.clone()).unwrap().clone();
+        record.kind = RecordKind::Edit;
+        record.parents = BTreeSet::from([parent]);
+        record.after.title = format!("changed {seed}");
+        store.insert(Entry::Record(record)).unwrap();
+        prop_assert!(store.view().is_err());
+        prop_assert!(generated_dag(seed, 0, false, &branches).view().is_ok());
+    }
+}
 
 #[test]
 fn view_history_and_note_order_are_independent_of_insertion_order() {
