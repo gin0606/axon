@@ -812,8 +812,9 @@ proptest::proptest! {
     #[test]
     fn declaration_cli_preserves_input_on_rejection_and_retries_generated_plans(
         title in "[A-Za-z][A-Za-z0-9]{0,12}",
-        control in proptest::prop_oneof![proptest::prelude::Just(10u8), 27u8..32],
+        control in 27u8..32,
     ) {
+    for control in [10, control] {
         let f = Fixture::new();
         f.ok(&["init", "demo"]);
         let before = snapshot(&f);
@@ -856,5 +857,6 @@ proptest::proptest! {
             assert_eq!(fs::read_to_string(&path).unwrap(), bad_bytes);
             assert_eq!(snapshot(&f), saved);
         }
+    }
     }
 }

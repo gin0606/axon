@@ -270,8 +270,9 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(12))]
     #[test]
     fn generated_corrupt_files_are_reported_by_path(
-        kinds in prop::collection::vec(0u8..5, 2..5)
+        extra_kinds in prop::collection::vec(0u8..5, 0..3)
     ) {
+        let kinds: Vec<_> = [0, 1].into_iter().chain(extra_kinds).collect();
         let f = Fixture::new();
         f.init();
         let ids: Vec<_> = (0..kinds.len()).map(|index| f.accepted(&format!("record {index}"))).collect();
