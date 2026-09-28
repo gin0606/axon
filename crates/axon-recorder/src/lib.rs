@@ -38,6 +38,7 @@ fn detect_with(mut read: impl FnMut(&str) -> Option<String>) -> Option<Recorder>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     fn detect(values: &[(&str, &str)]) -> Option<Recorder> {
         detect_with(|key| {
@@ -113,6 +114,70 @@ mod tests {
             let r = detect(&[(key, value), ("SECRET_TOKEN", "never copied")]).unwrap();
             assert_eq!(r.actor, expected);
             assert!(r.data.is_empty());
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn source_precedence_and_metadata(
+            sources in prop::collection::vec("[a-z]{1,8}", 7),
+            sessions in prop::collection::vec(
+                prop_oneof![
+                    Just(None),
+                    Just(Some(String::new())),
+                    Just(Some(" \t".into())),
+                    "[a-z]{1,8}".prop_map(Some),
+                ],
+                2,
+            ),
+            absent in prop::collection::vec(any::<bool>(), 7),
+            unrelated in "[a-z]{1,8}",
+        ) {
+            const KEYS: [&str; 7] = [
+                "AXON_ACTOR", "CODEX_THREAD_ID", "CODEX_SANDBOX", "CLAUDECODE",
+                "CLAUDE_CODE", "AI_AGENT", "USER",
+            ];
+
+            for selected in 0..=KEYS.len() {
+                let mut values = Vec::from([
+                    ("AXON_SESSION_ID", sessions[0].as_deref()),
+                    ("CLAUDE_CODE_SESSION_ID", sessions[1].as_deref()),
+                    ("SECRET_TOKEN", Some(unrelated.as_str())),
+                ]);
+                for (index, key) in KEYS.iter().enumerate() {
+                    let value = if index < selected {
+                        if absent[index] { None } else { Some(" \t") }
+                    } else {
+                        Some(sources[index].as_str())
+                    };
+                    values.push((key, value));
+                }
+
+                let actual = detect_with(|key| {
+                    values.iter().find(|(name, _)| *name == key)
+                        .and_then(|(_, value)| value.map(str::to_owned))
+                });
+                let expected = if selected == KEYS.len() {
+                    None
+                } else {
+                    let actor = match selected {
+                        0 | 5 | 6 => sources[selected].clone(),
+                        1 | 2 => "codex".into(),
+                        3 | 4 => "claude-code".into(),
+                        _ => unreachable!(),
+                    };
+                    let session = match selected {
+                        0 => sessions[0].as_deref(),
+                        1 => Some(sources[1].as_str()),
+                        3 | 4 => sessions[1].as_deref(),
+                        _ => None,
+                    }.filter(|value| !value.trim().is_empty());
+                    let data = session.map(|value| BTreeMap::from([("session_id".into(), value.into())]))
+                        .unwrap_or_default();
+                    Some(Recorder { actor, data })
+                };
+                prop_assert_eq!(actual, expected);
+            }
         }
     }
 }
