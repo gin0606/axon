@@ -7,6 +7,7 @@ use axon::{
     location::Location,
 };
 use chrono::Utc;
+use proptest::prelude::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -960,6 +961,180 @@ fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation
     assert!(failure(f.run(&["proposals"])).contains("exit status: 23"));
 }
 
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(8))]
+
+    #[test]
+    fn generated_cli_candidates_match_structured_reads_and_condition_calls(
+        children in 0usize..5,
+        open in any::<bool>(),
+    ) {
+        let f = Fixture::new();
+        f.init();
+        let root = new_entity(&f, &["capture", "--kind", "group", "--accept", "--title", "root"]);
+        set_condition(&f, &root, "echo root >> observations; test -f open");
+        let gate = (children > 0).then(|| f.accepted("gate"));
+        for index in 0..children {
+            let title = format!("child-{index}");
+            let mut args = vec!["capture", "--accept", "--title", title.as_str(), "--parent", root.as_str()];
+            if index == 0 { args.extend(["--needs", gate.as_ref().unwrap().as_str()]); }
+            let child = new_entity(&f, &args);
+            set_condition(&f, &child, &format!("echo {title} >> observations"));
+        }
+        if open { fs::write(f.0.join("open"), "").unwrap(); }
+        let store = f.records();
+        let derived = store.view().unwrap();
+        let view = axon::read::View::new(&store, &derived);
+        let structured = axon::read::candidates::<axon::lifecycle::Error>(
+            &view, axon::lifecycle::CandidateList::Tasks, |_| true,
+            |entity, _| Ok(entity != &eid(&root) || open), None,
+        ).unwrap();
+        let expected_calls = if open {
+            std::iter::once("root".to_owned()).chain((0..children).map(|index| format!("child-{index}"))).collect::<Vec<_>>()
+        } else { vec!["root".to_owned()] };
+        for invocation in 1..=2 {
+            let output = f.ok(&["tasks"]);
+            for (line, row) in output.lines().zip(&structured) {
+                let fields: Vec<_> = line.split_whitespace().collect();
+                prop_assert_eq!(fields[0], row.id.as_ref());
+                prop_assert_eq!(fields[2], format!("{:?}", row.status));
+            }
+            prop_assert_eq!(output.lines().count(), structured.len());
+            let calls = fs::read_to_string(f.0.join("observations")).unwrap();
+            let expected = expected_calls.iter().map(|call| format!("{call}\n")).collect::<String>().repeat(invocation);
+            prop_assert_eq!(calls, expected);
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(8))]
+
+    #[test]
+    fn generated_proposals_match_forest_oracle_and_condition_calls(
+        extras in proptest::collection::vec((any::<bool>(), any::<bool>()), 0..4),
+        random_closed in any::<u16>(),
+    ) {
+        let f = Fixture::new();
+        f.init();
+        let root = new_entity(&f, &["capture", "--kind", "group", "--accept", "--title", "root"]);
+        let nested = new_entity(&f, &["capture", "--kind", "group", "--accept", "--title", "nested", "--parent", &root]);
+        let deep = new_entity(&f, &["capture", "--kind", "group", "--title", "deep", "--parent", &nested]);
+        let other = new_entity(&f, &["capture", "--kind", "group", "--title", "other"]);
+        let mut nodes = vec![
+            (root.clone(), None, false),
+            (nested.clone(), Some(0), false),
+            (deep.clone(), Some(1), true),
+            (other.clone(), None, true),
+        ];
+        let mut children = vec![
+            ("draft-a".to_owned(), 2, true),
+            ("draft-b".to_owned(), 2, true),
+            ("other-draft".to_owned(), 3, true),
+            ("accepted".to_owned(), 0, false),
+        ];
+        children.extend(extras.iter().enumerate().map(|(index, (nested, undecided))| {
+            (format!("extra-{index}"), if *nested { 2 } else { 3 }, *undecided)
+        }));
+        for (title, parent, undecided) in children {
+            let mut args = vec!["capture", "--title", title.as_str(), "--parent", nodes[parent].0.as_str()];
+            if !undecided { args.push("--accept"); }
+            let id = new_entity(&f, &args);
+            nodes.push((id, Some(parent), undecided));
+        }
+        for (index, (id, _, _)) in nodes.iter().enumerate() {
+            set_condition(&f, id, &format!(
+                "echo {index} >> observations; if test -f fail-{index}; then exit 23; fi; test ! -f closed-{index}"
+            ));
+        }
+        let records = f.records();
+        let derived = records.view().unwrap();
+        let view = axon::read::View::new(&records, &derived);
+
+        // Every generated forest runs each required failure and short-circuit class.
+        for (closed, failed) in [
+            (vec![0], None),
+            (vec![1], None),
+            (vec![4], None),
+            (vec![], None),
+            ((0..nodes.len()).filter(|index| random_closed & (1 << index) != 0).collect(), None),
+            (vec![], Some(0)),
+            (vec![], Some(1)),
+            (vec![], Some(4)),
+            (vec![], Some(5)),
+        ] {
+            for index in 0..nodes.len() {
+                let _ = fs::remove_file(f.0.join(format!("closed-{index}")));
+                let _ = fs::remove_file(f.0.join(format!("fail-{index}")));
+            }
+            for index in &closed { fs::write(f.0.join(format!("closed-{index}")), "").unwrap(); }
+            if let Some(index) = failed { fs::write(f.0.join(format!("fail-{index}")), "").unwrap(); }
+
+            let mut evaluated = BTreeSet::new();
+            let mut expected_calls = Vec::new();
+            let mut expected_rows = Vec::new();
+            let mut expected_error = false;
+            for index in 0..nodes.len() {
+                if !nodes[index].2 { continue; }
+                let mut chain = vec![index];
+                let mut parent = nodes[index].1;
+                while let Some(ancestor) = parent {
+                    chain.push(ancestor);
+                    parent = nodes[ancestor].1;
+                }
+                chain.reverse();
+                let mut visible = true;
+                for ancestor in chain {
+                    if evaluated.insert(ancestor) { expected_calls.push(ancestor); }
+                    if failed == Some(ancestor) { expected_error = true; break; }
+                    if closed.contains(&ancestor) { visible = false; break; }
+                }
+                if expected_error { break; }
+                if visible { expected_rows.push(nodes[index].0.clone()); }
+            }
+            let expected_log = expected_calls.iter().map(|index| format!("{index}\n")).collect::<String>();
+            let mut structured_calls = Vec::new();
+            let structured = axon::read::candidates::<axon::Error>(
+                &view, axon::lifecycle::CandidateList::Proposals, |_| true,
+                |entity, command| {
+                    let index = nodes.iter().position(|node| &eid(&node.0) == entity).unwrap();
+                    assert_eq!(command, format!("echo {index} >> observations; if test -f fail-{index}; then exit 23; fi; test ! -f closed-{index}"));
+                    structured_calls.push(index);
+                    if failed == Some(index) { Err(axon::Error::Invalid("condition failed".into())) }
+                    else { Ok(!closed.contains(&index)) }
+                }, None,
+            );
+            prop_assert_eq!(structured_calls, expected_calls);
+            let structured_rows = if expected_error { prop_assert!(structured.is_err()); Vec::new() }
+            else {
+                let rows = structured.unwrap();
+                let ids = rows.iter().map(|row| row.id.to_string()).collect::<Vec<_>>();
+                prop_assert_eq!(ids, expected_rows.clone());
+                rows.iter().map(|row| (row.id.to_string(), format!("{:?}", row.status))).collect::<Vec<_>>()
+            };
+
+            for invocation in 1..=2 {
+                let output = f.run(&["proposals"]);
+                if expected_error {
+                    prop_assert!(failure(output).contains("exit status: 23"));
+                } else {
+                    let rows = success(output);
+                    let display_rows = rows.lines().map(|line| {
+                        let fields = line.split_whitespace().collect::<Vec<_>>();
+                        (fields[0].to_owned(), fields[2].to_owned())
+                    }).collect::<Vec<_>>();
+                    let ids = display_rows.iter().map(|row| row.0.clone()).collect::<Vec<_>>();
+                    prop_assert_eq!(ids, expected_rows.clone());
+                    prop_assert_eq!(display_rows, structured_rows.clone());
+                }
+                let calls = fs::read_to_string(f.0.join("observations")).unwrap();
+                prop_assert_eq!(calls, expected_log.repeat(invocation));
+            }
+            fs::remove_file(f.0.join("observations")).unwrap();
+        }
+    }
+}
+
 #[test]
 fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
     let f = Fixture::new();
@@ -1492,6 +1667,8 @@ mod location;
 #[path = "lifecycle/workflow.rs"]
 mod workflow;
 
+#[path = "lifecycle/cli_properties.rs"]
+mod cli_properties;
 #[path = "lifecycle/contracts.rs"]
 mod contracts;
 

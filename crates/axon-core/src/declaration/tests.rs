@@ -1,6 +1,7 @@
 use super::*;
-use crate::lifecycle::record::{Context, Entry, Operation, RecordKind, Store};
+use crate::lifecycle::record::{Context, Entry, Operation, RecordKind, Recorder, Store};
 use chrono::{TimeZone, Utc};
+use proptest::prelude::*;
 fn id(s: &str) -> EntityId {
     s.to_owned().try_into().unwrap()
 }
@@ -414,6 +415,122 @@ fn declaration_doc_example_has_identical_canonical_bytes() {
         f.create(name, Kind::Issue);
     }
     assert_eq!(d.serialize(&f.view()).unwrap(), text);
+}
+
+fn declaration_text() -> impl Strategy<Value = String> {
+    proptest::string::string_regex("[a-zA-Z0-9 #,:\\[\\]{}\\t\\n]{0,60}").unwrap()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn generated_declarations_parse_and_rewrite_canonically(
+        title in "[a-zA-Z][a-zA-Z0-9]{0,30}",
+        description in declaration_text(),
+        key in "k[a-z0-9-]{0,20}",
+        reverse in any::<bool>(),
+    ) {
+        for value in [description.as_str(), "null", "TRUE", "2026-01-01", "0x12", "é 日本語 🚀", "line\r\nnext", "line\nnext\n", "\u{2028}\u{2029}\0"] {
+            let mut d = example();
+            d.groups[0].title = title.clone();
+            d.groups[0].description = value.into();
+            d.issues[0].key = Some(key.clone());
+            d.issues[1].needs = vec![Reference::key(&key)];
+            if reverse { d.issues.reverse(); }
+            let yaml = d.serialize(&empty_view()).unwrap();
+            let parsed = parse(&yaml).unwrap();
+            prop_assert_eq!(parsed.serialize(&empty_view()).unwrap(), yaml);
+            prop_assert_eq!(parsed.groups[0].description.as_str(), value);
+            prop_assert_eq!(parsed.issues.iter().map(|issue| issue.key.as_deref()).collect::<Vec<_>>(), [Some(key.as_str()), Some("second")]);
+            prop_assert_eq!(parsed.issues.iter().map(|issue| issue.needs.len()).sum::<usize>(), 1);
+        }
+    }
+
+    #[test]
+    fn generated_yaml_damage_is_rejected(
+        title in "[a-zA-Z]{1,12}",
+    ) {
+        let mut d = example();
+        d.groups[0].title = title;
+        let yaml = d.serialize(&empty_view()).unwrap();
+        for field in ["schema", "groups", "issues", "references"] {
+            let line = yaml.lines().find(|line| line.starts_with(&format!("{field}:"))).unwrap();
+            for replacement in ["null", "true", "123", "{}"] {
+                let bad = yaml.replacen(line, &format!("{field}: {replacement}"), 1);
+                prop_assert!(parse(&bad).is_err(), "{bad}");
+            }
+            let duplicate = yaml.replacen(line, &format!("{line}\n{line}"), 1);
+            prop_assert!(parse(&duplicate).is_err(), "{duplicate}");
+        }
+    }
+
+    #[test]
+    fn generated_record_field_damage_is_rejected(
+        title in "[a-zA-Z]{1,12}",
+    ) {
+        let mut d = example();
+        d.groups[0].title = title;
+        let yaml = d.serialize(&empty_view()).unwrap();
+        for field in ["key", "lifecycle", "title", "description", "parent", "needs"] {
+            let line = yaml.lines().find(|line| line.starts_with(&format!("    {field}:"))).unwrap();
+            for damage in ["missing", "duplicate", "wrong-type"] {
+                let bad = match damage {
+                    "missing" => yaml.replacen(&format!("{line}\n"), "", 1),
+                    "duplicate" => yaml.replacen(line, &format!("{line}\n{line}"), 1),
+                    _ => yaml.replacen(line, &format!("    {field}: {{ bad: value }}"), 1),
+                };
+                prop_assert!(parse(&bad).is_err(), "{field}/{damage}: {bad}");
+            }
+        }
+    }
+
+    #[test]
+    fn generated_visible_fingerprint_fields_change_it(
+        title in "[a-zA-Z]{1,20}",
+        description in declaration_text(),
+    ) {
+        for selector in 0..7 {
+            let mut value = current(Kind::Issue, &title);
+            value.description = description.clone();
+            let entity = id("demo-a");
+            let base = fingerprint(&entity, &value);
+            let mut other_id = entity.clone();
+            match selector {
+                0 => value.title.push('!'),
+                1 => value.description.push('!'),
+                2 => value.lifecycle = Lifecycle::Completed,
+                3 => value.parent = Some(id("parent")),
+                4 => { value.needs.insert(id("needs")); },
+                5 => value.kind = Kind::Group,
+                _ => other_id = id("other"),
+            }
+            prop_assert_ne!(base, fingerprint(&other_id, &value), "selector {}", selector);
+            let unchanged = fingerprint(&other_id, &value);
+            value.condition = Some("exit 1".into());
+            prop_assert_eq!(unchanged, fingerprint(&other_id, &value), "selector {}", selector);
+        }
+    }
+
+    #[test]
+    fn generated_notes_and_recorders_do_not_change_fingerprint(
+        actor in "[a-z]{1,12}",
+        note in "[a-zA-Z0-9]{1,30}",
+    ) {
+        let entity = id("demo-a");
+        let value = current(Kind::Issue, "title");
+        let base = fingerprint(&entity, &value);
+        let mut store = Store::new();
+        let record = store.create(entity.clone(), value, Context {
+            at: context().at,
+            recorder: Some(Recorder { actor, data: Default::default() }),
+        }).unwrap();
+        store.insert(Entry::Record(record)).unwrap();
+        prop_assert_eq!(base.as_str(), fingerprint(&entity, store.view().unwrap().current(&entity).unwrap()));
+        let note = store.add_note(&entity, note, None, context_at(1001)).unwrap();
+        store.insert(Entry::Note(note)).unwrap();
+        prop_assert_eq!(base, fingerprint(&entity, store.view().unwrap().current(&entity).unwrap()));
+    }
 }
 
 #[test]
@@ -943,4 +1060,198 @@ fn a_fresh_declaration_that_would_repair_a_violation_is_still_rejected() {
     assert!(error.contains("structural violations"), "{error}");
     let error = d.prepare(&f.store, "demo").unwrap_err().to_string();
     assert!(error.contains("structural violations"), "{error}");
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
+    #[test]
+    fn generated_export_selectors_include_descendants_and_external_references(
+        title in "[A-Za-z][A-Za-z0-9]{0,12}",
+        reverse in any::<bool>(),
+    ) {
+        let mut f = Fixture::new();
+        for (name, kind) in [("h", Kind::Group), ("g", Kind::Group), ("a", Kind::Issue), ("b", Kind::Issue), ("x", Kind::Issue)] {
+            f.create(name, kind);
+        }
+        f.set_parent("g", Some("h"));
+        f.set_parent("a", Some("g"));
+        f.set_parent("b", Some("h"));
+        f.add_dependency("a", "x");
+        f.add_dependency("b", "a");
+        let edited_title = format!("Edited {title}");
+        f.write("a", &edited_title);
+        for mask in 1u8..32 {
+            let mut selectors: Vec<_> = ["h", "g", "a", "b", "x"]
+                .into_iter().enumerate().filter(|(bit, _)| mask & (1 << bit) != 0)
+                .map(|(_, name)| id(name)).collect();
+            if reverse { selectors.reverse(); }
+            let mut expected: BTreeSet<_> = selectors.iter().map(ToString::to_string).collect();
+            if expected.contains("h") { expected.extend(["g", "a", "b"].map(str::to_owned)); }
+            if expected.contains("g") { expected.insert("a".into()); }
+            let declaration = export(&f.store, &f.view(), &selectors).unwrap();
+            let actual: BTreeSet<_> = declaration.records().map(|record| record.id.clone().unwrap()).collect();
+            prop_assert_eq!(&actual, &expected);
+            let external: BTreeSet<_> = ["h", "g", "a", "x"].into_iter()
+                .filter(|name| !expected.contains(*name) && match *name {
+                    "h" => expected.contains("g") || expected.contains("b"),
+                    "g" => expected.contains("a"),
+                    "a" => expected.contains("b"),
+                    _ => expected.contains("a"),
+                }).map(str::to_owned).collect();
+            prop_assert_eq!(declaration.references.iter().map(|reference| reference.id.clone()).collect::<BTreeSet<_>>(), external);
+            prop_assert!(declaration.records().all(|record| record.key.is_none() && record.base.is_some()));
+            if expected.contains("a") {
+                prop_assert_eq!(declaration.issues.iter().find(|record| record.id.as_deref() == Some("a")).unwrap().title.as_str(), edited_title.as_str());
+            }
+        }
+    }
+
+    #[test]
+    fn generated_plan_edits_survive_partial_publication_and_retry(
+        title in "[A-Za-z][A-Za-z0-9]{0,12}",
+        reverse in any::<bool>(),
+    ) {
+        for relationship in 0..5 {
+          for published in 0..=3 {
+            let mut f = Fixture::new();
+            for (name, kind) in [("g", Kind::Group), ("x", Kind::Issue), ("a", Kind::Issue), ("b", Kind::Issue)] {
+                f.create(name, kind);
+            }
+            f.set_parent("a", Some("g"));
+            f.add_dependency("a", "b");
+            let original = f.store.clone();
+            let mut d = export(&f.store, &f.view(), &[id("g"), id("a"), id("b")]).unwrap();
+            let a = d.issues.iter_mut().find(|r| r.id.as_deref() == Some("a")).unwrap();
+            a.title = format!("Edited {title}");
+            match relationship {
+                0 => a.parent = None,
+                2 | 4 => a.needs.clear(),
+                _ => {},
+            }
+            let b = d.issues.iter_mut().find(|r| r.id.as_deref() == Some("b")).unwrap();
+            match relationship {
+                1 => b.parent = Some(Reference::id("g")),
+                3 => b.needs = vec![Reference::id("x")],
+                4 => b.needs = vec![Reference::id("a")],
+                _ => {},
+            }
+            let mut new = example().issues.remove(0);
+            new.key = Some("new".into());
+            new.title = format!("New {title}");
+            new.parent = Some(Reference::id("g"));
+            new.needs = vec![Reference::id("x")];
+            d.issues.push(new);
+            if reverse { d.issues.reverse(); }
+            d.prepare(&f.store, "demo").unwrap();
+            let new_id = d.issues.iter().find(|r| r.key.as_deref() == Some("new")).unwrap().id.clone().unwrap();
+            let input = d.serialize(&f.view()).unwrap();
+            let checked = d.check(&input, &f.store, context()).unwrap();
+            prop_assert_eq!(checked.records.len(), if relationship == 0 || relationship == 2 { 2 } else { 3 });
+            let prefix = published.min(checked.records.len());
+            for record in checked.records.iter().take(prefix) {
+                f.insert(record.clone());
+            }
+            let retry = d.check(&input, &f.store, context()).unwrap();
+            prop_assert_eq!(retry.records.len(), checked.records.len() - prefix);
+            for record in retry.records { f.insert(record); }
+            let settled = f.view();
+            prop_assert!(settled.is_valid());
+            prop_assert_eq!(settled.known().count(), 5);
+            let a = settled.current(&id("a")).unwrap();
+            let b = settled.current(&id("b")).unwrap();
+            let new = settled.current(&id(&new_id)).unwrap();
+            prop_assert_eq!(a.title.as_str(), format!("Edited {title}"));
+            prop_assert_eq!(a.parent.as_ref(), if relationship == 0 { None } else { Some(&id("g")) });
+            prop_assert_eq!(&a.needs, if relationship == 2 || relationship == 4 { &BTreeSet::new() } else { &BTreeSet::from([id("b")]) });
+            prop_assert_eq!(b.parent.as_ref(), if relationship == 1 { Some(&id("g")) } else { None });
+            prop_assert_eq!(&b.needs, match relationship { 3 => &BTreeSet::from([id("x")]), 4 => &BTreeSet::from([id("a")]), _ => &BTreeSet::new() });
+            prop_assert_eq!(new.parent.as_ref(), Some(&id("g")));
+            prop_assert_eq!(&new.needs, &BTreeSet::from([id("x")]));
+            let original_view = original.view().unwrap();
+            prop_assert_eq!(settled.current(&id("x")), original_view.current(&id("x")));
+            prop_assert!(d.check(&input, &f.store, context_at(9000)).unwrap().records.is_empty());
+          }
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(16))]
+
+    #[test]
+    fn generated_invalid_stores_keep_fresh_plans_out_but_allow_repairing_retries(
+        title in "[A-Za-z][A-Za-z0-9]{0,12}",
+    ) {
+      for conflicted_child in [false, true] {
+        let mut f = Fixture::new();
+        f.create("g", Kind::Group);
+        f.create("a", Kind::Issue);
+        f.set_parent("a", Some("g"));
+        f.create("unrelated", Kind::Issue);
+        let mut other = Fixture { store: f.store.clone(), clock: std::cell::Cell::new(6000) };
+        let conflicted = if conflicted_child { "a" } else { "unrelated" };
+        f.write(conflicted, &format!("Left {title}"));
+        other.write(conflicted, &format!("Right {title}"));
+        f.store.absorb(&other.store);
+        let before = f.store.clone();
+        let exported = export(&f.store, &f.view(), &[id("g")]);
+        if conflicted_child {
+            prop_assert!(exported.unwrap_err().to_string().contains("conflicted"));
+        } else {
+            prop_assert_eq!(exported.unwrap().issues.len(), 1);
+        }
+        let mut fresh = example();
+        fresh.groups[0].title = title.clone();
+        let input = fresh.serialize(&f.view()).unwrap();
+        prop_assert!(fresh.prepare(&f.store, "demo").unwrap_err().to_string().contains("conflicted"));
+        prop_assert_eq!(&f.store, &before);
+        prop_assert_eq!(input, fresh.serialize(&f.view()).unwrap());
+      }
+
+        for missing_parent in [false, true] {
+            let mut source = Fixture::new();
+            source.create("missing", if missing_parent { Kind::Group } else { Kind::Issue });
+            let mut value = current(Kind::Issue, &title);
+            if missing_parent {
+                value.parent = Some(id("missing"));
+            } else {
+                value.needs.insert(id("missing"));
+            }
+            let record = source.store.create(id("child"), value, context()).unwrap();
+            let mut alone = Fixture::new();
+            alone.insert(record);
+            let view = alone.view();
+            let declaration = export(&alone.store, &view, &[id("child")]).unwrap();
+            prop_assert!(declaration.references.is_empty());
+            let input = declaration.serialize(&view).unwrap();
+            let before = alone.store.clone();
+            prop_assert!(declaration.clone().prepare(&alone.store, "demo").unwrap_err().to_string().contains("does not exist"));
+            prop_assert!(declaration.check(&input, &alone.store, context()).unwrap_err().to_string().contains("does not exist"));
+            prop_assert_eq!(&alone.store, &before);
+        }
+
+        let mut f = Fixture::new();
+        f.create("x", Kind::Issue);
+        f.create("y", Kind::Issue);
+        f.add_dependency("x", "y");
+        let mut swap = export(&f.store, &f.view(), &[id("x"), id("y")]).unwrap();
+        swap.issues[0].needs.clear();
+        swap.issues[1].needs = vec![Reference::id("x")];
+        swap.issues[1].title = title;
+        let input = swap.serialize(&f.view()).unwrap();
+        let checked = swap.check(&input, &f.store, context()).unwrap();
+        prop_assert_eq!(checked.records.len(), 2);
+        f.insert(checked.records[1].clone());
+        prop_assert!(!f.view().is_valid());
+        let before = f.store.clone();
+        let mut fresh = example();
+        prop_assert!(fresh.prepare(&f.store, "demo").unwrap_err().to_string().contains("structural violations"));
+        prop_assert_eq!(&f.store, &before);
+        let retry = swap.check(&input, &f.store, context()).unwrap();
+        prop_assert_eq!(retry.records.len(), 1);
+        f.insert(retry.records[0].clone());
+        prop_assert!(f.view().is_valid());
+        prop_assert!(swap.check(&input, &f.store, context()).unwrap().already_applied);
+    }
 }

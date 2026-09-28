@@ -450,6 +450,54 @@ fn declaration_prepare_escapes_control_characters_in_output_paths() {
 
 #[cfg(unix)]
 #[test]
+fn declaration_import_keeps_newlines_in_paths_out_of_success_headers() {
+    let f = Fixture::new();
+    f.ok(&["init", "demo"]);
+    let path = f.0.join("plan\u{1b}\n.yaml");
+    fs::write(&path, f.ok(&["docs", "declaration", "--example"])).unwrap();
+    let before = snapshot(&f);
+    let displayed_path = path
+        .to_str()
+        .unwrap()
+        .replace('\u{1b}', "\\x1b")
+        .replace('\n', "\\n");
+
+    let prepared = f.ok(&["import", "prepare", path.to_str().unwrap()]);
+    assert!(!prepared.contains('\u{1b}'));
+    assert_eq!(
+        prepared.lines().next().unwrap(),
+        format!("Prepared {displayed_path}. Storage unchanged.")
+    );
+    let declaration = declaration::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+    for record in declaration.records() {
+        let mapping = format!(
+            "{} -> {}",
+            record.key.as_ref().unwrap(),
+            record.id.as_ref().unwrap()
+        );
+        assert!(prepared.lines().any(|line| line == mapping));
+    }
+    assert_eq!(snapshot(&f), before);
+
+    let applied = f.ok(&["import", "apply", path.to_str().unwrap()]);
+    assert!(!applied.contains('\u{1b}'));
+    assert_eq!(
+        applied.lines().next().unwrap(),
+        format!("Applied: storage applied; declaration updated: {displayed_path}")
+    );
+    for record in declaration.records() {
+        let mapping = format!(
+            "{} -> {}",
+            record.key.as_ref().unwrap(),
+            record.id.as_ref().unwrap()
+        );
+        assert!(applied.lines().any(|line| line == mapping));
+    }
+    assert_eq!(f.record_files().len(), declaration.records().count());
+}
+
+#[cfg(unix)]
+#[test]
 fn declaration_prepare_reports_applied_file_when_output_fails() {
     use std::os::fd::{FromRawFd, OwnedFd};
     let f = Fixture::new();
@@ -703,8 +751,10 @@ fn declaration_keeps_a_valid_written_id_and_rejects_ids_outside_the_character_ru
     }
 }
 
-#[test]
-fn declaration_rejects_external_kind_changes_before_apply_and_on_retry() {
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(8))]
+    #[test]
+    fn declaration_rejects_external_kind_changes_before_apply_and_on_retry(title in "[A-Za-z][A-Za-z0-9]{0,12}") {
     for external_kind in ["issue", "group"] {
         let f = Fixture::new();
         f.ok(&["init", "demo"]);
@@ -720,7 +770,7 @@ fn declaration_rejects_external_kind_changes_before_apply_and_on_retry() {
         ]));
         let original = snapshot(&f);
         let mut d = declaration::parse(&f.ok(&["export", &selected])).unwrap();
-        d.issues[0].title = "Edited".into();
+        d.issues[0].title = title.clone();
         let valid = d.serialize(&view_of(&original)).unwrap();
         let path = f.0.join("plan.yaml");
         for retry in [false, true] {
@@ -752,5 +802,61 @@ fn declaration_rejects_external_kind_changes_before_apply_and_on_retry() {
             fs::write(&path, d.serialize(&view_of(&before)).unwrap()).unwrap();
             f.ok(&["import", "check", path.to_str().unwrap()]);
         }
+    }
+}
+}
+
+#[cfg(unix)]
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(8))]
+    #[test]
+    fn declaration_cli_preserves_input_on_rejection_and_retries_generated_plans(
+        title in "[A-Za-z][A-Za-z0-9]{0,12}",
+        control in 27u8..32,
+    ) {
+    for control in [10, control] {
+        let f = Fixture::new();
+        f.ok(&["init", "demo"]);
+        let before = snapshot(&f);
+        let path = f.0.join(format!("plan{}.yaml", char::from(control)));
+        let mut plan = declaration::example();
+        plan.groups[0].title = title.clone();
+        let input = plan.serialize(&view_of(&before)).unwrap();
+        fs::write(&path, &input).unwrap();
+        let output = f.ok(&["import", "prepare", path.to_str().unwrap()]);
+        let escaped = if control == 10 { "\\n".into() } else { format!("\\x{control:02x}") };
+        assert_eq!(
+            output.lines().next().unwrap(),
+            format!("Prepared {}. Storage unchanged.", path.display().to_string().replace(char::from(control), &escaped))
+        );
+        assert_eq!(snapshot(&f), before);
+        let prepared = fs::read_to_string(&path).unwrap();
+        let checked = f.ok(&["import", "check", path.to_str().unwrap()]);
+        assert!(checked.contains("Create") || checked.contains("create") || checked.contains("changes"), "{checked}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), prepared);
+        assert_eq!(snapshot(&f), before);
+        let applied = f.ok(&["import", "apply", path.to_str().unwrap()]);
+        let saved = snapshot(&f);
+        assert_eq!(view_of(&saved).known().count(), 3);
+        let result = declaration::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(result.groups[0].title, title);
+        assert!(result.records().all(|r| r.id.is_some() && r.base.is_some()));
+        assert!(applied.contains("plan -> "));
+        fs::write(&path, prepared).unwrap();
+        assert!(f.ok(&["import", "apply", path.to_str().unwrap()]).contains("no-op"));
+        assert_eq!(snapshot(&f), saved);
+        let rejected = fs::read_to_string(&path).unwrap();
+        let bad_bytes = rejected.replacen(
+            &format!("id: {}", result.groups[0].id.as_ref().unwrap()),
+            &format!("id: Bad_{}", control),
+            1,
+        );
+        fs::write(&path, &bad_bytes).unwrap();
+        for command in ["prepare", "check", "apply"] {
+            assert!(failure(f.run(&["import", command, path.to_str().unwrap()])).contains("invalid EntityId"));
+            assert_eq!(fs::read_to_string(&path).unwrap(), bad_bytes);
+            assert_eq!(snapshot(&f), saved);
+        }
+    }
     }
 }

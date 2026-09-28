@@ -712,6 +712,59 @@ fn init_reuses_the_residue_of_an_interrupted_initialization_and_refuses_anything
     }
 }
 
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(12))]
+    #[test]
+    fn generated_initialization_residue_is_reused_only_without_foreign_files(
+        parts in prop::collection::vec(any::<bool>(), 4..5),
+        crlf in any::<bool>(),
+        foreign in 0u8..4,
+    ) {
+      for (parts, crlf, foreign) in [(parts, crlf, foreign), (vec![true; 4], true, 0)] {
+        let f = Fixture::new();
+        let directory = f.0.join(".axon");
+        fs::create_dir_all(directory.join("records/ab")).unwrap();
+        fs::write(directory.join("write.lock"), b"").unwrap();
+        fs::write(directory.join("header.json.tmp"), b"partial").unwrap();
+        if parts[0] {
+            let ignore = if crlf { "*.lock\r\n*.tmp\r\n" } else { "*.lock\n*.tmp\n" };
+            fs::write(directory.join(".gitignore"), ignore).unwrap();
+        }
+        if parts[1] {
+            let attributes = if crlf { "* -text\r\n" } else { "* -text\n" };
+            fs::write(directory.join(".gitattributes"), attributes).unwrap();
+        }
+        if parts[2] {
+            fs::write(directory.join("records/ab/leftover.tmp"), b"partial").unwrap();
+        }
+        if parts[3] {
+            fs::write(directory.join("other.tmp"), b"partial").unwrap();
+        }
+        let obstruction = match foreign {
+            0 => None,
+            1 => Some(("records/ab/foreign", b"x".as_slice())),
+            2 => Some(("state.jsonl", b"old\n".as_slice())),
+            _ => Some((".gitignore", b"# foreign\n".as_slice())),
+        };
+        if let Some((name, bytes)) = obstruction {
+            fs::write(directory.join(name), bytes).unwrap();
+        }
+        if let Some((name, bytes)) = obstruction {
+            let error = failure(f.run(&["init", "t"]));
+            prop_assert!(error.contains(name));
+            prop_assert_eq!(fs::read(directory.join(name)).unwrap(), bytes);
+            prop_assert!(!header(&f.0).exists());
+        } else {
+            f.ok(&["init", "t"]);
+            prop_assert!(header(&f.0).is_file());
+            prop_assert_eq!(fs::read(directory.join(".gitignore")).unwrap(), b"*.lock\n*.tmp\n");
+            prop_assert_eq!(fs::read(directory.join(".gitattributes")).unwrap(), b"* -text\n");
+            prop_assert!(f.ok(&["list"]).is_empty());
+        }
+      }
+    }
+}
+
 #[test]
 fn storage_check_from_a_linked_worktree_reports_the_main_worktree_headerless_store() {
     let f = repository();

@@ -265,6 +265,119 @@ fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() 
     assert!(f.ok(&["list"]).contains(&group));
     assert!(f.ok(&["show", &id]).contains("Issue  Ready  job"));
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(12))]
+    #[test]
+    fn generated_corrupt_files_are_reported_by_path(
+        extra_kinds in prop::collection::vec(0u8..5, 0..3)
+    ) {
+        let kinds: Vec<_> = [0, 1].into_iter().chain(extra_kinds).collect();
+        let f = Fixture::new();
+        f.init();
+        let ids: Vec<_> = (0..kinds.len()).map(|index| f.accepted(&format!("record {index}"))).collect();
+        let relatives: Vec<_> = ids.iter().map(|id| record_paths_of(&f.0, id).remove(0)).collect();
+        let mut corrupt_paths = Vec::new();
+        for (index, (relative, kind)) in relatives.into_iter().zip(&kinds).enumerate() {
+            let path = f.records_dir().join(&relative);
+            let bytes = fs::read(&path).unwrap();
+            let damaged = match kind {
+                0 => {
+                    fs::write(&path, &bytes[..bytes.len() - 1]).unwrap();
+                    relative
+                }
+                1 => {
+                    fs::write(&path, b"").unwrap();
+                    relative
+                }
+                2 => {
+                    let changed = String::from_utf8(bytes).unwrap().replace("\n", "\r\n");
+                    fs::write(&path, changed).unwrap();
+                    relative
+                }
+                3 => {
+                    let destination = relative.with_file_name(format!("stray-{index}"));
+                    fs::rename(&path, f.records_dir().join(&destination)).unwrap();
+                    destination
+                }
+                _ => {
+                    let wrong = if relative.parent().unwrap() == Path::new("00") { "ff" } else { "00" };
+                    let destination = PathBuf::from(wrong).join(relative.file_name().unwrap());
+                    fs::create_dir_all(f.records_dir().join(wrong)).unwrap();
+                    fs::rename(&path, f.records_dir().join(&destination)).unwrap();
+                    destination
+                }
+            };
+            corrupt_paths.push(damaged);
+        }
+        let before = f.record_files();
+        let check = failure(f.run(&["storage", "check"]));
+        let count = format!("{} corrupt files", kinds.len());
+        prop_assert!(check.contains(&count));
+        if kinds.contains(&2) {
+            prop_assert!(check.contains("CRLF"));
+        }
+        for path in &corrupt_paths {
+            let displayed = path.display().to_string();
+            prop_assert!(check.contains(&displayed));
+        }
+        prop_assert!(!check.contains("Conflicted:") && !check.contains("Violation:"));
+        prop_assert!(failure(f.run(&["list"])).contains("corrupt"));
+        prop_assert!(failure(f.run(&["capture", "--title", "rejected"])).contains("corrupt"));
+        prop_assert_eq!(f.record_files(), before);
+    }
+}
+
+#[test]
+fn all_storage_problem_combinations_keep_their_severity() {
+    for mask in 0u8..8 {
+        let f = Fixture::new();
+        f.init();
+        let contested = f.accepted("contested");
+        let dependent = f.accepted("dependent");
+        let missing = f.accepted("missing dependency");
+        f.ok(&["dep", "add", &dependent, "--needs", &missing]);
+        let gapped = f.accepted("gapped");
+        let created = record_paths_of(&f.0, &gapped).remove(0);
+        f.ok(&["start", &gapped]);
+        let other = copy_store(&f);
+        if mask & 1 != 0 {
+            f.ok(&["start", &contested]);
+            other.ok(&["start", &contested]);
+            merge_records(&other.0, &f.0);
+        }
+        if mask & 2 != 0 {
+            for relative in record_paths_of(&f.0, &missing) {
+                fs::remove_file(f.records_dir().join(relative)).unwrap();
+            }
+        }
+        if mask & 4 != 0 {
+            fs::remove_file(f.records_dir().join(created)).unwrap();
+        }
+        let check = f.run(&["storage", "check"]);
+        assert_eq!(check.status.success(), mask & 3 == 0, "mask {mask}");
+        let report = format!(
+            "{}{}",
+            String::from_utf8_lossy(&check.stdout),
+            String::from_utf8_lossy(&check.stderr)
+        );
+        assert_eq!(
+            report.contains("Conflicted:"),
+            mask & 1 != 0,
+            "mask {mask}: {report}"
+        );
+        assert_eq!(
+            report.contains("Violation:"),
+            mask & 2 != 0,
+            "mask {mask}: {report}"
+        );
+        assert_eq!(
+            report.contains("Missing parent records:"),
+            mask & 4 != 0,
+            "mask {mask}: {report}"
+        );
+    }
+}
 fn file_name(relative: &Path) -> String {
     relative.file_name().unwrap().to_str().unwrap().to_string()
 }

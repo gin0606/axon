@@ -1002,6 +1002,7 @@ mod tests {
     use super::*;
     use crate::lifecycle::record::{Entry, Recorder};
     use chrono::{TimeZone, Utc};
+    use proptest::prelude::*;
 
     fn id(value: &str) -> EntityId {
         value.to_owned().try_into().unwrap()
@@ -1676,36 +1677,354 @@ mod tests {
         assert!(hollow.stall.unwrap().own_condition_unsatisfied.is_empty());
     }
 
-    #[test]
-    fn descendants_are_preorder_with_sibling_structure_and_terminal_counts() {
-        let mut f = Fixture::new();
-        f.create("root", Kind::Group, None, &[], 1);
-        f.create("subgroup", Kind::Group, Some("root"), &[], 3);
-        f.create("first", Kind::Issue, Some("root"), &[], 2);
-        f.create("nested", Kind::Issue, Some("subgroup"), &[], 4);
-        f.perform("first", Operation::Cancel);
-        f.perform("nested", Operation::Start);
-        f.perform("nested", Operation::Complete);
-        inspect(&f, "root", |value| {
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn generated_nested_group_moves_from_confirmable_to_awaiting_confirmation(
+            start in 1i64..1_000_000,
+            gaps in prop::array::uniform3(1i64..100),
+        ) {
+            let mut f = Fixture::new();
+            f.create("root", Kind::Group, None, &[], start);
+            let first_at = start + gaps[0];
+            let subgroup_at = first_at + gaps[1];
+            let nested_at = subgroup_at + gaps[2];
+            f.create("subgroup", Kind::Group, Some("root"), &[], subgroup_at);
+            f.create("first", Kind::Issue, Some("root"), &[], first_at);
+            f.create("nested", Kind::Issue, Some("subgroup"), &[], nested_at);
+            f.perform("first", Operation::Cancel);
+            f.perform("nested", Operation::Start);
+            f.perform("nested", Operation::Complete);
+            let derived = f.derived();
+            let view = View::new(&f.store, &derived);
+            let tree = detail(&view, &id("root")).unwrap().descendants.unwrap();
+            prop_assert_eq!(tree.entries.iter().map(|entry| entry.row.id.to_string()).collect::<Vec<_>>(), ["first", "subgroup", "nested"]);
+            prop_assert_eq!(tree.entries[1].row.status, Status::Confirmable);
+            prop_assert!(!tree.entries[0].last);
+            prop_assert!(tree.entries[1].last);
+            prop_assert_eq!(tree.entries[2].ancestor_last.as_slice(), [true]);
+            prop_assert_eq!((tree.completed, tree.cancelled), (1, 1));
+            prop_assert!(!tree.awaiting_confirmation);
+            f.perform("subgroup", Operation::Complete);
+            let derived = f.derived();
+            let view = View::new(&f.store, &derived);
+            prop_assert!(detail(&view, &id("root")).unwrap().descendants.unwrap().awaiting_confirmation);
+        }
+
+        #[test]
+        fn generated_prerequisites_order_known_and_missing_dependencies(
+            flags in prop::collection::vec((any::<bool>(), any::<bool>()), 0..7),
+        ) {
+            for flags in [vec![], vec![(false, false), (false, true)], flags] {
+                let mut f = Fixture::new();
+                let mut names = Vec::new();
+                for (index, (completed, missing)) in flags.iter().enumerate() {
+                    let name = format!("dep-{}", 6 - index);
+                    f.create(&name, Kind::Issue, None, &[], index as i64 + 1);
+                    if *completed {
+                        f.perform(&name, Operation::Start);
+                        f.perform(&name, Operation::Complete);
+                    }
+                    names.push((name, *completed, *missing));
+                }
+                let group_deps: Vec<_> = names.iter().enumerate().filter(|(i, _)| i % 2 == 0).map(|(_, (name, _, _))| name.as_str()).collect();
+                let leaf_deps: Vec<_> = names.iter().enumerate().filter(|(i, _)| i % 2 == 1).map(|(_, (name, _, _))| name.as_str()).collect();
+                f.create("root", Kind::Group, None, &group_deps, 100);
+                f.create("leaf", Kind::Issue, Some("root"), &leaf_deps, 101);
+                let mut store = Store::new();
+                for (_, entry) in f.store.entries() {
+                    if !names.iter().any(|(name, _, missing)| *missing && entry.entity() == &id(name)) {
+                        store.insert(entry.clone()).unwrap();
+                    }
+                }
+                let derived = store.view().unwrap();
+                let view = View::new(&store, &derived);
+                let unmet = |parity| {
+                    names.iter().enumerate().filter(|(i, (_, completed, missing))| i % 2 == parity && (!completed || *missing))
+                        .map(|(_, (name, _, missing))| (name.clone(), *missing)).collect::<Vec<_>>()
+                };
+                let ordered = |items: Vec<(String, bool)>| {
+                    let mut known: Vec<_> = items.iter().filter(|(_, missing)| !missing).cloned().collect();
+                    let mut missing: Vec<_> = items.into_iter().filter(|(_, missing)| *missing).collect();
+                    missing.sort_by(|a, b| a.0.cmp(&b.0));
+                    known.extend(missing);
+                    known
+                };
+                let group_expected = ordered(unmet(0));
+                let leaf_expected = ordered(unmet(1));
+                let leaf = detail(&view, &id("leaf")).unwrap();
+                prop_assert_eq!(leaf.row.status, if group_expected.is_empty() && leaf_expected.is_empty() { Status::Ready } else { Status::Blocked });
+                if let Some(prerequisites) = leaf.prerequisites {
+                    prop_assert_eq!(prerequisites.operation, PrerequisiteOperation::Start);
+                    prop_assert_eq!(prerequisites.dependencies.iter().map(|item| (item.id.to_string(), item.row.is_none())).collect::<Vec<_>>(), leaf_expected);
+                    prop_assert_eq!(&prerequisites.ancestor_dependencies.iter().map(|item| (item.id.to_string(), item.row.is_none())).collect::<Vec<_>>(), &group_expected);
+                } else {
+                    prop_assert!(group_expected.is_empty() && leaf_expected.is_empty());
+                }
+                let group = detail(&view, &id("root")).unwrap();
+                prop_assert_eq!(group.row.status, leaf.row.status);
+                if let Some(stall) = group.stall {
+                    prop_assert_eq!(stall.dependencies.iter().map(|item| (item.id.to_string(), item.row.is_none())).collect::<Vec<_>>(), group_expected);
+                }
+            }
+        }
+
+        #[test]
+        fn generated_containment_cycles_keep_all_reads_finite(length in 2usize..8) {
+            let mut f = Fixture::new();
+            for index in 0..length {
+                let name = format!("group-{index}");
+                let parent = (index > 0 && index + 1 < length).then(|| format!("group-{}", index - 1));
+                f.create(&name, Kind::Group, parent.as_deref(), &[], index as i64 + 1);
+                f.set_condition(&name, Some(&name));
+            }
+            f.create("leaf", Kind::Issue, Some(&format!("group-{}", length - 1)), &[], length as i64 + 1);
+            let mut other = Fixture { store: f.store.clone(), clock: std::cell::Cell::new(500) };
+            let first = other.store.set_parent(&id("group-0"), Some(id(&format!("group-{}", length - 1))), other.tick()).unwrap().unwrap();
+            other.insert(first);
+            let last = format!("group-{}", length - 1);
+            let before_last = format!("group-{}", length - 2);
+            let second = f.store.set_parent(&id(&last), Some(id(&before_last)), f.tick()).unwrap().unwrap();
+            f.insert(second);
+            f.store.absorb(&other.store);
+            let derived = f.derived();
+            let view = View::new(&f.store, &derived);
+            prop_assert_eq!(list(&view, |_, _| true, None).len(), length + 1);
+            for index in 0..length {
+                let name = format!("group-{index}");
+                let row = detail(&view, &id(&name)).unwrap();
+                prop_assert!(row.row.invalid);
+                let found: BTreeSet<_> = row.descendants.unwrap().entries.iter().map(|entry| entry.row.id.to_string()).collect();
+                let expected: BTreeSet<_> = (0..length).filter(|other| *other != index).map(|other| format!("group-{other}")).chain(std::iter::once("leaf".into())).collect();
+                prop_assert_eq!(found, expected);
+            }
+            let mut calls = Vec::new();
+            let rows = candidates::<Error>(&view, CandidateList::Tasks, |_| true, |entity, _| {
+                calls.push(entity.clone());
+                Ok(true)
+            }, None).unwrap();
+            prop_assert_eq!(ids(&rows).into_iter().collect::<BTreeSet<_>>(), (0..length).map(|index| format!("group-{index}")).chain(std::iter::once("leaf".into())).collect());
+            prop_assert!(calls.len() <= length);
+        }
+
+        #[test]
+        fn generated_completion_cycles_name_each_member(length in 2usize..8) {
+            let mut f = Fixture::new();
+            for index in 0..length {
+                f.create(&format!("work-{index}"), Kind::Issue, None, &[], index as i64 + 1);
+            }
+            let mut other = Fixture { store: f.store.clone(), clock: std::cell::Cell::new(500) };
+            for index in 0..length - 1 {
+                f.add_dependency(&format!("work-{index}"), &format!("work-{}", index + 1));
+            }
+            other.add_dependency(&format!("work-{}", length - 1), "work-0");
+            f.store.absorb(&other.store);
+            let derived = f.derived();
+            let view = View::new(&f.store, &derived);
+            for index in 0..length {
+                let value = detail(&view, &id(&format!("work-{index}"))).unwrap();
+                prop_assert!(value.row.invalid);
+                let cycle = value.violations.iter().find(|violation| violation.kind == ViolationKind::CompletionCycle).unwrap();
+                prop_assert_eq!(related_ids(&cycle.related), [format!("work-{}", (index + 1) % length)]);
+                prop_assert_eq!(value.row.status, Status::Blocked);
+            }
+            prop_assert_eq!(candidates::<Error>(&view, CandidateList::Tasks, |_| true, |_, _| Ok(true), None).unwrap().len(), length);
+        }
+
+        #[test]
+        fn generated_unsettled_ancestors_block_reads(
+            length in 1usize..7,
+            broken in 0usize..6,
+        ) {
+            let broken = broken % length;
+            for mode in 0..3 {
+            let mut f = Fixture::new();
+            for index in 0..length {
+                let name = format!("group-{index}");
+                let parent = (index > 0).then(|| format!("group-{}", index - 1));
+                f.create(&name, Kind::Group, parent.as_deref(), &[], index as i64 + 1);
+            }
+            f.create("leaf", Kind::Issue, Some(&format!("group-{}", length - 1)), &[], length as i64 + 1);
+            let broken_id = id(&format!("group-{broken}"));
+            if mode == 1 {
+                let mut other = Fixture { store: f.store.clone(), clock: std::cell::Cell::new(500) };
+                let theirs = other.store.write(&broken_id, Some("theirs".into()), None, other.tick()).unwrap().unwrap();
+                other.insert(theirs);
+                let ours = f.store.write(&broken_id, Some("ours".into()), None, f.tick()).unwrap().unwrap();
+                f.insert(ours);
+                f.store.absorb(&other.store);
+            } else if mode == 0 {
+                let mut alone = Store::new();
+                for (_, entry) in f.store.entries() {
+                    if entry.entity() != &broken_id { alone.insert(entry.clone()).unwrap(); }
+                }
+                f.store = alone;
+            } else {
+                f.perform(&format!("group-{broken}"), Operation::Withdraw);
+            }
+            let derived = f.derived();
+            let view = View::new(&f.store, &derived);
+            let leaf = detail(&view, &id("leaf")).unwrap();
+            prop_assert_eq!(leaf.row.status, Status::Blocked);
+            let ancestors = leaf.prerequisites.unwrap().ancestors;
+            prop_assert_eq!(ancestors.len(), 1);
+            prop_assert_eq!(&ancestors[0].id, &broken_id);
+            prop_assert_eq!(ancestors[0].row.as_ref().map(|row| row.status), match mode { 0 => None, 1 => Some(Status::Conflicted), _ => Some(Status::Undecided) });
+            let rows = candidates::<Error>(&view, CandidateList::Tasks, |_| true, |_, _| Ok(true), None).unwrap();
+            prop_assert_eq!(rows.iter().find(|row| *row.id == id("leaf")).unwrap().status, Status::Blocked);
+            prop_assert_eq!(rows.iter().any(|row| row.id == &broken_id), false);
+            }
+        }
+
+        #[test]
+        fn generated_group_situation_and_tree_follow_child_states(
+            states in prop::collection::vec(0u8..5, 0..7),
+            times in prop::collection::vec(any::<u8>(), 0..7),
+        ) {
+            for states in [vec![], vec![1], vec![2], vec![3], vec![0], states] {
+            let mut f = Fixture::new();
+            f.create("root", Kind::Group, None, &[], 1);
+            let mut children = Vec::new();
+            for (index, state) in states.iter().enumerate() {
+                let name = format!("child-{index}");
+                let at = 10 + times.get(index).copied().unwrap_or(0) as i64 * 8 + index as i64;
+                f.create(&name, Kind::Issue, Some("root"), &[], at);
+                match state {
+                    0 => f.perform(&name, Operation::Withdraw),
+                    2 => f.perform(&name, Operation::Start),
+                    3 => { f.perform(&name, Operation::Start); f.perform(&name, Operation::Complete); }
+                    4 => f.perform(&name, Operation::Cancel),
+                    _ => {}
+                }
+                children.push((name, at, *state));
+            }
+            children.sort_by_key(|(name, at, _)| (*at, name.clone()));
+            let expected = if children.is_empty() {
+                Status::Empty
+            } else if children.iter().all(|(_, _, state)| *state >= 3) {
+                Status::Confirmable
+            } else if children.iter().any(|(_, _, state)| *state == 1) {
+                Status::Ready
+            } else if children.iter().any(|(_, _, state)| *state == 2 || *state == 3) {
+                Status::InProgress
+            } else {
+                Status::Blocked
+            };
+            let derived = f.derived();
+            let view = View::new(&f.store, &derived);
+            prop_assert_eq!(view.status(&id("root")), expected);
+            let value = detail(&view, &id("root")).unwrap();
             let tree = value.descendants.unwrap();
-            assert_eq!(
-                tree.entries
-                    .iter()
-                    .map(|e| e.row.id.to_string())
-                    .collect::<Vec<_>>(),
-                ["first", "subgroup", "nested"]
-            );
-            assert_eq!(tree.entries[1].row.status, Status::Confirmable);
-            assert!(!tree.entries[0].last);
-            assert!(tree.entries[1].last);
-            assert_eq!(tree.entries[2].ancestor_last, [true]);
-            assert_eq!((tree.completed, tree.cancelled), (1, 1));
-            assert!(!tree.awaiting_confirmation);
-        });
-        f.perform("subgroup", Operation::Complete);
-        inspect(&f, "root", |value| {
-            assert!(value.descendants.unwrap().awaiting_confirmation)
-        });
+            prop_assert_eq!(tree.entries.iter().map(|entry| entry.row.id.to_string()).collect::<Vec<_>>(), children.iter().map(|(name, _, _)| name.clone()).collect::<Vec<_>>());
+            prop_assert_eq!(tree.entries.iter().map(|entry| entry.last).collect::<Vec<_>>(), (0..children.len()).map(|index| index + 1 == children.len()).collect::<Vec<_>>());
+            prop_assert!(tree.entries.iter().all(|entry| entry.ancestor_last.is_empty()));
+            prop_assert_eq!((tree.completed, tree.cancelled), (
+                children.iter().filter(|(_, _, state)| *state == 3).count(),
+                children.iter().filter(|(_, _, state)| *state == 4).count(),
+            ));
+            prop_assert_eq!(tree.awaiting_confirmation, expected == Status::Confirmable);
+            prop_assert_eq!(value.stall.is_some(), matches!(expected, Status::Blocked | Status::InProgress) && !children.iter().any(|(_, _, state)| *state == 2));
+            }
+        }
+
+        #[test]
+        fn generated_nested_tree_preserves_branch_markers_and_counts(
+            left in prop::collection::vec(0u8..3, 0..4),
+            right in prop::collection::vec(0u8..3, 0..4),
+        ) {
+            let mut f = Fixture::new();
+            f.create("root", Kind::Group, None, &[], 1);
+            f.create("left", Kind::Group, Some("root"), &[], 2);
+            f.create("right", Kind::Group, Some("root"), &[], 3);
+            for (side, states) in [("left", &left), ("right", &right)] {
+                for (index, state) in states.iter().enumerate() {
+                    let name = format!("{side}-{index}");
+                    f.create(&name, Kind::Issue, Some(side), &[], 10 + index as i64);
+                    match state {
+                        1 => { f.perform(&name, Operation::Start); f.perform(&name, Operation::Complete); }
+                        2 => f.perform(&name, Operation::Cancel),
+                        _ => {}
+                    }
+                }
+            }
+            let derived = f.derived();
+            let view = View::new(&f.store, &derived);
+            let tree = detail(&view, &id("root")).unwrap().descendants.unwrap();
+            let mut expected = Vec::new();
+            for (side, states, ancestor_last) in [("left", &left, false), ("right", &right, true)] {
+                expected.push((side.to_owned(), ancestor_last, Vec::new()));
+                for index in 0..states.len() {
+                    expected.push((format!("{side}-{index}"), index + 1 == states.len(), vec![ancestor_last]));
+                }
+            }
+            prop_assert_eq!(tree.entries.iter().map(|entry| (entry.row.id.to_string(), entry.last, entry.ancestor_last.clone())).collect::<Vec<_>>(), expected);
+            prop_assert_eq!((tree.completed, tree.cancelled), (
+                left.iter().chain(&right).filter(|state| **state == 1).count(),
+                left.iter().chain(&right).filter(|state| **state == 2).count(),
+            ));
+            prop_assert!(!tree.awaiting_confirmation);
+        }
+
+        #[test]
+        fn generated_condition_reads_short_circuit_share_and_retry(
+            root_ok in any::<bool>(),
+            first_ok in any::<bool>(),
+            second_ok in any::<bool>(),
+            failing in 0usize..4,
+        ) {
+            for (root_ok, first_ok, second_ok, failing) in [
+                (false, false, false, 3),
+                (true, false, false, 3),
+                (true, true, false, 3),
+                (true, false, true, 3),
+                (true, true, true, 0),
+                (true, true, true, 1),
+                (true, true, true, 2),
+                (root_ok, first_ok, second_ok, failing),
+            ] {
+            let mut f = Fixture::new();
+            f.create("root", Kind::Group, None, &[], 1);
+            f.create("first", Kind::Issue, Some("root"), &[], 2);
+            f.create("second", Kind::Issue, Some("root"), &[], 3);
+            for name in ["root", "first", "second"] {
+                f.set_condition(name, Some(name));
+            }
+            let derived = f.derived();
+            let view = View::new(&f.store, &derived);
+            let values = [root_ok, first_ok, second_ok];
+            let expected_calls = if root_ok { &["root", "first", "second"][..] } else { &["root"][..] };
+            for _ in 0..2 {
+                let mut calls = Vec::new();
+                let rows = candidates::<Error>(&view, CandidateList::Tasks,
+                    |entity| entity == &id("root"),
+                    |entity, _| {
+                        let index = ["root", "first", "second"].iter().position(|name| entity == &id(name)).unwrap();
+                        calls.push(entity.to_string());
+                        if index == failing { Err(Error("condition failed".into())) } else { Ok(values[index]) }
+                    }, None);
+                let fails = failing == 0 || (root_ok && failing < 3);
+                prop_assert_eq!(rows.is_err(), fails);
+                if fails {
+                    prop_assert_eq!(calls.as_slice(), &expected_calls[..=failing]);
+                } else {
+                    prop_assert_eq!(calls, expected_calls);
+                    let rows = rows.unwrap();
+                    prop_assert_eq!(rows.len(), usize::from(root_ok));
+                    if root_ok {
+                        prop_assert_eq!(rows[0].status, if first_ok || second_ok { Status::Ready } else { Status::Blocked });
+                    }
+                }
+            }
+            let mut calls = Vec::new();
+            let shown = detail_with::<Error>(&view, &id("root"), |entity, _| {
+                calls.push(entity.to_string());
+                Ok(values[["root", "first", "second"].iter().position(|name| entity == &id(name)).unwrap()])
+            }).unwrap();
+            prop_assert_eq!(calls, expected_calls);
+            prop_assert_eq!(shown.row.status, if root_ok && (first_ok || second_ok) { Status::Ready } else { Status::Blocked });
+            }
+        }
     }
 
     #[test]
@@ -1968,6 +2287,99 @@ mod tests {
         right.perform("item", Operation::Cancel);
         left.store.absorb(&right.store);
         assert_eq!(heads_of(&left.store), [false, false]);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn generated_gap_heads_follow_parent_paths(seed in any::<u16>(), branches in prop::collection::vec(any::<bool>(), 0..4)) {
+            let item = id("item");
+            let mut base = Fixture::new();
+            base.create("item", Kind::Issue, None, &[], seed as i64 + 10);
+            let created = base.store.view().unwrap().head(&item).unwrap().clone();
+            let mut left = Fixture { store: base.store.clone(), clock: std::cell::Cell::new(seed as i64 + 100) };
+            left.perform("item", Operation::Start);
+            let start = left.store.view().unwrap().head(&item).unwrap().clone();
+            left.perform("item", Operation::Release);
+            let released = left.store.view().unwrap().head(&item).unwrap().clone();
+            let mut right = Fixture { store: base.store.clone(), clock: std::cell::Cell::new(seed as i64 + 200) };
+            right.perform("item", Operation::Cancel);
+            let cancelled = right.store.view().unwrap().head(&item).unwrap().clone();
+            left.store.absorb(&right.store);
+            let resolved = left.store.resolve(&item, &released, None, context(seed as i64 + 300)).unwrap();
+            let resolved = left.store.insert(Entry::Record(resolved)).unwrap();
+
+            let without = |source: &Store, omitted: &[RecordId]| {
+                let mut store = Store::new();
+                for (record_id, record) in source.records() {
+                    if !omitted.contains(record_id) {
+                        store.insert(Entry::Record(record.clone())).unwrap();
+                    }
+                }
+                store
+            };
+            let mut true_left = Fixture { store: left.store.clone(), clock: std::cell::Cell::new(seed as i64 + 400) };
+            let mut true_right = Fixture { store: left.store.clone(), clock: std::cell::Cell::new(seed as i64 + 500) };
+            true_left.perform("item", Operation::Start);
+            true_right.perform("item", Operation::Cancel);
+            true_left.store.absorb(&true_right.store);
+            let true_conflict = without(&true_left.store, std::slice::from_ref(&start));
+            prop_assert_eq!(true_conflict.view().unwrap().heads(&item).unwrap().len(), 2);
+
+            let mut later = Fixture { store: left.store.clone(), clock: std::cell::Cell::new(seed as i64 + 600) };
+            later.perform("item", Operation::Start);
+            later.perform("item", Operation::Release);
+            later.perform("item", Operation::Start);
+            let last = later.store.view().unwrap().head(&item).unwrap().clone();
+            let mut false_conflict = without(&left.store, std::slice::from_ref(&start));
+            false_conflict.insert(Entry::Record(later.store.record(&last).unwrap().clone())).unwrap();
+            prop_assert_eq!(false_conflict.view().unwrap().heads(&item).unwrap().len(), 2);
+
+            let mut branched = left.store.clone();
+            for (index, extend) in branches.iter().enumerate() {
+                let mut fork = Fixture { store: left.store.clone(), clock: std::cell::Cell::new(seed as i64 + 700 + index as i64 * 10) };
+                fork.perform("item", Operation::Start);
+                if *extend {
+                    fork.perform("item", Operation::Release);
+                }
+                branched.absorb(&fork.store);
+            }
+            let cases = [
+                (left.store.clone(), false),
+                (without(&left.store, std::slice::from_ref(&start)), true),
+                (without(&left.store, std::slice::from_ref(&released)), true),
+                (without(&left.store, &[created.clone(), start.clone()]), true),
+                (true_conflict, true),
+                (false_conflict, true),
+            ].into_iter().chain(std::iter::once((without(&branched, std::slice::from_ref(&start)), true)));
+            for (store, has_gap) in cases {
+                let derived = store.view().unwrap();
+                let view = View::new(&store, &derived);
+                let records: Vec<_> = store.records().filter(|(_, record)| record.entity == item).collect();
+                let oldest = records.iter().filter(|(_, record)| record.kind == RecordKind::Created)
+                    .min_by_key(|(record_id, record)| (record.at, *record_id))
+                    .or_else(|| records.iter().filter(|(_, record)| record.parents.iter().all(|parent| !store.contains(parent)))
+                        .min_by_key(|(record_id, record)| (record.at, *record_id)))
+                    .unwrap().0;
+                for head in view.heads(&item) {
+                    let mut pending = vec![head.id];
+                    let mut seen = BTreeSet::new();
+                    while let Some(record_id) = pending.pop() {
+                        if seen.insert(record_id) && let Some(record) = store.record(record_id) {
+                            pending.extend(record.parents.iter());
+                        }
+                    }
+                    let expected = derived.gaps().contains_key(&item)
+                        && (head.record.parents.iter().any(|parent| !store.contains(parent))
+                            || !seen.contains(oldest));
+                    prop_assert_eq!(head.likely_newer, expected);
+                }
+                prop_assert_eq!(derived.gaps().contains_key(&item), has_gap);
+            }
+            prop_assert!(left.store.contains(&cancelled));
+            prop_assert!(left.store.contains(&resolved));
+        }
     }
 
     #[test]

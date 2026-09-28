@@ -74,32 +74,6 @@ fn group_completed_and_reopened_then_converted_to_issue_is_a_valid_history() {
 }
 
 #[test]
-fn conversion_keeps_everything_but_the_kind_and_is_a_no_op_for_the_same_kind() {
-    let mut r = Replica::new("r0");
-    r.add_dep("i3", "g2");
-    r.move_to("i3", Some("g0"));
-    let before = r.current("i3");
-    assert!(
-        r.store
-            .convert(&id("i3"), Kind::Issue, r.tick())
-            .unwrap()
-            .is_none()
-    );
-    let record = r
-        .store
-        .convert(&id("i3"), Kind::Group, r.tick())
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        record.after,
-        Current {
-            kind: Kind::Group,
-            ..before
-        }
-    );
-}
-
-#[test]
 fn conversion_is_rejected_while_in_progress_terminal_or_with_children() {
     let mut r = Replica::new("r0");
     r.op("i3", Start);

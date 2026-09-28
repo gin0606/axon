@@ -1,6 +1,7 @@
 //! One record file: canonical bytes, the ID as their hash, and everything decode rejects.
 use super::*;
 use Operation::*;
+use proptest::prelude::*;
 
 fn store_with_every_kind() -> (Store, Vec<RecordId>) {
     let mut r = Replica::new("r0");
@@ -52,6 +53,22 @@ fn store_with_every_kind() -> (Store, Vec<RecordId>) {
     ids.push(r.resolve("i3", &mine));
     ids.push(r.note("i3", "a note"));
     (r.store, ids)
+}
+
+fn json_value() -> impl Strategy<Value = serde_json::Value> {
+    let leaf = prop_oneof![
+        Just(serde_json::Value::Null),
+        any::<bool>().prop_map(serde_json::Value::Bool),
+        any::<i64>().prop_map(|n| serde_json::json!(n)),
+        any::<String>().prop_map(serde_json::Value::String),
+    ];
+    leaf.prop_recursive(3, 32, 4, |inner| {
+        prop_oneof![
+            prop::collection::vec(inner.clone(), 0..4).prop_map(serde_json::Value::Array),
+            prop::collection::btree_map("[a-z]{1,6}", inner, 0..4)
+                .prop_map(|items| serde_json::Value::Object(items.into_iter().collect())),
+        ]
+    })
 }
 
 #[test]
@@ -422,4 +439,182 @@ fn impossible_transitions_and_conversions_are_rejected_without_their_parent() {
         1,
     );
     assert!(error(decode(doubled.as_bytes())).contains("duplicate parent"));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn generated_entries_keep_canonical_bytes_and_hash(
+        body in any::<String>(),
+        json in json_value(),
+    ) {
+        let (store, ids) = store_with_every_kind();
+        for (body, number) in [
+            (body.as_str(), "0"), ("日本語\n🚀", "-1"), (body.as_str(), "1.0"),
+            ("日本語\n🚀", "1e+5"), (body.as_str(), "12345678901234567890123456789"),
+        ] {
+        for id in &ids {
+            let mut entry = store.get(id).unwrap().clone();
+            match &mut entry {
+                Entry::Record(record) => record.after.description = body.into(),
+                Entry::Note(note) => note.body = if body.trim().is_empty() { "note".into() } else { body.into() },
+            }
+            if let Entry::Note(note) = &mut entry {
+                note.recorder = Some(Recorder {
+                    actor: "generated".into(),
+                    data: BTreeMap::from([
+                        ("number".into(), serde_json::from_str(number).unwrap()),
+                        ("value".into(), json.clone()),
+                    ]),
+                });
+            }
+            let bytes = encode(&entry).unwrap();
+            let expected_id = RecordId::of(&bytes);
+            prop_assert_eq!(&expected_id.to_string()[..2], expected_id.subdirectory());
+            let (decoded_id, decoded) = decode(&bytes).unwrap();
+            prop_assert_eq!(decoded_id, expected_id.clone());
+            prop_assert_eq!(&decoded, &entry);
+            prop_assert_eq!(&decode_as(&expected_id, &bytes).unwrap(), &decoded);
+            prop_assert_eq!(encode(&decoded).unwrap(), bytes);
+        }
+        }
+    }
+
+    #[test]
+    fn generated_record_damage_is_rejected(body in "[a-z]{1,12}") {
+        let (store, ids) = store_with_every_kind();
+        for id in &ids {
+        let mut entry = store.get(id).unwrap().clone();
+        if let Entry::Record(record) = &mut entry { record.after.description = body.clone(); }
+        let bytes = encode(&entry).unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        for damage in 0..5 {
+        let bad = match damage {
+            0 => text.replacen("\"entity\":\"i3\",", "", 1),
+            1 => text.replacen("\"entity\":\"i3\"", "\"entity\":123", 1),
+            2 => text.replacen("\"entity\":\"i3\"", "\"entity\":\"i3\",\"entity\":\"i3\"", 1),
+            3 => text.replacen("\"entity\":\"i3\"", "\"entity\":\"i3\",\"extra\":true", 1),
+            _ => text.replacen("\"entity\":\"i3\",", "\"entity\": \"i3\",", 1),
+        };
+        prop_assert!(decode(bad.as_bytes()).is_err(), "{bad}");
+        let altered = RecordId::of(bad.as_bytes());
+        prop_assert_ne!(altered.clone(), id.clone());
+        prop_assert!(decode_as(id, bad.as_bytes()).is_err());
+        }
+        }
+    }
+
+    #[test]
+    fn generated_headers_round_trip_and_reject_damage(
+        prefix in "[a-z][a-z0-9-]{0,15}[a-z0-9]",
+    ) {
+        let header = Header::new(&prefix).unwrap();
+        let bytes = encode_header(&header).unwrap();
+        prop_assert_eq!(decode_header(&bytes).unwrap(), header);
+        let text = String::from_utf8(bytes).unwrap();
+        for damage in 0..4 {
+        let bad = match damage {
+            0 => text.replacen(HEADER_FORMAT, "unknown/v2", 1),
+            1 => text.replacen("\"prefix\":", "\"other\":", 1),
+            2 => text.replacen(&format!("\"prefix\":\"{prefix}\""), "\"prefix\":\"-bad\"", 1),
+            _ => text.replacen("\"format\":", "\"format\":null,\"format\":", 1),
+        };
+        prop_assert!(decode_header(bad.as_bytes()).is_err(), "{bad}");
+        }
+        for bad_prefix in ["", "-bad", "bad-", "Upper", "space here", "under_score", "日本語"] {
+            let bad = text.replacen(&format!("\"prefix\":\"{prefix}\""), &format!("\"prefix\":\"{bad_prefix}\""), 1);
+            prop_assert!(decode_header(bad.as_bytes()).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn generated_parent_field_matrix_rejects_forbidden_changes(suffix in "[a-z]{1,8}") {
+        // Columns: kind, lifecycle, owner, text, parent, needs, condition.
+        const ALLOWED: [[bool; 7]; 9] = [
+            [false, true, true, false, false, false, false], // transition
+            [false, false, false, true, false, false, false], // edit
+            [false, false, false, false, true, false, false], // parent
+            [false, false, false, false, false, true, false], // dependency
+            [false, false, false, false, false, false, true], // condition
+            [false, false, false, true, true, true, false], // import
+            [false, true, true, false, false, false, false], // release transition
+            [true, false, false, false, false, false, false], // convert
+            [false; 7], // resolve repeats its chosen parent
+        ];
+        const REJECTED_WITHOUT_PARENT: [[bool; 7]; 9] = [
+            [true, true, true, false, false, false, false],
+            [true, true, false, false, false, false, false],
+            [true, true, false, false, false, false, false],
+            [true, true, false, false, false, false, false],
+            [true, true, false, false, false, false, false],
+            [true, true, false, false, false, false, false],
+            [true, true, true, false, false, false, false],
+            [false, false, true, false, false, false, false],
+            [false, false, true, false, false, false, false],
+        ];
+        let (source, ids) = store_with_every_kind();
+        let mut checked = 0;
+        for (row, record_id) in ids[1..10].iter().enumerate() {
+            for (field, allowed) in ALLOWED[row].iter().enumerate() {
+                if *allowed { continue; }
+                let mut store = Store::new();
+                let record = source.record(record_id).unwrap();
+                let mut ancestors = record.parents.iter().cloned().collect::<Vec<_>>();
+                while let Some(parent_id) = ancestors.pop() {
+                    if store.get(&parent_id).is_some() { continue; }
+                    let parent = source.record(&parent_id).unwrap();
+                    ancestors.extend(parent.parents.iter().cloned());
+                    store.insert(Entry::Record(parent.clone())).unwrap();
+                }
+                let mut damaged = record.clone();
+                match field {
+                    0 => damaged.after.kind = if damaged.after.kind == Kind::Issue { Kind::Group } else { Kind::Issue },
+                    1 => damaged.after.lifecycle = if damaged.after.lifecycle == Lifecycle::NotStarted { Lifecycle::Undecided } else { Lifecycle::NotStarted },
+                    2 => damaged.after.owner = Some(format!("owner-{suffix}")),
+                    3 => damaged.after.title.push_str(&suffix),
+                    4 => damaged.after.parent = if damaged.after.parent.is_some() { None } else { Some(id("g0")) },
+                    5 => { damaged.after.needs.insert(id(&format!("need-{suffix}"))); },
+                    _ => damaged.after.condition = Some(format!("exit 0 # {suffix}")),
+                }
+                let entry = Entry::Record(damaged);
+                let encoded = encode(&entry);
+                if REJECTED_WITHOUT_PARENT[row][field] {
+                    prop_assert!(encoded.is_err(), "record {} field {field} unexpectedly encoded", record.kind.name());
+                    continue;
+                }
+                let bytes = encoded.unwrap();
+                prop_assert!(decode(&bytes).is_ok());
+                store.insert(entry).unwrap();
+                prop_assert!(store.view().is_err(), "record {} changed field {field}", record.kind.name());
+                checked += 1;
+            }
+        }
+        prop_assert!(checked >= 20, "only {checked} encodable forbidden changes");
+    }
+
+    #[test]
+    fn generated_wrong_entity_or_kind_parent_is_rejected(
+        suffix in "[a-z]{1,8}",
+    ) {
+      for wrong_entity in [false, true] {
+        let mut replica = Replica::new("r0");
+        let parent = if wrong_entity {
+            replica.head("g0")
+        } else {
+            let conversion = replica.store.convert(&id("i3"), Kind::Group, replica.tick()).unwrap().unwrap();
+            insert(&mut replica.store, conversion)
+        };
+        let mut record = replica.store.record(&replica.head("i3")).unwrap().clone();
+        record.kind = RecordKind::Edit;
+        record.parents = BTreeSet::from([parent]);
+        record.at = replica.tick().at;
+        record.after.kind = Kind::Issue;
+        record.after.title.push_str(&suffix);
+        let bytes = encode(&Entry::Record(record.clone())).unwrap();
+        prop_assert!(decode(&bytes).is_ok());
+        replica.store.insert(Entry::Record(record)).unwrap();
+        prop_assert!(replica.store.view().is_err());
+      }
+    }
 }

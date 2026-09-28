@@ -770,6 +770,7 @@ mod tests {
 mod publication_tests {
     use super::*;
     use crate::lifecycle::record::{Context, Current, Kind, Lifecycle};
+    use proptest::prelude::*;
 
     fn fixture() -> (PathBuf, Store) {
         let root =
@@ -809,6 +810,35 @@ mod publication_tests {
             })
             .collect()
     }
+
+    fn records(count: usize) -> Vec<Entry> {
+        (0..count)
+            .map(|index| {
+                let id = format!("demo-{index}");
+                Entry::Record(
+                    record::Store::new()
+                        .create(
+                            id.clone().try_into().unwrap(),
+                            Current {
+                                kind: Kind::Issue,
+                                lifecycle: Lifecycle::NotStarted,
+                                owner: None,
+                                title: id,
+                                description: String::new(),
+                                condition: None,
+                                parent: None,
+                                needs: Default::default(),
+                            },
+                            Context {
+                                at: chrono::DateTime::from_timestamp(1000, 0).unwrap(),
+                                recorder: None,
+                            },
+                        )
+                        .unwrap(),
+                )
+            })
+            .collect()
+    }
     fn temporary_files(store: &Store) -> usize {
         let mut count = 0;
         for subdirectory in fs::read_dir(store.records_path()).unwrap() {
@@ -819,6 +849,71 @@ mod publication_tests {
             }
         }
         count
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(24))]
+        #[test]
+        fn generated_publication_failure_matches_published_files(
+            (count, existing, middle) in (3usize..7).prop_flat_map(|count| {
+                (Just(count), prop::collection::vec(any::<bool>(), count), 1..count - 1)
+            })
+        ) {
+          for scenario in 0..4 {
+            let (root, mut store) = fixture();
+            let mut existing = existing.clone();
+            let stop = if scenario == 0 || scenario == 3 { 0 } else { middle };
+            let missing_temp = scenario < 2;
+            existing[0] = scenario == 3;
+            existing[stop] = !missing_temp;
+            existing[count - 1] = true;
+            let entries = records(count);
+            let paths: Vec<_> = entries.iter().map(|entry| {
+                let id = RecordId::of(&record::encode(entry).unwrap());
+                store.records_path().join(id.subdirectory()).join(id.as_ref())
+            }).collect();
+            for (index, path) in paths.iter().enumerate() {
+                if existing[index] {
+                    fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    fs::write(path, record::encode(&entries[index]).unwrap()).unwrap();
+                }
+            }
+            let mut renamed = Vec::new();
+            let error = store.update_with(|_, _, _| Ok((entries.clone(), ())), &mut |progress| {
+                match progress {
+                    Progress::BeforePublish if missing_temp && !existing[stop] => {
+                        fs::remove_file(paths[stop].with_file_name(format!("{}{}", paths[stop].file_name().unwrap().to_str().unwrap(), TEMPORARY_SUFFIX))).unwrap();
+                    }
+                    Progress::Renamed(index) if index == stop && (!missing_temp || existing[stop]) => {
+                        return Err(invalid("injected after rename"));
+                    }
+                    _ => {}
+                }
+                Ok(())
+            }).unwrap_err();
+            for index in 0..count {
+                let published = existing[index] || index < stop || (!missing_temp && index == stop);
+                prop_assert_eq!(paths[index].exists(), published);
+                if !existing[index] && published {
+                    renamed.push(paths[index].display().to_string());
+                }
+            }
+            prop_assert_eq!(matches!(&error, Error::PublicationUnknown(_)), !renamed.is_empty());
+            if renamed.is_empty() {
+                prop_assert!(error.to_string().contains("not applied"));
+            } else {
+                let expected = format!("renamed so far: [{}]", renamed.join(", "));
+                prop_assert!(error.to_string().contains(&expected));
+            }
+            prop_assert_eq!(temporary_files(&store), 0);
+            store.update(|_, _, _| Ok((entries, ()))).unwrap();
+            prop_assert_eq!(store.read().unwrap().1.len(), count);
+            prop_assert!(paths.iter().all(|path| path.is_file()));
+            prop_assert_eq!(temporary_files(&store), 0);
+            drop(store);
+            fs::remove_dir_all(root).unwrap();
+          }
+        }
     }
 
     #[cfg(unix)]

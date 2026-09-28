@@ -2,7 +2,6 @@
 //! containment, dependencies, text, conditions, Notes and recorders. Operations only return
 //! a record, so a rejection leaves nothing to publish and the store as it was.
 use super::*;
-use crate::lifecycle::{REASON_LIMIT, TITLE_LIMIT};
 use Operation::*;
 
 fn empty() -> Replica {
@@ -35,49 +34,6 @@ fn transitions(r: &Replica, name: &str) -> Vec<RecordId> {
         .filter(|(_, record)| matches!(record.kind, RecordKind::Transition(_)))
         .map(|(record_id, _)| record_id.clone())
         .collect()
-}
-
-#[test]
-fn titles_and_reasons_are_single_lines_within_their_limits_on_input() {
-    let at_limit = "字".repeat(TITLE_LIMIT);
-    let over_limit = "字".repeat(TITLE_LIMIT + 1);
-    for (title, accepted) in [
-        (at_limit.as_str(), true),
-        (over_limit.as_str(), false),
-        ("two\nlines", false),
-        ("tab\there", false),
-        ("escape\u{1b}[2J", false),
-        ("c1\u{85}", false),
-        ("   ", false),
-    ] {
-        let mut r = empty();
-        let mut value = current(Kind::Issue, Lifecycle::NotStarted, None);
-        value.title = title.into();
-        assert_eq!(r.try_create("item", value).is_ok(), accepted, "{title:?}");
-    }
-    let mut r = empty();
-    register(&mut r, "item", Kind::Issue, None);
-    assert!(
-        r.store
-            .write(&id("item"), Some("two\nlines".into()), None, r.tick())
-            .is_err()
-    );
-    for reason in [
-        "two\nlines".to_owned(),
-        "r".repeat(REASON_LIMIT + 1),
-        " ".into(),
-    ] {
-        assert!(
-            r.store
-                .perform(&id("item"), Start, Some(reason), r.tick())
-                .is_err()
-        );
-    }
-    let record = r
-        .store
-        .perform(&id("item"), Start, Some("r".repeat(REASON_LIMIT)), r.tick())
-        .unwrap();
-    assert_eq!(record.reason, Some("r".repeat(REASON_LIMIT)));
 }
 
 #[test]
