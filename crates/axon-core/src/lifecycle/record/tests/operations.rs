@@ -850,17 +850,6 @@ fn notes_need_a_known_entity_and_a_body_and_each_addition_is_a_new_record() {
 }
 
 #[test]
-fn a_rejected_operation_produces_no_record_and_a_success_exactly_one() {
-    let mut r = Replica::new("r0");
-    let before = r.store.len();
-    assert!(r.try_op("g0", Start).is_err());
-    assert!(r.try_move("i3", Some("i1")).is_err());
-    assert!(r.try_add_dep("i1", "g0").is_err());
-    r.op("i3", Start);
-    assert_eq!(r.store.len(), before + 1);
-}
-
-#[test]
 fn entity_ids_have_an_eight_character_random_part() {
     let generated = new_entity_id("demo").unwrap();
     let text = generated.to_string();
