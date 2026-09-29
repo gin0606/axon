@@ -14,9 +14,17 @@ fn store_id_byte(byte: u8) -> bool {
 }
 macro_rules! identifier {
     ($name:ident, $valid:path, $expected:literal) => {
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-        #[serde(try_from = "String", into = "String")]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+        #[serde(try_from = "String")]
         pub struct $name(String);
+        impl Serialize for $name {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                serializer.serialize_str(&self.0)
+            }
+        }
         impl TryFrom<String> for $name {
             type Error = super::Error;
             fn try_from(value: String) -> Result<Self> {
