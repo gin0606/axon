@@ -224,27 +224,28 @@ impl View {
 
     fn derive_working(&self) -> BTreeSet<EntityId> {
         let mut working = BTreeSet::new();
-        loop {
-            let next: BTreeSet<EntityId> = self
-                .settled
-                .iter()
-                .filter(|(id, entity)| {
-                    entity.current.kind == Kind::Group
-                        && entity.current.lifecycle == Lifecycle::NotStarted
-                        && self.children(id).iter().any(|child| {
-                            matches!(
-                                self.settled[child].current.lifecycle,
-                                Lifecycle::InProgress | Lifecycle::Completed
-                            ) || working.contains(child)
-                        })
-                })
-                .map(|(id, _)| id.clone())
-                .collect();
-            if next == working {
-                return working;
+        let mut pending: Vec<_> = self
+            .settled
+            .values()
+            .filter(|entity| {
+                matches!(
+                    entity.current.lifecycle,
+                    Lifecycle::InProgress | Lifecycle::Completed
+                )
+            })
+            .filter_map(|entity| entity.current.parent.as_ref())
+            .collect();
+        while let Some(id) = pending.pop() {
+            if let Some(current) = self.current(id)
+                && current.kind == Kind::Group
+                && current.lifecycle == Lifecycle::NotStarted
+                && working.insert(id.clone())
+                && let Some(parent) = &current.parent
+            {
+                pending.push(parent);
             }
-            working = next;
         }
+        working
     }
 
     fn derive_violations(&self) -> BTreeSet<Violation> {
