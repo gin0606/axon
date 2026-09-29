@@ -333,8 +333,6 @@ fn declaration_check_rejects_local_and_core_guards() {
         fresh_yaml.replace("lifecycle: not-started", "lifecycle: completed"),
         "identity/reference:",
     );
-    let mut d = declaration::parse(&exported).unwrap();
-    d.issues.push(d.issues[0].clone());
     let duplicated = exported.replace(
         "references: []",
         &format!(
