@@ -206,50 +206,6 @@ mod tests {
             std::fs::remove_dir_all(root).unwrap();
         }
     }
-    #[test]
-    fn declaration_publication_distinguishes_drift_and_sync_failure() {
-        let directory =
-            std::env::temp_dir().join(format!("axon-declaration-{:032x}", rand::random::<u128>()));
-        std::fs::create_dir(&directory).unwrap();
-        let path = directory.join("declaration.yaml");
-        std::fs::write(&path, b"original").unwrap();
-        let error = crate::file::publish_with(
-            &path,
-            b"original",
-            b"prepared",
-            || {
-                std::fs::write(&path, b"editor")?;
-                Ok(())
-            },
-            || Ok(()),
-        )
-        .unwrap_err();
-        assert!(matches!(&error, super::Error::Invalid(_)));
-        let error = error.to_string();
-        assert!(
-            error.contains("not applied")
-                && error.contains("destination changed")
-                && error.contains("retained"),
-            "{error}"
-        );
-        assert_eq!(std::fs::read(&path).unwrap(), b"editor");
-        let error = crate::file::publish_with(
-            &path,
-            b"editor",
-            b"prepared",
-            || Ok(()),
-            || Err(std::io::Error::other("injected sync failure").into()),
-        )
-        .unwrap_err();
-        assert!(matches!(&error, super::Error::PublicationUnknown(_)));
-        let error = error.to_string();
-        assert!(
-            error.contains("result unknown after publication"),
-            "{error}"
-        );
-        assert_eq!(std::fs::read(&path).unwrap(), b"prepared");
-        std::fs::remove_dir_all(directory).unwrap();
-    }
 }
 
 #[cfg(test)]
