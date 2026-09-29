@@ -1287,35 +1287,147 @@ fn assert_process_gone(pid: i32) {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
+// The socket closes on unwind or SIGKILL without signalling a possibly reused PID.
+struct ConditionProcess {
+    child: std::process::Child,
+    connection: Option<std::net::TcpStream>,
+}
+impl ConditionProcess {
+    fn start(f: &Fixture, timeout: &str) -> Self {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let child = f
+            .command()
+            .args(["tasks", "--condition-timeout", timeout])
+            .env(
+                "AXON_TEST_ADDRESS",
+                listener.local_addr().unwrap().to_string(),
+            )
+            .env("AXON_TEST_EXE", std::env::current_exe().unwrap())
+            .env("LLVM_PROFILE_FILE", "/dev/null")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut process = Self {
+            child,
+            connection: None,
+        };
+        let start = std::time::Instant::now();
+        loop {
+            match listener.accept() {
+                Ok((mut connection, _)) => {
+                    connection.set_nonblocking(false).unwrap();
+                    connection
+                        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                        .unwrap();
+                    let mut ready = [0];
+                    connection.read_exact(&mut ready).unwrap();
+                    process.connection = Some(connection);
+                    return process;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(start.elapsed().as_secs() < 5, "condition did not connect");
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("condition connection failed: {error}"),
+            }
+        }
+    }
+
+    fn output(&mut self) -> Output {
+        use std::io::Read;
+        let start = std::time::Instant::now();
+        let status = loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                break status;
+            }
+            assert!(start.elapsed().as_secs() < 8, "Axon did not exit");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        self.child
+            .stdout
+            .take()
+            .unwrap()
+            .read_to_end(&mut stdout)
+            .unwrap();
+        self.child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_end(&mut stderr)
+            .unwrap();
+        Output {
+            status,
+            stdout,
+            stderr,
+        }
+    }
+}
+impl Drop for ConditionProcess {
+    fn drop(&mut self) {
+        self.connection.take();
+        // Child retains ownership until wait; no signals are sent to PID-file values.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn set_process_condition(f: &Fixture) {
+    f.init();
+    let id = f.accepted("interrupt");
+    set_condition(
+        f,
+        &id,
+        "echo $$ > shell-pid; \"$AXON_TEST_EXE\" --exact condition_process_fixture --ignored </dev/null >/dev/null 2>/dev/null & wait",
+    );
+}
+
+#[test]
+#[ignore = "subprocess fixture"]
+fn condition_process_fixture() {
+    use std::io::{Read, Write};
+    unsafe {
+        libc::signal(libc::SIGTERM, libc::SIG_IGN);
+    }
+    let mut connection =
+        std::net::TcpStream::connect(std::env::var("AXON_TEST_ADDRESS").unwrap()).unwrap();
+    connection
+        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .unwrap();
+    fs::write("descendant-pid", std::process::id().to_string()).unwrap();
+    connection.write_all(&[1]).unwrap();
+    let result = connection.read(&mut [0]);
+    assert!(
+        matches!(result, Ok(0))
+            || result.is_err_and(|error| matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ))
+    );
+}
+
 #[test]
 fn condition_timeout_and_ctrl_c_terminate_shell_and_descendants() {
     let f = Fixture::new();
-    f.init();
-    let id = f.accepted("interrupt");
-    let script = "echo $$ > shell-pid; sh -c 'trap \"\" TERM; echo $$ > descendant-pid; while :; do :; done' </dev/null >/dev/null 2>/dev/null & wait";
-    set_condition(&f, &id, script);
+    set_process_condition(&f);
     let before = f.records();
     for interrupt in [false, true] {
-        let mut cmd = f.command();
-        cmd.args([
-            "tasks",
-            "--condition-timeout",
-            if interrupt { "10s" } else { "500ms" },
-        ]);
-        let out = if interrupt {
-            fs::remove_file(f.0.join("descendant-pid")).ok();
-            let child = cmd
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap();
-            wait_pid(&f.0.join("descendant-pid"));
-            assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
-            child.wait_with_output().unwrap()
-        } else {
-            cmd.output().unwrap()
-        };
-        let error = failure(out);
+        let start = std::time::Instant::now();
+        let mut process = ConditionProcess::start(&f, if interrupt { "10s" } else { "500ms" });
+        let shell = wait_pid(&f.0.join("shell-pid"));
+        let descendant = wait_pid(&f.0.join("descendant-pid"));
+        assert_eq!(unsafe { libc::getpgid(descendant) }, shell);
+        if interrupt {
+            assert_eq!(
+                unsafe { libc::kill(process.child.id() as i32, libc::SIGINT) },
+                0
+            );
+        }
+        let error = failure(process.output());
         assert!(
             error.contains(if interrupt {
                 "interrupted by Ctrl-C"
@@ -1328,10 +1440,76 @@ fn condition_timeout_and_ctrl_c_terminate_shell_and_descendants() {
             error.contains("TERM followed by KILL after 1s grace"),
             "{error}"
         );
-        assert_process_gone(wait_pid(&f.0.join("shell-pid")));
-        assert_process_gone(wait_pid(&f.0.join("descendant-pid")));
+        assert_process_gone(shell);
+        assert_process_gone(descendant);
+        // All assertions precede cleanup and the descendant's independent 30s limit.
+        assert!(start.elapsed().as_secs() < 20);
         assert_eq!(f.records(), before);
     }
+}
+
+#[test]
+fn condition_fixture_unwind_closes_descendants() {
+    let f = Fixture::new();
+    set_process_condition(&f);
+    let result = std::panic::catch_unwind(|| {
+        let _process = ConditionProcess::start(&f, "10s");
+        panic!("intentional failure after condition startup");
+    });
+    let panic = result.unwrap_err();
+    assert_eq!(
+        panic.downcast_ref::<&str>(),
+        Some(&"intentional failure after condition startup")
+    );
+    assert_process_gone(wait_pid(&f.0.join("shell-pid")));
+    assert_process_gone(wait_pid(&f.0.join("descendant-pid")));
+}
+
+#[test]
+#[ignore = "subprocess fixture"]
+fn condition_owner_fixture() {
+    let f = Fixture(PathBuf::from(std::env::var_os("AXON_TEST_ROOT").unwrap()));
+    let _process = ConditionProcess::start(&f, "10s");
+    fs::write(f.0.join("owner-ready"), std::process::id().to_string()).unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(30));
+}
+
+#[test]
+fn condition_fixture_survives_owner_kill_without_leaking() {
+    let f = Fixture::new();
+    set_process_condition(&f);
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "condition_owner_fixture", "--ignored"])
+        .env("AXON_TEST_ROOT", &f.0)
+        .env("LLVM_PROFILE_FILE", "/dev/null")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut owner = ConditionProcess {
+        child,
+        connection: None,
+    };
+    wait_pid(&f.0.join("owner-ready"));
+    owner.child.kill().unwrap();
+    owner.child.wait().unwrap();
+    assert_process_gone(wait_pid(&f.0.join("shell-pid")));
+    assert_process_gone(wait_pid(&f.0.join("descendant-pid")));
+}
+
+#[test]
+fn condition_fixture_has_an_independent_lifetime_limit() {
+    let f = Fixture::new();
+    set_process_condition(&f);
+    let mut process = ConditionProcess::start(&f, "60s");
+    let shell = wait_pid(&f.0.join("shell-pid"));
+    let descendant = wait_pid(&f.0.join("descendant-pid"));
+    // Removing the supervisor leaves only the fixture's own deadline; keep the socket open.
+    process.child.kill().unwrap();
+    process.child.wait().unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(30));
+    assert_process_gone(shell);
+    assert_process_gone(descendant);
 }
 
 #[test]
