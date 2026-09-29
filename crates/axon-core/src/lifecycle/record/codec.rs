@@ -156,8 +156,9 @@ fn row(entry: &Entry) -> Row {
 fn entry(mut row: Row) -> Result<Entry> {
     let recorder = required("recorder", row.recorder)?;
     let reason = required("reason", row.reason)?;
-    let parents: BTreeSet<RecordId> = row.parents.iter().cloned().collect();
-    if parents.len() != row.parents.len() {
+    let parent_count = row.parents.len();
+    let parents: BTreeSet<RecordId> = row.parents.into_iter().collect();
+    if parents.len() != parent_count {
         return Err(invalid("duplicate parent"));
     }
     if row.record == "note" {
@@ -203,8 +204,9 @@ fn entry(mut row: Row) -> Result<Entry> {
         return Err(invalid("only a resolve record carries a chosen head"));
     }
     let after = required("after", row.after)?;
-    let needs: BTreeSet<EntityId> = after.needs.iter().cloned().collect();
-    if needs.len() != after.needs.len() {
+    let need_count = after.needs.len();
+    let needs: BTreeSet<EntityId> = after.needs.into_iter().collect();
+    if needs.len() != need_count {
         return Err(invalid("duplicate dependency"));
     }
     Ok(Entry::Record(Record {
