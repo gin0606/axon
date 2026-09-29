@@ -534,17 +534,13 @@ impl Store {
     ) -> Result<()> {
         let base = self.records_path();
         let mut planned = Vec::with_capacity(entries.len());
-        // The record directory and `.axon/` are synced after the renames as well: a
-        // subdirectory's entry (this publication's, or an earlier interrupted one's) is durable
-        // only once its parent is.
+        // `.axon/` is synced again after publication when its records directory was created.
         let mut created_records_directory = false;
         let prepared = (|| -> Result<()> {
             for entry in entries {
                 let bytes = record::encode(entry)?;
                 let id = RecordId::of(&bytes);
                 let directory = base.join(id.subdirectory());
-                // A directory created here is synced into its parent at once, so the entry
-                // of a subdirectory is durable before any record renamed into it.
                 if fs::symlink_metadata(&base).is_err() {
                     fs::create_dir(&base)?;
                     sync_directory(base.parent().unwrap())?;
@@ -562,7 +558,6 @@ impl Store {
                     }
                     Err(_) => {
                         fs::create_dir(&directory)?;
-                        sync_directory(&base)?;
                     }
                 }
                 let path = directory.join(id.as_ref());
@@ -573,6 +568,9 @@ impl Store {
                 let temp = temporary(&path, &bytes)?;
                 planned.push((path, Some(temp)));
             }
+            // Persist all subdirectory entries, including residue from interrupted writes,
+            // before the first rename. Renames only change the subdirectories themselves.
+            sync_directory(&base)?;
             self.guard()?;
             progress(Progress::BeforePublish)
         })();
@@ -600,11 +598,8 @@ impl Store {
                 // durable is not durable either). A file left by an interrupted publication
                 // is synced here too.
                 sync_directory(path.parent().unwrap())?;
-                if index == last {
-                    sync_directory(&base)?;
-                    if created_records_directory {
-                        sync_directory(base.parent().unwrap())?;
-                    }
+                if index == last && created_records_directory {
+                    sync_directory(base.parent().unwrap())?;
                 }
                 progress(Progress::Renamed(index))
             })();
