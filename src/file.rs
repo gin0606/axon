@@ -659,12 +659,36 @@ mod tests {
             &path,
             b"old",
             b"new",
+            || {
+                fs::write(&path, b"editor")?;
+                Ok(())
+            },
             || Ok(()),
-            || Err(invalid("injected directory sync")),
+        )
+        .unwrap_err();
+        assert!(matches!(&error, Error::Invalid(_)));
+        let error = error.to_string();
+        assert!(
+            error.contains("not applied")
+                && error.contains("destination changed")
+                && error.contains("retained"),
+            "{error}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"editor");
+        let error = publish_with(
+            &path,
+            b"editor",
+            b"new",
+            || Ok(()),
+            || Err(std::io::Error::other("injected sync failure").into()),
         )
         .unwrap_err();
         assert!(matches!(&error, Error::PublicationUnknown(_)));
-        assert!(error.to_string().contains("result unknown"));
+        assert!(
+            error
+                .to_string()
+                .contains("result unknown after publication")
+        );
         assert_eq!(fs::read(&path).unwrap(), b"new");
         fs::remove_dir_all(root).unwrap();
     }

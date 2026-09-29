@@ -45,9 +45,19 @@ fn operation_and_history_are_atomic_and_other_entities_unchanged() {
     insert(&mut r.store, created);
     register(&mut r, "other", Kind::Group, None);
     let other = r.view().settled_entity(&id("other")).unwrap().clone();
-    for operation in [
-        Accept, Start, Release, Withdraw, Cancel, Reconsider, Accept, Start, Complete, Reopen,
-        Start, Complete,
+    for (operation, expected) in [
+        (Accept, Lifecycle::NotStarted),
+        (Start, Lifecycle::InProgress),
+        (Release, Lifecycle::NotStarted),
+        (Withdraw, Lifecycle::Undecided),
+        (Cancel, Lifecycle::Cancelled),
+        (Reconsider, Lifecycle::Undecided),
+        (Accept, Lifecycle::NotStarted),
+        (Start, Lifecycle::InProgress),
+        (Complete, Lifecycle::Completed),
+        (Reopen, Lifecycle::NotStarted),
+        (Start, Lifecycle::InProgress),
+        (Complete, Lifecycle::Completed),
     ] {
         let before = r.view().settled_entity(&id("item")).unwrap().clone();
         // Every record carries the same time, earlier than the creation.
@@ -62,12 +72,7 @@ fn operation_and_history_are_atomic_and_other_entities_unchanged() {
             .unwrap();
         let recorded = insert(&mut r.store, record);
         let after = r.current("item");
-        assert_eq!(
-            after.lifecycle,
-            operation
-                .apply_as(Kind::Issue, before.current.lifecycle)
-                .unwrap()
-        );
+        assert_eq!(after.lifecycle, expected);
         // Only the lifecycle and the owner of a start change.
         assert_eq!(
             after,
