@@ -376,8 +376,8 @@ impl Store {
             if is_temporary(&name) {
                 continue;
             }
-            match fs::symlink_metadata(&path) {
-                Ok(meta) if meta.file_type().is_dir() => {
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => {
                     subdirectories.push((name.to_string_lossy().into_owned(), path));
                 }
                 Ok(_) => corrupt(&path, "not a record subdirectory".into(), false),
@@ -407,7 +407,7 @@ impl Store {
                     continue;
                 }
                 let name = name.to_string_lossy().into_owned();
-                let regular = fs::symlink_metadata(&file_path).map(|m| m.file_type().is_file());
+                let regular = file.file_type().map(|kind| kind.is_file());
                 match regular {
                     Ok(true) => {}
                     Ok(false) => {
