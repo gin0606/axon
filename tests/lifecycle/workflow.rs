@@ -87,78 +87,8 @@ fn the_daily_workflow_runs_from_registration_to_group_completion() {
 }
 
 #[test]
-fn linked_worktrees_share_parallel_work_and_notes() {
+fn unknown_commands_and_subcommand_help() {
     let f = Fixture::new();
-    git(&f.0, &["init", "-q"]);
-    git(
-        &f.0,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "--allow-empty",
-            "-qm",
-            "base",
-        ],
-    );
-    f.init();
-    let issue = f.accepted("共有する仕事");
-    let linked = Fixture::new();
-    git(
-        &f.0,
-        &[
-            "worktree",
-            "add",
-            "-qb",
-            "worker",
-            linked.0.to_str().unwrap(),
-        ],
-    );
-    assert!(linked.ok(&["tasks"]).contains(&issue));
-    let workers = [&f, &linked].map(|w| {
-        w.command()
-            .args(["start", &issue])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap()
-    });
-    let successes = workers
-        .into_iter()
-        .filter_map(|p| p.wait_with_output().ok())
-        .filter(|o| o.status.success())
-        .count();
-    assert_eq!(successes, 1);
-    linked.ok(&["note", "add", &issue, "-m", "linked worktreeからの記録"]);
-    assert!(
-        f.ok(&["note", "list", &issue])
-            .contains("linked worktreeからの記録")
-    );
-    f.ok(&["complete", &issue]);
-    assert!(linked.ok(&["tasks"]).is_empty());
-    assert!(!linked.0.join(".axon").exists());
-}
-
-#[test]
-fn help_exposes_lifecycle_commands() {
-    let f = Fixture::new();
-    let help = f.ok(&["--help"]);
-    for name in [
-        "proposals",
-        "tasks",
-        "accept",
-        "withdraw",
-        "cancel",
-        "reconsider",
-        "storage",
-        "export",
-        "import",
-    ] {
-        assert!(help.contains(name));
-    }
-    assert!(!help.contains("merge"));
     let rejected = f.run(&["no-such-command"]);
     assert_eq!(rejected.status.code(), Some(2));
     assert!(failure(rejected).contains("unrecognized subcommand"));

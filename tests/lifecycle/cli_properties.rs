@@ -217,21 +217,9 @@ proptest! {
         ] {
             let out = f.run(&args);
             prop_assert_eq!(out.status.code(), Some(1));
+            prop_assert!(out.stdout.is_empty());
             prop_assert!(String::from_utf8_lossy(&out.stderr).contains("control character"));
             prop_assert_eq!(f.records(), before.clone());
-        }
-        for title_len in [199usize, 200, 201] {
-            let title = "t".repeat(title_len);
-            let before = f.records();
-            prop_assert_eq!(f.run(&["capture", "--title", &title]).status.success(), title_len <= 200);
-            if title_len > 200 { prop_assert_eq!(f.records(), before); }
-        }
-        for reason_len in [499usize, 500, 501] {
-            let work = f.accepted("Reason boundary");
-            let reason = "r".repeat(reason_len);
-            let before = f.records();
-            prop_assert_eq!(f.run(&["start", &work, "-r", &reason]).status.success(), reason_len <= 500);
-            if reason_len > 500 { prop_assert_eq!(f.records(), before); }
         }
     }
 
@@ -299,6 +287,38 @@ proptest! {
             prop_assert_eq!(diagnostic.matches(&expected).count(), 2);
             prop_assert_eq!(diagnostic.matches("bytes omitted").count(), if omitted == 0 { 0 } else { 2 });
         }
+        }
+    }
+}
+
+/// The length limits do not depend on generated input, so their boundaries run once.
+#[test]
+fn one_line_fields_reject_values_over_the_length_limit_without_changing_records() {
+    let f = Fixture::new();
+    f.init();
+    for title_len in [199usize, 200, 201] {
+        let title = "t".repeat(title_len);
+        let before = f.records();
+        let out = f.run(&["capture", "--title", &title]);
+        if title_len > 200 {
+            assert_eq!(out.status.code(), Some(1));
+            assert!(failure(out).contains("the limit is"));
+            assert_eq!(f.records(), before);
+        } else {
+            success(out);
+        }
+    }
+    for reason_len in [499usize, 500, 501] {
+        let work = f.accepted("Reason boundary");
+        let reason = "r".repeat(reason_len);
+        let before = f.records();
+        let out = f.run(&["start", &work, "-r", &reason]);
+        if reason_len > 500 {
+            assert_eq!(out.status.code(), Some(1));
+            assert!(failure(out).contains("the limit is"));
+            assert_eq!(f.records(), before);
+        } else {
+            success(out);
         }
     }
 }

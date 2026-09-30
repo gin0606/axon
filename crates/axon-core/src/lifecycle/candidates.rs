@@ -74,31 +74,17 @@ impl<'a, E: From<Error>, F: FnMut(&EntityId, &str) -> std::result::Result<bool, 
     }
 }
 
-/// Evaluates only relevant candidates and their ancestors, once per invocation.
-/// The returned list is complete; an evaluation error never returns partial rows.
-pub fn candidates<E: From<Error>>(
-    view: &View,
-    kind: CandidateList,
-    evaluate: impl FnMut(&EntityId, &str) -> std::result::Result<bool, E>,
-) -> std::result::Result<Vec<&EntityId>, E> {
-    candidates_filtered(view, kind, |_| true, evaluate)
-}
-
-/// Filters candidates before evaluation; retained candidates still check every ancestor.
-pub fn candidates_filtered<E: From<Error>>(
-    view: &View,
-    kind: CandidateList,
-    include: impl FnMut(&EntityId) -> bool,
-    evaluate: impl FnMut(&EntityId, &str) -> std::result::Result<bool, E>,
-) -> std::result::Result<Vec<&EntityId>, E> {
-    list_candidates(view, kind, include, &mut Surfacing::new(view, evaluate))
-}
-
 /// The rows of a list in creation order. `tasks` rows are NotStarted Issues and Groups that
 /// surface, every InProgress Issue, and every Group whose effective lifecycle is InProgress.
 /// Such a Group is listed whether or not it surfaces, but its own surfacing is still decided
 /// (below surfaced ancestors), so a failing condition of its own fails the list. Conflicted
 /// Entities have no current value and are never candidates.
+///
+/// `include` filters candidates before evaluation: an excluded Entity is not evaluated as a
+/// candidate, but when a retained candidate's surfacing is decided it is evaluated like any
+/// other ancestor (see [`Surfacing::surfaced`]), whatever its kind.
+/// `surfacing` evaluates each condition at most once. An evaluation error fails the whole list
+/// and never returns partial rows.
 pub fn list_candidates<
     'a,
     E: From<Error>,
@@ -245,15 +231,18 @@ mod tests {
                 ]);
                 for kind in [CandidateList::Tasks, CandidateList::Proposals] {
                     let mut calls = Vec::new();
-                    let actual: BTreeSet<_> = candidates(&view, kind, |entity, command| {
-                        assert_eq!(command, entity.to_string());
-                        calls.push(entity.clone());
-                        Ok::<_, Error>(values[entity])
-                    })
-                    .unwrap()
-                    .into_iter()
-                    .cloned()
-                    .collect();
+                    let mut surfacing =
+                        Surfacing::new(&view, |entity: &EntityId, command: &str| {
+                            assert_eq!(command, entity.to_string());
+                            calls.push(entity.clone());
+                            Ok::<_, Error>(values[entity])
+                        });
+                    let actual: BTreeSet<_> =
+                        list_candidates(&view, kind, |_| true, &mut surfacing)
+                            .unwrap()
+                            .into_iter()
+                            .cloned()
+                            .collect();
                     let expected: BTreeSet<_> = view
                         .settled()
                         .filter(|(entity, settled)| {

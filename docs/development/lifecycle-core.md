@@ -2,7 +2,7 @@
 
 この境界が実装する契約は [lifecycle](../reference/lifecycle.md) と [保存と統合](../reference/storage.md)、対応するモデルは [モデル](../../spec/README.md)。[Rust library](../../crates/axon-core/src/lib.rs) の `lifecycle` module は filesystem、外部コマンド評価、Git を呼ばない。記録の集合からの導出、通常操作の前提検査と記録の生成、記録 1 件の `encode` / `decode` を、保存 adapter と CLI が共通で使う。`cargo test -p axon-core` で独立したメモリ上の fixture を検証する。
 
-この境界は Issue / Group の登録、基本遷移、包含・dependency の変更、文面編集、種類の変換、Note、衝突の解決記録、構造の違反の導出を扱う。候補評価は `candidates`、条件設定は `set_condition` が扱う。保存 adapter は [file 保存と Git 統合](lifecycle-file.md) に接続する。[CLI と保存の接続](lifecycle-cli.md) が公開入口を示す。
+この境界は Issue / Group の登録、基本遷移、包含・dependency の変更、文面編集、種類の変換、Note、衝突の解決記録、構造の違反の導出を扱う。候補評価は `list_candidates` と `Surfacing`、条件設定は `set_condition` が扱う。保存 adapter は [file 保存と Git 統合](lifecycle-file.md) に接続する。[CLI と保存の接続](lifecycle-cli.md) が公開入口を示す。
 
 ## 通常操作と構造
 

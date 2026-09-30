@@ -7,12 +7,12 @@ mod candidates;
 mod model;
 pub mod record;
 
-pub use candidates::{CandidateList, Surfacing, candidates, candidates_filtered, list_candidates};
+pub use candidates::{CandidateList, Surfacing, list_candidates};
 pub use model::*;
 pub use record::{
     Current, Entry, HEADER_FORMAT, Header, NONCE_LENGTH, Nonce, Note, RECORD_ID_LENGTH, Record,
-    RecordId, RecordKind, Settled, Store, View, Violation, ViolationKind, decode, decode_as,
-    decode_header, encode, encode_header, new_entity_id,
+    RecordId, RecordKind, Settled, Store, View, Violation, ViolationKind, decode, decode_header,
+    encode, encode_header, new_entity_id,
 };
 
 #[derive(Debug, thiserror::Error)]

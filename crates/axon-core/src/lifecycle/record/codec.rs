@@ -255,26 +255,12 @@ pub fn encode(entry: &Entry) -> Result<Vec<u8>> {
 /// the rules, truncated or empty input, and bytes that are not the canonical encoding of their
 /// content. Returns the record ID computed from the bytes.
 pub fn decode(bytes: &[u8]) -> Result<(RecordId, Entry)> {
-    Ok((RecordId::of(bytes), decode_canonical(bytes)?))
-}
-fn decode_canonical(bytes: &[u8]) -> Result<Entry> {
     let entry = entry(from_line::<Row>(bytes)?)?;
     let canonical = encode(&entry)?;
     if canonical != bytes {
         return Err(invalid("record bytes are not canonical"));
     }
-    Ok(entry)
-}
-
-/// Decodes a record file whose name is `id`, rejecting bytes whose hash is not the name.
-pub fn decode_as(id: &RecordId, bytes: &[u8]) -> Result<Entry> {
-    let actual = RecordId::of(bytes);
-    if &actual != id {
-        return Err(invalid(format!(
-            "record {id} has content whose hash is {actual}"
-        )));
-    }
-    decode_canonical(bytes)
+    Ok((RecordId::of(bytes), entry))
 }
 
 #[derive(Serialize, Deserialize)]

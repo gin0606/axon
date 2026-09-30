@@ -857,6 +857,16 @@ fn a_linked_worktree_without_a_store_uses_the_main_worktrees_store() {
         success(command(&linked.0).args(["list"]).output().unwrap()).contains(&from_main),
         "the linked worktree reads the main worktree's store"
     );
+    success(
+        command(&linked.0)
+            .args(["note", "add", &from_main, "-m", "from the linked worktree"])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        f.ok(&["note", "list", &from_main])
+            .contains("from the linked worktree")
+    );
     assert!(!linked.0.join(".axon").exists());
 }
 

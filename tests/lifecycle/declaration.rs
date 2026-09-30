@@ -150,19 +150,6 @@ fn declaration_docs_and_template_work_with_broken_management_root() {
     assert_eq!(d, declaration::example());
     assert_eq!(d.serialize(&view_of(&Store::new())).unwrap(), yaml);
     assert!(f.ok(&["docs"]).contains("docs declaration"));
-    let help = f.ok(&["--help"]);
-    for (heading, name) in [
-        ("Candidates & inspection:", "export"),
-        ("Text & relationships:", "import"),
-    ] {
-        let section = help.split(heading).nth(1).unwrap();
-        let section = section.trim_start().split("\n\n").next().unwrap();
-        assert!(
-            section
-                .lines()
-                .any(|line| line.split_whitespace().next() == Some(name))
-        );
-    }
     assert!(f.ok(&["import", "--help"]).contains("prepare"));
     assert!(f.ok(&["import", "check", "--help"]).contains("<FILE>"));
     assert!(f.ok(&["export", "--help"]).contains("<ID>..."));

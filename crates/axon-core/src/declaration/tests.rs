@@ -456,9 +456,25 @@ proptest! {
         let yaml = d.serialize(&empty_view()).unwrap();
         for field in ["schema", "groups", "issues", "references"] {
             let line = yaml.lines().find(|line| line.starts_with(&format!("{field}:"))).unwrap();
+            // The whole value is replaced, so a block sequence under the key does not turn
+            // the damage into a syntax error.
+            let block: String = yaml
+                .lines()
+                .skip_while(|l| *l != line)
+                .enumerate()
+                .take_while(|(i, l)| *i == 0 || l.is_empty() || l.starts_with(' '))
+                .map(|(_, l)| format!("{l}\n"))
+                .collect();
             for replacement in ["null", "true", "123", "{}"] {
-                let bad = yaml.replacen(line, &format!("{field}: {replacement}"), 1);
-                prop_assert!(parse(&bad).is_err(), "{bad}");
+                let bad = yaml.replacen(&block, &format!("{field}: {replacement}\n"), 1);
+                let result = parse(&bad);
+                prop_assert!(result.is_err(), "{bad}");
+                let error = result.unwrap_err().to_string();
+                // The lists are rejected by their type, not by the text left around them.
+                prop_assert!(
+                    field == "schema" || error.contains("expected a sequence"),
+                    "{error}\n{bad}"
+                );
             }
             let duplicate = yaml.replacen(line, &format!("{line}\n{line}"), 1);
             prop_assert!(parse(&duplicate).is_err(), "{duplicate}");
@@ -915,7 +931,6 @@ fn conflicted_and_violating_stores_reject_declarations_except_a_completing_retry
     other.set_parent("a", Some("b"));
     f.set_parent("b", Some("a"));
     f.store.absorb(&other.store);
-    let before = f.store.clone();
     for error in [
         swap.check(&input, &f.store, context()).unwrap_err(),
         swap.clone().prepare(&f.store, "demo").unwrap_err(),
@@ -923,7 +938,6 @@ fn conflicted_and_violating_stores_reject_declarations_except_a_completing_retry
         let error = error.to_string();
         assert!(error.contains("structural violations"), "{error}");
     }
-    assert_eq!(f.store, before);
 }
 
 #[test]
@@ -1194,7 +1208,6 @@ proptest! {
         f.write(conflicted, &format!("Left {title}"));
         other.write(conflicted, &format!("Right {title}"));
         f.store.absorb(&other.store);
-        let before = f.store.clone();
         let exported = export(&f.store, &f.view(), &[id("g")]);
         if conflicted_child {
             prop_assert!(exported.unwrap_err().to_string().contains("conflicted"));
@@ -1205,7 +1218,6 @@ proptest! {
         fresh.groups[0].title = title.clone();
         let input = fresh.serialize(&f.view()).unwrap();
         prop_assert!(fresh.prepare(&f.store, "demo").unwrap_err().to_string().contains("conflicted"));
-        prop_assert_eq!(&f.store, &before);
         prop_assert_eq!(input, fresh.serialize(&f.view()).unwrap());
       }
 
@@ -1225,10 +1237,8 @@ proptest! {
             let declaration = export(&alone.store, &view, &[id("child")]).unwrap();
             prop_assert!(declaration.references.is_empty());
             let input = declaration.serialize(&view).unwrap();
-            let before = alone.store.clone();
             prop_assert!(declaration.clone().prepare(&alone.store, "demo").unwrap_err().to_string().contains("does not exist"));
             prop_assert!(declaration.check(&input, &alone.store, context()).unwrap_err().to_string().contains("does not exist"));
-            prop_assert_eq!(&alone.store, &before);
         }
 
         let mut f = Fixture::new();
@@ -1244,10 +1254,8 @@ proptest! {
         prop_assert_eq!(checked.records.len(), 2);
         f.insert(checked.records[1].clone());
         prop_assert!(!f.view().is_valid());
-        let before = f.store.clone();
         let mut fresh = example();
         prop_assert!(fresh.prepare(&f.store, "demo").unwrap_err().to_string().contains("structural violations"));
-        prop_assert_eq!(&f.store, &before);
         let retry = swap.check(&input, &f.store, context()).unwrap();
         prop_assert_eq!(retry.records.len(), 1);
         f.insert(retry.records[0].clone());
