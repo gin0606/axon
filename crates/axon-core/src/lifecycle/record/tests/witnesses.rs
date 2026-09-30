@@ -198,6 +198,31 @@ fn cross_moves_form_a_containment_cycle_repaired_by_detaching() {
     assert!(r0.view().is_valid());
 }
 
+/// A containment cycle of NotStarted Groups above a started Issue: deriving the Groups'
+/// progress terminates and marks every Group on the cycle.
+#[test]
+fn a_containment_cycle_above_a_started_issue_marks_every_group_on_it_as_working() {
+    let mut r0 = Replica::new("r0");
+    let mut r1 = Replica::new("r1");
+    r0.op("i1", Start);
+    r0.move_to("g0", Some("g2"));
+    r1.move_to("g2", Some("g0"));
+    r0.sync(&r1);
+    let view = r0.view();
+    assert!(
+        r0.violations("g0")
+            .contains(&ViolationKind::ContainmentCycle)
+    );
+    assert_eq!(view.working(), &BTreeSet::from([id("g0"), id("g2")]));
+    for group in ["g0", "g2"] {
+        assert_eq!(lifecycle(&view, group), Lifecycle::NotStarted);
+        assert_eq!(
+            view.effective_lifecycle(&id(group)),
+            Some(Lifecycle::InProgress)
+        );
+    }
+}
+
 /// wCompletedWithOpenDep (reopenUnderDependent): one side completes the dependent while the
 /// other reopens the dependency. Adding a dependency and completing do not mix silently.
 #[test]

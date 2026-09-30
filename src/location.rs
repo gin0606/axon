@@ -68,7 +68,7 @@ impl Git {
         })
     }
 }
-/// The worktree root, the common directory and the Git directory, from a single rev-parse.
+/// The Git directory, worktree root and common directory, from a single rev-parse.
 fn git(cwd: &Path) -> Result<Option<Discovered>> {
     let mut boundary = None;
     for ancestor in cwd.ancestors() {
@@ -80,19 +80,19 @@ fn git(cwd: &Path) -> Result<Option<Discovered>> {
     let result = git_command(cwd)
         .args([
             "rev-parse",
-            "--show-toplevel",
             "--path-format=absolute",
-            "--git-common-dir",
             "--git-dir",
+            "--show-toplevel",
+            "--git-common-dir",
         ])
         .output();
     match result {
         Ok(output) if output.status.success() => {
             let text =
                 String::from_utf8(output.stdout).map_err(|_| invalid("Git path is not UTF-8"))?;
-            let Some([root, common, git_dir]) = rev_parse(&text) else {
+            let Some([git_dir, root, common]) = rev_parse(&text) else {
                 return Err(invalid(
-                    "Git discovery failed: expected the working tree root, the common directory and the Git directory on three lines; a Git worktree whose path contains a newline is not supported, so move or rename it",
+                    "Git discovery failed: expected the Git directory, the working tree root and the common directory on three lines; a Git worktree whose path contains a newline is not supported, so move or rename it",
                 ));
             };
             if let Some(boundary) = boundary
@@ -110,9 +110,13 @@ fn git(cwd: &Path) -> Result<Option<Discovered>> {
             }))
         }
         failed => {
-            // Bare repositories have no .git entry but still form a boundary.
-            let repository = git_command(cwd).args(["rev-parse", "--git-dir"]).output();
-            if boundary.is_none() && !repository.is_ok_and(|o| o.status.success()) {
+            // A bare repository prints its Git directory before --show-toplevel fails;
+            // outside Git the first option fails without printing a path.
+            if boundary.is_none()
+                && !failed
+                    .as_ref()
+                    .is_ok_and(|output| !output.stdout.is_empty())
+            {
                 return Ok(None);
             }
             match failed {

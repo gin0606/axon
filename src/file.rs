@@ -376,8 +376,8 @@ impl Store {
             if is_temporary(&name) {
                 continue;
             }
-            match fs::symlink_metadata(&path) {
-                Ok(meta) if meta.file_type().is_dir() => {
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => {
                     subdirectories.push((name.to_string_lossy().into_owned(), path));
                 }
                 Ok(_) => corrupt(&path, "not a record subdirectory".into(), false),
@@ -407,7 +407,7 @@ impl Store {
                     continue;
                 }
                 let name = name.to_string_lossy().into_owned();
-                let regular = fs::symlink_metadata(&file_path).map(|m| m.file_type().is_file());
+                let regular = file.file_type().map(|kind| kind.is_file());
                 match regular {
                     Ok(true) => {}
                     Ok(false) => {
@@ -532,22 +532,26 @@ impl Store {
         entries: &[Entry],
         progress: &mut dyn FnMut(Progress) -> Result<()>,
     ) -> Result<()> {
+        self.publish_entries_with(entries, progress, &mut |path| sync_directory(path))
+    }
+    fn publish_entries_with(
+        &self,
+        entries: &[Entry],
+        progress: &mut dyn FnMut(Progress) -> Result<()>,
+        sync: &mut dyn FnMut(&Path) -> Result<()>,
+    ) -> Result<()> {
         let base = self.records_path();
         let mut planned = Vec::with_capacity(entries.len());
-        // The record directory and `.axon/` are synced after the renames as well: a
-        // subdirectory's entry (this publication's, or an earlier interrupted one's) is durable
-        // only once its parent is.
+        // `.axon/` is synced again after publication when its records directory was created.
         let mut created_records_directory = false;
         let prepared = (|| -> Result<()> {
             for entry in entries {
                 let bytes = record::encode(entry)?;
                 let id = RecordId::of(&bytes);
                 let directory = base.join(id.subdirectory());
-                // A directory created here is synced into its parent at once, so the entry
-                // of a subdirectory is durable before any record renamed into it.
                 if fs::symlink_metadata(&base).is_err() {
                     fs::create_dir(&base)?;
-                    sync_directory(base.parent().unwrap())?;
+                    sync(base.parent().unwrap())?;
                     created_records_directory = true;
                 }
                 // A link at the subdirectory would take the record outside the store; a read
@@ -562,7 +566,6 @@ impl Store {
                     }
                     Err(_) => {
                         fs::create_dir(&directory)?;
-                        sync_directory(&base)?;
                     }
                 }
                 let path = directory.join(id.as_ref());
@@ -573,6 +576,9 @@ impl Store {
                 let temp = temporary(&path, &bytes)?;
                 planned.push((path, Some(temp)));
             }
+            // Persist all subdirectory entries, including residue from interrupted writes,
+            // before the first rename. Renames only change the subdirectories themselves.
+            sync(&base)?;
             self.guard()?;
             progress(Progress::BeforePublish)
         })();
@@ -599,12 +605,9 @@ impl Store {
                 // order survives a crash (a record whose parent or dependency is not yet
                 // durable is not durable either). A file left by an interrupted publication
                 // is synced here too.
-                sync_directory(path.parent().unwrap())?;
-                if index == last {
-                    sync_directory(&base)?;
-                    if created_records_directory {
-                        sync_directory(base.parent().unwrap())?;
-                    }
+                sync(path.parent().unwrap())?;
+                if index == last && created_records_directory {
+                    sync(base.parent().unwrap())?;
                 }
                 progress(Progress::Renamed(index))
             })();
@@ -916,6 +919,137 @@ mod publication_tests {
         assert_eq!(loaded.corruption[0].path, Path::new(id.subdirectory()));
         assert!(store.update(|_, _, _| Ok((records, ()))).is_err());
         assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_record_that_is_a_symlink_or_directory_is_corruption_and_never_read() {
+        for symlink in [true, false] {
+            let (root, mut store) = fixture();
+            let entry = two_records().remove(0);
+            let bytes = record::encode(&entry).unwrap();
+            let id = RecordId::of(&bytes);
+            let directory = store.records_path().join(id.subdirectory());
+            fs::create_dir_all(&directory).unwrap();
+            let path = directory.join(id.as_ref());
+            if symlink {
+                let elsewhere = root.join("elsewhere");
+                fs::write(&elsewhere, &bytes).unwrap();
+                std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+            } else {
+                fs::create_dir(&path).unwrap();
+            }
+            let loaded = store.load().unwrap();
+            assert!(loaded.records.entries().next().is_none());
+            assert_eq!(loaded.corruption.len(), 1);
+            assert_eq!(
+                loaded.corruption[0].path,
+                Path::new(id.subdirectory()).join(id.as_ref())
+            );
+            assert_eq!(loaded.corruption[0].reason, "not a regular file");
+            assert!(store.update(|_, _, _| Ok((vec![entry], ()))).is_err());
+            drop(store);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    /// Publishes `entries` and returns each directory sync and rename in order. A sync of the
+    /// records directory also shows how many of the records were already in place.
+    fn publication_events(store: &Store, entries: &[Entry]) -> Vec<String> {
+        let base = store.records_path();
+        let records: Vec<PathBuf> = entries
+            .iter()
+            .map(|entry| {
+                let id = RecordId::of(&record::encode(entry).unwrap());
+                base.join(id.subdirectory()).join(id.as_ref())
+            })
+            .collect();
+        let events = std::cell::RefCell::new(Vec::new());
+        store
+            .publish_entries_with(
+                entries,
+                &mut |progress| {
+                    if let Progress::Renamed(index) = progress {
+                        events.borrow_mut().push(format!("renamed {index}"));
+                    }
+                    Ok(())
+                },
+                &mut |path| {
+                    let event = if path == base {
+                        let published = records.iter().filter(|p| p.exists()).count();
+                        format!("sync records ({published} published)")
+                    } else if path == base.parent().unwrap() {
+                        "sync .axon".into()
+                    } else {
+                        format!("sync {}", path.strip_prefix(&base).unwrap().display())
+                    };
+                    events.borrow_mut().push(event);
+                    sync_directory(path)
+                },
+            )
+            .unwrap();
+        events.into_inner()
+    }
+
+    #[test]
+    fn every_directory_entry_is_synced_before_a_record_under_it_is_published() {
+        let (root, store) = fixture();
+        let entries = two_records();
+        let subdirectories: Vec<String> = entries
+            .iter()
+            .map(|entry| {
+                RecordId::of(&record::encode(entry).unwrap())
+                    .subdirectory()
+                    .to_string()
+            })
+            .collect();
+        let sync = |index: usize| format!("sync {}", subdirectories[index]);
+        // A store cloned without records has no records directory: creating it syncs `.axon/`.
+        fs::remove_dir_all(store.records_path()).unwrap();
+        assert_eq!(
+            publication_events(&store, &entries[..1]),
+            [
+                "sync .axon".into(),
+                "sync records (0 published)".into(),
+                sync(0),
+                "sync .axon".into(),
+                "renamed 0".into(),
+            ]
+        );
+        // An existing record is not renamed again, but its directory is still synced.
+        assert_eq!(
+            publication_events(&store, &entries),
+            [
+                "sync records (1 published)".into(),
+                sync(0),
+                "renamed 0".into(),
+                sync(1),
+                "renamed 1".into(),
+            ]
+        );
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_records_directory_sync_is_not_applied_and_leaves_no_temporary_file() {
+        let (root, store) = fixture();
+        let base = store.records_path();
+        let error = store
+            .publish_entries_with(&two_records(), &mut |_| Ok(()), &mut |path| {
+                if path == base {
+                    Err(invalid("injected sync failure"))
+                } else {
+                    sync_directory(path)
+                }
+            })
+            .unwrap_err();
+        assert!(matches!(&error, Error::Invalid(_)), "{error}");
+        assert!(error.to_string().contains("not applied"), "{error}");
+        assert_eq!(store.read().unwrap().1.len(), 0);
+        assert_eq!(temporary_files(&store), 0);
         drop(store);
         fs::remove_dir_all(root).unwrap();
     }

@@ -224,27 +224,30 @@ impl View {
 
     fn derive_working(&self) -> BTreeSet<EntityId> {
         let mut working = BTreeSet::new();
-        loop {
-            let next: BTreeSet<EntityId> = self
-                .settled
-                .iter()
-                .filter(|(id, entity)| {
-                    entity.current.kind == Kind::Group
-                        && entity.current.lifecycle == Lifecycle::NotStarted
-                        && self.children(id).iter().any(|child| {
-                            matches!(
-                                self.settled[child].current.lifecycle,
-                                Lifecycle::InProgress | Lifecycle::Completed
-                            ) || working.contains(child)
-                        })
-                })
-                .map(|(id, _)| id.clone())
-                .collect();
-            if next == working {
-                return working;
+        let mut pending: Vec<_> = self
+            .settled
+            .values()
+            .filter(|entity| {
+                matches!(
+                    entity.current.lifecycle,
+                    Lifecycle::InProgress | Lifecycle::Completed
+                )
+            })
+            .filter_map(|entity| entity.current.parent.as_ref())
+            .collect();
+        while let Some(id) = pending.pop() {
+            if let Some(current) = self.current(id)
+                && current.kind == Kind::Group
+                && current.lifecycle == Lifecycle::NotStarted
+                && !working.contains(id)
+            {
+                working.insert(id.clone());
+                if let Some(parent) = &current.parent {
+                    pending.push(parent);
+                }
             }
-            working = next;
         }
+        working
     }
 
     fn derive_violations(&self) -> BTreeSet<Violation> {
@@ -530,10 +533,10 @@ impl View {
     /// visited once, so a containment cycle ends the walk.
     pub fn descendants(&self, id: &EntityId) -> Vec<EntityId> {
         let mut found = Vec::new();
-        let mut seen = BTreeSet::from([id.clone()]);
+        let mut seen = BTreeSet::from([id]);
         let mut pending: Vec<&EntityId> = self.children(id).iter().rev().collect();
         while let Some(child) = pending.pop() {
-            if !seen.insert(child.clone()) {
+            if !seen.insert(child) {
                 continue;
             }
             found.push(child.clone());
@@ -546,13 +549,13 @@ impl View {
     pub fn ancestors(&self, id: &EntityId) -> Vec<EntityId> {
         let mut found = Vec::new();
         let mut seen = BTreeSet::new();
-        let mut next = self.current(id).and_then(|c| c.parent.clone());
+        let mut next = self.current(id).and_then(|c| c.parent.as_ref());
         while let Some(ancestor) = next {
-            if !self.is_settled(&ancestor) || !seen.insert(ancestor.clone()) {
+            if !self.is_settled(ancestor) || !seen.insert(ancestor) {
                 break;
             }
-            next = self.current(&ancestor).and_then(|c| c.parent.clone());
-            found.push(ancestor);
+            next = self.current(ancestor).and_then(|c| c.parent.as_ref());
+            found.push(ancestor.clone());
         }
         found
     }
@@ -561,28 +564,27 @@ impl View {
     /// adopted.
     pub fn ancestors_adopted(&self, id: &EntityId) -> bool {
         let mut seen = BTreeSet::new();
-        let mut next = self.current(id).and_then(|c| c.parent.clone());
+        let mut next = self.current(id).and_then(|c| c.parent.as_ref());
         while let Some(ancestor) = next {
-            let Some(current) = self.current(&ancestor) else {
+            let Some(current) = self.current(ancestor) else {
                 return false;
             };
             if current.lifecycle != Lifecycle::NotStarted {
                 return false;
             }
-            if !seen.insert(ancestor.clone()) {
+            if !seen.insert(ancestor) {
                 break;
             }
-            next = current.parent.clone();
+            next = current.parent.as_ref();
         }
         true
     }
-    fn settled_needs(&self, id: &EntityId) -> Vec<&EntityId> {
+    fn settled_needs(&self, id: &EntityId) -> impl Iterator<Item = &EntityId> {
         self.settled[id]
             .current
             .needs
             .iter()
             .filter(|d| self.is_settled(d))
-            .collect()
     }
     /// Whether every dependency is settled and Completed.
     pub fn dependencies_completed(&self, id: &EntityId) -> bool {

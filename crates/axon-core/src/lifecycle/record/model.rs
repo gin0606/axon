@@ -19,9 +19,17 @@ fn lowercase_hex(value: &str, length: usize) -> bool {
 
 macro_rules! hex_identifier {
     ($name:ident, $length:expr, $what:literal) => {
-        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-        #[serde(try_from = "String", into = "String")]
+        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+        #[serde(try_from = "String")]
         pub struct $name(String);
+        impl Serialize for $name {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                serializer.serialize_str(&self.0)
+            }
+        }
         impl TryFrom<String> for $name {
             type Error = super::Error;
             fn try_from(value: String) -> Result<Self> {
@@ -208,7 +216,7 @@ impl Record {
                 ]
                 .into_iter()
                 .any(|before| {
-                    operation.apply_as(self.after.kind, before).ok() == Some(self.after.lifecycle)
+                    operation.next_as(self.after.kind, before) == Some(self.after.lifecycle)
                 });
                 if !reachable {
                     return Err(invalid(format!(

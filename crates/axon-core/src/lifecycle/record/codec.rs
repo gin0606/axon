@@ -6,7 +6,7 @@ use super::model::{Current, Entry, Header, Note, Record, RecordId, RecordKind};
 use super::{EntityId, Kind, Lifecycle, Nonce, Operation, Recorder, Result, StoreId};
 use crate::lifecycle::invalid;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, ser::SerializeStruct};
 use std::collections::BTreeSet;
 
 pub const HEADER_FORMAT: &str = "axon-records/v1";
@@ -69,7 +69,7 @@ fn required<T>(field: &str, value: Option<T>) -> Result<T> {
     value.ok_or_else(|| invalid(format!("missing key {field:?}")))
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AfterRow {
     kind: String,
@@ -84,80 +84,102 @@ struct AfterRow {
     parent: Option<Option<EntityId>>,
     needs: Vec<EntityId>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Row {
     entity: EntityId,
     record: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     operation: Option<String>,
     parents: Vec<RecordId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     nonce: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     chosen: Option<RecordId>,
     at: DateTime<Utc>,
     #[serde(default, deserialize_with = "present")]
     recorder: Option<Option<Recorder>>,
     #[serde(default, deserialize_with = "present")]
     reason: Option<Option<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     after: Option<AfterRow>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     body: Option<String>,
 }
 
-fn row(entry: &Entry) -> Row {
-    match entry {
-        Entry::Record(record) => Row {
-            entity: record.entity.clone(),
-            record: record.kind.name().into(),
-            operation: match &record.kind {
-                RecordKind::Transition(operation) => Some(operation_name(*operation).into()),
-                _ => None,
-            },
-            parents: record.parents.iter().cloned().collect(),
-            nonce: None,
-            chosen: match &record.kind {
-                RecordKind::Resolve { chosen } => Some(chosen.clone()),
-                _ => None,
-            },
-            at: record.at,
-            recorder: Some(record.recorder.clone()),
-            reason: Some(record.reason.clone()),
-            after: Some(AfterRow {
-                kind: kind_name(record.after.kind).into(),
-                lifecycle: lifecycle_name(record.after.lifecycle).into(),
-                owner: Some(record.after.owner.clone()),
-                title: record.after.title.clone(),
-                description: record.after.description.clone(),
-                condition: Some(record.after.condition.clone()),
-                parent: Some(record.after.parent.clone()),
-                needs: record.after.needs.iter().cloned().collect(),
-            }),
-            body: None,
-        },
-        Entry::Note(note) => Row {
-            entity: note.entity.clone(),
-            record: "note".into(),
-            operation: None,
-            parents: Vec::new(),
-            nonce: Some(note.nonce.to_string()),
-            chosen: None,
-            at: note.at,
-            recorder: Some(note.recorder.clone()),
-            reason: Some(note.reason.clone()),
-            after: None,
-            body: Some(note.body.clone()),
-        },
+struct CanonicalEntry<'a>(&'a Entry);
+impl Serialize for CanonicalEntry<'_> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        match self.0 {
+            Entry::Record(record) => {
+                #[derive(Serialize)]
+                struct After<'a> {
+                    kind: &'static str,
+                    lifecycle: &'static str,
+                    owner: &'a Option<String>,
+                    title: &'a str,
+                    description: &'a str,
+                    condition: &'a Option<String>,
+                    parent: &'a Option<EntityId>,
+                    needs: &'a BTreeSet<EntityId>,
+                }
+                let optional = matches!(
+                    record.kind,
+                    RecordKind::Transition(_) | RecordKind::Resolve { .. }
+                );
+                let mut row = serializer.serialize_struct("Row", 7 + usize::from(optional))?;
+                row.serialize_field("entity", &record.entity)?;
+                row.serialize_field("record", record.kind.name())?;
+                if let RecordKind::Transition(operation) = record.kind {
+                    row.serialize_field("operation", operation_name(operation))?;
+                }
+                row.serialize_field("parents", &record.parents)?;
+                if let RecordKind::Resolve { chosen } = &record.kind {
+                    row.serialize_field("chosen", chosen)?;
+                }
+                row.serialize_field("at", &record.at)?;
+                row.serialize_field("recorder", &record.recorder)?;
+                row.serialize_field("reason", &record.reason)?;
+                row.serialize_field(
+                    "after",
+                    &After {
+                        kind: kind_name(record.after.kind),
+                        lifecycle: lifecycle_name(record.after.lifecycle),
+                        owner: &record.after.owner,
+                        title: &record.after.title,
+                        description: &record.after.description,
+                        condition: &record.after.condition,
+                        parent: &record.after.parent,
+                        needs: &record.after.needs,
+                    },
+                )?;
+                row.end()
+            }
+            Entry::Note(note) => {
+                let mut row = serializer.serialize_struct("Row", 8)?;
+                row.serialize_field("entity", &note.entity)?;
+                row.serialize_field("record", "note")?;
+                row.serialize_field("parents", &[] as &[RecordId])?;
+                row.serialize_field("nonce", &note.nonce)?;
+                row.serialize_field("at", &note.at)?;
+                row.serialize_field("recorder", &note.recorder)?;
+                row.serialize_field("reason", &note.reason)?;
+                row.serialize_field("body", &note.body)?;
+                row.end()
+            }
+        }
     }
 }
 
 fn entry(mut row: Row) -> Result<Entry> {
     let recorder = required("recorder", row.recorder)?;
     let reason = required("reason", row.reason)?;
-    let parents: BTreeSet<RecordId> = row.parents.iter().cloned().collect();
-    if parents.len() != row.parents.len() {
+    let parent_count = row.parents.len();
+    let parents: BTreeSet<RecordId> = row.parents.into_iter().collect();
+    if parents.len() != parent_count {
         return Err(invalid("duplicate parent"));
     }
     if row.record == "note" {
@@ -203,8 +225,9 @@ fn entry(mut row: Row) -> Result<Entry> {
         return Err(invalid("only a resolve record carries a chosen head"));
     }
     let after = required("after", row.after)?;
-    let needs: BTreeSet<EntityId> = after.needs.iter().cloned().collect();
-    if needs.len() != after.needs.len() {
+    let need_count = after.needs.len();
+    let needs: BTreeSet<EntityId> = after.needs.into_iter().collect();
+    if needs.len() != need_count {
         return Err(invalid("duplicate dependency"));
     }
     Ok(Entry::Record(Record {
@@ -248,7 +271,7 @@ fn from_line<'a, T: Deserialize<'a>>(bytes: &'a [u8]) -> Result<T> {
 /// The canonical bytes of one record after validating it.
 pub fn encode(entry: &Entry) -> Result<Vec<u8>> {
     entry.validate()?;
-    to_line(&row(entry))
+    to_line(&CanonicalEntry(entry))
 }
 
 /// Decodes one record file. Rejects unknown, missing or kind-mismatched keys, values outside
