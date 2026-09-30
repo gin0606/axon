@@ -167,7 +167,13 @@ fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() 
             error.contains(files[0].to_str().unwrap()),
             "{label}: {error}"
         );
-        assert!(error.contains("0000000000"), "{label}: {error}");
+        // The forged file holds valid bytes under another name: reported by the hash they have.
+        let forged_line = format!(
+            "Corrupt: 00/{}: content whose hash is {}, not the name",
+            "0".repeat(64),
+            blake3::hash(&good).to_hex()
+        );
+        assert!(error.contains(&forged_line), "{label}: {error}");
         assert!(
             !error.contains("Conflicted:") && !error.contains("Violation:"),
             "{label}: corruption is reported alone, before any derivation: {error}"
@@ -188,19 +194,22 @@ fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() 
     assert!(f.ok(&["list"]).contains(&id));
     // The conflict is reported again once the corruption is gone.
     assert!(failure(f.run(&["storage", "check"])).contains("Conflicted:"));
-    // A record file whose subdirectory does not match its name is corruption too.
-    let misplaced = f
-        .records_dir()
-        .join("zz")
-        .join(files[0].file_name().unwrap());
+    // A record file whose subdirectory does not match its name is corruption too, even when
+    // its content hashes to the name.
+    let name = files[0].file_name().unwrap().to_str().unwrap();
+    let wrong = if name.starts_with("00") { "ff" } else { "00" };
+    let misplaced = f.records_dir().join(wrong).join(name);
     fs::create_dir_all(misplaced.parent().unwrap()).unwrap();
     fs::write(&misplaced, &good).unwrap();
     let error = failure(f.run(&["storage", "check"]));
     assert!(
-        error.contains("1 corrupt files") && error.contains("Corrupt: zz:"),
+        error.contains("1 corrupt files")
+            && error.contains(&format!(
+                "Corrupt: {wrong}/{name}: subdirectory differs from the ID"
+            )),
         "{error}"
     );
-    fs::remove_dir_all(misplaced.parent().unwrap()).unwrap();
+    fs::remove_file(&misplaced).unwrap();
     // The check of an explicit root does not discover: a nested directory checks itself.
     let nested = f.0.join("nested");
     fs::create_dir(&nested).unwrap();

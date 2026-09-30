@@ -692,102 +692,6 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"new");
         fs::remove_dir_all(root).unwrap();
     }
-
-    #[test]
-    fn record_publication_is_one_file_per_record_and_a_temporary_file_is_ignored() {
-        use crate::lifecycle::record::{Context, Current, Kind, Lifecycle};
-        let root =
-            std::env::temp_dir().join(format!("axon-records-{:032x}", rand::random::<u128>()));
-        fs::create_dir(&root).unwrap();
-        let location = Location::discover(&root, true).unwrap();
-        location.init("demo").unwrap();
-        let mut store = location.open().unwrap();
-        let context = Context {
-            at: chrono::Utc::now(),
-            recorder: None,
-        };
-        let id = store
-            .update(|header, records, _| {
-                assert_eq!(header.prefix, "demo");
-                let id = record::new_entity_id(&header.prefix)?;
-                let record = records.create(
-                    id.clone(),
-                    Current {
-                        kind: Kind::Issue,
-                        lifecycle: Lifecycle::NotStarted,
-                        owner: None,
-                        title: "one".into(),
-                        description: String::new(),
-                        condition: None,
-                        parent: None,
-                        needs: Default::default(),
-                    },
-                    context.clone(),
-                )?;
-                Ok((vec![Entry::Record(record)], id))
-            })
-            .unwrap();
-        let (_, records, _) = store.read().unwrap();
-        assert_eq!(records.len(), 1);
-        let (record_id, _) = records.entries().next().unwrap();
-        let path = store
-            .records_path()
-            .join(record_id.subdirectory())
-            .join(record_id.as_ref());
-        assert!(path.is_file());
-        let bytes = fs::read(&path).unwrap();
-        assert_eq!(RecordId::of(&bytes), *record_id);
-        // A stale temporary file beside it is ignored by reads and by the corruption listing.
-        let temp = path.with_file_name(format!("{record_id}.tmp"));
-        fs::write(&temp, b"partial").unwrap();
-        let loaded = store.load().unwrap();
-        assert!(loaded.is_intact());
-        assert_eq!(loaded.records.len(), 1);
-        // A file whose name is not a record ID, and one whose content does not hash to its
-        // name, are corruption that stops every read.
-        fs::write(store.records_path().join("stray"), b"x").unwrap();
-        let forged = store
-            .records_path()
-            .join(record_id.subdirectory())
-            .join("0".repeat(RECORD_ID_LENGTH));
-        fs::write(&forged, &bytes).unwrap();
-        let loaded = store.load().unwrap();
-        assert_eq!(loaded.corruption.len(), 2);
-        assert!(
-            loaded
-                .corruption
-                .iter()
-                .any(|c| c.path == Path::new("stray"))
-        );
-        assert!(
-            loaded
-                .corruption
-                .iter()
-                .any(|c| c.reason.contains("hash") || c.reason.contains("subdirectory"))
-        );
-        let error = store.read().unwrap_err().to_string();
-        assert!(
-            error.contains("corrupt") && error.contains("stray"),
-            "{error}"
-        );
-        assert!(
-            store
-                .update(|_, _, _| Ok((Vec::new(), ())))
-                .unwrap_err()
-                .to_string()
-                .contains("corrupt")
-        );
-        fs::remove_file(store.records_path().join("stray")).unwrap();
-        fs::remove_file(&forged).unwrap();
-        // The same record published again is the same file: nothing changes.
-        let (_, records, _) = store.read().unwrap();
-        let entry = records.entries().next().unwrap().1.clone();
-        store.update(|_, _, _| Ok((vec![entry], ()))).unwrap();
-        assert_eq!(store.read().unwrap().1.len(), 1);
-        assert!(store.read().unwrap().2.is_known(&id));
-        drop(store);
-        fs::remove_dir_all(root).unwrap();
-    }
 }
 
 #[cfg(test)]
@@ -883,14 +787,19 @@ mod publication_tests {
                 (Just(count), prop::collection::vec(any::<bool>(), count), 1..count - 1)
             })
         ) {
-          for scenario in 0..4 {
+          for scenario in 0..5 {
             let (root, mut store) = fixture();
             let mut existing = existing.clone();
-            let stop = if scenario == 0 || scenario == 3 { 0 } else { middle };
-            let missing_temp = scenario < 2;
+            // Scenario 4 fails at the rename of the last record.
+            let stop = match scenario {
+                0 | 3 => 0,
+                4 => count - 1,
+                _ => middle,
+            };
+            let missing_temp = scenario < 2 || scenario == 4;
             existing[0] = scenario == 3;
-            existing[stop] = !missing_temp;
             existing[count - 1] = true;
+            existing[stop] = !missing_temp;
             let entries = records(count);
             let paths: Vec<_> = entries.iter().map(|entry| {
                 let id = RecordId::of(&record::encode(entry).unwrap());
@@ -924,6 +833,7 @@ mod publication_tests {
             }
             prop_assert_eq!(matches!(&error, Error::PublicationUnknown(_)), !renamed.is_empty());
             if renamed.is_empty() {
+                prop_assert!(matches!(&error, Error::Invalid(_)));
                 prop_assert!(error.to_string().contains("not applied"));
             } else {
                 let expected = format!("renamed so far: [{}]", renamed.join(", "));
@@ -975,68 +885,6 @@ mod publication_tests {
         fs::set_permissions(&header, PermissionsExt::from_mode(0o644)).unwrap();
         drop(store);
         fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn a_failed_rename_is_classified_by_the_renames_before_it_and_leaves_no_temporary_file() {
-        let (root, mut store) = fixture();
-        let records = two_records();
-        let temp_of = |store: &Store, index: usize| {
-            let id = RecordId::of(&record::encode(&records[index]).unwrap());
-            store
-                .records_path()
-                .join(id.subdirectory())
-                .join(format!("{id}{TEMPORARY_SUFFIX}"))
-        };
-        let path_of = |store: &Store, index: usize| {
-            let id = RecordId::of(&record::encode(&records[index]).unwrap());
-            store
-                .records_path()
-                .join(id.subdirectory())
-                .join(id.as_ref())
-        };
-        // The second record's temporary file vanishes before the renames: its rename fails
-        // after the first record was renamed. Result unknown, listing the first only, and no
-        // temporary file is left behind.
-        let second_temp = temp_of(&store, 1);
-        let error = store
-            .update_with(|_, _, _| Ok((records.clone(), ())), &mut |progress| {
-                if progress == Progress::BeforePublish {
-                    fs::remove_file(&second_temp).unwrap();
-                }
-                Ok(())
-            })
-            .unwrap_err();
-        assert!(matches!(&error, Error::PublicationUnknown(_)), "{error}");
-        assert!(
-            error.to_string().contains(&format!(
-                "renamed so far: [{}]",
-                path_of(&store, 0).display()
-            )),
-            "{error}"
-        );
-        assert_eq!(store.read().unwrap().1.len(), 1);
-        assert_eq!(temporary_files(&store), 0);
-        // The first record's temporary file vanishes instead: nothing is renamed, not
-        // applied, and the second record's temporary file is removed.
-        let (root2, mut store2) = fixture();
-        let first_temp = temp_of(&store2, 0);
-        let error = store2
-            .update_with(|_, _, _| Ok((records.clone(), ())), &mut |progress| {
-                if progress == Progress::BeforePublish {
-                    fs::remove_file(&first_temp).unwrap();
-                }
-                Ok(())
-            })
-            .unwrap_err();
-        assert!(matches!(&error, Error::Invalid(_)), "{error}");
-        assert!(error.to_string().contains("not applied"), "{error}");
-        assert_eq!(store2.read().unwrap().1.len(), 0);
-        assert_eq!(temporary_files(&store2), 0);
-        drop(store);
-        drop(store2);
-        fs::remove_dir_all(root).unwrap();
-        fs::remove_dir_all(root2).unwrap();
     }
 
     #[cfg(unix)]
@@ -1142,45 +990,6 @@ mod publication_tests {
             "{error}"
         );
         assert_eq!(first.len(), 1);
-        assert_eq!(temporary_files(&store), 0);
-        // Retrying publishes only the missing record; the existing one is the same file.
-        store.update(|_, _, _| Ok((two_records(), ()))).unwrap();
-        assert_eq!(store.read().unwrap().1.len(), 2);
-        // A failure at the second rename when the first record already existed is still
-        // "not applied": no file was renamed.
-        let mut third = two_records();
-        third.truncate(1);
-        let extra = record::Store::new()
-            .create(
-                "demo-three".to_string().try_into().unwrap(),
-                Current {
-                    kind: Kind::Group,
-                    lifecycle: Lifecycle::NotStarted,
-                    owner: None,
-                    title: "three".into(),
-                    description: String::new(),
-                    condition: None,
-                    parent: None,
-                    needs: Default::default(),
-                },
-                Context {
-                    at: chrono::DateTime::from_timestamp(1000, 0).unwrap(),
-                    recorder: None,
-                },
-            )
-            .unwrap();
-        third.push(Entry::Record(extra));
-        let error = store
-            .update_with(|_, _, _| Ok((third, ())), &mut |progress| match progress {
-                Progress::Renamed(0) => Err(invalid("injected after the existing record")),
-                _ => Ok(()),
-            })
-            .unwrap_err();
-        assert!(
-            matches!(&error, Error::Invalid(_)) && error.to_string().contains("not applied"),
-            "no file was renamed, so nothing was applied: {error}"
-        );
-        assert_eq!(store.read().unwrap().1.len(), 2);
         assert_eq!(temporary_files(&store), 0);
         drop(store);
         fs::remove_dir_all(root).unwrap();
