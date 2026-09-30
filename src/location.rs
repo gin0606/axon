@@ -71,11 +71,20 @@ impl Git {
 /// The Git directory, worktree root and common directory, from a single rev-parse.
 fn git(cwd: &Path) -> Result<Option<Discovered>> {
     let mut boundary = None;
+    // Every directory Git takes for a repository, a bare one included, holds `HEAD`. Without
+    // it or a `.git` entry in any ancestor, rev-parse would find nothing and is not run. This
+    // holds because `git_command` drops `GIT_*` variables that could point elsewhere.
+    let mut repository_candidate = false;
     for ancestor in cwd.ancestors() {
         if present(&ancestor.join(".git"))? {
             boundary = Some(ancestor);
+            repository_candidate = true;
             break;
         }
+        repository_candidate |= present(&ancestor.join("HEAD"))?;
+    }
+    if !repository_candidate {
+        return Ok(None);
     }
     let result = git_command(cwd)
         .args([

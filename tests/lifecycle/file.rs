@@ -1797,6 +1797,27 @@ fn git_call_log(shim: &Path) -> PathBuf {
 
 #[cfg(unix)]
 #[test]
+fn operations_outside_git_start_no_git_process() {
+    let f = Fixture::new();
+    let shim = Fixture::new();
+    let log = git_call_log(&shim.0);
+    let path = format!(
+        "{}:{}",
+        shim.0.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    for args in [
+        vec!["init", "t"],
+        vec!["capture", "--title", "written"],
+        vec!["list"],
+    ] {
+        success(f.command().env("PATH", &path).args(args).output().unwrap());
+    }
+    assert!(!log.exists(), "{}", fs::read_to_string(&log).unwrap());
+}
+
+#[cfg(unix)]
+#[test]
 fn git_worktree_operations_start_few_git_processes() {
     let f = Fixture::new();
     git(&f.0, &["init", "-q"]);

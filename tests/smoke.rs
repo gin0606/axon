@@ -815,14 +815,18 @@ fn bare_repository_is_a_boundary_without_a_dot_git_entry() {
     fs::create_dir(&bare).unwrap();
     git(&bare, &["init", "--bare", "--quiet"]);
     let before = f.record_files();
-    for args in [
-        vec!["list"],
-        vec!["init"],
-        vec!["capture", "--accept", "--title", "wrong store"],
-    ] {
-        assert!(
-            failure(command(&bare).args(args).output().unwrap()).contains("Git discovery failed")
-        );
+    // Below the repository's own directory, only an ancestor holds `HEAD`.
+    for cwd in [bare.clone(), bare.join("refs/heads")] {
+        for args in [
+            vec!["list"],
+            vec!["init"],
+            vec!["capture", "--accept", "--title", "wrong store"],
+        ] {
+            assert!(
+                failure(command(&cwd).args(args).output().unwrap())
+                    .contains("Git discovery failed")
+            );
+        }
     }
     assert_eq!(before, f.record_files());
 }
