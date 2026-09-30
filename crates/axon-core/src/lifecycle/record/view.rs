@@ -239,10 +239,12 @@ impl View {
             if let Some(current) = self.current(id)
                 && current.kind == Kind::Group
                 && current.lifecycle == Lifecycle::NotStarted
-                && working.insert(id.clone())
-                && let Some(parent) = &current.parent
+                && !working.contains(id)
             {
-                pending.push(parent);
+                working.insert(id.clone());
+                if let Some(parent) = &current.parent {
+                    pending.push(parent);
+                }
             }
         }
         working
