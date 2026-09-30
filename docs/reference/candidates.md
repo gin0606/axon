@@ -139,4 +139,4 @@ Group の行の状況は配下から導出し、次の表を上から順に見�
 
 `crates/axon-core/src/lifecycle/candidates.rs` が保存から独立した候補選択と評価順・共有を担い、`src/cli/condition.rs` が外部プロセスの起動と監督を担う。
 
-検証は `cargo test`。library では候補集合と評価順・共有を boolean oracle と比較し、`axon show` の評価範囲と `Unsurfaced`・理由の導出を `crates/axon-core/src/read.rs` の単体テストで検査する。独立 fixture の smoke では集合、修復、非実行、worktree・管理ルート、実プロセスの終了コード、30秒の既定値、タイムアウト・Ctrl-C と子プロセスの終了、出力上限、trace の書込失敗と、`axon show` の評価・`--skip-conditions`・判定失敗の診断を検査する。binary test は起動失敗と trace の flush 失敗も実プロセスで検査する。
+検証は `cargo test`。library では候補集合と評価順・共有を boolean oracle と比較し、`axon show` の評価範囲と `Unsurfaced`・理由の導出を `crates/axon-core/src/read.rs` の単体テストで検査する。独立 fixture の smoke では集合、修復、非実行、worktree・管理ルート、実プロセスの終了コード、タイムアウト・Ctrl-C と子プロセスの終了、出力上限、trace の書込失敗と、`axon show` の評価・`--skip-conditions`・判定失敗の診断を検査する。binary test は30秒の既定値を引数の解析で検査し、起動失敗と trace の flush 失敗を実プロセスで検査する。

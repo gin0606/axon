@@ -21,13 +21,13 @@
 
 無視する運用は、利用者が `.git/info/exclude` や global の ignore file に `.axon/` の行を書いて選ぶ。追跡する運用は、利用者が `git add .axon` で記録、header、`.axon/.gitignore`、`.axon/.gitattributes` を stage して commit して選ぶ。二つの運用は一つの repository では混ぜない。無視されている保存先は Git の checkout・merge の上書き保護を受けず、警告なしに置き換わる。Axon はこの混在を検出しない。理由と境界は [保存と統合の契約](../reference/storage.md#無視する運用と追跡する運用) にある。
 
-探索は Git 内では現在の worktree root の `.axon`、次に main worktree の `.axon` の順に見る。2 段目は linked worktree で、Git common directory が main worktree 直下の `.git` directory である場合だけ使い、bare repository に付けた worktree と submodule では使わない。各段は `header.json` があれば確定し、header がなく記録やその他の file（以前の形式の `state.jsonl` を含む）があれば破損または未知の format として停止し、中断した初期化の残骸しかない `.axon` では確定せず次へ進む。Git 内では header のない段（`.axon` がない段を含む）の判定より先にその段の Git index の unmerged を検査し、unmerged なら停止する。確定した保存先が破損・読取不能なら停止し、別の保存先へ fallback しない。Git 外では最寄りの `header.json` を持つ祖先で止まる。段の意味と、追跡する運用で保存先を持たない branch の linked worktree が main worktree の保存先に書く副作用は [保存と統合の契約](../reference/storage.md#探索) に定める。
+探索は Git 内では現在の worktree root の `.axon`、次に main worktree の `.axon` の順に見る。2 段目は linked worktree で、Git common directory が main worktree 直下の `.git` directory である場合だけ使い、bare repository に付けた worktree と submodule では使わない。各段は `header.json` があれば確定し、header がなく記録やその他の file（以前の形式の `state.jsonl` を含む）があれば破損または未知の format として停止し、中断した初期化の残骸しかない `.axon` では確定せず次へ進む。Git 内では header のない段（`.axon` がない段を含む）の判定より先にその段の Git index の unmerged を検査し、unmerged なら停止する。確定した保存先が破損・読取不能なら停止し、別の保存先へ fallback しない。Git 外では最寄りの `header.json` を持つ祖先で止まる。祖先のどれにも `.git` も `HEAD` もなければ、bare repository を含め Git が repository を見つけることはないので、Git を呼ばずに Git 外とする。段の意味と、追跡する運用で保存先を持たない branch の linked worktree が main worktree の保存先に書く副作用は [保存と統合の契約](../reference/storage.md#探索) に定める。
 
 `axon init` は 2 段目を使わず、Git 内では現在の worktree root だけを対象にする。2 段目が働く構成の linked worktree での `axon init` は、main worktree に保存先があればその path を示して拒否し、main worktree の Git index で `.axon/` の下が unmerged なら拒否し、main worktree に保存先がなければ作成したうえで他の worktree からは見えないことを表示する。main worktree の判定は、common directory の親で `git rev-parse --is-bare-repository` を含む一回の Git 呼出しで行う。bare repository なら 2 段目を使わず、それ以外の理由で Git が失敗した場合は未初期化として扱わずにエラーとする。
 
 OS lock、Git index の unmerged 検査、管理 directory が通常の directory であること（symlink の拒否）の検査は、確定した保存先とそれを含む worktree に対して行う（保存先の確定より前の unmerged 検査は header のない段に対して行う）。通常 writer の lock は確定した保存先の `.axon/write.lock`、`axon init` の lock は Git 内では common Git directory の `axon-init.lock`、Git 外では管理 directory の `.axon/axon-init.lock` で、worktree をまたぐ並行初期化も直列化する。
 
-`axon init` はその OS lock 下で既存の保存先を確認し、記録の directory を作り、`.axon/.gitignore` と `.axon/.gitattributes` をそれぞれ一時 file から rename で作り、header を一時 file `header.json.tmp` に書いて sync し、`header.json` へ rename して directory を sync する。header の公開前に中断した保存先は未初期化のままで、再実行で作り直せる。
+`axon init` はその OS lock 下で既存の保存先を確認し、記録の directory を作り、`.axon/.gitignore` と `.axon/.gitattributes` をそれぞれ一時 file から rename で作り、管理 root と `.axon/` を sync してから header を一時 file `header.json.tmp` に書いて sync し、`header.json` へ rename して directory を sync する。header の公開前に中断した保存先は未初期化のままで、再実行で作り直せる。
 
 ## 記録 file と codec
 
@@ -57,7 +57,9 @@ decode は未知の key、欠けた key、種類と合わない key、規則外�
 
 ## 書込の保証
 
-writer は `.axon/write.lock` の OS lock を取得してから記録の集合を読み、通常操作の前提を検査して新しい記録を一つ作る。記録 ID を計算し、目的の subdirectory を必要なら作り、`<記録 ID>.tmp` に bytes を書いて sync し、`<記録 ID>` へ rename して directory を sync して成功する。既存の記録 file は書き直さず、置き換えず、削除しない。lock file は置換・削除しない。process 終了時は OS が lock を解放する。同値の操作は記録を作らず No changes で終わる。保存先の発見は CLI 実行ごとに一回で、実行の途中で Git の toplevel や common directory が変わったことは検出しない。
+writer は `.axon/write.lock` の OS lock を取得してから記録の集合を読み、通常操作の前提を検査して新しい記録を一つ作る。記録 ID を計算し、記録の directory と目的の subdirectory を必要なら作り、`<記録 ID>.tmp` に bytes を書いて sync し、`.axon/` と記録の directory を sync してから `<記録 ID>` へ rename して directory を sync して成功する。`.axon/` と記録の directory は毎回 sync し、中断した writer が作って sync しなかった entry も永続化する。既存の記録 file は書き直さず、置き換えず、削除しない。lock file は置換・削除しない。process 終了時は OS が lock を解放する。同値の操作は記録を作らず No changes で終わる。保存先の発見は CLI 実行ごとに一回で、実行の途中で Git の toplevel や common directory が変わったことは検出しない。
+
+一回の公開の sync は最後のものを除いて後続の書込より先に届けばよく、順序だけを保証する。最後の sync で全体を永続化し、rename 後に失敗した場合も、rename 済みの記録を永続化するために sync を試みる。Apple のプラットフォームでは前者を I/O barrier（`F_BARRIERFSYNC`）、後者を drive cache まで flush する `F_FULLFSYNC` で行い、barrier が使えない filesystem では後者で代える。その他のプラットフォームではどちらも `fsync` とする。
 
 rename 前の失敗は `not applied`、rename 後の directory sync の失敗は `result unknown` と区別する。結果不明なら process 終了を確認し、記録の集合を読み直して記録の有無を照合する。Note や登録を推測で再実行しない。出力失敗は `storage applied; output failed` で区別する。
 

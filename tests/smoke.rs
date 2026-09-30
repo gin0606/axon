@@ -815,14 +815,18 @@ fn bare_repository_is_a_boundary_without_a_dot_git_entry() {
     fs::create_dir(&bare).unwrap();
     git(&bare, &["init", "--bare", "--quiet"]);
     let before = f.record_files();
-    for args in [
-        vec!["list"],
-        vec!["init"],
-        vec!["capture", "--accept", "--title", "wrong store"],
-    ] {
-        assert!(
-            failure(command(&bare).args(args).output().unwrap()).contains("Git discovery failed")
-        );
+    // Below the repository's own directory, only an ancestor holds `HEAD`.
+    for cwd in [bare.clone(), bare.join("refs/heads")] {
+        for args in [
+            vec!["list"],
+            vec!["init"],
+            vec!["capture", "--accept", "--title", "wrong store"],
+        ] {
+            assert!(
+                failure(command(&cwd).args(args).output().unwrap())
+                    .contains("Git discovery failed")
+            );
+        }
     }
     assert_eq!(before, f.record_files());
 }
@@ -1286,6 +1290,10 @@ struct ConditionProcess {
 }
 impl ConditionProcess {
     fn start(f: &Fixture, timeout: &str) -> Self {
+        Self::start_with_lifetime(f, timeout, std::time::Duration::from_secs(30))
+    }
+    /// `lifetime` bounds the descendant fixture on its own, even without this supervisor.
+    fn start_with_lifetime(f: &Fixture, timeout: &str, lifetime: std::time::Duration) -> Self {
         use std::io::Read;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -1297,6 +1305,7 @@ impl ConditionProcess {
                 listener.local_addr().unwrap().to_string(),
             )
             .env("AXON_TEST_EXE", std::env::current_exe().unwrap())
+            .env("AXON_TEST_LIFETIME_MS", lifetime.as_millis().to_string())
             .env("LLVM_PROFILE_FILE", "/dev/null")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1387,8 +1396,12 @@ fn condition_process_fixture() {
     }
     let mut connection =
         std::net::TcpStream::connect(std::env::var("AXON_TEST_ADDRESS").unwrap()).unwrap();
+    let lifetime = std::env::var("AXON_TEST_LIFETIME_MS")
+        .unwrap()
+        .parse()
+        .unwrap();
     connection
-        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .set_read_timeout(Some(std::time::Duration::from_millis(lifetime)))
         .unwrap();
     fs::write("descendant-pid", std::process::id().to_string()).unwrap();
     connection.write_all(&[1]).unwrap();
@@ -1493,27 +1506,19 @@ fn condition_fixture_survives_owner_kill_without_leaking() {
 fn condition_fixture_has_an_independent_lifetime_limit() {
     let f = Fixture::new();
     set_process_condition(&f);
-    let mut process = ConditionProcess::start(&f, "60s");
+    let lifetime = std::time::Duration::from_secs(2);
+    let mut process = ConditionProcess::start_with_lifetime(&f, "60s", lifetime);
+    let start = std::time::Instant::now();
     let shell = wait_pid(&f.0.join("shell-pid"));
     let descendant = wait_pid(&f.0.join("descendant-pid"));
     // Removing the supervisor leaves only the fixture's own deadline; keep the socket open.
     process.child.kill().unwrap();
     process.child.wait().unwrap();
-    std::thread::sleep(std::time::Duration::from_secs(30));
+    assert!(start.elapsed() < lifetime);
+    assert_eq!(unsafe { libc::kill(descendant, 0) }, 0);
+    std::thread::sleep(lifetime.saturating_sub(start.elapsed()));
     assert_process_gone(shell);
     assert_process_gone(descendant);
-}
-
-#[test]
-fn condition_default_timeout_is_thirty_seconds_in_a_real_process() {
-    let f = Fixture::new();
-    f.init();
-    let id = f.accepted("default timeout");
-    set_condition(&f, &id, "sleep 60");
-    let start = std::time::Instant::now();
-    let error = failure(f.run(&["tasks"]));
-    assert!(start.elapsed() >= std::time::Duration::from_secs(30));
-    assert!(error.contains("timed out after 30s"), "{error}");
 }
 
 #[test]

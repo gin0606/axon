@@ -116,10 +116,9 @@ fn reorder_records(text: &str, group_order: usize, issue_order: usize) -> String
     result
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(4))]
-    #[test]
-    fn relationship_changes_are_order_independent(title in "[A-Za-z][A-Za-z0-9]{0,12}", group_order in 3usize..1000, issue_order in 3usize..1000) {
+/// Applies each relationship change with its records in every `(group, issue)` order of
+/// `reorder_records` and requires the same result and canonical output as the first order.
+fn assert_order_independent(title: &str, orders: &[(usize, usize)]) {
     for case in [
         "cancelled-parent",
         "cancelled-dependencies",
@@ -169,11 +168,11 @@ proptest! {
             "active-subtree" => d.groups[2].parent = Some(Reference::id("h")),
             _ => unreachable!(),
         }
-        d.groups[1].title = title.clone();
+        d.groups[1].title = title.into();
         d.prepare(&before, "demo").unwrap();
         let text = d.serialize(&before_view).unwrap();
         let mut canonical_result = None;
-        for (group_order, issue_order) in [(0, 0), (1, 0), (0, 1), (1, 1), (2, 2), (group_order, issue_order)] {
+        for &(group_order, issue_order) in orders {
             let root = std::env::temp_dir()
                 .join(format!("axon-relations-{:032x}", rand::random::<u128>()));
             std::fs::create_dir(&root).unwrap();
@@ -247,7 +246,10 @@ proptest! {
             }
             let output = std::fs::read_to_string(&path).unwrap();
             if let Some(expected) = &canonical_result {
-                assert_eq!(&output, expected, "{case}, group order {group_order}, issue order {issue_order}");
+                assert_eq!(
+                    &output, expected,
+                    "{case}, group order {group_order}, issue order {issue_order}"
+                );
             } else {
                 canonical_result = Some(output);
             }
@@ -262,4 +264,20 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn relationship_changes_are_order_independent() {
+    assert_order_independent("Renamed", &[(0, 0), (1, 0), (0, 1), (1, 1), (2, 2)]);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(4))]
+    #[test]
+    fn generated_orders_of_relationship_changes_match_the_file_order(
+        title in "[A-Za-z][A-Za-z0-9]{0,12}",
+        group_order in 3usize..1000,
+        issue_order in 3usize..1000,
+    ) {
+        assert_order_independent(&title, &[(0, 0), (group_order, issue_order)]);
+    }
 }

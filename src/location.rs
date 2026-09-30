@@ -71,11 +71,20 @@ impl Git {
 /// The Git directory, worktree root and common directory, from a single rev-parse.
 fn git(cwd: &Path) -> Result<Option<Discovered>> {
     let mut boundary = None;
+    // Every directory Git takes for a repository, a bare one included, holds `HEAD`. Without
+    // it or a `.git` entry in any ancestor, rev-parse would find nothing and is not run. This
+    // holds because `git_command` drops `GIT_*` variables that could point elsewhere.
+    let mut repository_candidate = false;
     for ancestor in cwd.ancestors() {
         if present(&ancestor.join(".git"))? {
             boundary = Some(ancestor);
+            repository_candidate = true;
             break;
         }
+        repository_candidate |= present(&ancestor.join("HEAD"))?;
+    }
+    if !repository_candidate {
+        return Ok(None);
     }
     let result = git_command(cwd)
         .args([
@@ -502,13 +511,15 @@ impl Location {
                     fs::rename(&temp, &path)?;
                 }
             }
-            // The record directory, the ignore file and the attributes file are durable before
-            // the header, which marks the store, is published.
-            file::sync_directory(&directory)?;
+            // `.axon/` itself, the record directory, the ignore file and the attributes file are
+            // durable before the header, which marks the store, is published. `.axon/` may be
+            // the residue of an interrupted initialization that never synced its entry.
+            file::sync_directory(&self.root, file::Reach::Ordered)?;
+            file::sync_directory(&directory, file::Reach::Ordered)?;
             let bytes = encode_header(&Header::new(prefix)?)?;
             let temp = file::temporary(&header, &bytes)?;
             fs::rename(&temp, &header)?;
-            file::sync_directory(&directory)?;
+            file::sync_directory(&directory, file::Reach::Durable)?;
             Ok(Initialized {
                 git: self.git.is_some(),
                 linked_worktree,

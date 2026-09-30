@@ -755,6 +755,20 @@ fn display_duration(duration: Duration) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn durations_are_displayed_in_the_largest_whole_unit() {
+        for (duration, text) in [
+            (Duration::from_secs(30), "30s"),
+            (Duration::from_millis(500), "500ms"),
+            (Duration::from_millis(1500), "1500ms"),
+            (Duration::from_secs(120), "2m"),
+            (Duration::from_secs(90), "90s"),
+            (Duration::from_secs(7200), "2h"),
+        ] {
+            assert_eq!(display_duration(duration), text);
+        }
+    }
+
     struct FlushFailure;
     impl Write for FlushFailure {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {

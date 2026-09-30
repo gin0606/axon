@@ -514,3 +514,24 @@ pub fn operation_label(command: &Command) -> String {
         .map(|t| format!("{t} {operation}"))
         .unwrap_or_else(|| operation.into())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_condition_evaluating_command_defaults_to_a_thirty_second_timeout() {
+        for args in [
+            ["axon", "tasks"].as_slice(),
+            &["axon", "proposals"],
+            &["axon", "show", "ID"],
+        ] {
+            let conditions = match Cli::try_parse_from(args).unwrap().command {
+                Command::Tasks(options) | Command::Proposals(options) => options.conditions,
+                Command::Show { conditions, .. } => conditions,
+                _ => unreachable!(),
+            };
+            assert_eq!(conditions.condition_timeout, Duration::from_secs(30));
+        }
+    }
+}
