@@ -1,0 +1,1 @@
+{"entity":"axon-nd3bds","record":"created","parents":[],"at":"2026-08-31T12:49:27.127473Z","recorder":{"actor":"codex","data":{}},"reason":null,"after":{"kind":"issue","lifecycle":"not-started","owner":null,"title":"Store を in-memory で開けるようにする","description":"","label":"chore","condition":null,"parent":null,"needs":[]}}

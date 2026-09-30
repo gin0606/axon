@@ -1,0 +1,1 @@
+{"entity":"axon-95r483","record":"created","parents":[],"at":"2026-08-31T10:10:24.579226Z","recorder":{"actor":"codex","data":{}},"reason":null,"after":{"kind":"issue","lifecycle":"not-started","owner":null,"title":"導出値 (ready/blocked/orphaned) を計算する","description":"","label":"chore","condition":null,"parent":null,"needs":[]}}
