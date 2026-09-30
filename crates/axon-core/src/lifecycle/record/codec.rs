@@ -69,7 +69,7 @@ fn required<T>(field: &str, value: Option<T>) -> Result<T> {
     value.ok_or_else(|| invalid(format!("missing key {field:?}")))
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AfterRow {
     kind: String,
@@ -84,26 +84,26 @@ struct AfterRow {
     parent: Option<Option<EntityId>>,
     needs: Vec<EntityId>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Row {
     entity: EntityId,
     record: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     operation: Option<String>,
     parents: Vec<RecordId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     nonce: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     chosen: Option<RecordId>,
     at: DateTime<Utc>,
     #[serde(default, deserialize_with = "present")]
     recorder: Option<Option<Recorder>>,
     #[serde(default, deserialize_with = "present")]
     reason: Option<Option<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     after: Option<AfterRow>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     body: Option<String>,
 }
 
