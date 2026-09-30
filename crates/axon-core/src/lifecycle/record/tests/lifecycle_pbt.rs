@@ -304,6 +304,7 @@ proptest! {
         title in "[a-zA-Z0-9]{1,24}",
         state in prop_oneof![Just(Lifecycle::Undecided), Just(Lifecycle::NotStarted)],
         from_group in any::<bool>(),
+        label in 0usize..Label::ALL.len(),
     ) {
         let kind = if from_group { Kind::Group } else { Kind::Issue };
         let other = if from_group { Kind::Issue } else { Kind::Group };
@@ -314,15 +315,21 @@ proptest! {
         r.add_dep("item", "dep");
         let edit = r.store.write(&id("item"), Some(format!("edited {title}")), None, r.tick()).unwrap().unwrap();
         insert(&mut r.store, edit);
+        let relabel = r.store.set_label(&id("item"), Label::ALL[label], r.tick()).unwrap();
+        if let Some(record) = relabel {
+            insert(&mut r.store, record);
+        }
+        prop_assert_eq!(r.current("item").label, Label::ALL[label]);
         let before = r.current("item");
         let old_len = r.store.len();
         prop_assert!(r.store.convert(&id("item"), kind, r.tick()).unwrap().is_none());
         prop_assert_eq!(r.store.len(), old_len);
         let record = r.store.convert(&id("item"), other, r.tick()).unwrap().unwrap();
         prop_assert_eq!(&record.kind, &RecordKind::Convert);
-        prop_assert_eq!(&record.after, &Current { kind: other, ..before });
+        prop_assert_eq!(&record.after, &Current { kind: other, ..before.clone() });
         insert(&mut r.store, record);
         prop_assert_eq!(r.store.len(), old_len + 1);
+        prop_assert_eq!(r.current("item"), Current { kind: other, ..before });
     }
 
     #[test]

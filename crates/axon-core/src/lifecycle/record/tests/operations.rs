@@ -868,11 +868,20 @@ fn a_label_changes_like_text_and_leaves_everything_else_alone() {
     assert_eq!(r.current("i3").label, Label::Bug);
     // A terminal Entity is rejected before the comparison, even for its own label.
     r.op("i3", Complete);
-    for label in [Label::Bug, Label::Chore] {
-        assert!(error(r.store.set_label(&id("i3"), label, r.tick())).contains("fixed"));
-    }
     r.op("i1", Cancel);
-    assert!(error(r.store.set_label(&id("i1"), Label::Feat, r.tick())).contains("fixed"));
+    r.op("g2", Complete);
+    r.op("g0", Cancel);
+    for name in ["i3", "i1", "g2", "g0"] {
+        let own = r.current(name).label;
+        let other = *Label::ALL.iter().find(|label| **label != own).unwrap();
+        for label in [own, other] {
+            assert!(
+                error(r.store.set_label(&id(name), label, r.tick()))
+                    .contains("terminal label is fixed"),
+                "{name} {label}"
+            );
+        }
+    }
     // An import changes the label with the rest and leaves an unchanged one alone, even on
     // an Entity whose label may no longer change.
     let mut r = Replica::new("r0");
@@ -931,7 +940,7 @@ fn a_label_changes_like_text_and_leaves_everything_else_alone() {
             },
             r.tick()
         ))
-        .contains("fixed")
+        .contains("terminal label is fixed")
     );
 }
 
