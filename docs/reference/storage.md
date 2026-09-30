@@ -7,14 +7,14 @@
 記録は Entity ごとの不変な事実で、次を持つ。
 
 - 対象の Entity ID。
-- 記録の種類。登録、lifecycle 遷移（操作名を含む）、文面編集、所属変更、dependency の追加と削除、再浮上条件の設定と解除、種類の変換、declaration の適用（title・description・parent・needs の変更をまとめて持つ）、解決、Note。
+- 記録の種類。登録、lifecycle 遷移（操作名を含む）、文面編集、label の設定、所属変更、dependency の追加と削除、再浮上条件の設定と解除、種類の変換、declaration の適用（title・description・label・parent・needs の変更をまとめて持つ）、解決、Note。
 - 親記録の ID の集合。登録の記録は親を持たず、解決記録は衝突していた全 head を親にし、それ以外の記録は親を一つだけ持つ。Note は親を持たず、因果を持たない集合をなす。
 - 日時（UTC の瞬間と小数秒）、任意の記録者情報（`actor` と任意の JSON `data`）、任意の理由。
-- 操作後の現在値（Note 以外）。種類（Issue・Group）、保存値の lifecycle、`InProgress` の Issue なら着手した actor、title、description、再浮上条件、親 Group、outgoing dependency。Note は本文と、同じ本文・日時・記録者の Note を別の記録にするための乱数（nonce）を持つ。
+- 操作後の現在値（Note 以外）。種類（Issue・Group）、保存値の lifecycle、`InProgress` の Issue なら着手した actor、title、description、label、再浮上条件、親 Group、outgoing dependency。label は固定集合（[label](lifecycle.md#label)）の値で、どの種類の記録の現在値も常に持ち、記録 file では `description` の次に置く。Note は本文と、同じ本文・日時・記録者の Note を別の記録にするための乱数（nonce）を持つ。
 
 記録 ID は記録 file の bytes 全体の BLAKE3 hash を小文字 16 進 64 文字で表したもので、接頭辞を持たない。同じ ID なら同じ内容であり、file 名と内容を照合できる。Note ID も記録 ID である。Entity の短い ID（[識別子と入力](cli.md#識別子と入力)）とは別の契約で、CLI では完全な記録 ID を使う。
 
-文面・関係・条件の編集も記録にする。lifecycle 遷移の記録は、直前の記録の現在値から操作後の現在値への変化として読める。種類の変換は lifecycle 遷移ではないが記録として残り、変換前後の種類が読める。lifecycle 遷移の記録の妥当性は、その遷移の時点の種類（直前の記録の現在値の種類）の規則で判定し、Entity の現在の種類では判定しない（[種類の変換](lifecycle.md#種類の変換)）。種類の規則に反する遷移の記録（Group の `Start`、Issue の `Undecided` からの `Complete` など）は、通常の writer が作ることはなく、読取は [保存先の破損](#保存先の破損) として扱う。遷移元は親記録の現在値なので、親記録が欠けている記録（[gap](#記録の欠けgap)）ではこの検査を行わない。
+文面・label・関係・条件の編集も記録にする。lifecycle 遷移の記録は、直前の記録の現在値から操作後の現在値への変化として読める。種類の変換は lifecycle 遷移ではないが記録として残り、変換前後の種類が読める。lifecycle 遷移の記録の妥当性は、その遷移の時点の種類（直前の記録の現在値の種類）の規則で判定し、Entity の現在の種類では判定しない（[種類の変換](lifecycle.md#種類の変換)）。種類の規則に反する遷移の記録（Group の `Start`、Issue の `Undecided` からの `Complete` など）は、通常の writer が作ることはなく、読取は [保存先の破損](#保存先の破損) として扱う。遷移元は親記録の現在値なので、親記録が欠けている記録（[gap](#記録の欠けgap)）ではこの検査を行わない。
 
 ## 現在値の導出
 
@@ -36,7 +36,7 @@ Group の実効 lifecycle、一覧の状況、候補集合は settled な Entity
 
 settled な Entity の現在値がコアの構造の制約に反する箇所を、Entity ごとに種類を持つ「違反」の集合として導出する。種類は、包含の循環、親の不在（親が存在しない、または Group でない）、終了した親の下の未終了、`InProgress` の Issue か実効 `InProgress` の Group の未採用の祖先、`Completed` の Entity の未完了の依存先、依存先の不在、通常完了経路の循環である。違反は settled な保存先への通常操作からは生じない。両側の有効な操作を Git が組み合わせたとき（片側が Group を `Complete` し他側がその Group に子を登録した、両側の移動で循環ができた、片側が完了しつつ他側でその依存先を `Reopen` した、片側で Group を未採用の下へ移し他側でその配下を完了した）、cherry-pick や revert で記録の一部だけが入ったり消えたりしたとき（親 Group の登録の記録を伴わない子の記録など）、解決の選択が完了済みの相互依存を作ったときに生じる。
 
-違反は通常操作を止めない。lifecycle 操作（`Reconsider`・`Reopen` を含む全遷移）、所属変更、dependency の追加と削除、登録、種類の変換、文面編集、条件の設定、declaration の反映のすべての通常操作は、各操作の前提に加えて「操作後の違反が操作前の違反の部分集合」であることを要求する。所属変更、dependency の追加、登録は、これに加えて、変更で新しく持った関係（dependency、所属）が誘導する通常完了経路の前提の辺（依存先は自身と子孫にその依存先を待たせ、所属先は新しい子を待ち、新しく祖先の連なりに加わった Group は自身と子孫にその依存先を待たせる。移動の前後で共通の祖先の依存先は新しい関係ではない）のどれかが変更後の循環上に載る（辺の先から前提をたどって辺の元へ戻れる）なら、違反が増えなくても拒否する。辺は関係ごとに数え、別の関係がすでに同じ Entity の組を待たせていても検査する。そうでないと、祖先の dependency で待っている組に自身の dependency を重ねる変更が通り、祖先の dependency を外しても循環が残る。有効な保存先では循環上に載る辺は必ず違反を増やすので、この検査は部分集合の検査に含まれる。無関係な違反が残っていても操作は進む。
+違反は通常操作を止めない。lifecycle 操作（`Reconsider`・`Reopen` を含む全遷移）、所属変更、dependency の追加と削除、登録、種類の変換、文面編集、label の設定、条件の設定、declaration の反映のすべての通常操作は、各操作の前提に加えて「操作後の違反が操作前の違反の部分集合」であることを要求する。所属変更、dependency の追加、登録は、これに加えて、変更で新しく持った関係（dependency、所属）が誘導する通常完了経路の前提の辺（依存先は自身と子孫にその依存先を待たせ、所属先は新しい子を待ち、新しく祖先の連なりに加わった Group は自身と子孫にその依存先を待たせる。移動の前後で共通の祖先の依存先は新しい関係ではない）のどれかが変更後の循環上に載る（辺の先から前提をたどって辺の元へ戻れる）なら、違反が増えなくても拒否する。辺は関係ごとに数え、別の関係がすでに同じ Entity の組を待たせていても検査する。そうでないと、祖先の dependency で待っている組に自身の dependency を重ねる変更が通り、祖先の dependency を外しても循環が残る。有効な保存先では循環上に載る辺は必ず違反を増やすので、この検査は部分集合の検査に含まれる。無関係な違反が残っていても操作は進む。
 
 違反に含まれる Entity には修復のための免除を与える。終了した親の配下を変更しないという固定、`Completed` の dependency の固定（削除だけ。追加は免除しない）、`Completed` の依存元による `Reopen` の阻止を、その Entity が違反に含まれるときだけ免除する。免除は操作の前提を緩めるだけで、違反を増やす操作は免除の下でも通らない。違反は Entity と種類の組で数え、同じ Entity の同じ種類の違反を重くする操作（すでに未完了の依存先を持つ `Completed` の依存元に、もう一つ未完了の依存先を残す `Reopen` など）は違反を増やさない。`Completed` の Group の下の `Cancelled` の Issue が循環に含まれていても、その `Reconsider` は終了した親の下に未終了の Entity を作るため拒否される。`Completed` の依存元による阻止の免除が働くのは、その依存元がすでに未完了の依存先を持つ違反にあるときだけで、依存元にその違反を新しく作る `Reopen` は拒否される。修復は違反を減らす操作（解決記録、dependency の削除、依存元から順の `Reopen`、取り外し、再採用）で行う。終了した Group どうしの包含の循環は取り外しで、完了済みの相互依存は dependency の削除で直せる。免除は違反のない保存先では働かない。包含の循環と通常完了経路の循環の違反は循環上の Entity（包含または完了の前提をたどって自身に戻れる Entity）だけに付き、循環を待つだけの Entity は違反に含まれず、免除も受けない。待つ側まで含めると、待つ側どうしに新しい循環を足しても違反の集合が増えず、通常操作が循環を作れてしまう。すでに循環上にある Entity どうしの間の dependency の追加、所属変更、登録（同じ循環への chord や、別の循環の構成員どうしで新しい循環を閉じる辺）は、構成員を変えなくても新しい辺が循環上に載るため拒否する。これを通すと、元の循環を直した後に通常操作で足した循環が残る。循環を待つ Entity を経由して構成員を増やす追加も拒否し、循環上の Entity を待つだけの追加（循環を閉じない辺）は通る。解決記録は違反の検査を免除する。解決の選択で違反ができることがあり、それを解決時に拒否するとどの選択も拒否されて行き止まりになる場合があるためで、解決で head を一つに戻してから通常操作で直す。違反があり衝突がない保存先には、修復を確実に進める通常操作が一つはある。
 
@@ -55,10 +55,12 @@ gap は記録が消せないため解決記録では埋まらない。欠けた�
 `.axon/records/` の下にある記録以外の file は次のように扱う。
 
 - 名前が `.tmp` で終わる file は書込途中の一時 file で、読取と `axon storage check` は無視する。
-- それ以外の、名前が記録 ID の形でない file（OS が作る file を含む）、名前と内容の hash が一致しない file、名前の先頭 2 文字と違う subdirectory にある file、途中で切れた file と空の file、規則外の内容の file は保存先の破損とする。読取と `axon storage check` は衝突や違反とは別に破損として報告し、利用者が file を直すまで読取と全操作を止める。破損は Entity に属さないので、違反の免除は当てはまらない。
+- それ以外の、名前が記録 ID の形でない file（OS が作る file を含む）、名前と内容の hash が一致しない file、名前の先頭 2 文字と違う subdirectory にある file、途中で切れた file と空の file、規則外の内容の file（現在値に label がない記録、固定集合の外の label を持つ記録を含む）は保存先の破損とする。読取と `axon storage check` は衝突や違反とは別に破損として報告し、利用者が file を直すまで読取と全操作を止める。破損は Entity に属さないので、違反の免除は当てはまらない。
 - 名前と内容の hash が一致しない file のうち、内容の CRLF を LF に戻すと名前の hash と一致するものは、Git の改行変換が疑われる破損として、その file の理由にその旨を書き、報告の末尾に改行変換の可能性と [保存先と worktree](../guide/storage.md#改行変換と-axongitattributes) への案内を一行添える。読取は内容を戻さず、破損として止める扱いは変えない。
 
 `.axon/` 直下の header・`.gitignore`・`.gitattributes`・lock 以外の file は読まず、報告もしない。header file の欠落、読めない header、未知の format は破損と同じく操作を止める。未知の format は変換しない。
+
+現在の header の format は `axon-records/v2` である。label を導入する前の format `axon-records/v1` の保存先は、記録が label を持たないため読めない。読取と全操作（`axon storage check` を含む）は、記録を読まずに変換が要ることを示す診断で止め、暗黙に変換しない。v1 の記録へ label を足すと記録 ID（内容の hash）と親記録の参照がすべて変わるため、v2 への移行は利用者が一度限りの変換で行う。v1 のまま残した branch や clone の記録 file を v2 の保存先へ Git で統合すると、label のない記録が破損になるため、統合する側も変換してから統合する。共通の記録が両側で同じ記録 ID になるよう、各 Entity に両側で同じ label が付く対応を使う（[format を上げて変換で移す理由](../design/decisions.md#format-を上げて変換で移す理由)）。
 
 ## 保存先と初期化
 
@@ -71,7 +73,7 @@ prefix は Entity ID の先頭に使い、ASCII の小文字英数字とハイ�
 | path | 内容 |
 | --- | --- |
 | `.axon/records/` | 記録の directory。記録は記録 ID の先頭 2 文字の subdirectory の下に、記録 ID を file 名として置く |
-| `.axon/header.json` | header。format の識別子、store ID、prefix を持つ 1 行の JSON |
+| `.axon/header.json` | header。format の識別子（`axon-records/v2`）、store ID、prefix を持つ 1 行の JSON |
 | `.axon/.gitignore` | `*.lock` と `*.tmp` の 2 行。lock と書込途中の一時 file だけを Git から除外し、記録と header は追跡できる |
 | `.axon/.gitattributes` | `* -text` の 1 行。`.axon/` の下の file を Git の改行変換の対象から外す |
 

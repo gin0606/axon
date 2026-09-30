@@ -1,6 +1,6 @@
 # lifecycleと構造の契約
 
-この文書は、Issue・Group が持つ lifecycle の状態と遷移、Group の実効 lifecycle、再浮上条件、計画としての包含、種類の変換、dependency、候補集合、文面・Note・状態変更履歴の契約を定める。一覧の行と状況、候補一覧の評価順と外部コマンドの実行は [候補と外部条件](candidates.md)、識別子・引数・表示・保存結果は [CLIと表示の契約](cli.md)、計画全体の一括編集は [Declaration](declaration.md)、記録の保存と Git 統合は [保存と統合の契約](storage.md) に定める。
+この文書は、Issue・Group が持つ lifecycle の状態と遷移、Group の実効 lifecycle、再浮上条件、計画としての包含、種類の変換、dependency、候補集合、label、文面・Note・状態変更履歴の契約を定める。一覧の行と状況、候補一覧の評価順と外部コマンドの実行は [候補と外部条件](candidates.md)、識別子・引数・表示・保存結果は [CLIと表示の契約](cli.md)、計画全体の一括編集は [Declaration](declaration.md)、記録の保存と Git 統合は [保存と統合の契約](storage.md) に定める。
 
 対応する実行可能なモデルは [`spec/lifecycle_rules.qnt`](../../spec/lifecycle_rules.qnt)、[`spec/issue_lifecycle.qnt`](../../spec/issue_lifecycle.qnt)、[`spec/group_lifecycle.qnt`](../../spec/group_lifecycle.qnt)、[`spec/lifecycle_reachability.qnt`](../../spec/lifecycle_reachability.qnt)、[`spec/candidate_evaluation.qnt`](../../spec/candidate_evaluation.qnt)、[`spec/lifecycle_information.qnt`](../../spec/lifecycle_information.qnt) にある。モデルが前提とする規則の一覧、各モデルの対象範囲・検証する性質・再現手順は [モデルの読み方](../../spec/README.md#モデルが表す規則) を参照する。
 
@@ -110,7 +110,7 @@ Group の移動は、その Group の親だけを付け替える。配下の所�
 
 種類（Issue・Group）は Entity の現在値であり、変換で変わる。保存値が `Undecided`・`NotStarted` の Issue は Group に、保存値が `Undecided`・`NotStarted` で子のない Group は Issue に変換できる。`InProgress` の Issue は先に `Release` する。終了した Entity と子を持つ Group は変換できない。
 
-変換は lifecycle・所属・dependency・文面・再浮上条件・Note・ID を変えない。変換した Entity を参照する所属と dependency はそのまま残る。Issue から変換した Group は子を持たないため、実効値は保存値と同じになる。
+変換は lifecycle・所属・dependency・文面・label・再浮上条件・Note・ID を変えない。変換した Entity を参照する所属と dependency はそのまま残る。Issue から変換した Group は子を持たないため、実効値は保存値と同じになる。
 
 変換は lifecycle 遷移ではないが記録として残り、変換前後の種類が読める。lifecycle 遷移の記録の妥当性は、その遷移の時点の種類（直前の記録の現在値の種類。登録時の種類を、その遷移より前の変換の記録で進めたもの）の規則で判定し、Entity の現在の種類では判定しない。遷移は種類を変えないため、遷移の記録が持つ操作後の種類がその時点の種類でもある。Issue として `Start`・`Release` してから Group に変換した履歴と、Group として `NotStarted` から `Complete` し `Reopen` してから Issue に変換した履歴は、この判定で妥当になる。現在の種類で全記録を判定すると、Group が `Start` を持たず、Issue が `NotStarted` から完了しないため不正になる。`axon log` は変換を lifecycle 遷移と区別し、変換前後の種類とともに示す（[CLIと表示の契約](cli.md#noteと履歴)）。
 
@@ -148,17 +148,37 @@ Group は `Start` を持たないため、着手可能・着手候補になら�
 
 終了した Entity は条件を評価せず、浮上しない。祖先のいずれかが非浮上なら、その子孫を判断候補・着手候補から外すが、子の状態や条件は変えない。再浮上条件の成立状況が変化しても、保存する lifecycle・所属・dependency は変わらない。終了している間にも外界は変化するが、その Entity の条件を評価するという意味ではない。
 
+## label
+
+label は、Entity が表す仕事の種類を固定集合の値で分類する属性である。Issue・Group とも必ず一つの label を持ち、未設定の状態はない。集合は次の 7 値で、これ以外の値は拒否する。集合を設定で変える経路はない。
+
+| label | 意味 |
+| --- | --- |
+| `bug` | 期待と異なる振る舞いを直す |
+| `feat` | 新しい振る舞いや機能を加える |
+| `chore` | 依存の更新、CI、設定など、振る舞いを変えない保守 |
+| `docs` | 文書・help・skill を整備する |
+| `test` | テストを追加・整理する |
+| `refactor` | 振る舞いを変えずに構造を整理する |
+| `spike` | 決めるために調べる（要検討の事項、仕様・計画・方針の検討） |
+
+Group の label は、その計画の主な種類を表す。配下の label から導出せず、配下と一致することも要求しない。
+
+label は登録時に必ず与え、後から別の値へ変更できる。解除はない。編集できる状態は title・description と同じで、`Undecided`・`NotStarted`・`InProgress` では状態を変えずに変更でき、終了後は固定する（[情報の役割と編集範囲](#情報の役割と編集範囲)）。変更は記録として残る。
+
+label は分類であり、優先度ではない。lifecycle 遷移の前提、包含と dependency の制約、候補集合、一覧の状況、再浮上条件の評価のいずれにも影響しない。種類の変換は label を変えない。一覧での表示と絞り込みは [CLIと表示の契約](cli.md#一覧) に定める。理由は [label を固定集合の必須属性にした理由](../design/decisions.md#label-を固定集合の必須属性にした理由) に記す。
+
 ## 文面・Note・状態変更履歴
 
 ### 情報の役割と編集範囲
 
-Issue・Group とも、title・description は現在の内容を保持する。`Undecided`・`NotStarted`・`InProgress` は状態を変えずに編集でき、終了後は固定する。`Cancelled` の Entity は `Reconsider` で `Undecided` へ、`Completed` の Entity は `Reopen` で `NotStarted` へ戻せば編集できる。完了した結果を保ったままの訂正・補足は Note に追記する。この規則は title・description の規則であり、所属・dependency は上に定めた変更条件に従う。
+Issue・Group とも、title・description・label は現在の内容を保持する。`Undecided`・`NotStarted`・`InProgress` は状態を変えずに編集でき、終了後は固定する。`Cancelled` の Entity は `Reconsider` で `Undecided` へ、`Completed` の Entity は `Reopen` で `NotStarted` へ戻せば編集できる。完了した結果を保ったままの訂正・補足は Note に追記する。この規則は title・description・label の規則であり、所属・dependency は上に定めた変更条件に従う。
 
 文面の編集は編集後の現在値を持つ記録として残り、`axon log` で編集があったことが読める。採用した時点の文面を別に保存することはせず、Axon は編集の差分を示さない。着手中の計画の具体化・修正のために、作業の解放や採用撤回を要求しない。完了条件をエージェントが都合よく緩和・削除することへの対処は、skill による運用とセッションログでの確認に任せる。残したい変更理由は Note で補足する。
 
 Note は、調査結果・作業結果・申し送り・訂正など、状態変更と独立した情報を残す。どの状態でも追加でき、追加しても状態は変えない。追記専用とし、既存の Note は編集・削除せず、訂正は新しい Note とする。同じ内容の追記も、それぞれ別の記録として残す。Note は互いに因果を持たない集合で、表示順は日時、同じ日時なら記録 ID で決める。
 
-状態変更履歴は Note と別の役割を持ち、成功した lifecycle 遷移ごとに、操作・変更後の状態・日時・任意の理由を持つ記録を自動で残す。変更前の状態は直前の記録の現在値として読める。状態変更と記録の追加は一体で確定し、片方だけを保存しない。拒否された遷移は記録を作らない。記録は不変で、後からの理由の補足・訂正は Note に追記する。文面編集・関係の変更・条件の設定・種類の変換・衝突の解決も同じ記録の列に残るが、lifecycle 遷移とは区別して表示する。記録が持つ項目と、記録の集合からの現在値の導出は [保存と統合の契約](storage.md#記録) に定める。
+状態変更履歴は Note と別の役割を持ち、成功した lifecycle 遷移ごとに、操作・変更後の状態・日時・任意の理由を持つ記録を自動で残す。変更前の状態は直前の記録の現在値として読める。状態変更と記録の追加は一体で確定し、片方だけを保存しない。拒否された遷移は記録を作らない。記録は不変で、後からの理由の補足・訂正は Note に追記する。文面編集・label の設定・関係の変更・条件の設定・種類の変換・衝突の解決も同じ記録の列に残るが、lifecycle 遷移とは区別して表示する。記録が持つ項目と、記録の集合からの現在値の導出は [保存と統合の契約](storage.md#記録) に定める。
 
 Note と Note 以外の記録は別々の入口で表示する。保存上の区別は、実際に起きた操作を自動記録することと、自由な補足を追加することの区別である。
 
