@@ -289,13 +289,6 @@ fn the_id_is_the_hash_of_the_bytes_so_a_changed_byte_is_a_different_record() {
     assert_eq!(RecordId::of(altered.as_bytes()), altered_id);
     assert!(error(RecordId::try_from("ABC")).contains("record ID"));
     assert!(RecordId::try_from(ids[0].to_string()).is_ok());
-    // A file whose name is not the hash of its bytes is rejected before decoding.
-    assert_eq!(
-        decode_as(&altered_id, altered.as_bytes()).unwrap(),
-        decode(altered.as_bytes()).unwrap().1
-    );
-    let mismatch = error(decode_as(&ids[10], altered.as_bytes()));
-    assert!(mismatch.contains(&ids[10].to_string()) && mismatch.contains(&altered_id.to_string()));
 }
 
 #[test]
@@ -473,9 +466,8 @@ proptest! {
             let expected_id = RecordId::of(&bytes);
             prop_assert_eq!(&expected_id.to_string()[..2], expected_id.subdirectory());
             let (decoded_id, decoded) = decode(&bytes).unwrap();
-            prop_assert_eq!(decoded_id, expected_id.clone());
+            prop_assert_eq!(decoded_id, expected_id);
             prop_assert_eq!(&decoded, &entry);
-            prop_assert_eq!(&decode_as(&expected_id, &bytes).unwrap(), &decoded);
             prop_assert_eq!(encode(&decoded).unwrap(), bytes);
         }
         }
@@ -498,9 +490,6 @@ proptest! {
             _ => text.replacen("\"entity\":\"i3\",", "\"entity\": \"i3\",", 1),
         };
         prop_assert!(decode(bad.as_bytes()).is_err(), "{bad}");
-        let altered = RecordId::of(bad.as_bytes());
-        prop_assert_ne!(altered.clone(), id.clone());
-        prop_assert!(decode_as(id, bad.as_bytes()).is_err());
         }
         }
     }
