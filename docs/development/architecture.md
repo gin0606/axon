@@ -65,7 +65,7 @@ cargo tree -p axon-core --depth 1
 | CLI 内部 | `cargo test --locked -p axon --bin axon`。表示、ID 解決、外部条件 process の単体テスト |
 | 公開 CLI と保存の接続 | `cargo test --locked --test smoke`。`tests/smoke.rs` が `tests/lifecycle/{workflow,file,location,contracts,declaration,label_conversion}.rs` も読み込み、独立 fixture、実 Git worktree、公開出力を検証する。`label_conversion.rs` は binary が書いた保存先を v1 の形に戻して変換し、元の bytes に戻ることと拒否する入力を検証する |
 | 記録者取得 | `cargo test --locked -p axon-recorder`。環境変数からの検出の単体テスト |
-| label 導入前の保存先の変換 | `cargo test --locked -p axon-label-conversion`（対応 file の解析と label の挿入位置の単体テスト）と `cargo test --locked --test smoke label_conversion`。既定メンバーではないので、オプションなしの `cargo test` には含まれない |
+| label 導入前の保存先の変換 | `cargo test --locked -p axon-label-conversion`（対応 file の解析と label の挿入位置の単体テスト）と `cargo test --locked --test smoke label_conversion`。既定メンバーではないが root crate の dev-dependency なので、smoke の `label_conversion::` はオプションなしの `cargo test` でも実行される。lib の単体テストと binary はオプションなしの `cargo test` に含まれない |
 
 層の整理でも公開コマンド・引数・出力 bytes・終了コード、lifecycle の意味論、canonical bytes は維持する。全体検証とモデルを再検証する条件は [検証方針](verification.md) に従う。
 
