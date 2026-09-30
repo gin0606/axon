@@ -13,7 +13,7 @@ description: Axonのdeclarationを`axon export`し、`axon import prepare`・`ax
 
 - 既存計画は `axon export ID...` のstdoutを未使用のfileへ保存する。Groupは自身と終了済みを含む全子孫、Issueは単体、複数selectorは和集合。`axon export`は保存先を変更せず条件を実行しない。既存の編集fileへリダイレクトして上書きしない。
 - 新規計画は `axon docs declaration --example` から作る。これは保存先を開かない。`id: null`、`base: null`、一意の `key` を持つrecordに、呼び出し側が決めた初期状態 `undecided` または `not-started` を書く。雛形の初期状態だけから採用判断を推測しない。
-- schemaは `axon-declaration/v1`。fieldはすべて必須。編集集合は `groups` と `issues` のrecordだけで、載っていないEntityは触らない。recordを消しても削除・`axon cancel`・所属解除・依存解除にならない。各recordはtitle、description、親、outgoing dependencyの完全な宣言で、親解除は `parent: null`、依存なしは `needs: []` と書く。
+- schemaは `axon-declaration/v2`。fieldはすべて必須。編集集合は `groups` と `issues` のrecordだけで、載っていないEntityは触らない。recordを消しても削除・`axon cancel`・所属解除・依存解除にならない。各recordはtitle、description、label、親、outgoing dependencyの完全な宣言で、親解除は `parent: null`、依存なしは `needs: []` と書く。
 - 既存のid、base、lifecycle、kindは変えない。`lifecycle`は`references`を含めて保存値で、`axon show --details`・`axon list --lifecycle`が示すGroupの実効値とは異なりうる（保存値`NotStarted`で配下の仕事が始まったGroupも`not-started`のまま）。新規は`axon import prepare`後もkeyを保持する。参照は `{ id: 完全ID }` または `{ key: 別名 }`。`references` は編集集合外への参照の読み取り専用contextで、incoming edgeは含まない。必要なら `axon show ID --details --skip-conditions` で確認する。既存Entityを追加するにはselectorを広げて別fileへ`axon export`を再実行し、保全した編集意図を移す。baseを手作りしない。
 - 再浮上条件・Note・履歴の取り込み、既存lifecycleの遷移、未知形式の変換には使わない。既存の条件とNoteは保持される。
 

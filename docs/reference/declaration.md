@@ -21,7 +21,7 @@ declaration の `issues` と `groups` に載っている Entity だけが編集�
 形式は strict YAML とし、schema label は `axon-declaration/v2` とする。v2 は v1 の record に必須の `label` field を加えた形式である。次は既存 Group の subtree に新規 Issue を一件追加し、subtree 外の Issue へ依存を張る、`prepare` 前の例である。fingerprint は例示値である。
 
 ```yaml
-schema: axon-declaration/v1
+schema: axon-declaration/v2
 groups:
   - id: demo-k3m7pq
     key: null
@@ -32,6 +32,7 @@ groups:
       ## 目的
 
       検索フォームと結果表示を揃える。
+    label: feat
     parent: null
     needs: []
 issues:
@@ -41,6 +42,7 @@ issues:
     lifecycle: completed
     title: 検索 API を実装する
     description: レスポンス形式を固定した。
+    label: feat
     parent: { id: demo-k3m7pq }
     needs: []
   - id: demo-c9d4ts
@@ -49,6 +51,7 @@ issues:
     lifecycle: not-started
     title: 検索フォームを作る
     description: ""
+    label: feat
     parent: { id: demo-k3m7pq }
     needs:
       - { id: demo-8bxw2r }
@@ -58,6 +61,7 @@ issues:
     lifecycle: not-started
     title: 検索結果を表示する
     description: フォームの送信結果を一覧に出す。
+    label: feat
     parent: { id: demo-k3m7pq }
     needs:
       - { id: demo-8bxw2r }

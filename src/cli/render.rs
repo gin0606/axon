@@ -549,6 +549,14 @@ pub(super) fn declaration_changes(
                     }
                 ));
                 out.push_str(&format!(
+                    "  label: {}\n",
+                    if a.label == b.label {
+                        "unchanged".into()
+                    } else {
+                        format!("{} -> {}", a.label.name(), b.label.name())
+                    }
+                ));
+                out.push_str(&format!(
                     "  parent: {} -> {}\n",
                     a.parent
                         .as_ref()
@@ -568,8 +576,9 @@ pub(super) fn declaration_changes(
             }
         } else {
             out.push_str(&format!(
-                "  Create {}\n  title: new\n  description: new\n  parent: null -> {}\n",
+                "  Create {}\n  title: new\n  description: new\n  label: {}\n  parent: null -> {}\n",
                 axon::declaration::kind(b.kind),
+                b.label.name(),
                 b.parent
                     .as_ref()
                     .map(ToString::to_string)

@@ -28,7 +28,7 @@ pub(super) enum Command {
     },
     /// Export Issues and complete Group subtrees as canonical declaration YAML
     #[command(
-        after_help = "Example: axon export ID... > plan.yaml\nEdit title, description, parent or needs in plan.yaml.\nNext: axon import prepare plan.yaml\nFor a new plan: axon docs declaration --example > new-plan.yaml"
+        after_help = "Example: axon export ID... > plan.yaml\nEdit title, description, label, parent or needs in plan.yaml.\nNext: axon import prepare plan.yaml\nFor a new plan: axon docs declaration --example > new-plan.yaml"
     )]
     Export {
         #[arg(required = true, num_args = 1.., value_name = "ID")]
@@ -172,7 +172,7 @@ pub(super) enum Import {
     Prepare { file: PathBuf },
     /// Validate canonical FILE and display changes without writing or running conditions
     #[command(
-        after_help = "Example: axon import check plan.yaml\nReview title changes, description change indicators and relationship changes.\nNext, after reviewing: axon import apply plan.yaml"
+        after_help = "Example: axon import check plan.yaml\nReview title changes, description change indicators, label changes and relationship changes.\nNext, after reviewing: axon import apply plan.yaml"
     )]
     Check { file: PathBuf },
     /// Apply all changes atomically and refresh FILE; safe to retry the same declaration

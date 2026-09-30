@@ -3,16 +3,20 @@ Declarations describe the complete editable fields of a selected plan.
 Get a plan: axon export ID... > plan.yaml
 Start a new plan: axon docs declaration --example > plan.yaml
 
-The strict YAML schema is axon-declaration/v1. The root fields are schema,
+The strict YAML schema is axon-declaration/v2. The root fields are schema,
 groups, issues and references. Every record has id, key, base, lifecycle,
-title, description, parent and needs. References contain id, kind, lifecycle
-and title for targets outside the edited records.
+title, description, label, parent and needs. References contain id, kind,
+lifecycle and title for targets outside the edited records. Files in an
+earlier schema are rejected: export existing records again, and give records
+not yet in storage a label under the current schema.
 
 Existing records have a full id and a read-only base fingerprint and lifecycle.
 New records have id: null, base: null, a unique key, and lifecycle: undecided
 or not-started. Keys are file-local aliases. References use { id: FULL-ID } or
 { key: local-key }. A parent must be a Group; needs lists outgoing dependencies.
 Titles must not be blank. Description text is preserved without trimming.
+The label is required and one of bug, feat, chore, docs, test, refactor or
+spike; a new record is created with the label it declares.
 
 Edit the declaration, then follow these steps:
   axon import prepare plan.yaml
@@ -22,7 +26,8 @@ Edit the declaration, then follow these steps:
 Prepare assigns new IDs and rewrites the file without changing storage.
 Prepare prints each new record as key -> full ID.
 Check shows old -> new titles on one line (newlines as \n and controls escaped),
-description changed/unchanged, and relationship changes without writing.
+description changed/unchanged, old -> new labels, and relationship changes
+without writing.
 Apply validates everything, saves one stored record file per changed Entity and rewrites
 the declaration; a retry finishes an interrupted save per Entity. Check again
 to confirm that no differences remain. Apply also prints key -> full ID for records

@@ -140,6 +140,8 @@ fn declaration_docs_and_template_work_with_broken_management_root() {
         "lifecycle",
         "title",
         "description",
+        "label",
+        "axon-declaration/v2",
         "parent",
         "needs",
         "prepare",
@@ -151,9 +153,14 @@ fn declaration_docs_and_template_work_with_broken_management_root() {
     ] {
         assert!(docs.contains(phrase), "{phrase}");
     }
+    for label in axon::lifecycle::Label::ALL {
+        assert!(docs.contains(label.name()), "{}", label.name());
+    }
     let output = f.run(&["docs", "declaration", "--example"]);
     assert!(output.stderr.is_empty());
     let yaml = success(output);
+    assert!(yaml.starts_with("schema: axon-declaration/v2\n"), "{yaml}");
+    assert_eq!(yaml.matches("\n    label: feat\n").count(), 3, "{yaml}");
     let d = declaration::parse(&yaml).unwrap();
     assert_eq!(d, declaration::example());
     assert_eq!(d.serialize(&view_of(&Store::new())).unwrap(), yaml);
@@ -194,6 +201,7 @@ fn declaration_prepare_check_new_plan_and_existing_changes() {
     assert_eq!(bytes, fs::read(&path).unwrap());
     let text = f.ok(&["import", "check", path.to_str().unwrap()]);
     assert_eq!(text.matches("Create ").count(), 3);
+    assert_eq!(text.matches("\n  label: feat\n").count(), 3, "{text}");
     assert!(text.contains("needs: +"));
     assert!(text.contains("Situation after: Blocked"));
     assert_eq!(before, snapshot(&f));
@@ -239,9 +247,16 @@ fn declaration_check_rejections_preserve_storage_and_input() {
     let before = snapshot(&f);
     let mutations = [
         (
-            exported.replace("axon-declaration/v1", "wrong/v1"),
+            exported.replace("axon-declaration/v2", "wrong/v1"),
             "schema:",
         ),
+        (
+            exported.replace("axon-declaration/v2", "axon-declaration/v1"),
+            "run axon export again",
+        ),
+        (exported.replace("label: chore", "label: fix"), "schema:"),
+        (exported.replace("label: chore", "label: null"), "schema:"),
+        (exported.replace("    label: chore\n", ""), "schema:"),
         (
             exported.replace("title: Original", "title: Original\n    unknown: x"),
             "schema:",
@@ -643,6 +658,43 @@ fn declaration_apply_registers_edits_and_retries() {
 }
 
 #[test]
+fn declaration_label_changes_show_each_side_and_apply_as_one_record() {
+    let f = Fixture::new();
+    f.ok(&["init", "demo"]);
+    let id = created(&f.ok(&[
+        "capture", "--label", "chore", "--accept", "--title", "Labelled",
+    ]));
+    let exported = f.ok(&["export", &id]);
+    assert!(exported.contains("\n    description: \"\"\n    label: chore\n    parent: null\n"));
+    let path = f.0.join("plan.yaml");
+    let edited = exported.replace("label: chore", "label: bug");
+    fs::write(&path, &edited).unwrap();
+    let before = snapshot(&f);
+    let text = f.ok(&["import", "check", path.to_str().unwrap()]);
+    assert!(
+        text.lines().any(|line| line == "  label: chore -> bug"),
+        "{text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "  title: unchanged"),
+        "{text}"
+    );
+    assert!(!text.contains("No changes"), "{text}");
+    assert_eq!(snapshot(&f), before);
+    f.ok(&["import", "apply", path.to_str().unwrap()]);
+    let after = snapshot(&f);
+    assert_eq!(after.len(), before.len() + 1);
+    let log = f.ok(&["log", &id]);
+    assert!(log.contains("Declaration applied: label"), "{log}");
+    assert!(f.ok(&["list", "--label", "bug"]).contains(&id));
+    let rewritten = fs::read_to_string(&path).unwrap();
+    assert!(rewritten.contains("label: bug"));
+    assert_eq!(rewritten, f.ok(&["export", &id]));
+    let check = f.ok(&["import", "check", path.to_str().unwrap()]);
+    assert!(check.contains("No changes"), "{check}");
+}
+
+#[test]
 fn declaration_title_changes_show_each_side_and_reject_control_characters() {
     let f = Fixture::new();
     f.ok(&["init", "demo"]);
@@ -659,6 +711,10 @@ fn declaration_title_changes_show_each_side_and_reject_control_characters() {
         "{text}"
     );
     assert!(text.contains("description: changed"));
+    assert!(
+        text.lines().any(|line| line == "  label: unchanged"),
+        "{text}"
+    );
     assert!(!text.contains("Private full description"));
     let before = snapshot(&f);
     for title in ["After\nline", "After\u{1b}[2J", &"a".repeat(201)] {

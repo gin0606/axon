@@ -34,7 +34,7 @@ Groupの完了前には目的・完了条件、全子孫の終了、成果の統
 
 ## 計画をまとめて登録・編集する
 
-一括操作には `axon-declaration/v1` の YAML を使います。形式の詳細は `axon docs declaration` と [計画全体の取得と一括編集](../reference/declaration.md) を参照してください。
+一括操作には `axon-declaration/v2` の YAML を使います。形式の詳細は `axon docs declaration` と [計画全体の取得と一括編集](../reference/declaration.md) を参照してください。
 
 ### 新規計画を登録する
 
