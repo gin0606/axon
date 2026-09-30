@@ -572,7 +572,8 @@ fn a_store_in_the_format_before_labels_needs_conversion_and_its_records_are_not_
             error.contains("header.json")
                 && error.contains("needs conversion")
                 && error.contains("axon-records/v1")
-                && error.contains("axon-records/v2"),
+                && error.contains("axon-records/v2")
+                && error.contains("docs/guide/storage.md"),
             "{args:?}: {error}"
         );
         assert!(!error.contains("corrupt"), "{args:?}: {error}");

@@ -42,6 +42,33 @@ git checkout -- .axon
 
 1行目は追跡されたfile（記録、header、`.axon/.gitignore`、`.axon/.gitattributes`）だけを消し、indexは変えません。2行目がindexの内容で書き直します。untrackedの記録fileは対象にならず、そのまま残ります。取り出し直した後、`git ls-files --eol -- .axon` の各行が `i/lf` と `w/lf` を示すことを確かめます。`i/crlf` があれば変換されたfileがstageされているので、`git restore --staged -- .axon` でindexをcommitの内容に戻してから（`.axon/` のほかのstageした変更も外れます）手順を繰り返します。`w/crlf` が残るなら `.axon/.gitattributes` より優先される設定があるので、契約にある防げない設定を確認します。それでも `i/crlf` が残るなら変換されたfileがcommitされています。そのfileの行末のCRを取り除いて（例: `git ls-files -z -- .axon | xargs -0 perl -pi -e 's/\r\n/\n/'`）`git add .axon` してcommitし、その後で各cloneが同じ確認をします。checkoutしたcommitが `.axon/` を追跡していないworktree（main worktreeの保存先を読むlinked worktree）では不要です。属性のcommitより前に分岐したbranchをcheckoutした場合は、そのbranchに属性のcommitを取り込んでから同じ手順を繰り返します。属性のcommitより前のcommitそのものを読むcloneでは、`git rev-parse --git-path info/attributes` が示すfileに `/.axon/** -text` の行を足すと、そのcloneのcheckoutでは常に変換が止まります。
 
+## labelを導入する前の保存先を変換する
+
+labelを導入する前の保存先（headerのformatが `axon-records/v1`）は、`axon storage check` を含む全操作が `the store needs conversion` の診断で止まります。記録にlabelを足すと記録IDと親記録の参照がすべて変わるため、一度限りの変換ツール `axon-label-conversion` で `axon-records/v2` の保存先を作り、置き換えます。ツールは入力の保存先を変更せず、新しい管理rootに書き出します。各記録がlabel以外は変換前と同じであること、Noteが同じbytesであること、labelが対応fileどおりであることを検査し、通ったときだけ `OUT/.axon` に置きます。
+
+1. Axonのソースのcheckoutで `cargo build --release -p axon-label-conversion` を実行します。ツールは `target/release/axon-label-conversion` にでき、PATHには入りません。
+2. labelの対応fileを用意します。1行に `ENTITY-ID LABEL` を一つずつ書き、`#` で始まる行は無視されます。`Completed`・`Cancelled` のEntityは対応fileに行がなければ `chore` になります。それ以外のEntityに行がなければ変換は止まり、そのIDを列挙します。空の対応fileで一度実行すると、labelを決める必要のあるEntityの一覧が、各headのlifecycleとtitleとともに得られます。保存先にないEntityの行は許され（他のbranchのEntityのため）、変換の後にその一覧を示すので、IDの打ち間違いがないか確かめてください。
+3. 変換し、書き出した保存先を検査します。`axon` はv2を読めるbinaryです。`OUT` と後の `BACKUP` はrepositoryのwork treeの外に置いてください。変換から置き換えまで、その保存先を操作しないでください。
+
+   ```sh
+   /path/to/axon/target/release/axon-label-conversion --labels labels.txt ROOT OUT
+   axon storage check OUT
+   ```
+
+   `axon storage check OUT` は、変換前から衝突や違反があればそれを報告して終了1になります。破損が報告されないこと、衝突・違反が変換前からのものであることを確かめてください。変換前の報告は、labelを導入する前のbinaryの `axon storage check ROOT` で得られます。
+4. 元の記録とheaderを `BACKUP` に移して残し、置き換えます。各行は前の行が成功したときだけ進みます。置き換えた保存先を確かめるまで `BACKUP` を消さないでください。
+
+   ```sh
+   mkdir BACKUP &&
+   mv ROOT/.axon/records ROOT/.axon/header.json BACKUP/ &&
+   cp -R OUT/.axon/records OUT/.axon/header.json ROOT/.axon/ &&
+   axon storage check ROOT
+   ```
+
+`OUT/.axon` が既にある場合と、`OUT` が `ROOT/.axon` の中にある場合は書き出しません。ツールは `OUT/.axon.unchecked` に書いて検査し、通ったときだけ `OUT/.axon` へ移します。中断で `OUT/.axon.unchecked` が残ったら、使わずに消してから再実行してください。破損した保存先、親記録の欠けた保存先、Git indexで `.axon/` の下がunmergedな保存先は変換しません。先に通常の手順で直してください。衝突と違反はそのまま変換され、衝突中のEntityは全headに同じlabelが付きます。
+
+追跡する運用では、置き換えで消えた記録fileと増えた記録fileを一つのcommitにし、対応fileもrepositoryに残します。untrackedの記録fileは変換の対象に含まれるので、変換の前に消さないでください。変換のcommitを取り込む他のcloneやworktreeは、取り込む前に自分のuntrackedの記録fileをcommitし、下のbranchの手順で変換します。取り込んだ後に残ったv1の記録fileは、labelのない記録として読取を止めます。他のbranchの保存先は、そのbranchを変換済みのbranchへ統合する前に、同じ対応fileでそのbranchの上で変換してcommitします。変換は記録のbytesと対応fileだけで決まるので、両側に共通する記録は同じIDになり、統合では片側だけの記録が増えるだけです。変換で列挙されたそのbranchだけのEntityは対応fileに行を足します。変換済みの側に同じEntityがあれば、その側で付いたlabel（行がなかったなら `chore`）を書きます。labelが両側で違うと、同じEntityの記録が別のIDで二重に残ります。統合後は `axon storage check` で確認してください。
+
 ## どの保存先が選ばれるか
 
 Git内では現在のrepositoryの中だけを探し、次の順で保存先を選びます。

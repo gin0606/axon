@@ -330,7 +330,7 @@ pub fn decode_header(bytes: &[u8]) -> Result<Header> {
     let row: HeaderRow = from_line(bytes).map_err(|error| invalid(format!("header: {error}")))?;
     if row.format == EARLIER_HEADER_FORMAT {
         return Err(invalid(format!(
-            "{NEEDS_CONVERSION}: its format {EARLIER_HEADER_FORMAT:?} predates labels; convert it to {HEADER_FORMAT:?} before use"
+            "{NEEDS_CONVERSION}: its format {EARLIER_HEADER_FORMAT:?} predates labels; convert it to {HEADER_FORMAT:?} before use as the storage guide (docs/guide/storage.md, converting a store from before labels) describes"
         )));
     }
     if row.format != HEADER_FORMAT {

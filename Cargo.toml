@@ -10,7 +10,7 @@ readme = "README.md"
 publish = false
 
 [workspace]
-members = ["crates/axon-core", "crates/axon-recorder"]
+members = ["crates/axon-core", "crates/axon-label-conversion", "crates/axon-recorder"]
 default-members = [".", "crates/axon-core", "crates/axon-recorder"]
 
 [dependencies]
@@ -26,4 +26,5 @@ serde_json = { version = "1.0", features = ["arbitrary_precision", "float_roundt
 thiserror = "2.0.20"
 
 [dev-dependencies]
+axon-label-conversion = { path = "crates/axon-label-conversion" }
 proptest = "1.11.0"
