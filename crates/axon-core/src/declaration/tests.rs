@@ -456,9 +456,25 @@ proptest! {
         let yaml = d.serialize(&empty_view()).unwrap();
         for field in ["schema", "groups", "issues", "references"] {
             let line = yaml.lines().find(|line| line.starts_with(&format!("{field}:"))).unwrap();
+            // The whole value is replaced, so a block sequence under the key does not turn
+            // the damage into a syntax error.
+            let block: String = yaml
+                .lines()
+                .skip_while(|l| *l != line)
+                .enumerate()
+                .take_while(|(i, l)| *i == 0 || l.is_empty() || l.starts_with(' '))
+                .map(|(_, l)| format!("{l}\n"))
+                .collect();
             for replacement in ["null", "true", "123", "{}"] {
-                let bad = yaml.replacen(line, &format!("{field}: {replacement}"), 1);
-                prop_assert!(parse(&bad).is_err(), "{bad}");
+                let bad = yaml.replacen(&block, &format!("{field}: {replacement}\n"), 1);
+                let result = parse(&bad);
+                prop_assert!(result.is_err(), "{bad}");
+                let error = result.unwrap_err().to_string();
+                // The lists are rejected by their type, not by the text left around them.
+                prop_assert!(
+                    field == "schema" || error.contains("expected a sequence"),
+                    "{error}\n{bad}"
+                );
             }
             let duplicate = yaml.replacen(line, &format!("{line}\n{line}"), 1);
             prop_assert!(parse(&duplicate).is_err(), "{duplicate}");
