@@ -9,8 +9,8 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 | 文書 | 読む目的 |
 | --- | --- |
 | [使い始める](guide/getting-started.md) | 試用手順、保存先の作り方、同梱skill |
-| [日常の操作](guide/usage.md) | 候補、状態変更、Group最終確認、記録参照、計画の一括登録・編集 |
-| [状態と用語](guide/concepts.md) | lifecycleと関係 |
+| [日常の操作](guide/usage.md) | 候補、状態変更、label、Group最終確認、記録参照、計画の一括登録・編集 |
+| [状態と用語](guide/concepts.md) | lifecycle、label、関係 |
 | [保存先とworktree](guide/storage.md) | 無視する運用と追跡する運用、探索・初期化の境界 |
 | [Agentからのアクセス](guide/codex.md) | ホスト権限と保存先 |
 | [記録者連携](development/lifecycle-recorder.md) | 自動取得と詳細参照 |
@@ -59,8 +59,8 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 3. コマンドという手段ではなくlifecycleの遷移概念を指すときは、specの遷移名`Accept`・`Withdraw`・`Start`・`Release`・`Complete`・`Cancel`・`Reconsider`・`Reopen`を使う。これらはQuintの型構築子でもあるが、他ツールの識別子としての除外よりこの規則を優先する。
 4. 状態は`Undecided`・`NotStarted`・`InProgress`・`Completed`・`Cancelled`のようにcode表記にする。遷移の動詞形`Complete`と、状態の過去分詞形`Completed`を区別する。
 5. 一般的な意味での作業の中断・完了・統合・リリースは日本語で書き、Axonのコマンド名・遷移名・状態名と同じ英単語を裸で散文に使わない。ただし、次の対象外に該当する場合を除く。
-6. Axon固有の名詞（Issue、Group、Entity、Note、lifecycle、dependency、declaration）、情報モデルのfield名や記録の名詞（actor、log、reason、parent、condition）、declarationのfield名（parent、needs、key、base）、リポジトリ内のpath・ディレクトリ名、Git・YAML・JSONL・Quint・Rustなど他ツール・他仕様の識別子、一般技術語は対象外。他ツールの識別子は節・表の冒頭または近くの文でツールを示す。その語を主語に操作の挙動を述べる文はコマンド側とみなす。たとえば「`axon condition`は現在の条件だけを編集する」はコマンドの説明、「logのreason」は記録の説明となる。helpも、`axon help`の実行とhelpの出力内容を区別する。
+6. Axon固有の名詞（Issue、Group、Entity、Note、lifecycle、dependency、declaration）、情報モデルのfield名や記録の名詞（actor、log、reason、parent、condition、label）、declarationのfield名（parent、needs、key、base、label）、リポジトリ内のpath・ディレクトリ名、Git・YAML・JSONL・Quint・Rustなど他ツール・他仕様の識別子、一般技術語は対象外。他ツールの識別子は節・表の冒頭または近くの文でツールを示す。その語を主語に操作の挙動を述べる文はコマンド側とみなす。たとえば「`axon condition`は現在の条件だけを編集する」はコマンドの説明、「logのreason」は記録の説明となる。helpも、`axon help`の実行とhelpの出力内容を区別する。
 7. skillのdescriptionは冒頭でAxon対象と分かるようにし、Axonの操作を指す場合は上記のコマンド表記にする。
-8. 記録の種類名を種類として指すとき（`created`・`transition`・`import`・`resolve`・`note` など）は、コマンド名と重なるため常にcode表記にする。6のfield名・記録の名詞としての用法（parent、condition）はそのまま対象外とする。
+8. 記録の種類名を種類として指すとき（`created`・`transition`・`label`・`import`・`resolve`・`note` など）は、コマンド名と重なるため常にcode表記にする。6のfield名・記録の名詞としての用法（parent、condition、label）はそのまま対象外とする。
 
 確認時は、`axon --help`の全subcommand、`axon import`・`axon storage`・`axon note`の下位subcommand、状態5語、遷移8語を対象に、fenced code・inline code span・frontmatterのname行を除いた散文をcase-sensitiveかつ単語境界`[A-Za-z-]`で検索する。残存箇所を全て分類し、Axonの操作・遷移・状態を裸で指す箇所がないことを確認する。対象語で始まるcode spanも列挙し、コマンド引用が`axon`から始まることを確認する。検索は発見の補助であり、意味の判定や文脈の確認を置き換えない。

@@ -23,9 +23,9 @@ Issueの`Start`には全祖先が採用済みで、自身と全祖先の直接de
 
 ## 読む目的から入口を選ぶ
 
-`axon list` は非浮上・terminalを含む保存済み全件で、`--kind issue|group`、`--lifecycle not-started` など、`--terminal=false`、`--search='text'` でAND絞り込みできる。`--lifecycle` はGroupの実効値で絞り込むため、保存値`NotStarted`で配下の仕事が始まったGroupは `in-progress` に当たる。検索は現在のtitle・本文だけのcase-sensitiveなliteral一致で、不一致は意味上の重複の不在を示さない。
+一覧と`axon show`の先頭行は `ID  Kind  Situation  Label  Title`。衝突中のEntityは現在値を持たないため、行のlabel・タイトルはheadの値が異なれば記録ID順で最初のheadの値を示し、確定した値ではない。`axon list` は非浮上・terminalを含む保存済み全件で、`--kind issue|group`、`--label bug`、`--lifecycle not-started` など、`--terminal=false`、`--search='text'` でAND絞り込みできる。`--lifecycle` はGroupの実効値で絞り込むため、保存値`NotStarted`で配下の仕事が始まったGroupは `in-progress` に当たる。検索は現在のtitle・本文だけのcase-sensitiveなliteral一致で、不一致は意味上の重複の不在を示さない。
 
-`axon proposals` は自身と全祖先が浮上した`Undecided`、`axon tasks` は同条件の保存値`NotStarted`と、浮上を問わない`InProgress`のIssue・実効`InProgress`のGroupを平らな一覧で示す。祖先の採用待ちや依存待ちも`axon tasks`に入る。候補一覧はinventoryではなく、不在は削除・登録失敗・未着手を立証しない。`--kind`・`--search` は対象候補を先に絞り、残る候補の祖先は通常どおり評価する。ただし`axon tasks`は、残ったGroupの行の状況を導出するため、絞り込みで除外された子孫の着手可能なIssueとその間のGroupの条件も評価する。実効`InProgress`のGroupも保存値は`NotStarted`なので自身の条件を評価し、判定失敗は一覧全体を失敗させる。
+`axon proposals` は自身と全祖先が浮上した`Undecided`、`axon tasks` は同条件の保存値`NotStarted`と、浮上を問わない`InProgress`のIssue・実効`InProgress`のGroupを平らな一覧で示す。祖先の採用待ちや依存待ちも`axon tasks`に入る。候補一覧はinventoryではなく、不在は削除・登録失敗・未着手を立証しない。`--kind`・`--label`・`--search` は対象候補を先に絞り、残る候補の祖先は通常どおり評価する。ただし`axon tasks`は、残ったGroupの行の状況を導出するため、絞り込みで除外された子孫の着手可能なIssueとその間のGroupの条件も評価する。実効`InProgress`のGroupも保存値は`NotStarted`なので自身の条件を評価し、判定失敗は一覧全体を失敗させる。
 
 Groupの行の状況は、保存値が`Undecided`・`Completed`・`Cancelled`ならその状態名、保存値が`NotStarted`なら配下から導出され、上から最初に当たるものを示す。`Empty`（直属の子がない。次の一手は計画を書くこと。完了できる場合も`Empty`）、`Confirmable`（最終確認が通れば`axon complete`できる）、`Ready`（着手候補のIssueを子孫に持つ）、`InProgress`（実効値が`InProgress`。完了済みの子孫だけで着手中の子孫がない場合も含む）、`Blocked`（残り）。衝突中のEntityの状況は`Conflicted`で、現在値を持たず候補にならず、その配下や依存元の判定では祖先の採用や依存先の`Completed`を満たさない。Groupの行の状況と子孫の集計では衝突中の子孫を存在しないものとして導出するため、衝突中の子だけを持つGroupも`Empty`になる。違反に含まれるEntityの状況には`+Invalid`が付く。Group自身は着手対象にならず、`Ready`のGroupでも着手するのは子孫のIssue。`Ready`は、`axon tasks`と既定の`axon show`では再浮上条件を評価した着手候補の子孫から、条件を評価しない`axon list`・`axon show --skip-conditions`では着手可能な子孫から決まる。浮上していない着手可能なIssueだけを配下に持つGroupは、`axon tasks`・`axon show`では`Blocked`、`axon list`・`axon show --skip-conditions`では`Ready`になる。
 
@@ -33,11 +33,23 @@ Groupの行の状況は、保存値が`Undecided`・`Completed`・`Cancelled`な
 
 `axon note search 語句` は終了Entityを含む全Note本文を条件実行なしで横断検索する。case-sensitiveなliteral部分一致でtrim・Unicode正規化はせず、空文字は構文エラー、非一致はstdout空・stderr案内で正常終了する。完全Entity ID・安定Note ID・日時・最初の一致の抜粋を1 Note＝1行で示し、`axon list`と同じEntityの順序と、Entity内の日時順（同時刻は記録ID順）を保つ。抜粋の省略側は…、改行・バックスラッシュ・制御文字は可視化する。原文は`axon note show ID NOTE_ID`で読む。`axon list`/`axon tasks`/`axon proposals`の検索にはNote本文を含めない。
 
-`axon note list ID` は全Noteの本文・安定ID・日時・actor、`axon note show ID NOTE_ID` は個別Noteを読む。`axon log ID` は状態変更・編集・種類の変換・解決の経緯。分岐の記録を時刻で一本の操作列へ並べ直さない。`--recorder-details` で保存済みdataを取得する。`axon actor` は現在環境の任意actorを表示するだけで、過去の記録者・所有者・今のwriterの終了を立証しない。
+`axon note list ID` は全Noteの本文・安定ID・日時・actor、`axon note show ID NOTE_ID` は個別Noteを読む。`axon log ID` は状態変更・編集・labelの設定・種類の変換・解決の経緯。分岐の記録を時刻で一本の操作列へ並べ直さない。`--recorder-details` で保存済みdataを取得する。`axon actor` は現在環境の任意actorを表示するだけで、過去の記録者・所有者・今のwriterの終了を立証しない。
 
 ## 情報を混同しない
 
-title・本文は現在の定義で、未終了の間は`axon write`で編集できる。Noteはimmutableな補足でterminal後も追記でき、同内容の別Noteも独立に保持する。logのreasonはその記録（状態変更、値を変えない編集、解決など）の理由。記録者は環境から取得できた場合だけ付随し、欠如は保存失敗ではない。
+title・本文は現在の定義で、未終了の間は`axon write`で編集できる。labelは仕事の種類を表す分類で、各Entityが次の固定集合から必ず一つ持つ。未設定・解除はなく、集合外の値は拒否される。未終了の間は`axon label set ID VALUE`で変更でき、終了後は文面と同じく固定される。Groupのlabelは計画の主な種類で、配下から導出せず一致も要求しない。labelは優先度ではなく、lifecycle遷移の前提、包含・dependencyの制約、候補集合、状況、条件の評価に影響しない。`axon convert`もlabelを変えない。
+
+| label | 意味 |
+| --- | --- |
+| `bug` | 期待と異なる振る舞いを直す |
+| `feat` | 新しい振る舞いや機能を加える |
+| `chore` | 依存の更新、CI、設定など、振る舞いを変えない保守 |
+| `docs` | 文書・help・skillを整備する |
+| `test` | テストを追加・整理する |
+| `refactor` | 振る舞いを変えずに構造を整理する |
+| `spike` | 決めるために調べる（要検討の事項、仕様・計画・方針の検討） |
+
+Noteはimmutableな補足でterminal後も追記でき、同内容の別Noteも独立に保持する。logのreasonはその記録（状態変更、値を変えない編集、解決など）の理由。記録者は環境から取得できた場合だけ付随し、欠如は保存失敗ではない。
 
 再浮上条件は未設定またはshell文字列。未設定は常に成立。祖先は上から評価し、条件が未成立の祖先か終了した祖先より下は評価しない。終了した祖先の配下は条件によらず浮上しない。衝突中か保存先に無い祖先は評価せず連なりがそこで切れ、配下は残りの連なりで浮上を決めるが着手可能にはならない。`axon condition set|unset`はterminalにも使え、lifecycleを変えず条件を評価しない（変更は記録として履歴に残る）。条件未成立は明示状態操作のguardではない。壊れた条件も保存情報を読み`axon condition set|unset`で修復できる。
 

@@ -1,6 +1,6 @@
 ---
 name: register
-description: Axonの新しいIssueまたはGroupの重複と計画の完成度を確認し、依頼から確定できる採否、本文、構造、再浮上条件で登録する協業ワークフロー。既存Entityの変更や実装には使わない。
+description: Axonの新しいIssueまたはGroupの重複と計画の完成度を確認し、依頼から確定できる採否、本文、label、構造、再浮上条件で登録する協業ワークフロー。既存Entityの変更や実装には使わない。
 ---
 
 # 新しいAxon Entityを登録する
@@ -9,10 +9,11 @@ description: Axonの新しいIssueまたはGroupの重複と計画の完成度�
 
 ## 登録内容を確定する
 
-関連するコード、文書、Entityを必要な範囲で調べ、目的、scope、完了条件、kind、親Group、outgoing dependency、未設定またはshell文字列の再浮上条件を確定する。
+関連するコード、文書、Entityを必要な範囲で調べ、目的、scope、完了条件、kind、label、親Group、outgoing dependency、未設定またはshell文字列の再浮上条件を確定する。
 
 - ユーザーが実行または採用を明示していれば採用済みの`NotStarted`、懸念や未解決事項の記録なら`Undecided`とする。採否を読み取れない単独の「登録して」では確認する。
 - 一つの懸念または作業はIssue、複数Entityを含む明示的な計画範囲はGroupとする。合意済みscopeからkindを一意に決められない場合は確認する。
+- labelは`axon:conventions`の基準で選ぶ。
 - 再浮上条件の既定は未設定とする。shell文字列と実行影響が依頼から確定している場合だけ条件を保存し、「後で」のような時期の言及だけでは未設定のままにする。自然言語の条件をshellへ具体化するとき、意味や実行影響が未確定なら、必要な時刻基準・実行場所・参照先を含む具体案を示して判断を得る。
 
 親Groupは終了していないGroupであればよく、採用済みである必要はない。登録の経路を問わず、未終了の子を加えた最終確認待ちのGroupは`Complete`できなくなり、採用済みで登録したIssueも祖先の採用と自身・祖先の依存先の完了まで着手できない。これらを着手・完了の前提への影響として報告する。
@@ -31,4 +32,4 @@ description: Axonの新しいIssueまたはGroupの重複と計画の完成度�
 
 採否未判断なら`axon-kit:capture`、採用済みなら`axon-kit:plan`を使い、作成結果と関係を確認する。このskillは登録と検証で終了し、同じ依頼が明示的に実装workflowまで含み、そのworkflowへ引き渡す場合を除いて`axon start`や実装へ進まない。
 
-作成または再利用したID、kind、declaration、lifecycleと条件、重複判断、候補と着手・完了の前提への影響、未解決事項を報告する。
+作成または再利用したID、kind、label、declaration、lifecycleと条件、重複判断、候補と着手・完了の前提への影響、未解決事項を報告する。

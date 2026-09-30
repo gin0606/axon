@@ -15,10 +15,10 @@ AXON_BIN="$(pwd)/target/debug/axon"
 AXON_TRIAL_DIR="$(mktemp -d)"
 cd "$AXON_TRIAL_DIR"
 "$AXON_BIN" init trial
-"$AXON_BIN" capture --accept --title '最初の仕事' -m '目的と完了条件'
+"$AXON_BIN" capture --accept --label feat --title '最初の仕事' -m '目的と完了条件'
 ```
 
-以降の `ID` は直前の登録出力で返ったIDへ置き換えます。試用先はGit repository外で、既存の `.axon` を持つディレクトリの配下も避けてください。
+登録には仕事の種類を表す `--label` が必須です。値と意味は [日常の操作](usage.md#labelで仕事の種類を示す) にあります。以降の `ID` は直前の登録出力で返ったIDへ置き換えます。試用先はGit repository外で、既存の `.axon` を持つディレクトリの配下も避けてください。
 
 ```sh
 "$AXON_BIN" tasks
@@ -41,7 +41,7 @@ AXON_GIT_TRIAL_DIR="$(mktemp -d)"
 cd "$AXON_GIT_TRIAL_DIR"
 git init
 "$AXON_BIN" init trial
-"$AXON_BIN" capture --accept --title 'Gitのrepositoryで管理する仕事' -m '目的と完了条件'
+"$AXON_BIN" capture --accept --label feat --title 'Gitのrepositoryで管理する仕事' -m '目的と完了条件'
 ```
 
 作った直後のheader、`.axon/.gitignore`、`.axon/.gitattributes`（記録を作ればその記録も）はGitからuntrackedに見え、`git add -A` すればcommitされます。二つの運用のどちらを使うかを決め、一つのrepositoryでは混ぜないでください。
@@ -58,6 +58,6 @@ git init
 
 binaryを指定した場合はその指定を、未指定なら対象環境で発見した `axon` を使います。skillは`axon --version`・`axon --help`で対応を照合して実行ファイルとrootを固定します。対象環境のCLIとsessionに読み込まれたskillのversionが一致しない場合は、その不一致を解決してから操作します。開発版の試用では上記の絶対パスを渡す方法も使えます。
 
-同梱skillは、Groupを直接着手せず配下から実効lifecycleを導出する規則（[Group の実効 lifecycle](../reference/lifecycle.md#group-の実効-lifecycle)）、`axon reopen`、記録の集合の保存先と `axon storage check`・`axon resolve`・`axon convert` を前提にします。
+同梱skillは、Groupを直接着手せず配下から実効lifecycleを導出する規則（[Group の実効 lifecycle](../reference/lifecycle.md#group-の実効-lifecycle)）、`axon reopen`、記録の集合の保存先と `axon storage check`・`axon resolve`・`axon convert`、必須のlabel（`axon capture --label`・`axon label set`）と `axon-declaration/v2` を前提にします。
 
 例えば「このrepositoryの懸念をAxonに未判断として記録して」と依頼できます。対象と任せる範囲は依頼が決め、登録から実装・commitの権限を推測しません。
