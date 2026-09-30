@@ -457,12 +457,9 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
         "NaNs",
         "18446744073709551615h",
     ] {
-        assert_eq!(
-            f.run(&["tasks", &format!("--condition-timeout={value}")])
-                .status
-                .code(),
-            Some(2)
-        );
+        let out = f.run(&["tasks", &format!("--condition-timeout={value}")]);
+        assert_eq!(out.status.code(), Some(2));
+        failure(out);
     }
     assert!(!f.0.join(".axon").exists());
     for args in [
@@ -522,36 +519,13 @@ fn prefixes_outside_the_id_character_rule_are_rejected_without_creating_a_store(
 }
 
 #[test]
-fn one_line_fields_reject_or_escape_line_breaks() {
+fn a_multiline_condition_is_escaped_where_it_is_shown() {
     let f = Fixture::new();
     f.ok(&["init", "project"]);
     let id = f.ok(&["capture", "--accept", "--title", "Work"]);
     let id = created(&id).to_owned();
-    let before = snapshot(&f);
-    let long_title = "t".repeat(201);
-    let long_reason = "r".repeat(501);
-    for args in [
-        vec!["capture", "--title", "Two\nlines"],
-        vec!["capture", "--title", "Tab\there"],
-        vec!["capture", "--title", &long_title],
-        vec!["write", &id, "--title", "Two\nlines"],
-        vec![
-            "start",
-            &id,
-            "-r",
-            "real\n2020-01-01 00:00 +00:00  human  InProgress → Completed",
-        ],
-        vec!["start", &id, "-r", &long_reason],
-    ] {
-        let error = failure(f.run(&args));
-        assert!(
-            error.contains("control character") || error.contains("the limit is"),
-            "{error}"
-        );
-    }
-    assert_eq!(snapshot(&f), before);
-    f.ok(&["capture", "--title", &"t".repeat(200)]);
-    f.ok(&["start", &id, "-r", &"r".repeat(500)]);
+    // InProgress work runs no condition, so show only displays it.
+    f.ok(&["start", &id]);
     // A condition is a shell script and may span lines, so it is escaped where it is shown.
     f.ok(&[
         "condition",

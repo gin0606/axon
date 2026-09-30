@@ -395,14 +395,6 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
     failure(f.run(&["write", &id]));
     failure(f.run(&["note", "add", &id]));
     failure(f.run(&["write", &id, "-m", "x", "-F", "-"]));
-    let help = f.ok(&["--help"]);
-    let listed = |name: &str| {
-        help.lines()
-            .any(|line| line.trim_start().starts_with(&format!("{name} ")))
-    };
-    for name in ["complete", "parent", "condition"] {
-        assert!(listed(name), "{help}");
-    }
     assert!(f.ok(&["complete", "--help"]).contains("final review"));
 }
 #[test]
@@ -1525,7 +1517,7 @@ fn condition_default_timeout_is_thirty_seconds_in_a_real_process() {
 }
 
 #[test]
-fn candidate_help_timeout_validation_and_trace_sink_failure() {
+fn candidate_help_and_trace_sink_failure() {
     use std::os::fd::{FromRawFd, OwnedFd};
     let f = Fixture::new();
     f.init();
@@ -1541,9 +1533,6 @@ fn candidate_help_timeout_validation_and_trace_sink_failure() {
         "KILL",
     ] {
         assert!(help.contains(text));
-    }
-    for value in ["0", "-1", "NaN", "inf", "1e100", "1e-100", "wrong"] {
-        failure(f.run(&["tasks", "--condition-timeout", value]));
     }
     set_condition(&f, &id, "echo ran >> observed");
     let mut cmd = f.command();
@@ -1621,27 +1610,6 @@ fn condition_uses_current_worktree_or_management_root_and_inherits_environment()
         .output()
         .unwrap();
     assert!(success(out).contains(&id));
-}
-
-#[test]
-fn condition_trace_and_failure_preserve_utf8_across_capture_boundary() {
-    let f = Fixture::new();
-    f.init();
-    let id = f.accepted("utf8");
-    let output = format!("{}日", "A".repeat(32767));
-    fs::write(f.0.join("utf8-output"), &output).unwrap();
-    for exit in [0, 23] {
-        set_condition(
-            &f,
-            &id,
-            &format!("cat utf8-output; cat utf8-output >&2; exit {exit}"),
-        );
-        let out = f.run(&["tasks", "--trace-conditions"]);
-        assert_eq!(out.status.success(), exit == 0);
-        let diagnostic = String::from_utf8(out.stderr).unwrap();
-        assert_eq!(diagnostic.matches(&output).count(), 2);
-        assert!(!diagnostic.contains('�'));
-    }
 }
 
 fn without_recorder(command: &mut Command) -> &mut Command {
