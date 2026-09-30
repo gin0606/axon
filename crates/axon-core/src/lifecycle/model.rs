@@ -131,6 +131,60 @@ pub enum Kind {
     Issue,
     Group,
 }
+/// The kind of work an Entity represents, from a fixed set. Every Entity has exactly one; it
+/// affects no lifecycle rule, structure, candidate set or situation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Label {
+    Bug,
+    Feat,
+    Chore,
+    Docs,
+    Test,
+    Refactor,
+    Spike,
+}
+impl Label {
+    /// Every label in the order help and documentation list them.
+    pub const ALL: [Label; 7] = [
+        Label::Bug,
+        Label::Feat,
+        Label::Chore,
+        Label::Docs,
+        Label::Test,
+        Label::Refactor,
+        Label::Spike,
+    ];
+    /// The one spelling records, the CLI and declarations use.
+    pub fn name(self) -> &'static str {
+        match self {
+            Label::Bug => "bug",
+            Label::Feat => "feat",
+            Label::Chore => "chore",
+            Label::Docs => "docs",
+            Label::Test => "test",
+            Label::Refactor => "refactor",
+            Label::Spike => "spike",
+        }
+    }
+    /// The label spelled exactly `name`; anything outside the set is rejected.
+    pub fn from_name(name: &str) -> Result<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|label| label.name() == name)
+            .ok_or_else(|| {
+                let names: Vec<_> = Self::ALL.iter().map(|label| label.name()).collect();
+                invalid(format!(
+                    "unknown label {name:?}: expected one of {}",
+                    names.join(", ")
+                ))
+            })
+    }
+}
+impl fmt::Display for Label {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Recorder {

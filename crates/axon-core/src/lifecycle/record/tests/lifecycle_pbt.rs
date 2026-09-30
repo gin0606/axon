@@ -341,6 +341,7 @@ proptest! {
         prop_assert!(base.try_add_dep("item", "g0").unwrap().is_some());
         prop_assert!(base.try_remove_dep("item", "g2").unwrap().is_some());
         prop_assert!(base.store.convert(&id("item"), Kind::Group, base.tick()).unwrap().is_some());
+        prop_assert!(base.store.set_label(&id("item"), Label::Bug, base.tick()).unwrap().is_some());
         let mut a = Replica::from("r0", &base.store);
         let mut b = Replica::from("r1", &base.store);
         let edit = a.store.write(&id("item"), Some(left), None, a.tick()).unwrap().unwrap();
@@ -353,12 +354,14 @@ proptest! {
         prop_assert!(a.try_create("new", current(Kind::Issue, Lifecycle::NotStarted, None)).is_err());
         prop_assert!(a.try_op("item", Operation::Start).is_err());
         prop_assert!(a.store.write(&id("item"), Some("updated".into()), None, a.tick()).is_err());
+        prop_assert!(a.store.set_label(&id("item"), Label::Bug, a.tick()).is_err());
         prop_assert!(a.try_move("item", Some("g0")).is_err());
         prop_assert!(a.try_add_dep("item", "g0").is_err());
         prop_assert!(a.try_remove_dep("item", "g2").is_err());
         prop_assert!(a.store.set_condition(&id("item"), Some("true".into()), a.tick()).is_err());
         prop_assert!(a.store.convert(&id("item"), Kind::Group, a.tick()).is_err());
-        prop_assert!(a.store.import(&id("item"), "x".into(), "body".into(), None, BTreeSet::new(), a.tick()).is_err());
+        let value = Imported { title: "x".into(), description: "body".into(), label: Label::Bug, parent: None, needs: BTreeSet::new() };
+        prop_assert!(a.store.import(&id("item"), value, a.tick()).is_err());
         prop_assert_eq!(a.store.len(), old_len);
         let note = a.store.add_note(&id("item"), "note".into(), None, a.tick()).unwrap();
         a.store.insert(Entry::Note(note)).unwrap();
@@ -539,6 +542,7 @@ proptest! {
     fn generated_import_is_one_record_with_final_value(
         title in "[a-z]{1,20}",
         description in ".{0,30}",
+        label in 0usize..Label::ALL.len(),
         with_parent in any::<bool>(),
         with_dependency in any::<bool>(),
     ) {
@@ -548,15 +552,17 @@ proptest! {
         let parent = with_parent.then(|| id("destination"));
         let needs = if with_dependency { BTreeSet::from([id("dependency")]) } else { BTreeSet::new() };
         let title = format!("imported {title}");
+        let label = Label::ALL[label];
         let before = r.current("item");
         let old_len = r.store.len();
-        let record = r.store.import(&id("item"), title.clone(), description.clone(), parent.clone(), needs.clone(), r.tick()).unwrap().unwrap();
+        let record = r.store.import(&id("item"), Imported { title: title.clone(), description: description.clone(), label, parent: parent.clone(), needs: needs.clone() }, r.tick()).unwrap().unwrap();
         prop_assert_eq!(&record.kind, &RecordKind::Import);
-        prop_assert_eq!(&record.after, &Current { title: title.clone(), description: description.clone(), parent: parent.clone(), needs: needs.clone(), ..before });
+        prop_assert_eq!(&record.after, &Current { title: title.clone(), description: description.clone(), label, parent: parent.clone(), needs: needs.clone(), ..before });
         prop_assert_eq!(r.store.len(), old_len);
         insert(&mut r.store, record);
         prop_assert_eq!(r.store.len(), old_len + 1);
-        prop_assert!(r.store.import(&id("item"), title, description, parent, needs, r.tick()).unwrap().is_none());
+        let value = Imported { title, description, label, parent, needs };
+        prop_assert!(r.store.import(&id("item"), value, r.tick()).unwrap().is_none());
     }
 
     #[test]

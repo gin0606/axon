@@ -1,4 +1,5 @@
 use super::*;
+use crate::lifecycle::Label;
 use crate::lifecycle::record::Record as StoreRecord;
 use crate::lifecycle::record::{Context, Entry, RecordKind, Store};
 
@@ -515,6 +516,8 @@ impl Declaration {
                 owner: None,
                 title: desired.title.clone(),
                 description: desired.description.clone(),
+                // A declaration does not carry a label yet; a new Entity starts as chore.
+                label: Label::Chore,
                 condition: None,
                 parent: desired.parent.clone(),
                 needs: BTreeSet::new(),

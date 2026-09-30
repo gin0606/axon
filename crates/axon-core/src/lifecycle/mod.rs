@@ -10,9 +10,9 @@ pub mod record;
 pub use candidates::{CandidateList, Surfacing, list_candidates};
 pub use model::*;
 pub use record::{
-    Current, Entry, HEADER_FORMAT, Header, NONCE_LENGTH, Nonce, Note, RECORD_ID_LENGTH, Record,
-    RecordId, RecordKind, Settled, Store, View, Violation, ViolationKind, decode, decode_header,
-    encode, encode_header, new_entity_id,
+    Current, EARLIER_HEADER_FORMAT, Entry, HEADER_FORMAT, Header, NEEDS_CONVERSION, NONCE_LENGTH,
+    Nonce, Note, RECORD_ID_LENGTH, Record, RecordId, RecordKind, Settled, Store, View, Violation,
+    ViolationKind, decode, decode_header, encode, encode_header, new_entity_id,
 };
 
 #[derive(Debug, thiserror::Error)]

@@ -21,6 +21,7 @@ fn current(kind: Kind, title: &str) -> Current {
         owner: None,
         title: title.into(),
         description: String::new(),
+        label: crate::lifecycle::Label::Chore,
         condition: None,
         parent: None,
         needs: BTreeSet::new(),

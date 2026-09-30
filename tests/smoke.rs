@@ -220,6 +220,7 @@ fn current(title: &str) -> Current {
         owner: None,
         title: title.into(),
         description: String::new(),
+        label: axon::lifecycle::Label::Chore,
         condition: None,
         parent: None,
         needs: BTreeSet::new(),
@@ -641,7 +642,7 @@ fn unsupported_corrupt_and_earlier_format_stores_are_rejected_without_changes() 
             "wrong-format" => {
                 fs::write(
                     f.header(),
-                    "{\"format\":\"axon-records/v2\",\"store\":\"store-1\",\"prefix\":\"t\"}\n",
+                    "{\"format\":\"axon-records/v3\",\"store\":\"store-1\",\"prefix\":\"t\"}\n",
                 )
                 .unwrap();
                 f.header()

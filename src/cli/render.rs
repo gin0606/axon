@@ -383,6 +383,7 @@ fn describe(entry: &read::RecordEntry<'_>) -> String {
                 format!("Edited: {}", changed.join(", "))
             }
         }
+        RecordKind::Label => format!("Label set: {}", after.label),
         RecordKind::Parent => format!(
             "Parent: {} → {}",
             before.map(parent_of).unwrap_or_else(|| "unknown".into()),

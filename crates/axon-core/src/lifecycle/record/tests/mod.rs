@@ -45,6 +45,7 @@ fn current(kind: Kind, lifecycle: Lifecycle, parent: Option<&str>) -> Current {
         owner: None,
         title: "task".into(),
         description: "body\n日本語".into(),
+        label: Label::Feat,
         condition: None,
         parent: parent.map(id),
         needs: BTreeSet::new(),

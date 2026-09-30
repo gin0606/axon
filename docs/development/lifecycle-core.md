@@ -2,11 +2,11 @@
 
 この境界が実装する契約は [lifecycle](../reference/lifecycle.md) と [保存と統合](../reference/storage.md)、対応するモデルは [モデル](../../spec/README.md)。[Rust library](../../crates/axon-core/src/lib.rs) の `lifecycle` module は filesystem、外部コマンド評価、Git を呼ばない。記録の集合からの導出、通常操作の前提検査と記録の生成、記録 1 件の `encode` / `decode` を、保存 adapter と CLI が共通で使う。`cargo test -p axon-core` で独立したメモリ上の fixture を検証する。
 
-この境界は Issue / Group の登録、基本遷移、包含・dependency の変更、文面編集、種類の変換、Note、衝突の解決記録、構造の違反の導出を扱う。候補評価は `list_candidates` と `Surfacing`、条件設定は `set_condition` が扱う。保存 adapter は [file 保存と Git 統合](lifecycle-file.md) に接続する。[CLI と保存の接続](lifecycle-cli.md) が公開入口を示す。
+この境界は Issue / Group の登録、基本遷移、包含・dependency の変更、文面編集、label の設定、種類の変換、Note、衝突の解決記録、構造の違反の導出を扱う。候補評価は `list_candidates` と `Surfacing`、条件設定は `set_condition` が扱う。保存 adapter は [file 保存と Git 統合](lifecycle-file.md) に接続する。[CLI と保存の接続](lifecycle-cli.md) が公開入口を示す。
 
 ## 通常操作と構造
 
-現在値は最大一つの親 Group と outgoing dependency 集合を保持する。`create`、`set_parent`、`add_dependency`、`convert`、`perform`（lifecycle 操作）は操作後の view の全体検査で「違反が操作前の部分集合である」ことを確認して確定し（`create`、`set_parent`、`add_dependency` は加えて、操作前に違反があれば、新しく持った dependency、所属、新しく祖先の連なりに加わった Group の依存先が誘導する前提の辺が操作後の循環上に載らないことを確認する。循環上の Entity どうしの辺は違反の集合を変えないため。辺は関係ごとに数え、既存の組と重なっても検査する）、違反を増やせない `remove_dependency`（自身の前提は `Completed` でないか、違反に含まれること）、`write`、`set_condition` は自身の前提で確定する。拒否時は記録を作らない。同値の関係指定は成功した no-op とする。`write` は終了した Entity を、指定した値が現在の値と同じでも同値の判定より先に拒否する（[CLI と表示の契約](../reference/cli.md#mutationの結果)）。状態変更は `check_operation` の前提に加えて全体検査を行い、成功時だけ記録を加える。`check_operation` は免除を、結果が違反を増やさない場合にだけ与える（終了した親の下では、未終了のまま留まる操作と終了させる操作。親の記録が欠けているだけならそれ以上は縛らない。`Completed` の依存元による阻止では、その依存元がすでに未完了の依存先を持つ違反にある場合）ので、免除の場面では読取側の判定と書込の結果が一致する。規則は書込の全体検査で、読取側が先取りしない場面では書込だけが拒否する。外部条件は評価しない。衝突中の Entity が一つでもある store では、解決と Note 以外の操作を拒否する。
+現在値は最大一つの親 Group と outgoing dependency 集合を保持する。`create`、`set_parent`、`add_dependency`、`convert`、`perform`（lifecycle 操作）は操作後の view の全体検査で「違反が操作前の部分集合である」ことを確認して確定し（`create`、`set_parent`、`add_dependency` は加えて、操作前に違反があれば、新しく持った dependency、所属、新しく祖先の連なりに加わった Group の依存先が誘導する前提の辺が操作後の循環上に載らないことを確認する。循環上の Entity どうしの辺は違反の集合を変えないため。辺は関係ごとに数え、既存の組と重なっても検査する）、違反を増やせない `remove_dependency`（自身の前提は `Completed` でないか、違反に含まれること）、`write`、`set_label`、`set_condition` は自身の前提で確定する。拒否時は記録を作らない。同値の関係指定は成功した no-op とする。`write` と `set_label` は終了した Entity を、指定した値が現在の値と同じでも同値の判定より先に拒否する（[CLI と表示の契約](../reference/cli.md#mutationの結果)）。状態変更は `check_operation` の前提に加えて全体検査を行い、成功時だけ記録を加える。`check_operation` は免除を、結果が違反を増やさない場合にだけ与える（終了した親の下では、未終了のまま留まる操作と終了させる操作。親の記録が欠けているだけならそれ以上は縛らない。`Completed` の依存元による阻止では、その依存元がすでに未完了の依存先を持つ違反にある場合）ので、免除の場面では読取側の判定と書込の結果が一致する。規則は書込の全体検査で、読取側が先取りしない場面では書込だけが拒否する。外部条件は評価しない。衝突中の Entity が一つでもある store では、解決と Note 以外の操作を拒否する。
 
 操作の前提は `Operation::apply_as` の種類別の基本遷移と `check_operation` が検査する。Group は `Start`・`Release` を受け付けず、保存値が `InProgress` になることはない。実効 lifecycle は `working_groups` / `effective_lifecycle` が子から導出する。Issue の `Start` は全祖先の保存値が `NotStarted` で、自身と全祖先の直接依存先がすべて `Completed` であること、`Complete` は自身の依存先の `Completed` と全祖先の採用と直属の子がすべて終了していること（統合で子を持った Issue も同じ。`Cancel` も直属の子の終了を要求する）、`Reopen` は全祖先の採用と `Completed` の依存元がないこと、Group の `Withdraw` は実効値が `NotStarted` であること、着手・完了した子孫を持つ Group の `Accept` は全祖先の採用を要求する。`perform(..., Operation::Complete, ...)` 自体を Group 全体の最終確認済みという明示入力とする。`check_operation` や子の終了は最終確認を記録せず、親を自動変更しない。衝突中の Entity は現在値を持たないため、祖先や依存先が衝突中ならこれらの前提を満たさない。「全祖先が採用済み」（`ancestors_adopted`）は親の連なりの各段が settled で `NotStarted` であることを要求し、連なりの途中に衝突中または記録の欠けた Entity があれば、その下の settled な祖先がすべて `NotStarted` でも満たさない。
 
@@ -16,7 +16,7 @@
 
 ## 記録の集合と導出
 
-記録は Entity ごとの不変な事実で、ID は内容の hash、Entity、種類、親記録の ID の集合、日時、記録者、任意の理由、操作後の現在値（種類、lifecycle、`InProgress` の owner、title、description、条件、親、dependency）を持つ。Note は親を持たない記録で本文を持つ。項目と codec は [記録 file と codec](lifecycle-file.md#記録-file-と-codec) に定める。
+記録は Entity ごとの不変な事実で、ID は内容の hash、Entity、種類、親記録の ID の集合、日時、記録者、任意の理由、操作後の現在値（種類、lifecycle、`InProgress` の owner、title、description、label、条件、親、dependency）を持つ。label は固定集合の `Label` で、綴りの表は `Label::name` にあり、CLI と declaration もこれを使う。Note は親を持たない記録で本文を持つ。項目と codec は [記録 file と codec](lifecycle-file.md#記録-file-と-codec) に定める。
 
 記録の集合から view を導出する。Entity ごとに、Note 以外の記録のうちどの記録の親にもなっていない記録を head とし、head が一つなら settled でその現在値、複数なら衝突中で現在値なし。親が集合にない記録を持つ Entity は gap を持つ。settled な Entity の現在値から実効 lifecycle と違反の集合を導出する。導出は入力の順序に依存せず、同順位の並びは記録 ID で固定する。view は記録から導出できる値であり、保存項目ではない。
 
@@ -24,7 +24,7 @@
 
 `history` は Entity の Note 以外の記録を因果順で返し、並行する分岐を枝ごとにまとめる。保存先にある親をすべて返し終えた記録を返せる記録とし、次に返すのは、直前の記録の返せる子の最小 ID、無ければ返せる子が残っている記録のうち最後に返したもの（直近の分岐点）の返せる子の最小 ID（深さ優先）、それも無ければ親を持たない作成の記録、親がすべて保存先にない記録（gap の根）の順で最小 ID で、この選び方は表示順だけを決める。並行か先行かの判定は親をたどる `precedes` を使う。日時の大小や同一時刻は先行関係を作らない。`notes` は日時順、同時刻は ID 順で返す。日時は UTC の瞬間と小数秒を保持し、writer が入力表記の offset を UTC に正規化してから記録にする。
 
-lifecycle 遷移の記録の妥当性は、その遷移の時点の種類（直前の記録の現在値の種類）の規則で判定する。遷移は種類を変えないので、その記録自身の現在値の種類がその時点の種類である。遷移元は親記録の現在値から取り、親記録が欠けている記録ではこの検査を行わない。親記録がある記録は、その種類が変えてよい項目（遷移は lifecycle と owner、文面編集は title と description、所属変更は parent、dependency の増減は needs、条件は condition、変換は kind、declaration の適用は title・description・parent・needs、解決は採った head と同じ値）以外を親記録の現在値から変えていないことも検査し、変えていれば破損とする。Issue として `Start`・`Release` してから Group に変換した履歴は妥当で、現在の種類で判定すると不正になる。変換の記録は操作後の種類を持ち、変換前の種類はその反対なので、記録だけから両方が読める。
+lifecycle 遷移の記録の妥当性は、その遷移の時点の種類（直前の記録の現在値の種類）の規則で判定する。遷移は種類を変えないので、その記録自身の現在値の種類がその時点の種類である。遷移元は親記録の現在値から取り、親記録が欠けている記録ではこの検査を行わない。親記録がある記録は、その種類が変えてよい項目（遷移は lifecycle と owner、文面編集は title と description、label の設定は label、所属変更は parent、dependency の増減は needs、条件は condition、変換は kind、declaration の適用は title・description・label・parent・needs、解決は採った head と同じ値）以外を親記録の現在値から変えていないことも検査し、変えていれば破損とする。Issue として `Start`・`Release` してから Group に変換した履歴は妥当で、現在の種類で判定すると不正になる。変換の記録は操作後の種類を持ち、変換前の種類はその反対なので、記録だけから両方が読める。
 
 ## 衝突と解決
 

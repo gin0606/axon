@@ -23,6 +23,7 @@ fn every_operation_except_resolve_and_note_is_rejected_while_any_entity_is_confl
             .contains(blocked)
     );
     assert!(error(r.store.write(&id("i3"), Some("x".into()), None, r.tick())).contains(blocked));
+    assert!(error(r.store.set_label(&id("i3"), Label::Bug, r.tick())).contains(blocked));
     assert!(error(r.try_move("i3", Some("g2"))).contains(blocked));
     assert!(error(r.try_add_dep("i3", "g2")).contains(blocked));
     assert!(error(r.try_remove_dep("i3", "g2")).contains(blocked));
@@ -37,10 +38,13 @@ fn every_operation_except_resolve_and_note_is_rejected_while_any_entity_is_confl
     assert!(
         error(r.store.import(
             &id("i3"),
-            "t".into(),
-            "d".into(),
-            None,
-            BTreeSet::new(),
+            Imported {
+                title: "t".into(),
+                description: "d".into(),
+                label: Label::Bug,
+                parent: None,
+                needs: BTreeSet::new()
+            },
             r.tick()
         ))
         .contains(blocked)
@@ -757,10 +761,13 @@ fn text_condition_and_import_records_carry_the_value_after_and_skip_no_ops() {
         .store
         .import(
             &id("i3"),
-            "imported".into(),
-            "desc".into(),
-            Some(id("g0")),
-            BTreeSet::from([id("i1")]),
+            Imported {
+                title: "imported".into(),
+                description: "desc".into(),
+                label: Label::Docs,
+                parent: Some(id("g0")),
+                needs: BTreeSet::from([id("i1")]),
+            },
             r.tick(),
         )
         .unwrap()
@@ -768,6 +775,7 @@ fn text_condition_and_import_records_carry_the_value_after_and_skip_no_ops() {
     assert_eq!(import.kind, RecordKind::Import);
     assert_eq!(import.parents, BTreeSet::from([r.head("i3")]));
     assert_eq!(import.after.title, "imported");
+    assert_eq!(import.after.label, Label::Docs);
     assert_eq!(import.after.parent, Some(id("g0")));
     assert_eq!(import.after.needs, BTreeSet::from([id("i1")]));
     let count = r.store.len();
@@ -778,10 +786,13 @@ fn text_condition_and_import_records_carry_the_value_after_and_skip_no_ops() {
         r.store
             .import(
                 &id("i3"),
-                "imported".into(),
-                "desc".into(),
-                Some(id("g0")),
-                BTreeSet::from([id("i1")]),
+                Imported {
+                    title: "imported".into(),
+                    description: "desc".into(),
+                    label: Label::Docs,
+                    parent: Some(id("g0")),
+                    needs: BTreeSet::from([id("i1")])
+                },
                 r.tick()
             )
             .unwrap()
@@ -795,10 +806,13 @@ fn text_condition_and_import_records_carry_the_value_after_and_skip_no_ops() {
         .store
         .import(
             &id("i3"),
-            "task".into(),
-            "body\n日本語".into(),
-            Some(id("g0")),
-            BTreeSet::new(),
+            Imported {
+                title: "task".into(),
+                description: "body\n日本語".into(),
+                label: Label::Feat,
+                parent: Some(id("g0")),
+                needs: BTreeSet::new(),
+            },
             r.tick(),
         )
         .unwrap()
@@ -807,13 +821,117 @@ fn text_condition_and_import_records_carry_the_value_after_and_skip_no_ops() {
     assert!(
         error(r.store.import(
             &id("i3"),
-            "task".into(),
-            "body\n日本語".into(),
-            Some(id("g0")),
-            BTreeSet::from([id("g0")]),
+            Imported {
+                title: "task".into(),
+                description: "body\n日本語".into(),
+                label: Label::Feat,
+                parent: Some(id("g0")),
+                needs: BTreeSet::from([id("g0")])
+            },
             r.tick()
         ))
         .contains("completion cycle")
+    );
+}
+
+#[test]
+fn a_label_changes_like_text_and_leaves_everything_else_alone() {
+    let mut r = Replica::new("r0");
+    r.op("i3", Start);
+    let before = r.current("i3");
+    assert_eq!(before.label, Label::Feat);
+    // The same label is no change, for an unfinished Entity.
+    assert!(
+        r.store
+            .set_label(&id("i3"), Label::Feat, r.tick())
+            .unwrap()
+            .is_none()
+    );
+    let head = r.head("i3");
+    let record = r
+        .store
+        .set_label(&id("i3"), Label::Bug, r.tick())
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.kind, RecordKind::Label);
+    assert_eq!(record.parents, BTreeSet::from([head]));
+    assert_eq!(
+        record.after,
+        Current {
+            label: Label::Bug,
+            ..before
+        }
+    );
+    let count = r.store.len();
+    insert(&mut r.store, record);
+    assert_eq!(r.store.len(), count + 1);
+    assert_eq!(r.current("i3").label, Label::Bug);
+    // A terminal Entity is rejected before the comparison, even for its own label.
+    r.op("i3", Complete);
+    for label in [Label::Bug, Label::Chore] {
+        assert!(error(r.store.set_label(&id("i3"), label, r.tick())).contains("fixed"));
+    }
+    r.op("i1", Cancel);
+    assert!(error(r.store.set_label(&id("i1"), Label::Feat, r.tick())).contains("fixed"));
+    // An import changes the label with the rest and leaves an unchanged one alone, even on
+    // an Entity whose label may no longer change.
+    let mut r = Replica::new("r0");
+    let import = r
+        .store
+        .import(
+            &id("i3"),
+            Imported {
+                title: "task".into(),
+                description: "body\n日本語".into(),
+                label: Label::Spike,
+                parent: None,
+                needs: BTreeSet::new(),
+            },
+            r.tick(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(import.kind, RecordKind::Import);
+    assert_eq!(
+        import.after,
+        Current {
+            label: Label::Spike,
+            ..r.current("i3")
+        }
+    );
+    insert(&mut r.store, import);
+    r.op("i3", Start);
+    r.op("i3", Complete);
+    let completed = r.current("i3");
+    assert!(
+        r.store
+            .import(
+                &id("i3"),
+                Imported {
+                    title: completed.title.clone(),
+                    description: completed.description.clone(),
+                    label: Label::Spike,
+                    parent: None,
+                    needs: BTreeSet::new()
+                },
+                r.tick()
+            )
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        error(r.store.import(
+            &id("i3"),
+            Imported {
+                title: completed.title.clone(),
+                description: completed.description.clone(),
+                label: Label::Bug,
+                parent: None,
+                needs: BTreeSet::new()
+            },
+            r.tick()
+        ))
+        .contains("fixed")
     );
 }
 

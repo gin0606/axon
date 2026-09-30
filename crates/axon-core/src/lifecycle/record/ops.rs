@@ -3,8 +3,9 @@
 use super::model::{Current, Entry, Note, Record, RecordId, RecordKind};
 use super::store::Store;
 use super::view::View;
-use super::{Context, EntityId, Kind, Lifecycle, Nonce, Operation, Result};
+use super::{Context, EntityId, Kind, Label, Lifecycle, Nonce, Operation, Result};
 use crate::lifecycle::{invalid, validate_reason};
+use std::collections::BTreeSet;
 
 impl Store {
     fn settled_view(&self) -> Result<View> {
@@ -51,6 +52,17 @@ impl Store {
     ) -> Result<Option<Record>> {
         let view = self.settled_view()?;
         write_in(&view, id, title, description, context)
+    }
+    /// Sets the label of an unfinished Entity. None when unchanged; a terminal Entity is
+    /// rejected before that, even for its own label.
+    pub fn set_label(
+        &self,
+        id: &EntityId,
+        label: Label,
+        context: Context,
+    ) -> Result<Option<Record>> {
+        let view = self.settled_view()?;
+        set_label_in(&view, id, label, context)
     }
     /// Sets or clears the condition command without evaluating it. None when unchanged.
     pub fn set_condition(
@@ -143,19 +155,23 @@ impl Store {
         without_new_violations(self, &view, record).map(Some)
     }
     /// The final value `axon import apply` gives an existing Entity, validated as the sequence
-    /// text edit, dependency removals, move, dependency additions, and recorded once. None
+    /// text edit, label, dependency removals, move, dependency additions, and recorded once. None
     /// when nothing changes. Conflicts block it like every ordinary operation; the rule that
     /// a whole declaration is also rejected while the store has violations, except on a retry
     /// whose remaining records remove them, needs the whole declaration and is the caller's.
     pub fn import(
         &self,
         id: &EntityId,
-        title: String,
-        description: String,
-        parent: Option<EntityId>,
-        needs: std::collections::BTreeSet<EntityId>,
+        value: Imported,
         context: Context,
     ) -> Result<Option<Record>> {
+        let Imported {
+            title,
+            description,
+            label,
+            parent,
+            needs,
+        } = value;
         let view = self.settled_view()?;
         let head = view.settled_entity(id).map(|e| e.head.clone());
         let before = view.require_settled(id)?.clone();
@@ -170,6 +186,10 @@ impl Store {
         let description = (before.description != description).then_some(description);
         if title.is_some() || description.is_some() {
             let record = write_in(&view, id, title, description, context.clone())?;
+            apply(&mut scratch, record)?;
+        }
+        if before.label != label {
+            let record = set_label_in(&scratch.view()?, id, label, context.clone())?;
             apply(&mut scratch, record)?;
         }
         for target in before.needs.difference(&needs) {
@@ -254,6 +274,16 @@ impl Store {
         note.validate()?;
         Ok(note)
     }
+}
+
+/// The fields `Store::import` moves to their final values; the rest of the value stays.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Imported {
+    pub title: String,
+    pub description: String,
+    pub label: Label,
+    pub parent: Option<EntityId>,
+    pub needs: BTreeSet<EntityId>,
 }
 
 /// A record that continues the single head of a settled Entity.
@@ -449,6 +479,33 @@ fn write_in(
         view,
         id,
         RecordKind::Edit,
+        after,
+        None,
+        context,
+    )))
+}
+
+fn set_label_in(
+    view: &View,
+    id: &EntityId,
+    label: Label,
+    context: Context,
+) -> Result<Option<Record>> {
+    let current = view.require_settled(id)?;
+    if current.is_terminal() {
+        return Err(invalid("terminal label is fixed"));
+    }
+    if current.label == label {
+        return Ok(None);
+    }
+    let after = Current {
+        label,
+        ..current.clone()
+    };
+    Ok(Some(follow(
+        view,
+        id,
+        RecordKind::Label,
         after,
         None,
         context,

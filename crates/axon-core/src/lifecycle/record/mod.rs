@@ -7,22 +7,28 @@
 //! Entity. `encode` / `decode` map one record to its canonical bytes and back.
 //!
 //! This module is the core of the storage layer. It shares the lifecycle vocabulary (`Kind`,
-//! `Lifecycle`, `Operation`, `Recorder`, `EntityId`, `StoreId`) with the lifecycle model.
+//! `Label`, `Lifecycle`, `Operation`, `Recorder`, `EntityId`, `StoreId`) with the lifecycle model.
 mod codec;
 mod model;
 mod ops;
 mod store;
 mod view;
 
-pub use codec::{HEADER_FORMAT, decode, decode_header, encode, encode_header};
+pub use codec::{
+    EARLIER_HEADER_FORMAT, HEADER_FORMAT, NEEDS_CONVERSION, decode, decode_header, encode,
+    encode_header,
+};
 pub use model::{
     Current, Entry, Header, NONCE_LENGTH, Nonce, Note, RECORD_ID_LENGTH, Record, RecordId,
     RecordKind,
 };
+pub use ops::Imported;
 pub use store::Store;
 pub use view::{Settled, View, Violation, ViolationKind};
 
-pub use super::{Context, EntityId, Error, Kind, Lifecycle, Operation, Recorder, Result, StoreId};
+pub use super::{
+    Context, EntityId, Error, Kind, Label, Lifecycle, Operation, Recorder, Result, StoreId,
+};
 
 impl Entry {
     /// The ID this record has once encoded: the hash of its canonical bytes.

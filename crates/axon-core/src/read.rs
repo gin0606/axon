@@ -38,6 +38,7 @@ pub enum MatchLocation {
 pub struct Row<'a> {
     pub id: &'a EntityId,
     pub kind: Kind,
+    pub label: Label,
     pub title: &'a str,
     pub status: Status,
     /// The Entity is attributed a structural violation.
@@ -346,6 +347,7 @@ impl<'a> View<'a> {
         Row {
             id,
             kind: presented.kind,
+            label: presented.label,
             title: &presented.title,
             status,
             invalid: self.view.in_violation(id),
@@ -1052,6 +1054,7 @@ mod tests {
                         owner: None,
                         title: name.into(),
                         description: "body needle".into(),
+                        label: crate::lifecycle::Label::Chore,
                         condition: None,
                         parent: parent.map(id),
                         needs: dependencies.iter().map(|d| id(d)).collect(),
@@ -1110,6 +1113,27 @@ mod tests {
         let derived = f.derived();
         let view = View::new(&f.store, &derived);
         check(detail(&view, &id(name)).unwrap())
+    }
+
+    #[test]
+    fn rows_and_details_carry_the_current_label() {
+        let mut f = Fixture::new();
+        f.create("item", Kind::Issue, None, &[], 1);
+        let record = f
+            .store
+            .set_label(&id("item"), crate::lifecycle::Label::Bug, f.tick())
+            .unwrap()
+            .unwrap();
+        f.insert(record);
+        let derived = f.derived();
+        let view = View::new(&f.store, &derived);
+        assert_eq!(
+            view.row(&id("item"), None).label,
+            crate::lifecycle::Label::Bug
+        );
+        inspect(&f, "item", |value| {
+            assert_eq!(value.row.label, crate::lifecycle::Label::Bug)
+        });
     }
 
     #[test]

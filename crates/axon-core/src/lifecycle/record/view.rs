@@ -773,13 +773,14 @@ pub(super) fn record_problems(store: &Store) -> Vec<(RecordId, crate::lifecycle:
 
 /// Whether a record with a present parent changes only what its kind may change. A
 /// transition changes lifecycle and owner by the rules of the kind at its time; an edit the
-/// text; a parent, dependency or condition record its one field; a conversion the kind; an
-/// import text, parent and needs; a resolve record repeats the chosen head.
+/// text; a label, parent, dependency or condition record its one field; a conversion the
+/// kind; an import text, label, parent and needs; a resolve record repeats the chosen head.
 fn continues(parent_id: &RecordId, parent: &Record, record: &Record) -> Result<()> {
     let before = &parent.after;
     let after = &record.after;
-    let (mut kind, mut lifecycle, mut owner, mut text, mut parent_field, mut needs, mut condition) =
-        (false, false, false, false, false, false, false);
+    let (mut kind, mut lifecycle, mut owner, mut text, mut label) =
+        (false, false, false, false, false);
+    let (mut parent_field, mut needs, mut condition) = (false, false, false);
     match &record.kind {
         RecordKind::Created => unreachable!("a created record has no parent"),
         RecordKind::Transition(operation) => {
@@ -793,6 +794,7 @@ fn continues(parent_id: &RecordId, parent: &Record, record: &Record) -> Result<(
             owner = true;
         }
         RecordKind::Edit => text = true,
+        RecordKind::Label => label = true,
         RecordKind::Parent => parent_field = true,
         RecordKind::Dependency => needs = true,
         RecordKind::Condition => condition = true,
@@ -810,6 +812,7 @@ fn continues(parent_id: &RecordId, parent: &Record, record: &Record) -> Result<(
         }
         RecordKind::Import => {
             text = true;
+            label = true;
             parent_field = true;
             needs = true;
         }
@@ -831,6 +834,7 @@ fn continues(parent_id: &RecordId, parent: &Record, record: &Record) -> Result<(
             text || (before.title == after.title && before.description == after.description),
             "text",
         ),
+        (label || before.label == after.label, "label"),
         (parent_field || before.parent == after.parent, "parent"),
         (needs || before.needs == after.needs, "needs"),
         (

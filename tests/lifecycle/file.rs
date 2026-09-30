@@ -520,7 +520,7 @@ fn storage_check_reports_a_missing_or_unreadable_header_by_path() {
         ("missing", None),
         (
             "unknown-format",
-            Some("{\"format\":\"axon-records/v2\",\"store\":\"store-1\",\"prefix\":\"t\"}\n"),
+            Some("{\"format\":\"axon-records/v3\",\"store\":\"store-1\",\"prefix\":\"t\"}\n"),
         ),
         ("corrupt", Some("not a header\n")),
     ] {
@@ -541,6 +541,40 @@ fn storage_check_reports_a_missing_or_unreadable_header_by_path() {
             assert!(!error.contains("consistent"), "{kind}: {error}");
         }
     }
+}
+
+#[test]
+fn a_store_in_the_format_before_labels_needs_conversion_and_its_records_are_not_read() {
+    let f = Fixture::new();
+    f.init();
+    f.accepted("kept");
+    let header = fs::read_to_string(f.header()).unwrap();
+    fs::write(
+        f.header(),
+        header.replacen("axon-records/v2", "axon-records/v1", 1),
+    )
+    .unwrap();
+    // Damage under the records is not looked at: the format alone decides.
+    fs::create_dir(f.records_dir().join("foo")).unwrap();
+    let before = f.record_files();
+    for args in [
+        vec!["storage", "check"],
+        vec!["storage", "check", f.0.to_str().unwrap()],
+        vec!["list"],
+        vec!["capture", "--title", "new"],
+    ] {
+        let error = failure(f.run(&args));
+        assert!(
+            error.contains("header.json")
+                && error.contains("needs conversion")
+                && error.contains("axon-records/v1")
+                && error.contains("axon-records/v2"),
+            "{args:?}: {error}"
+        );
+        assert!(!error.contains("corrupt"), "{args:?}: {error}");
+        assert!(!error.contains("foo"), "{args:?}: {error}");
+    }
+    assert_eq!(f.record_files(), before);
 }
 
 #[test]

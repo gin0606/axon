@@ -24,6 +24,7 @@ fn current(kind: Kind, title: &str) -> Current {
         owner: None,
         title: title.into(),
         description: String::new(),
+        label: crate::lifecycle::Label::Chore,
         condition: None,
         parent: None,
         needs: BTreeSet::new(),
@@ -659,6 +660,27 @@ fn prepared_plan_checks_retries_and_collisions_without_partial_matches() {
     assert_eq!(checked.records.len(), 2);
     f.apply(&retry);
     assert_eq!(f.view().known().count(), 6);
+}
+
+#[test]
+fn applying_a_declaration_keeps_the_label_of_an_existing_entity() {
+    let mut f = Fixture::new();
+    f.create("a", Kind::Issue);
+    let record = f
+        .store
+        .set_label(&id("a"), crate::lifecycle::Label::Bug, f.tick())
+        .unwrap()
+        .unwrap();
+    f.insert(record);
+    let mut d = export(&f.store, &f.view(), &[id("a")]).unwrap();
+    let input = d.serialize(&f.view()).unwrap();
+    let unchanged = d.check(&input, &f.store, f.tick()).unwrap();
+    assert!(unchanged.records.is_empty());
+    d.issues[0].title = "renamed".into();
+    let checked = f.apply(&d);
+    assert_eq!(checked.records.len(), 1);
+    assert_eq!(checked.records[0].kind, RecordKind::Import);
+    assert_eq!(checked.records[0].after.label, crate::lifecycle::Label::Bug);
 }
 
 #[test]

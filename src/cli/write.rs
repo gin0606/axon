@@ -8,7 +8,7 @@ use super::{
 use axon::{
     Result,
     lifecycle::{
-        Context, EntityId, Kind, Lifecycle, Operation,
+        Context, EntityId, Kind, Label, Lifecycle, Operation,
         record::{Current, Entry, Record, RecordId, Store, View},
     },
 };
@@ -136,6 +136,8 @@ pub(super) fn capture(args: Create) -> Result<Output> {
                 owner: None,
                 title,
                 description,
+                // Capture has no label option yet; every new Entity starts as chore.
+                label: Label::Chore,
                 condition: args.command,
                 parent,
                 needs,
@@ -402,6 +404,7 @@ mod tests {
                         owner: None,
                         title: name.into(),
                         description: String::new(),
+                        label: Label::Chore,
                         condition: None,
                         parent: None,
                         needs: needs
@@ -462,6 +465,7 @@ mod tests {
                     owner: None,
                     title: id.into(),
                     description: String::new(),
+                    label: Label::Chore,
                     condition: None,
                     parent: None,
                     needs: needs.into_iter().map(|n| n.to_owned().try_into().unwrap()).collect(),

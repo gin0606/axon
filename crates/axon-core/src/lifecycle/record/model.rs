@@ -1,4 +1,4 @@
-use super::{EntityId, Kind, Lifecycle, Operation, Recorder, Result, StoreId};
+use super::{EntityId, Kind, Label, Lifecycle, Operation, Recorder, Result, StoreId};
 use crate::lifecycle::{TITLE_LIMIT, invalid, validate_line, validate_reason};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -103,6 +103,7 @@ pub struct Current {
     pub owner: Option<String>,
     pub title: String,
     pub description: String,
+    pub label: Label,
     /// None means no condition. The core never executes a stored command.
     pub condition: Option<String>,
     pub parent: Option<EntityId>,
@@ -137,12 +138,13 @@ pub enum RecordKind {
     Created,
     Transition(Operation),
     Edit,
+    Label,
     Parent,
     Dependency,
     Condition,
     Convert,
     /// One record for every Entity that `axon import apply` changes: title, description,
-    /// parent and needs move to their final values together.
+    /// label, parent and needs move to their final values together.
     Import,
     /// Joins every head of a conflicted Entity and takes the value of `chosen`.
     Resolve {
@@ -155,6 +157,7 @@ impl RecordKind {
             Self::Created => "created",
             Self::Transition(_) => "transition",
             Self::Edit => "edit",
+            Self::Label => "label",
             Self::Parent => "parent",
             Self::Dependency => "dependency",
             Self::Condition => "condition",
