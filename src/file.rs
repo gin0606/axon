@@ -119,13 +119,22 @@ pub(crate) enum Reach {
     Durable,
 }
 /// On Apple platforms a full sync flushes the whole drive cache and is slow; an ordered sync
-/// takes an I/O barrier instead, and falls back to the full sync where that is unsupported.
+/// takes an I/O barrier instead, and falls back to the full sync only where the filesystem
+/// does not support one. Any other failure is returned: a retried sync may report success
+/// for writes the failed one lost.
 fn sync_file(file: &File, reach: Reach) -> std::io::Result<()> {
     #[cfg(target_vendor = "apple")]
     if reach == Reach::Ordered {
         use std::os::fd::AsRawFd;
         if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_BARRIERFSYNC) } != -1 {
             return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if !matches!(
+            error.raw_os_error(),
+            Some(libc::ENOTSUP | libc::EOPNOTSUPP | libc::ENOTTY | libc::EINVAL)
+        ) {
+            return Err(error);
         }
     }
     #[cfg(not(target_vendor = "apple"))]
@@ -647,6 +656,11 @@ impl Store {
                         let _ = fs::remove_file(temp);
                     }
                 }
+                // The records reported as renamed have had ordered syncs only; a durable sync
+                // flushes them too. Its failure leaves the result as unknown as it already is.
+                if !renamed.is_empty() {
+                    let _ = sync(&base, Reach::Durable);
+                }
                 return Err(if renamed.is_empty() {
                     invalid(format!(
                         "not applied: no record written; rename to {} failed: {e}",
@@ -1081,6 +1095,33 @@ mod publication_tests {
         assert!(error.to_string().contains("not applied"), "{error}");
         assert_eq!(store.read().unwrap().1.len(), 0);
         assert_eq!(temporary_files(&store), 0);
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_publication_stopped_after_a_rename_ends_with_a_durable_sync() {
+        let (root, store) = fixture();
+        let base = store.records_path();
+        let mut durable = Vec::new();
+        let error = store
+            .publish_entries_with(
+                &two_records(),
+                &mut |progress| match progress {
+                    Progress::Renamed(0) => Err(invalid("injected failure after the first rename")),
+                    _ => Ok(()),
+                },
+                &mut |path, reach| {
+                    if reach == Reach::Durable {
+                        durable.push(path.to_path_buf());
+                    }
+                    sync_directory(path, reach)
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(&error, Error::PublicationUnknown(_)), "{error}");
+        assert_eq!(durable, [base]);
+        assert_eq!(store.read().unwrap().1.len(), 1);
         drop(store);
         fs::remove_dir_all(root).unwrap();
     }

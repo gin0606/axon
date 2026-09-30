@@ -59,7 +59,7 @@ decode は未知の key、欠けた key、種類と合わない key、規則外�
 
 writer は `.axon/write.lock` の OS lock を取得してから記録の集合を読み、通常操作の前提を検査して新しい記録を一つ作る。記録 ID を計算し、目的の subdirectory を必要なら作り、`<記録 ID>.tmp` に bytes を書いて sync し、`<記録 ID>` へ rename して directory を sync して成功する。既存の記録 file は書き直さず、置き換えず、削除しない。lock file は置換・削除しない。process 終了時は OS が lock を解放する。同値の操作は記録を作らず No changes で終わる。保存先の発見は CLI 実行ごとに一回で、実行の途中で Git の toplevel や common directory が変わったことは検出しない。
 
-sync のうち後続の書込より先に届けばよいもの（一時 file、rename 前の directory、複数の記録の公開で最後以外の rename 後の directory）は順序だけを保証し、公開の最後の sync で全体を永続化する。Apple のプラットフォームでは前者を I/O barrier（`F_BARRIERFSYNC`）、後者を drive cache まで flush する `F_FULLFSYNC` で行い、barrier が使えない filesystem では後者で代える。その他のプラットフォームではどちらも `fsync` とする。
+一回の公開の sync は最後のものを除いて後続の書込より先に届けばよく、順序だけを保証する。最後の sync で全体を永続化し、rename 後に失敗した場合も、rename 済みの記録を永続化するために sync を試みる。Apple のプラットフォームでは前者を I/O barrier（`F_BARRIERFSYNC`）、後者を drive cache まで flush する `F_FULLFSYNC` で行い、barrier が使えない filesystem では後者で代える。その他のプラットフォームではどちらも `fsync` とする。
 
 rename 前の失敗は `not applied`、rename 後の directory sync の失敗は `result unknown` と区別する。結果不明なら process 終了を確認し、記録の集合を読み直して記録の有無を照合する。Note や登録を推測で再実行しない。出力失敗は `storage applied; output failed` で区別する。
 
