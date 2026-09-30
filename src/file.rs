@@ -61,7 +61,7 @@ pub(crate) fn lock(path: &Path) -> Result<File> {
     file.lock()?;
     Ok(file)
 }
-/// Writes bytes to `<path>.tmp` and syncs it; the caller renames it into place. Only for a
+/// Writes bytes to `<path>.tmp` and syncs it in order; the caller renames it into place. Only for a
 /// writer under the store's lock, for which a leftover file of that name is a stale one of
 /// its own.
 pub(crate) fn temporary(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
@@ -102,7 +102,7 @@ fn temporary_unique(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
 }
 fn fill(mut file: File, temp: PathBuf, bytes: &[u8]) -> Result<PathBuf> {
     file.write_all(bytes)
-        .and_then(|()| file.sync_all())
+        .and_then(|()| sync_file(&file, Reach::Ordered))
         .map_err(|e| {
             invalid(format!(
                 "temporary write failed: {e}; retained {}",
@@ -111,8 +111,29 @@ fn fill(mut file: File, temp: PathBuf, bytes: &[u8]) -> Result<PathBuf> {
         })?;
     Ok(temp)
 }
-pub(crate) fn sync_directory(path: &Path) -> Result<()> {
-    File::open(path)?.sync_all().map_err(Into::into)
+/// How far a sync reaches. A sync that only has to precede later writes is `Ordered`; each
+/// publication ends with a `Durable` one, after which everything written before it is durable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Reach {
+    Ordered,
+    Durable,
+}
+/// On Apple platforms a full sync flushes the whole drive cache and is slow; an ordered sync
+/// takes an I/O barrier instead, and falls back to the full sync where that is unsupported.
+fn sync_file(file: &File, reach: Reach) -> std::io::Result<()> {
+    #[cfg(target_vendor = "apple")]
+    if reach == Reach::Ordered {
+        use std::os::fd::AsRawFd;
+        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_BARRIERFSYNC) } != -1 {
+            return Ok(());
+        }
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    let _ = reach;
+    file.sync_all()
+}
+pub(crate) fn sync_directory(path: &Path, reach: Reach) -> Result<()> {
+    sync_file(&File::open(path)?, reach).map_err(Into::into)
 }
 /// Replaces a file whose current bytes are `before` through a temporary file and a rename,
 /// then syncs the directory. Failure before the rename is `not applied`; failure after it is
@@ -124,7 +145,7 @@ pub(crate) fn publish(
     recheck: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     publish_with(path, before, bytes, recheck, || {
-        sync_directory(path.parent().unwrap())
+        sync_directory(path.parent().unwrap(), Reach::Durable)
     })
 }
 pub(crate) fn publish_with(
@@ -532,13 +553,15 @@ impl Store {
         entries: &[Entry],
         progress: &mut dyn FnMut(Progress) -> Result<()>,
     ) -> Result<()> {
-        self.publish_entries_with(entries, progress, &mut |path| sync_directory(path))
+        self.publish_entries_with(entries, progress, &mut |path, reach| {
+            sync_directory(path, reach)
+        })
     }
     fn publish_entries_with(
         &self,
         entries: &[Entry],
         progress: &mut dyn FnMut(Progress) -> Result<()>,
-        sync: &mut dyn FnMut(&Path) -> Result<()>,
+        sync: &mut dyn FnMut(&Path, Reach) -> Result<()>,
     ) -> Result<()> {
         let base = self.records_path();
         let mut planned = Vec::with_capacity(entries.len());
@@ -551,7 +574,7 @@ impl Store {
                 let directory = base.join(id.subdirectory());
                 if fs::symlink_metadata(&base).is_err() {
                     fs::create_dir(&base)?;
-                    sync(base.parent().unwrap())?;
+                    sync(base.parent().unwrap(), Reach::Ordered)?;
                     created_records_directory = true;
                 }
                 // A link at the subdirectory would take the record outside the store; a read
@@ -578,7 +601,7 @@ impl Store {
             }
             // Persist all subdirectory entries, including residue from interrupted writes,
             // before the first rename. Renames only change the subdirectories themselves.
-            sync(&base)?;
+            sync(&base, Reach::Ordered)?;
             self.guard()?;
             progress(Progress::BeforePublish)
         })();
@@ -604,10 +627,15 @@ impl Store {
                 // Each rename is followed by the sync of its directory, so the publication
                 // order survives a crash (a record whose parent or dependency is not yet
                 // durable is not durable either). A file left by an interrupted publication
-                // is synced here too.
-                sync(path.parent().unwrap())?;
+                // is synced here too. Only the publication's last sync has to be durable.
+                let reach = if index == last && !created_records_directory {
+                    Reach::Durable
+                } else {
+                    Reach::Ordered
+                };
+                sync(path.parent().unwrap(), reach)?;
                 if index == last && created_records_directory {
-                    sync(base.parent().unwrap())?;
+                    sync(base.parent().unwrap(), Reach::Durable)?;
                 }
                 progress(Progress::Renamed(index))
             })();
@@ -976,7 +1004,7 @@ mod publication_tests {
                     }
                     Ok(())
                 },
-                &mut |path| {
+                &mut |path, reach| {
                     let event = if path == base {
                         let published = records.iter().filter(|p| p.exists()).count();
                         format!("sync records ({published} published)")
@@ -985,8 +1013,11 @@ mod publication_tests {
                     } else {
                         format!("sync {}", path.strip_prefix(&base).unwrap().display())
                     };
-                    events.borrow_mut().push(event);
-                    sync_directory(path)
+                    events.borrow_mut().push(match reach {
+                        Reach::Ordered => event,
+                        Reach::Durable => format!("{event} (durable)"),
+                    });
+                    sync_directory(path, reach)
                 },
             )
             .unwrap();
@@ -1014,7 +1045,7 @@ mod publication_tests {
                 "sync .axon".into(),
                 "sync records (0 published)".into(),
                 sync(0),
-                "sync .axon".into(),
+                "sync .axon (durable)".into(),
                 "renamed 0".into(),
             ]
         );
@@ -1025,7 +1056,7 @@ mod publication_tests {
                 "sync records (1 published)".into(),
                 sync(0),
                 "renamed 0".into(),
-                sync(1),
+                format!("{} (durable)", sync(1)),
                 "renamed 1".into(),
             ]
         );
@@ -1038,11 +1069,11 @@ mod publication_tests {
         let (root, store) = fixture();
         let base = store.records_path();
         let error = store
-            .publish_entries_with(&two_records(), &mut |_| Ok(()), &mut |path| {
+            .publish_entries_with(&two_records(), &mut |_| Ok(()), &mut |path, reach| {
                 if path == base {
                     Err(invalid("injected sync failure"))
                 } else {
-                    sync_directory(path)
+                    sync_directory(path, reach)
                 }
             })
             .unwrap_err();

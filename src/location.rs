@@ -504,11 +504,11 @@ impl Location {
             }
             // The record directory, the ignore file and the attributes file are durable before
             // the header, which marks the store, is published.
-            file::sync_directory(&directory)?;
+            file::sync_directory(&directory, file::Reach::Ordered)?;
             let bytes = encode_header(&Header::new(prefix)?)?;
             let temp = file::temporary(&header, &bytes)?;
             fs::rename(&temp, &header)?;
-            file::sync_directory(&directory)?;
+            file::sync_directory(&directory, file::Reach::Durable)?;
             Ok(Initialized {
                 git: self.git.is_some(),
                 linked_worktree,
