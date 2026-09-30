@@ -577,13 +577,12 @@ impl View {
         }
         true
     }
-    fn settled_needs(&self, id: &EntityId) -> Vec<&EntityId> {
+    fn settled_needs(&self, id: &EntityId) -> impl Iterator<Item = &EntityId> {
         self.settled[id]
             .current
             .needs
             .iter()
             .filter(|d| self.is_settled(d))
-            .collect()
     }
     /// Whether every dependency is settled and Completed.
     pub fn dependencies_completed(&self, id: &EntityId) -> bool {
