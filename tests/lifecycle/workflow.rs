@@ -10,6 +10,8 @@ fn the_daily_workflow_runs_from_registration_to_group_completion() {
     f.ok(&["init", "trial"]);
     let group = created(f.ok(&[
         "capture",
+        "--label",
+        "chore",
         "--kind",
         "group",
         "--accept",
@@ -18,9 +20,12 @@ fn the_daily_workflow_runs_from_registration_to_group_completion() {
         "-m",
         "全成果を検証",
     ]));
-    let first = created(f.ok(&["capture", "--title", "調査", "--parent", &group]));
+    let first = created(f.ok(&[
+        "capture", "--label", "chore", "--title", "調査", "--parent", &group,
+    ]));
     let second = created(f.ok(&[
-        "capture", "--accept", "--title", "実装", "--parent", &group, "--needs", &first,
+        "capture", "--label", "chore", "--accept", "--title", "実装", "--parent", &group,
+        "--needs", &first,
     ]));
     assert!(f.ok(&["proposals"]).contains(&first));
     f.ok(&["accept", &first]);
@@ -75,7 +80,7 @@ fn the_daily_workflow_runs_from_registration_to_group_completion() {
     assert!(review.contains("Awaiting final confirmation"));
     assert!(
         f.ok(&["tasks"])
-            .contains(&format!("{group}  Group  Confirmable  納品"))
+            .contains(&format!("{group}  Group  Confirmable  chore  納品"))
     );
     assert!(
         f.ok(&["note", "list", &second])

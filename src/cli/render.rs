@@ -40,10 +40,11 @@ fn situation(value: &read::Row<'_>) -> String {
 }
 pub(super) fn row(value: &read::Row<'_>) -> String {
     format!(
-        "{}  {}  {}  {}\n",
+        "{}  {}  {}  {}  {}\n",
         display::identity(value.id),
         display::muted(format!("{:?}", value.kind)),
         situation(value),
+        value.label,
         display::line(value.title)
     )
 }
@@ -68,13 +69,14 @@ fn record_label(record: &axon::lifecycle::record::Record) -> String {
 pub(super) fn head(head: &read::Head<'_>) -> String {
     let after = &head.record.after;
     format!(
-        "{}  {}  {}  {}  {}  {}  {}{}\n",
+        "{}  {}  {}  {}  {}  {}  {}  {}{}\n",
         display::identity(head.id),
         display::muted(display::timestamp(&head.record.at)),
         actor_of(head.record.recorder.as_ref()),
         display::muted(record_label(head.record)),
         display::situation(&format!("{:?}", after.lifecycle)),
         display::muted(format!("{:?}", after.kind)),
+        after.label,
         display::line(&after.title),
         if head.likely_newer {
             display::muted("  parent missing; likely newer")
@@ -426,6 +428,7 @@ fn describe(entry: &read::RecordEntry<'_>) -> String {
                 Some(before) => [
                     (before.title != after.title, "title"),
                     (before.description != after.description, "description"),
+                    (before.label != after.label, "label"),
                     (before.parent != after.parent, "parent"),
                     (before.needs != after.needs, "needs"),
                 ]
@@ -433,13 +436,13 @@ fn describe(entry: &read::RecordEntry<'_>) -> String {
                 .filter(|(changed, _)| *changed)
                 .map(|(_, field)| field)
                 .collect(),
-                None => vec!["title/description/parent/needs"],
+                None => vec!["title/description/label/parent/needs"],
             };
             format!("Declaration applied: {}", changed.join(", "))
         }
         RecordKind::Resolve { chosen } => format!(
-            "Resolved: {chosen}  {:?}  {:?}{reason}",
-            after.lifecycle, after.kind
+            "Resolved: {chosen}  {:?}  {:?}  {}{reason}",
+            after.lifecycle, after.kind, after.label
         ),
     }
 }
@@ -666,7 +669,15 @@ pub fn render_root_help() -> String {
         ),
         (
             "Text & relationships",
-            &["write", "parent", "dep", "condition", "convert", "import"],
+            &[
+                "write",
+                "label",
+                "parent",
+                "dep",
+                "condition",
+                "convert",
+                "import",
+            ],
         ),
         (
             "Setup & utilities",

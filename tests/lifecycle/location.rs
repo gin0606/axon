@@ -398,7 +398,10 @@ fn an_unmerged_index_is_reported_alone_when_it_removed_the_header_from_the_worki
             .unwrap(),
     );
     assert_eq!(from_outside, without_root);
-    for args in [vec!["list"], vec!["capture", "--title", "rejected"]] {
+    for args in [
+        vec!["list"],
+        vec!["capture", "--label", "chore", "--title", "rejected"],
+    ] {
         let error = failure(f.run(&args));
         assert!(error.ends_with(&diagnostic), "{args:?}: {error}");
         assert!(!error.contains("not a store"), "{args:?}: {error}");
@@ -475,7 +478,7 @@ fn an_unmerged_index_is_reported_before_a_damaged_store_with_a_header() {
     fs::remove_file(&records).unwrap();
     fs::create_dir(&records).unwrap();
     fs::create_dir(f.0.join(".axon/write.lock")).unwrap();
-    let error = failure(f.run(&["capture", "--title", "rejected"]));
+    let error = failure(f.run(&["capture", "--label", "chore", "--title", "rejected"]));
     assert!(error.ends_with(&unmerged_header(&f.0)), "{error}");
 }
 
@@ -547,7 +550,10 @@ fn a_linked_worktree_with_an_unmerged_headerless_store_does_not_fall_through_to_
             "{records}: {without_root}"
         );
         assert_eq!(run(&["storage", "check", "."]), without_root);
-        for args in [vec!["list"], vec!["capture", "--title", "rejected"]] {
+        for args in [
+            vec!["list"],
+            vec!["capture", "--label", "chore", "--title", "rejected"],
+        ] {
             assert!(
                 run(&args).ends_with(&unmerged_header(&linked.0)),
                 "{args:?}"
@@ -595,7 +601,14 @@ fn init_in_a_subdirectory_creates_the_store_at_the_repository_root() {
     );
     let id = created(&success(
         command(&nested)
-            .args(["capture", "--accept", "--title", "from a subdirectory"])
+            .args([
+                "capture",
+                "--label",
+                "chore",
+                "--accept",
+                "--title",
+                "from a subdirectory",
+            ])
             .output()
             .unwrap(),
     ));
@@ -847,7 +860,14 @@ fn a_linked_worktree_without_a_store_uses_the_main_worktrees_store() {
     let linked = add_worktree(&f.0, "linked");
     let from_linked = created(&success(
         command(&linked.0)
-            .args(["capture", "--accept", "--title", "from linked"])
+            .args([
+                "capture",
+                "--label",
+                "chore",
+                "--accept",
+                "--title",
+                "from linked",
+            ])
             .output()
             .unwrap(),
     ));
@@ -928,7 +948,14 @@ fn init_in_a_linked_worktree_is_allowed_while_the_main_worktree_has_none() {
     assert!(!f.0.join(".axon").exists());
     let id = created(&success(
         command(&linked.0)
-            .args(["capture", "--accept", "--title", "local only"])
+            .args([
+                "capture",
+                "--label",
+                "chore",
+                "--accept",
+                "--title",
+                "local only",
+            ])
             .output()
             .unwrap(),
     ));
@@ -959,6 +986,8 @@ fn a_worktree_of_a_bare_repository_does_not_reach_the_directory_beside_it() {
             command(&holder)
                 .args([
                     "capture",
+                    "--label",
+                    "chore",
                     "--accept",
                     "--title",
                     "beside the bare repository",
@@ -1007,7 +1036,14 @@ fn a_submodule_uses_neither_the_superprojects_store_nor_its_modules_directory() 
     success(command(&parent).args(["init", "sup"]).output().unwrap());
     let visible = created(&success(
         command(&parent)
-            .args(["capture", "--accept", "--title", "superproject only"])
+            .args([
+                "capture",
+                "--label",
+                "chore",
+                "--accept",
+                "--title",
+                "superproject only",
+            ])
             .output()
             .unwrap(),
     ));
@@ -1111,7 +1147,9 @@ fn a_management_directory_that_is_a_symlink_is_rejected_from_a_linked_worktree()
     let before = target.record_files();
     for args in [
         vec!["list"],
-        vec!["capture", "--accept", "--title", "rejected"],
+        vec![
+            "capture", "--label", "chore", "--accept", "--title", "rejected",
+        ],
     ] {
         let error = failure(command(&linked.0).args(args).output().unwrap());
         assert!(
@@ -1170,7 +1208,7 @@ fn conditions_run_in_the_current_worktree_while_the_store_is_shared() {
     f.init();
     ignore_store(&f.0, ".axon/");
     let task = f.accepted("task");
-    let proposal = created(&f.ok(&["capture", "--title", "proposal"]));
+    let proposal = created(&f.ok(&["capture", "--label", "chore", "--title", "proposal"]));
     for id in [&task, &proposal] {
         f.ok(&["condition", "set", id, "--command", "test -f marker"]);
     }

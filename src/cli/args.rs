@@ -1,10 +1,10 @@
 use super::display;
 use axon::{
     Result,
-    lifecycle::{EntityId, Kind, Lifecycle},
+    lifecycle::{EntityId, Kind, Label, Lifecycle},
     read,
 };
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum, builder::PossibleValue};
 use std::{io::Read, path::PathBuf, time::Duration};
 
 #[derive(Parser)]
@@ -116,7 +116,7 @@ To read saved information without running any condition, add --skip-conditions; 
     Reopen(Change),
     /// Convert an unstarted Entity between Issue and Group without changing anything else
     #[command(
-        after_help = "Example: axon convert ID --kind group\nOnly an Undecided or NotStarted Entity converts; release an InProgress Issue first, and a Group with children is not converted to an Issue. Lifecycle, parent, dependencies, text, condition and Notes stay as they are. Converting to the kind the Entity already has is No changes. The kind is not a lifecycle transition, so there is no --reason.\nA Group's description states the outcome of the whole plan and what its final review confirms, so reread an Issue's description after converting it."
+        after_help = "Example: axon convert ID --kind group\nOnly an Undecided or NotStarted Entity converts; release an InProgress Issue first, and a Group with children is not converted to an Issue. Lifecycle, parent, dependencies, text, label, condition and Notes stay as they are. Converting to the kind the Entity already has is No changes. The kind is not a lifecycle transition, so there is no --reason.\nA Group's description states the outcome of the whole plan and what its final review confirms, so reread an Issue's description after converting it."
     )]
     Convert {
         id: String,
@@ -126,7 +126,7 @@ To read saved information without running any condition, add --skip-conditions; 
     },
     /// List conflicted Entities with their heads, or resolve one by taking a head's value
     #[command(
-        after_help = "Example: axon resolve\n         axon resolve ID --head RECORD_ID -r 'keep the side with remaining work'\nWithout ID every conflicted Entity is listed; with ID alone, that Entity. Each head line has the record ID, time, actor, record kind, and the lifecycle, kind and title of that head. When the Entity has a gap, a head whose own parent record is missing, or from which following parent records never reaches the oldest record of the Entity (its creation, or else the earliest record whose parents are all missing), is marked \"parent missing; likely newer\": a cherry-pick or revert left a gap, and that head is probably the later record.\nWith ID and --head RECORD_ID (a complete record ID from the listing) a resolve record takes that head's value and joins every head; the Entity is settled at once. Violations that remain are shown by axon show and axon storage check and repaired with ordinary commands."
+        after_help = "Example: axon resolve\n         axon resolve ID --head RECORD_ID -r 'keep the side with remaining work'\nWithout ID every conflicted Entity is listed; with ID alone, that Entity. Each head line has the record ID, time, actor, record kind, and the lifecycle, kind, label and title of that head. When the Entity has a gap, a head whose own parent record is missing, or from which following parent records never reaches the oldest record of the Entity (its creation, or else the earliest record whose parents are all missing), is marked \"parent missing; likely newer\": a cherry-pick or revert left a gap, and that head is probably the later record.\nWith ID and --head RECORD_ID (a complete record ID from the listing) a resolve record takes that head's value and joins every head; the Entity is settled at once. Violations that remain are shown by axon show and axon storage check and repaired with ordinary commands."
     )]
     Resolve {
         /// The conflicted Entity; without it every conflicted Entity is listed
@@ -137,6 +137,12 @@ To read saved information without running any condition, add --skip-conditions; 
         /// Why this head is taken: one line, stored in the resolve record like other reasons
         #[arg(short, long, requires = "head")]
         reason: Option<String>,
+    },
+    /// Change the label that classifies the kind of work, without changing lifecycle
+    #[command(after_help = LABEL_HELP)]
+    Label {
+        #[command(subcommand)]
+        command: LabelCommand,
     },
     /// Edit title or description without changing lifecycle
     Write {
@@ -258,6 +264,7 @@ impl Body {
     }
 }
 #[derive(Args)]
+#[command(after_help = LABEL_HELP)]
 pub(super) struct Create {
     /// Title of the new Entity: one line, at most 200 characters
     #[arg(long)]
@@ -265,6 +272,9 @@ pub(super) struct Create {
     /// Entity kind to create
     #[arg(long, value_enum, default_value = "issue")]
     pub(super) kind: EntityKind,
+    /// The kind of work: required, one of the fixed set
+    #[arg(long, value_enum)]
+    pub(super) label: LabelValue,
     /// Register as adopted work in NotStarted instead of Undecided
     #[arg(long)]
     pub(super) accept: bool,
@@ -285,6 +295,48 @@ pub(super) struct Change {
     pub(super) id: String,
     #[arg(short, long)]
     pub(super) reason: Option<String>,
+}
+/// The label help shared by the commands that take one.
+const LABEL_HELP: &str = "Every Entity has exactly one label from a fixed set: bug, feat, chore, docs, test, refactor, spike.
+A label classifies the kind of work; it is not a priority and changes no lifecycle rule, candidate list or situation. A Group's label is the main kind of its plan.
+There is no unset, and the label of a Completed or Cancelled Entity cannot be changed.";
+#[derive(Subcommand)]
+pub(super) enum LabelCommand {
+    /// Replace the label; the same value is No changes
+    #[command(after_help = LABEL_HELP)]
+    Set {
+        id: String,
+        #[arg(value_enum)]
+        value: LabelValue,
+    },
+}
+/// A label given on the command line, spelled as the common core spells it.
+#[derive(Clone, Copy)]
+pub struct LabelValue(pub Label);
+impl ValueEnum for LabelValue {
+    fn value_variants<'a>() -> &'a [Self] {
+        const VALUES: [LabelValue; Label::ALL.len()] = {
+            let mut values = [LabelValue(Label::ALL[0]); Label::ALL.len()];
+            let mut index = 0;
+            while index < values.len() {
+                values[index] = LabelValue(Label::ALL[index]);
+                index += 1;
+            }
+            values
+        };
+        &VALUES
+    }
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(PossibleValue::new(self.0.name()).help(match self.0 {
+            Label::Bug => "Fix behavior that differs from what is expected",
+            Label::Feat => "Add new behavior or a feature",
+            Label::Chore => "Maintenance that changes no behavior: dependencies, CI, settings",
+            Label::Docs => "Documents, help or skills",
+            Label::Test => "Add or reorganize tests",
+            Label::Refactor => "Reorganize structure without changing behavior",
+            Label::Spike => "Investigate in order to decide: open questions, specifications, plans",
+        }))
+    }
 }
 #[derive(Subcommand)]
 pub(super) enum Parent {
@@ -386,18 +438,22 @@ pub struct Selection {
     /// Restrict the Entity kind before evaluating any conditions
     #[arg(long)]
     pub(super) kind: Option<EntityKind>,
+    /// Restrict the label before evaluating any conditions; AND with other filters
+    #[arg(long, value_enum)]
+    pub(super) label: Option<LabelValue>,
     /// Literal, case-sensitive text in current title or description; AND with other filters. Search Note bodies with axon note search
     #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
     pub search: Option<String>,
 }
 impl Selection {
     /// Whether the Entity's presented value (its current value, or its first head's while
-    /// conflicted) matches the kind and search filters.
+    /// conflicted) matches the kind, label and search filters.
     pub fn matches(&self, view: &read::View<'_>, id: &EntityId) -> bool {
         let Some(current) = view.presented(id) else {
             return false;
         };
         self.kind.is_none_or(|k| k.matches(current.kind))
+            && self.label.is_none_or(|l| l.0 == current.label)
             && self
                 .search
                 .as_ref()
@@ -467,6 +523,9 @@ pub fn operation_label(command: &Command) -> String {
         Command::Reconsider(c) => ("reconsider", Some(&c.id)),
         Command::Reopen(c) => ("reopen", Some(&c.id)),
         Command::Convert { id, .. } => ("convert", Some(id)),
+        Command::Label {
+            command: LabelCommand::Set { id, .. },
+        } => ("label set", Some(id)),
         Command::Resolve { id, .. } => ("resolve", id.as_deref()),
         Command::Condition {
             command: Condition::Set { id, .. },

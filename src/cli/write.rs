@@ -1,6 +1,6 @@
 use super::{
     Output, Publication,
-    args::{Body, Change, Condition, Create, Dependency, Import, Parent},
+    args::{Body, Change, Condition, Create, Dependency, Import, LabelCommand, Parent},
     display, output,
     render::{confirmation, converted, declaration_changes, declaration_ids, situation_label},
     store::{context, fresh_entity_id, open, resolve},
@@ -8,7 +8,7 @@ use super::{
 use axon::{
     Result,
     lifecycle::{
-        Context, EntityId, Kind, Label, Lifecycle, Operation,
+        Context, EntityId, Kind, Lifecycle, Operation,
         record::{Current, Entry, Record, RecordId, Store, View},
     },
 };
@@ -136,8 +136,7 @@ pub(super) fn capture(args: Create) -> Result<Output> {
                 owner: None,
                 title,
                 description,
-                // Capture has no label option yet; every new Entity starts as chore.
-                label: Label::Chore,
+                label: args.label.0,
                 condition: args.command,
                 parent,
                 needs,
@@ -186,6 +185,29 @@ pub(super) fn write(value: String, title: Option<String>, body: Body) -> Result<
             changes.push("No changes");
         }
         Ok((record, confirmation(&id, &changes.join("  "))))
+    })
+}
+pub(super) fn label(command: LabelCommand) -> Result<Output> {
+    let LabelCommand::Set {
+        id: value,
+        value: label,
+    } = command;
+    mutate(|records, view| {
+        let id = resolve(view, &value)?;
+        let record = records.set_label(&id, label.0, context())?;
+        let text = confirmation(
+            &id,
+            &format!(
+                "{}: {}",
+                if record.is_none() {
+                    "No changes  Label"
+                } else {
+                    "Label updated"
+                },
+                label.0
+            ),
+        );
+        Ok((record, text))
     })
 }
 pub(super) fn add_note(
@@ -383,7 +405,7 @@ pub(super) fn transition(args: Change, operation: Operation) -> Result<Output> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axon::lifecycle::record::Kind;
+    use axon::lifecycle::{Label, record::Kind};
     use chrono::Utc;
     use proptest::prelude::*;
 

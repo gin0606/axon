@@ -13,16 +13,21 @@ fn view_of(records: &Store) -> record::View {
 fn declaration_export_selectors_and_references_are_read_only() {
     let f = Fixture::new();
     f.ok(&["init", "demo"]);
-    let outer = created(&f.ok(&["capture", "--kind", "group", "--accept", "--title", "Outer"]));
+    let outer = created(&f.ok(&[
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Outer",
+    ]));
     let group = created(&f.ok(&[
-        "capture", "--kind", "group", "--accept", "--title", "Plan", "--parent", &outer,
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Plan",
+        "--parent", &outer,
     ]));
     let external = f.accepted("Outside");
     let done = created(&f.ok(&[
-        "capture", "--accept", "--title", "Finished", "--parent", &group,
+        "capture", "--label", "chore", "--accept", "--title", "Finished", "--parent", &group,
     ]));
     let cancelled = created(&f.ok(&[
         "capture",
+        "--label",
+        "chore",
         "--accept",
         "--title",
         "Cancelled",
@@ -30,10 +35,13 @@ fn declaration_export_selectors_and_references_are_read_only() {
         &group,
     ]));
     let nested = created(&f.ok(&[
-        "capture", "--kind", "group", "--accept", "--title", "Nested", "--parent", &group,
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Nested",
+        "--parent", &group,
     ]));
     let child = created(&f.ok(&[
         "capture",
+        "--label",
+        "chore",
         "--accept",
         "--title",
         "Body",
@@ -192,6 +200,8 @@ fn declaration_prepare_check_new_plan_and_existing_changes() {
     assert_eq!(bytes, fs::read(&path).unwrap());
     let existing = created(&f.ok(&[
         "capture",
+        "--label",
+        "chore",
         "--accept",
         "--title",
         "Original",
@@ -276,8 +286,12 @@ fn declaration_check_rejections_preserve_storage_and_input() {
 fn declaration_check_rejects_local_and_core_guards() {
     let f = Fixture::new();
     f.ok(&["init", "demo"]);
-    let group = created(&f.ok(&["capture", "--kind", "group", "--accept", "--title", "Group"]));
-    let other = created(&f.ok(&["capture", "--kind", "group", "--accept", "--title", "Other"]));
+    let group = created(&f.ok(&[
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Group",
+    ]));
+    let other = created(&f.ok(&[
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Other",
+    ]));
     let a = f.accepted("A");
     let b = f.accepted("B");
     let exported = f.ok(&["export", &a]);
@@ -745,13 +759,13 @@ proptest::proptest! {
         f.ok(&["init", "demo"]);
         let external = if external_kind == "group" {
             created(&f.ok(&[
-                "capture", "--kind", "group", "--accept", "--title", "External",
+                "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "External",
             ]))
         } else {
             f.accepted("External")
         };
         let selected = created(&f.ok(&[
-            "capture", "--accept", "--title", "Original", "--needs", &external,
+            "capture", "--label", "chore", "--accept", "--title", "Original", "--needs", &external,
         ]));
         let original = snapshot(&f);
         let mut d = declaration::parse(&f.ok(&["export", &selected])).unwrap();
