@@ -92,7 +92,7 @@ fn git(cwd: &Path) -> Result<Option<Discovered>> {
                 String::from_utf8(output.stdout).map_err(|_| invalid("Git path is not UTF-8"))?;
             let Some([git_dir, root, common]) = rev_parse(&text) else {
                 return Err(invalid(
-                    "Git discovery failed: expected the working tree root, the common directory and the Git directory on three lines; a Git worktree whose path contains a newline is not supported, so move or rename it",
+                    "Git discovery failed: expected the Git directory, the working tree root and the common directory on three lines; a Git worktree whose path contains a newline is not supported, so move or rename it",
                 ));
             };
             if let Some(boundary) = boundary
