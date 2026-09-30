@@ -917,6 +917,38 @@ mod publication_tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_record_that_is_a_symlink_or_directory_is_corruption_and_never_read() {
+        for symlink in [true, false] {
+            let (root, mut store) = fixture();
+            let entry = two_records().remove(0);
+            let bytes = record::encode(&entry).unwrap();
+            let id = RecordId::of(&bytes);
+            let directory = store.records_path().join(id.subdirectory());
+            fs::create_dir_all(&directory).unwrap();
+            let path = directory.join(id.as_ref());
+            if symlink {
+                let elsewhere = root.join("elsewhere");
+                fs::write(&elsewhere, &bytes).unwrap();
+                std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+            } else {
+                fs::create_dir(&path).unwrap();
+            }
+            let loaded = store.load().unwrap();
+            assert!(loaded.records.entries().next().is_none());
+            assert_eq!(loaded.corruption.len(), 1);
+            assert_eq!(
+                loaded.corruption[0].path,
+                Path::new(id.subdirectory()).join(id.as_ref())
+            );
+            assert_eq!(loaded.corruption[0].reason, "not a regular file");
+            assert!(store.update(|_, _, _| Ok((vec![entry], ()))).is_err());
+            drop(store);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_symlinked_temporary_path_is_replaced_without_following_it() {
         let (root, mut store) = fixture();
         let target = root.join("unrelated.txt");
