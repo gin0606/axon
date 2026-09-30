@@ -114,7 +114,7 @@ canonical serializer は次の規則で出力する。
 7. LF 改行、2 space indent、document marker なし、末尾 newline 一つとする。
 8. comment は意味に含めず、canonical rewrite では保持しない。
 
-parser は strict とし、unknown field、重複 key、anchor、alias、merge key、独自 tag、複数 document、mapping 以外の root、要求型と異なる scalar を拒否する。schema label が `axon-declaration/v2` 以外の file は変換せずに拒否する。Entity の `label` field を持たない `axon-declaration/v1` の file もこれに当たり、v1 の `base` は v2 の fingerprint と一致しないため、診断で `axon export` による v2 での取り直しを案内する。
+parser は strict とし、unknown field、重複 key、anchor、alias、merge key、独自 tag、複数 document、mapping 以外の root、要求型と異なる scalar を拒否する。schema label が `axon-declaration/v2` 以外の file は変換せずに拒否する。Entity の `label` field を持たない `axon-declaration/v1` の file もこれに当たり、v1 の `base` は v2 の fingerprint と一致しないため、診断は、既存 Entity の record を `axon export` で v2 として取り直すことと、保存先にまだない record は各 record に `label` を加えて `axon-declaration/v2` と宣言することを案内する。v1 の file の既存 Entity の record には `label` を足さず `base` も手で書き換えず、未使用の別 file へ `axon export` で取り直して未適用の編集を移す。v1 の file で `base` が null の record も、`prepare` で得た `id` が保存先に存在すれば以前の `apply` で保存済みなので、取り直す側に入れる。保存先にまだない record は、`base` が null で、`id` が null か、`axon show ID --skip-conditions` がその `id` を存在しないと診断する record である。保存先にまだない record だけの v1 の file は、各 record に `label` を加えて schema 行を v2 に書き換えてよい。取り直す record も含む v1 の file は、取り直した v2 の file へ保存先にまだない record を `label` を加えて移す。`axon export` が出す既存 Entity の record は `key` が null なので、移した record や編集がそれらを `{ key: ... }` で参照していれば `{ id: ... }` に書き換える。
 
 ## 競合検知
 

@@ -312,7 +312,9 @@ fn strict_yaml_rejects_unsupported_constructs_and_wrong_types() {
     ] {
         let e = parse(&v1).unwrap_err().to_string();
         assert!(
-            e.contains("axon-declaration/v1") && e.contains("axon export") && e.contains(SCHEMA),
+            e.contains("axon-declaration/v1")
+                && e.contains("axon export")
+                && e.contains(&format!("add a label to each and declare {SCHEMA}")),
             "{e}"
         );
     }

@@ -76,7 +76,7 @@ axon import check new-plan.yaml
 
 ### 登録後の計画を修正する
 
-`GROUP_ID` を対象のIDへ置き換え、未使用のfileへ取得します。既存の編集fileへリダイレクトして上書きしないでください。labelを導入する前の `axon-declaration/v1` のfileは拒否されるので、手で `label` を足さず、`axon export` で取り直して編集意図を移してください。
+`GROUP_ID` を対象のIDへ置き換え、未使用のfileへ取得します。既存の編集fileへリダイレクトして上書きしないでください。labelを導入する前の `axon-declaration/v1` のfileは拒否されます。v1の `base` はv2のfingerprintと一致しないため、既存Entityのrecordには手で `label` を足さず `base` も書き換えず、未使用のfileへ `axon export` で取り直して編集意図を移します。保存先にまだないrecordには `label` を足します。そうしたrecordだけのfileはschema行を `axon-declaration/v2` にします。取り直したfileがあれば、そこへ移します。`base: null` でも `axon import prepare` 済みで保存済みのrecordは取り直す側です。その見分け方と参照の書き換えは [declarationの契約](../reference/declaration.md#canonical-形式) にあります。
 
 ```sh
 axon export GROUP_ID > plan-edit.yaml
