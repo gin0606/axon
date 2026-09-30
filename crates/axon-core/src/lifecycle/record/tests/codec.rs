@@ -143,6 +143,32 @@ fn key_order_and_optional_keys_follow_the_contract() {
     assert!(!note.contains("\"after\""));
 }
 
+/// Record files written by an earlier encoder, one per record kind. Stored records stay readable
+/// only while decoding and re-encoding reproduces these bytes exactly.
+const WRITTEN_RECORDS: [&str; 11] = [
+    r#"{"entity":"i3","record":"created","parents":[],"at":"1970-01-01T00:00:03.500Z","recorder":{"actor":"setup","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"not-started","owner":null,"title":"task","description":"body\n日本語","condition":null,"parent":null,"needs":[]}}"#,
+    r#"{"entity":"i3","record":"transition","operation":"start","parents":["2a21511cbd45b559ef550bd9595ef3a61babecfcefcd61caa1661b33d61c66ee"],"at":"1970-01-01T00:01:41.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"task","description":"body\n日本語","condition":null,"parent":null,"needs":[]}}"#,
+    r#"{"entity":"i3","record":"edit","parents":["04349af49e27c28e63a4e7b2385be53a85eb07f057e2f97f83405af4d210a674"],"at":"1970-01-01T00:01:42.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","condition":null,"parent":null,"needs":[]}}"#,
+    r#"{"entity":"i3","record":"parent","parents":["1668939b50174dc2792035965e0b5dd1e99c69a3d6c89afb5ea7d7000b494d02"],"at":"1970-01-01T00:01:43.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","condition":null,"parent":"g0","needs":[]}}"#,
+    r#"{"entity":"i3","record":"dependency","parents":["4a9eafe8e3ef7fe127e7095ff618b0d5924bf2a7f709a4ef9eef206269e124c6"],"at":"1970-01-01T00:01:44.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","condition":null,"parent":"g0","needs":["g2"]}}"#,
+    r#"{"entity":"i3","record":"condition","parents":["da0d7388a814361e962ea78a46d592ef36c923e852fcfd08b1c0c436b464b494"],"at":"1970-01-01T00:01:45.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","condition":"exit 0","parent":"g0","needs":["g2"]}}"#,
+    r#"{"entity":"i3","record":"import","parents":["b11fbc9e09ce2ee264e4f0c28effa45a6c1d37f8ec2fb06c3f1f2db94046f6af"],"at":"1970-01-01T00:01:46.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","condition":"exit 0","parent":null,"needs":[]}}"#,
+    r#"{"entity":"i3","record":"transition","operation":"release","parents":["5fd9e8ee6182ef36ac2029e04c3bd4ee5d27688eb3be0016df6c2633bd33dd04"],"at":"1970-01-01T00:01:47.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"not-started","owner":null,"title":"edited","description":"desc","condition":"exit 0","parent":null,"needs":[]}}"#,
+    r#"{"entity":"i3","record":"convert","parents":["6b9f014340e86165401af5650e510b39748b7faaf8ffff2b2232e1e7404cac69"],"at":"1970-01-01T00:01:48.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"group","lifecycle":"not-started","owner":null,"title":"edited","description":"desc","condition":"exit 0","parent":null,"needs":[]}}"#,
+    r#"{"entity":"i3","record":"resolve","parents":["67c55c7d136fca429bca79efee2cb6cb9d53ce5d00431dc5b81fde8e10c568f3","71223f8c26da3acc056dc58b5da7cb1659f162111f750ee06c109cdeb7763c96"],"chosen":"67c55c7d136fca429bca79efee2cb6cb9d53ce5d00431dc5b81fde8e10c568f3","at":"1970-01-01T00:01:50.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":"pick","after":{"kind":"group","lifecycle":"undecided","owner":null,"title":"edited","description":"desc","condition":"exit 0","parent":null,"needs":[]}}"#,
+    r#"{"entity":"i3","record":"note","parents":[],"nonce":"9dcfece3cb52b8ff3dde4bb73b041297","at":"1970-01-01T00:01:51.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"body":"a note"}"#,
+];
+
+#[test]
+fn records_written_earlier_decode_and_re_encode_to_the_same_bytes() {
+    for line in WRITTEN_RECORDS {
+        let bytes = format!("{line}\n").into_bytes();
+        let (id, entry) = decode(&bytes).unwrap();
+        assert_eq!(id, RecordId::of(&bytes));
+        assert_eq!(encode(&entry).unwrap(), bytes, "{line}");
+    }
+}
+
 #[test]
 fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
     let (store, ids) = store_with_every_kind();
