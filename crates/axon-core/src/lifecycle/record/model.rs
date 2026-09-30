@@ -216,7 +216,7 @@ impl Record {
                 ]
                 .into_iter()
                 .any(|before| {
-                    operation.apply_as(self.after.kind, before).ok() == Some(self.after.lifecycle)
+                    operation.next_as(self.after.kind, before) == Some(self.after.lifecycle)
                 });
                 if !reachable {
                     return Err(invalid(format!(
