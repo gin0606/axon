@@ -574,8 +574,6 @@ impl Store {
     ) -> Result<()> {
         let base = self.records_path();
         let mut planned = Vec::with_capacity(entries.len());
-        // `.axon/` is synced again after publication when its records directory was created.
-        let mut created_records_directory = false;
         let prepared = (|| -> Result<()> {
             for entry in entries {
                 let bytes = record::encode(entry)?;
@@ -583,8 +581,6 @@ impl Store {
                 let directory = base.join(id.subdirectory());
                 if fs::symlink_metadata(&base).is_err() {
                     fs::create_dir(&base)?;
-                    sync(base.parent().unwrap(), Reach::Ordered)?;
-                    created_records_directory = true;
                 }
                 // A link at the subdirectory would take the record outside the store; a read
                 // rejects it as corruption, so a write does not go through it either.
@@ -608,8 +604,10 @@ impl Store {
                 let temp = temporary(&path, &bytes)?;
                 planned.push((path, Some(temp)));
             }
-            // Persist all subdirectory entries, including residue from interrupted writes,
-            // before the first rename. Renames only change the subdirectories themselves.
+            // Persist the records directory and all subdirectory entries before the first
+            // rename, including those an interrupted writer created and never synced.
+            // Renames only change the subdirectories themselves.
+            sync(base.parent().unwrap(), Reach::Ordered)?;
             sync(&base, Reach::Ordered)?;
             self.guard()?;
             progress(Progress::BeforePublish)
@@ -637,15 +635,12 @@ impl Store {
                 // order survives a crash (a record whose parent or dependency is not yet
                 // durable is not durable either). A file left by an interrupted publication
                 // is synced here too. Only the publication's last sync has to be durable.
-                let reach = if index == last && !created_records_directory {
+                let reach = if index == last {
                     Reach::Durable
                 } else {
                     Reach::Ordered
                 };
                 sync(path.parent().unwrap(), reach)?;
-                if index == last && created_records_directory {
-                    sync(base.parent().unwrap(), Reach::Durable)?;
-                }
                 progress(Progress::Renamed(index))
             })();
             if let Err(e) = published {
@@ -1051,22 +1046,24 @@ mod publication_tests {
             })
             .collect();
         let sync = |index: usize| format!("sync {}", subdirectories[index]);
-        // A store cloned without records has no records directory: creating it syncs `.axon/`.
+        // A store cloned without records has no records directory; the publication creates it.
         fs::remove_dir_all(store.records_path()).unwrap();
         assert_eq!(
             publication_events(&store, &entries[..1]),
             [
                 "sync .axon".into(),
                 "sync records (0 published)".into(),
-                sync(0),
-                "sync .axon (durable)".into(),
+                format!("{} (durable)", sync(0)),
                 "renamed 0".into(),
             ]
         );
-        // An existing record is not renamed again, but its directory is still synced.
+        // An existing record is not renamed again, but its directory is still synced. `.axon/`
+        // is synced every time: a writer that created the records directory may have stopped
+        // before syncing it.
         assert_eq!(
             publication_events(&store, &entries),
             [
+                "sync .axon".into(),
                 "sync records (1 published)".into(),
                 sync(0),
                 "renamed 0".into(),

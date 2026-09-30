@@ -511,8 +511,10 @@ impl Location {
                     fs::rename(&temp, &path)?;
                 }
             }
-            // The record directory, the ignore file and the attributes file are durable before
-            // the header, which marks the store, is published.
+            // `.axon/` itself, the record directory, the ignore file and the attributes file are
+            // durable before the header, which marks the store, is published. `.axon/` may be
+            // the residue of an interrupted initialization that never synced its entry.
+            file::sync_directory(&self.root, file::Reach::Ordered)?;
             file::sync_directory(&directory, file::Reach::Ordered)?;
             let bytes = encode_header(&Header::new(prefix)?)?;
             let temp = file::temporary(&header, &bytes)?;

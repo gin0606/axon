@@ -27,7 +27,7 @@
 
 OS lock、Git index の unmerged 検査、管理 directory が通常の directory であること（symlink の拒否）の検査は、確定した保存先とそれを含む worktree に対して行う（保存先の確定より前の unmerged 検査は header のない段に対して行う）。通常 writer の lock は確定した保存先の `.axon/write.lock`、`axon init` の lock は Git 内では common Git directory の `axon-init.lock`、Git 外では管理 directory の `.axon/axon-init.lock` で、worktree をまたぐ並行初期化も直列化する。
 
-`axon init` はその OS lock 下で既存の保存先を確認し、記録の directory を作り、`.axon/.gitignore` と `.axon/.gitattributes` をそれぞれ一時 file から rename で作り、header を一時 file `header.json.tmp` に書いて sync し、`header.json` へ rename して directory を sync する。header の公開前に中断した保存先は未初期化のままで、再実行で作り直せる。
+`axon init` はその OS lock 下で既存の保存先を確認し、記録の directory を作り、`.axon/.gitignore` と `.axon/.gitattributes` をそれぞれ一時 file から rename で作り、管理 root と `.axon/` を sync してから header を一時 file `header.json.tmp` に書いて sync し、`header.json` へ rename して directory を sync する。header の公開前に中断した保存先は未初期化のままで、再実行で作り直せる。
 
 ## 記録 file と codec
 
@@ -57,7 +57,7 @@ decode は未知の key、欠けた key、種類と合わない key、規則外�
 
 ## 書込の保証
 
-writer は `.axon/write.lock` の OS lock を取得してから記録の集合を読み、通常操作の前提を検査して新しい記録を一つ作る。記録 ID を計算し、目的の subdirectory を必要なら作り、`<記録 ID>.tmp` に bytes を書いて sync し、`<記録 ID>` へ rename して directory を sync して成功する。既存の記録 file は書き直さず、置き換えず、削除しない。lock file は置換・削除しない。process 終了時は OS が lock を解放する。同値の操作は記録を作らず No changes で終わる。保存先の発見は CLI 実行ごとに一回で、実行の途中で Git の toplevel や common directory が変わったことは検出しない。
+writer は `.axon/write.lock` の OS lock を取得してから記録の集合を読み、通常操作の前提を検査して新しい記録を一つ作る。記録 ID を計算し、記録の directory と目的の subdirectory を必要なら作り、`<記録 ID>.tmp` に bytes を書いて sync し、`.axon/` と記録の directory を sync してから `<記録 ID>` へ rename して directory を sync して成功する。`.axon/` と記録の directory は毎回 sync し、中断した writer が作って sync しなかった entry も永続化する。既存の記録 file は書き直さず、置き換えず、削除しない。lock file は置換・削除しない。process 終了時は OS が lock を解放する。同値の操作は記録を作らず No changes で終わる。保存先の発見は CLI 実行ごとに一回で、実行の途中で Git の toplevel や common directory が変わったことは検出しない。
 
 一回の公開の sync は最後のものを除いて後続の書込より先に届けばよく、順序だけを保証する。最後の sync で全体を永続化し、rename 後に失敗した場合も、rename 済みの記録を永続化するために sync を試みる。Apple のプラットフォームでは前者を I/O barrier（`F_BARRIERFSYNC`）、後者を drive cache まで flush する `F_FULLFSYNC` で行い、barrier が使えない filesystem では後者で代える。その他のプラットフォームではどちらも `fsync` とする。
 
