@@ -531,10 +531,10 @@ impl View {
     /// visited once, so a containment cycle ends the walk.
     pub fn descendants(&self, id: &EntityId) -> Vec<EntityId> {
         let mut found = Vec::new();
-        let mut seen = BTreeSet::from([id.clone()]);
+        let mut seen = BTreeSet::from([id]);
         let mut pending: Vec<&EntityId> = self.children(id).iter().rev().collect();
         while let Some(child) = pending.pop() {
-            if !seen.insert(child.clone()) {
+            if !seen.insert(child) {
                 continue;
             }
             found.push(child.clone());
@@ -547,13 +547,13 @@ impl View {
     pub fn ancestors(&self, id: &EntityId) -> Vec<EntityId> {
         let mut found = Vec::new();
         let mut seen = BTreeSet::new();
-        let mut next = self.current(id).and_then(|c| c.parent.clone());
+        let mut next = self.current(id).and_then(|c| c.parent.as_ref());
         while let Some(ancestor) = next {
-            if !self.is_settled(&ancestor) || !seen.insert(ancestor.clone()) {
+            if !self.is_settled(ancestor) || !seen.insert(ancestor) {
                 break;
             }
-            next = self.current(&ancestor).and_then(|c| c.parent.clone());
-            found.push(ancestor);
+            next = self.current(ancestor).and_then(|c| c.parent.as_ref());
+            found.push(ancestor.clone());
         }
         found
     }
@@ -562,18 +562,18 @@ impl View {
     /// adopted.
     pub fn ancestors_adopted(&self, id: &EntityId) -> bool {
         let mut seen = BTreeSet::new();
-        let mut next = self.current(id).and_then(|c| c.parent.clone());
+        let mut next = self.current(id).and_then(|c| c.parent.as_ref());
         while let Some(ancestor) = next {
-            let Some(current) = self.current(&ancestor) else {
+            let Some(current) = self.current(ancestor) else {
                 return false;
             };
             if current.lifecycle != Lifecycle::NotStarted {
                 return false;
             }
-            if !seen.insert(ancestor.clone()) {
+            if !seen.insert(ancestor) {
                 break;
             }
-            next = current.parent.clone();
+            next = current.parent.as_ref();
         }
         true
     }
