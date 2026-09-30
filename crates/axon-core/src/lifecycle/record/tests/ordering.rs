@@ -366,7 +366,8 @@ fn history_is_causal_with_id_ties_and_time_never_orders_records() {
 
 #[test]
 fn corrupt_parent_links_are_rejected_by_derivation() {
-    // A parent of another Entity, a Note as parent, and a cycle are corruption, not gaps.
+    // A parent of another Entity and a Note as parent are corruption, not gaps. A cycle among
+    // records cannot be built here: a record's ID depends on its parents' IDs.
     let mut r = Replica::new("r0");
     let foreign = r.head("g0");
     let mut record = r.store.record(&r.head("i3")).unwrap().clone();
@@ -382,11 +383,6 @@ fn corrupt_parent_links_are_rejected_by_derivation() {
     let mut store = r.store.clone();
     insert(&mut store, record);
     assert!(error(store.view()).contains("Note as its parent"));
-    // A cycle among records cannot be built: a record's ID depends on its parents' IDs. The
-    // derivation still counts the records it orders, so a set that somehow contains one is
-    // reported instead of looping.
-    let view = r.store.view().unwrap();
-    assert!(view.is_valid());
 }
 
 #[test]

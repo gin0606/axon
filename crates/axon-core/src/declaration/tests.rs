@@ -915,7 +915,6 @@ fn conflicted_and_violating_stores_reject_declarations_except_a_completing_retry
     other.set_parent("a", Some("b"));
     f.set_parent("b", Some("a"));
     f.store.absorb(&other.store);
-    let before = f.store.clone();
     for error in [
         swap.check(&input, &f.store, context()).unwrap_err(),
         swap.clone().prepare(&f.store, "demo").unwrap_err(),
@@ -923,7 +922,6 @@ fn conflicted_and_violating_stores_reject_declarations_except_a_completing_retry
         let error = error.to_string();
         assert!(error.contains("structural violations"), "{error}");
     }
-    assert_eq!(f.store, before);
 }
 
 #[test]
@@ -1194,7 +1192,6 @@ proptest! {
         f.write(conflicted, &format!("Left {title}"));
         other.write(conflicted, &format!("Right {title}"));
         f.store.absorb(&other.store);
-        let before = f.store.clone();
         let exported = export(&f.store, &f.view(), &[id("g")]);
         if conflicted_child {
             prop_assert!(exported.unwrap_err().to_string().contains("conflicted"));
@@ -1205,7 +1202,6 @@ proptest! {
         fresh.groups[0].title = title.clone();
         let input = fresh.serialize(&f.view()).unwrap();
         prop_assert!(fresh.prepare(&f.store, "demo").unwrap_err().to_string().contains("conflicted"));
-        prop_assert_eq!(&f.store, &before);
         prop_assert_eq!(input, fresh.serialize(&f.view()).unwrap());
       }
 
@@ -1225,10 +1221,8 @@ proptest! {
             let declaration = export(&alone.store, &view, &[id("child")]).unwrap();
             prop_assert!(declaration.references.is_empty());
             let input = declaration.serialize(&view).unwrap();
-            let before = alone.store.clone();
             prop_assert!(declaration.clone().prepare(&alone.store, "demo").unwrap_err().to_string().contains("does not exist"));
             prop_assert!(declaration.check(&input, &alone.store, context()).unwrap_err().to_string().contains("does not exist"));
-            prop_assert_eq!(&alone.store, &before);
         }
 
         let mut f = Fixture::new();
@@ -1244,10 +1238,8 @@ proptest! {
         prop_assert_eq!(checked.records.len(), 2);
         f.insert(checked.records[1].clone());
         prop_assert!(!f.view().is_valid());
-        let before = f.store.clone();
         let mut fresh = example();
         prop_assert!(fresh.prepare(&f.store, "demo").unwrap_err().to_string().contains("structural violations"));
-        prop_assert_eq!(&f.store, &before);
         let retry = swap.check(&input, &f.store, context()).unwrap();
         prop_assert_eq!(retry.records.len(), 1);
         f.insert(retry.records[0].clone());

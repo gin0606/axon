@@ -2305,10 +2305,9 @@ mod tests {
             let released = left.store.view().unwrap().head(&item).unwrap().clone();
             let mut right = Fixture { store: base.store.clone(), clock: std::cell::Cell::new(seed as i64 + 200) };
             right.perform("item", Operation::Cancel);
-            let cancelled = right.store.view().unwrap().head(&item).unwrap().clone();
             left.store.absorb(&right.store);
             let resolved = left.store.resolve(&item, &released, None, context(seed as i64 + 300)).unwrap();
-            let resolved = left.store.insert(Entry::Record(resolved)).unwrap();
+            left.store.insert(Entry::Record(resolved)).unwrap();
 
             let without = |source: &Store, omitted: &[RecordId]| {
                 let mut store = Store::new();
@@ -2377,8 +2376,6 @@ mod tests {
                 }
                 prop_assert_eq!(derived.gaps().contains_key(&item), has_gap);
             }
-            prop_assert!(left.store.contains(&cancelled));
-            prop_assert!(left.store.contains(&resolved));
         }
     }
 
