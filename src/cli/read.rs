@@ -2,7 +2,7 @@ use super::{
     Output, Publication,
     args::{CandidateOptions, ConditionOptions, ListOptions},
     condition, display,
-    render::{self, branch_boundary, format_note, list_row, log_line},
+    render::{self, branch_boundary, format_note, log_line},
     store::{Read, resolve},
 };
 use axon::{
@@ -43,14 +43,14 @@ pub(super) fn search_notes(query: String) -> Result<Output> {
 }
 pub(super) fn list(options: ListOptions) -> Result<Output> {
     let opened = Read::open()?;
-    let text = read::list(
-        &opened.read(),
-        |view, id| options.matches(view, id),
-        options.selection.search.as_deref(),
-    )
-    .into_iter()
-    .map(|e| list_row(&e, options.selection.search.is_some()))
-    .collect();
+    let text = render::list(
+        &read::list(
+            &opened.read(),
+            |view, id| options.matches(view, id),
+            options.selection.search.as_deref(),
+        ),
+        options.selection.search.is_some(),
+    );
     result(text, "No matching Entities.", opened.notice())
 }
 pub(super) fn proposals(options: CandidateOptions) -> Result<Output> {
@@ -71,7 +71,7 @@ fn candidates(options: CandidateOptions, kind: CandidateList) -> Result<Output> 
     let text = {
         let view = opened.read();
         let evaluation = evaluation(&options.conditions, opened.location.worktree.clone());
-        read::candidates(
+        let rows = read::candidates(
             &view,
             kind,
             |id| options.selection.matches(&view, id),
@@ -81,10 +81,8 @@ fn candidates(options: CandidateOptions, kind: CandidateList) -> Result<Output> 
                     .map_err(|e| axon::Error::Invalid(e.to_string()))
             },
             options.selection.search.as_deref(),
-        )?
-        .into_iter()
-        .map(|e| list_row(&e, options.selection.search.is_some()))
-        .collect()
+        )?;
+        render::list(&rows, options.selection.search.is_some())
     };
     result(
         text,

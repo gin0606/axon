@@ -37,8 +37,8 @@ axon-label-conversion binary: 一度限りの保存先の変換
 | `setup` | 初期化、保存検査、`axon docs`、`axon completion`、記録者表示 |
 | `store` | 保存先の取得、ID 解決、新規 ID の衝突確認 |
 | `condition` | 候補の外部条件を実行する process、timeout、trace、呼出し内の評価結果保持 |
-| `render` | 読み取り結果から CLI の文字列を組み立てる |
-| `display` | 端末装飾、制御文字の可視化、表示時刻などの表示規則 |
+| `render` | 読み取り結果から CLI の文字列を組み立てる。一覧と子孫ツリーの列の並び、端末での列揃えと Title の折り返しもここに置く |
+| `display` | 端末装飾、端末の判定と幅の取得、表示幅と折り返し、制御文字の可視化、表示時刻などの表示規則 |
 
 読み取りは「保存 adapter → 記録の集合 → コアの view → `axon::read` の構造化結果 → `cli::render` → 出力」と進む。コアの `read` は CLI の英語ラベル、ANSI、端末への出力を持たず、候補条件の評価は呼出し側の callback を受け取る。shell の実行は `cli::condition` に残す。保存された条件文字列と、その呼出しで得た評価結果を混同しない。
 
