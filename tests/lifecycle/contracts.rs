@@ -782,9 +782,20 @@ fn non_pipe_output_failure_identifies_applied_storage() {
 
 #[cfg(unix)]
 fn terminal_output(f: &Fixture, args: &[&str], no_color: bool) -> String {
+    sized_terminal_output(f, args, no_color, 0)
+}
+/// Output on a terminal `columns` wide; 0 leaves the width unknown.
+#[cfg(unix)]
+fn sized_terminal_output(f: &Fixture, args: &[&str], no_color: bool, columns: u16) -> String {
     use std::io::Read;
     use std::os::fd::FromRawFd;
     let (mut master, mut slave) = (0, 0);
+    let mut size = libc::winsize {
+        ws_row: 24,
+        ws_col: columns,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
     assert_eq!(
         unsafe {
             libc::openpty(
@@ -792,7 +803,8 @@ fn terminal_output(f: &Fixture, args: &[&str], no_color: bool) -> String {
                 &mut slave,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                std::ptr::null_mut(),
+                // The parameter is `*mut` on macOS and `*const` on Linux.
+                &raw mut size,
             )
         },
         0
@@ -905,6 +917,158 @@ fn tty_decoration_preserves_text_and_does_not_style_user_content() {
     assert_eq!(
         strip_sgr(&colored),
         format!("{id}  Resolved: {head}  InProgress\n")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn terminal_lists_line_up_columns_and_wrap_titles_in_the_title_column() {
+    let f = Fixture::new();
+    f.init();
+    // Six- and eight-character IDs, and situations and labels of different lengths.
+    let short = "t-0000zz";
+    f.publish(vec![registration(&f.records(), short)]);
+    let long_title = "0123456789".repeat(4);
+    let started = f.accepted(&long_title);
+    f.ok(&["start", &started]);
+    let waiting = f.ok(&[
+        "capture", "--label", "refactor", "--accept", "--title", "Waiting", "--needs", short,
+    ]);
+    let waiting = created(&waiting);
+    let proposal = f.ok(&["capture", "--label", "feat", "--title", "Proposal"]);
+    let proposal = created(&proposal);
+    // Columns 12 + 7 + 12 + 10 put the title at 41; a 70-column terminal leaves it 29.
+    let blank = " ".repeat(41);
+    let tasks = format!(
+        "{short}    Issue  Ready       chore     {short}\n\
+         {started}  Issue  InProgress  chore     {}\n\
+         {blank}{}\n\
+         {waiting}  Issue  Blocked     refactor  Waiting\n",
+        &long_title[..29],
+        &long_title[29..]
+    );
+    let list = format!("{tasks}{proposal}  Issue  Undecided   feat      Proposal\n");
+    for (args, expected) in [
+        (vec!["list"], list.clone()),
+        (vec!["tasks"], tasks.clone()),
+        (
+            vec!["proposals"],
+            format!("{proposal}  Issue  Undecided  feat  Proposal\n"),
+        ),
+    ] {
+        assert_eq!(sized_terminal_output(&f, &args, true, 70), expected);
+        let colored = sized_terminal_output(&f, &args, false, 70);
+        assert!(colored.contains('\x1b'), "{colored}");
+        assert_eq!(strip_sgr(&colored), expected);
+    }
+    // Without a known width the columns still line up, and titles do not wrap.
+    assert_eq!(
+        sized_terminal_output(&f, &["list"], true, 0),
+        list.replace(&format!("\n{blank}"), "")
+    );
+    // A pipe keeps one row per line with cells joined by two spaces.
+    assert!(f.ok(&["list"]).contains(&format!(
+        "\n{started}  Issue  InProgress  chore  {long_title}\n"
+    )));
+    assert_eq!(
+        sized_terminal_output(&f, &["list", "--search", "Wait"], true, 70),
+        format!("{waiting}  Issue  Blocked  refactor  Waiting\n  Matched: Title\n")
+    );
+    // Wait reasons are sentences, not table rows, and keep their pipe form in a terminal.
+    let shown = f.ok(&["show", waiting]);
+    assert!(
+        shown.contains(&format!(
+            "Dependency must complete: {short}  Issue  Ready  chore  {short}\n"
+        )),
+        "{shown}"
+    );
+    assert_eq!(
+        sized_terminal_output(&f, &["show", waiting], true, 70),
+        shown
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn terminal_tree_lines_up_titles_across_depths_and_keeps_its_lines_when_wrapping() {
+    let f = Fixture::new();
+    f.init();
+    let root = f.ok(&[
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Root",
+    ]);
+    let root = created(&root);
+    let sub_title = "S".repeat(30);
+    let sub = f.ok(&[
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", &sub_title,
+        "--parent", root,
+    ]);
+    let sub = created(&sub);
+    let deep_title = "0123456789".repeat(4);
+    let deep = f.ok(&[
+        "capture",
+        "--label",
+        "chore",
+        "--accept",
+        "--title",
+        &deep_title,
+        "--parent",
+        sub,
+    ]);
+    let deep = created(&deep);
+    let last_title = "L".repeat(30);
+    let last = f.ok(&[
+        "capture",
+        "--label",
+        "chore",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        &last_title,
+        "--parent",
+        root,
+    ]);
+    let last = created(&last);
+    let leaf = f.ok(&[
+        "capture", "--label", "chore", "--accept", "--title", "Leaf", "--parent", last,
+    ]);
+    let leaf = created(&leaf);
+    // The deepest drawing and ID take 18 columns, which puts the title at 18 + 23 = 41 and
+    // leaves it 26 of 67 columns.
+    let tree = |text: &str| text[text.find("├── ").unwrap()..].to_string();
+    let expected = format!(
+        "├── {sub}      Group  Ready  chore  {}\n\
+         │   │{}{}\n\
+         │   └── {deep}  Issue  Ready  chore  {}\n\
+         │{}{}\n\
+         └── {last}      Group  Ready  chore  {}\n\
+         \x20   │{}{}\n\
+         \x20   └── {leaf}  Issue  Ready  chore  Leaf\n",
+        &sub_title[..26],
+        " ".repeat(36),
+        &sub_title[26..],
+        &deep_title[..26],
+        " ".repeat(40),
+        &deep_title[26..],
+        &last_title[..26],
+        " ".repeat(36),
+        &last_title[26..],
+    );
+    assert_eq!(
+        tree(&sized_terminal_output(&f, &["show", root], true, 67)),
+        expected
+    );
+    let colored = sized_terminal_output(&f, &["show", root], false, 67);
+    assert_eq!(tree(&strip_sgr(&colored)), expected);
+    // A pipe keeps the tree drawing followed by cells joined by two spaces.
+    assert_eq!(
+        tree(&f.ok(&["show", root])),
+        format!(
+            "├── {sub}  Group  Ready  chore  {sub_title}\n\
+             │   └── {deep}  Issue  Ready  chore  {deep_title}\n\
+             └── {last}  Group  Ready  chore  {last_title}\n\
+             \x20   └── {leaf}  Issue  Ready  chore  Leaf\n"
+        )
     );
 }
 

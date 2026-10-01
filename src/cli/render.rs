@@ -35,18 +35,128 @@ pub(super) fn situation_label(value: &read::Row<'_>) -> String {
         label.into()
     }
 }
-fn situation(value: &read::Row<'_>) -> String {
-    display::situation(&situation_label(value))
+/// A cell before the title: the text to measure and the text as printed.
+struct Cell {
+    text: String,
+    printed: String,
 }
+/// The cells a row prints before its title, in order. Every row layout takes its columns from
+/// here, so a new column is added only here.
+fn cells(value: &read::Row<'_>) -> Vec<Cell> {
+    let kind = format!("{:?}", value.kind);
+    let situation = situation_label(value);
+    vec![
+        Cell {
+            text: display::line(value.id),
+            printed: display::identity(value.id),
+        },
+        Cell {
+            printed: display::muted(&kind),
+            text: kind,
+        },
+        Cell {
+            printed: display::situation(&situation),
+            text: situation,
+        },
+        Cell {
+            text: value.label.to_string(),
+            printed: value.label.to_string(),
+        },
+    ]
+}
+/// A row on its own line, cells joined by two spaces, as a table prints it off a terminal.
 pub(super) fn row(value: &read::Row<'_>) -> String {
-    format!(
-        "{}  {}  {}  {}  {}\n",
-        display::identity(value.id),
-        display::muted(format!("{:?}", value.kind)),
-        situation(value),
-        value.label,
-        display::line(value.title)
-    )
+    table(&[TableRow::new(value)], None)
+}
+/// A row of a table: tree drawing before its cells, the drawing that continues it on a
+/// wrapped line, and lines printed below it as they are.
+struct TableRow {
+    indent: String,
+    continued: String,
+    cells: Vec<Cell>,
+    title: String,
+    below: String,
+}
+impl TableRow {
+    fn new(value: &read::Row<'_>) -> Self {
+        Self {
+            indent: String::new(),
+            continued: String::new(),
+            cells: cells(value),
+            title: display::line(value.title),
+            below: String::new(),
+        }
+    }
+}
+/// A title column narrower than this is not wrapped; wrapping it would only stack fragments.
+const MIN_WRAPPED_TITLE: usize = 20;
+/// Rows as `row` prints them when stdout is not a terminal. In a terminal the cells start at
+/// the same column on every row of this output, as wide as the widest, and a title wider
+/// than the rest of the terminal continues on lines indented to the title column.
+fn table(rows: &[TableRow], terminal: Option<&display::Terminal>) -> String {
+    let mut out = String::new();
+    let Some(terminal) = terminal else {
+        for row in rows {
+            out.push_str(&row.indent);
+            for cell in &row.cells {
+                out.push_str(&cell.printed);
+                out.push_str("  ");
+            }
+            out.push_str(&row.title);
+            out.push('\n');
+            out.push_str(&row.below);
+        }
+        return out;
+    };
+    let lead = |row: &TableRow, index: usize| {
+        if index == 0 {
+            display::width(&row.indent)
+        } else {
+            0
+        }
+    };
+    let mut widths: Vec<usize> = Vec::new();
+    for row in rows {
+        for (index, cell) in row.cells.iter().enumerate() {
+            let width = lead(row, index) + display::width(&cell.text);
+            match widths.get_mut(index) {
+                Some(widest) => *widest = (*widest).max(width),
+                None => widths.push(width),
+            }
+        }
+    }
+    let title_column: usize = widths.iter().map(|width| width + 2).sum();
+    let wrap = terminal
+        .columns
+        .map(|columns| columns.saturating_sub(title_column))
+        .filter(|&room| room >= MIN_WRAPPED_TITLE);
+    for row in rows {
+        out.push_str(&row.indent);
+        for (index, cell) in row.cells.iter().enumerate() {
+            out.push_str(&cell.printed);
+            let used = lead(row, index) + display::width(&cell.text);
+            out.push_str(&" ".repeat(widths[index] - used + 2));
+        }
+        let pieces = match wrap {
+            Some(room) => display::wrap(&row.title, room),
+            None => vec![row.title.clone()],
+        };
+        for (index, piece) in pieces.iter().enumerate() {
+            if index > 0 {
+                out.push_str(&row.continued);
+                out.push_str(
+                    &" ".repeat(title_column.saturating_sub(display::width(&row.continued))),
+                );
+            }
+            out.push_str(piece);
+            out.push('\n');
+        }
+        if pieces.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&row.below);
+    }
+    out
 }
 /// The row of an Entity named by a relation, or its bare ID when it does not exist.
 pub(super) fn row_of(related: &read::Related<'_>) -> String {
@@ -292,17 +402,39 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
             "\nDescendants: {}/{total} terminal ({completed} completed, {cancelled} cancelled)\n",
             completed + cancelled
         ));
-        for child in &descendants.entries {
-            for last in &child.ancestor_last {
-                out.push_str(if *last { "    " } else { "│   " });
-            }
-            out.push_str(if child.last {
-                "└── "
-            } else {
-                "├── "
-            });
-            out.push_str(&row(&child.row));
-        }
+        let entries = &descendants.entries;
+        let rows: Vec<_> = entries
+            .iter()
+            .enumerate()
+            .map(|(index, child)| {
+                let ancestors: String = child
+                    .ancestor_last
+                    .iter()
+                    .map(|last| if *last { "    " } else { "│   " })
+                    .collect();
+                // A wrapped title keeps the lines of later siblings and of its own children.
+                let has_children = entries
+                    .get(index + 1)
+                    .is_some_and(|next| next.ancestor_last.len() > child.ancestor_last.len());
+                TableRow {
+                    indent: format!(
+                        "{ancestors}{}",
+                        if child.last {
+                            "└── "
+                        } else {
+                            "├── "
+                        }
+                    ),
+                    continued: format!(
+                        "{ancestors}{}{}",
+                        if child.last { "    " } else { "│   " },
+                        if has_children { "│" } else { "" }
+                    ),
+                    ..TableRow::new(&child.row)
+                }
+            })
+            .collect();
+        out.push_str(&table(&rows, display::terminal().as_ref()));
         if descendants.awaiting_confirmation {
             out.push_str(&format!(
                 "{}\n",
@@ -599,24 +731,36 @@ pub(super) fn declaration_changes(
     out.push_str("Check passed. Storage and declaration unchanged.\n");
     Ok(out)
 }
-pub fn list_row(value: &read::Row<'_>, searched: bool) -> String {
-    let mut text = row(value);
-    if searched {
-        text.push_str(&format!(
-            "  {} {}\n",
-            display::muted("Matched:"),
-            value
-                .matches
-                .iter()
-                .map(|location| match location {
-                    read::MatchLocation::Title => "Title",
-                    read::MatchLocation::Description => "Description",
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    text
+/// The rows of `axon list`, `axon proposals` and `axon tasks`, each followed by where the
+/// search matched when searched.
+pub fn list(values: &[read::Row<'_>], searched: bool) -> String {
+    let rows: Vec<_> = values
+        .iter()
+        .map(|value| TableRow {
+            below: if searched {
+                matched(value)
+            } else {
+                String::new()
+            },
+            ..TableRow::new(value)
+        })
+        .collect();
+    table(&rows, display::terminal().as_ref())
+}
+fn matched(value: &read::Row<'_>) -> String {
+    format!(
+        "  {} {}\n",
+        display::muted("Matched:"),
+        value
+            .matches
+            .iter()
+            .map(|location| match location {
+                read::MatchLocation::Title => "Title",
+                read::MatchLocation::Description => "Description",
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 /// `listed` Notes share the output with other records, so their bodies are indented.
 /// A single requested Note prints its body as stored.
@@ -817,4 +961,112 @@ pub(super) fn storage_report(view: &read::View<'_>) -> StorageReport {
         ));
     }
     StorageReport { text, failing }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn table_row(indent: &str, continued: &str, cells: &[&str], title: &str) -> TableRow {
+        TableRow {
+            indent: indent.into(),
+            continued: continued.into(),
+            cells: cells
+                .iter()
+                .map(|text| Cell {
+                    text: (*text).into(),
+                    printed: (*text).into(),
+                })
+                .collect(),
+            title: title.into(),
+            below: String::new(),
+        }
+    }
+    fn sized(columns: Option<usize>) -> display::Terminal {
+        display::Terminal { columns }
+    }
+
+    #[test]
+    fn off_a_terminal_cells_are_joined_by_two_spaces() {
+        let mut rows = vec![
+            table_row("", "", &["t-0000zz", "Issue", "Ready"], "短い"),
+            table_row("", "", &["t-00000000", "Group", "InProgress+Blocked"], ""),
+        ];
+        rows[0].below = "  Matched: Title\n".into();
+        assert_eq!(
+            table(&rows, None),
+            "t-0000zz  Issue  Ready  短い\n  Matched: Title\nt-00000000  Group  InProgress+Blocked  \n"
+        );
+    }
+
+    #[test]
+    fn in_a_terminal_cells_start_at_the_same_column_and_titles_wrap_there() {
+        let mut rows = vec![
+            table_row("", "", &["t-0000zz", "Issue", "Ready"], "短い"),
+            table_row(
+                "",
+                "",
+                &["t-00000000", "Group", "InProgress+Blocked"],
+                "一二三四五六七八九十一二三四五六七八九十abc",
+            ),
+        ];
+        rows[0].below = "  Matched: Title\n".into();
+        rows[1].below = "  Matched: Description\n".into();
+        // The title column starts at 10 + 2 + 5 + 2 + 18 + 2 = 39; 22 columns remain.
+        assert_eq!(
+            table(&rows, Some(&sized(Some(61)))),
+            concat!(
+                "t-0000zz    Issue  Ready               短い\n",
+                "  Matched: Title\n",
+                "t-00000000  Group  InProgress+Blocked  一二三四五六七八九十一\n",
+                "                                       二三四五六七八九十abc\n",
+                "  Matched: Description\n",
+            )
+        );
+        // Exactly the minimum room still wraps.
+        assert_eq!(
+            table(&rows, Some(&sized(Some(59)))),
+            concat!(
+                "t-0000zz    Issue  Ready               短い\n",
+                "  Matched: Title\n",
+                "t-00000000  Group  InProgress+Blocked  一二三四五六七八九十\n",
+                "                                       一二三四五六七八九十\n",
+                "                                       abc\n",
+                "  Matched: Description\n",
+            )
+        );
+        // Without a width, or with less than the minimum room, rows line up but do not wrap.
+        let unwrapped = concat!(
+            "t-0000zz    Issue  Ready               短い\n",
+            "  Matched: Title\n",
+            "t-00000000  Group  InProgress+Blocked  一二三四五六七八九十一二三四五六七八九十abc\n",
+            "  Matched: Description\n",
+        );
+        assert_eq!(table(&rows, Some(&sized(None))), unwrapped);
+        assert_eq!(table(&rows, Some(&sized(Some(58)))), unwrapped);
+    }
+
+    #[test]
+    fn tree_drawing_counts_toward_the_first_column_and_continues_on_wrapped_lines() {
+        let rows = vec![
+            table_row("├── ", "│   │", &["t-a", "Group", "Ready"], "親"),
+            table_row(
+                "│   └── ",
+                "│       ",
+                &["t-b", "Issue", "Ready"],
+                "abcdefghijklmnopqrstuvwxyz",
+            ),
+            table_row("└── ", "    ", &["t-c", "Issue", "Ready"], "末"),
+        ];
+        // The title column starts at 8 + 3 + 2 + 5 + 2 + 5 + 2 = 27; 20 columns remain.
+        assert_eq!(
+            table(&rows, Some(&sized(Some(47)))),
+            concat!(
+                "├── t-a      Group  Ready  親\n",
+                "│   └── t-b  Issue  Ready  abcdefghijklmnopqrst\n",
+                "│                          uvwxyz\n",
+                "└── t-c      Issue  Ready  末\n",
+            )
+        );
+    }
 }

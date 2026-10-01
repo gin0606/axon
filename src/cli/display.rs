@@ -98,6 +98,50 @@ pub fn situation(text: &str) -> String {
     };
     paint(style, text, std::io::stdout().is_terminal())
 }
+/// Stdout as a terminal, which lines up rows in columns. Like decoration, this follows only
+/// whether stdout is a terminal, so output that programs read keeps one row per line.
+pub struct Terminal {
+    /// The terminal's width, read once; `None` when it cannot be read.
+    pub columns: Option<usize>,
+}
+pub fn terminal() -> Option<Terminal> {
+    use std::os::fd::AsRawFd;
+    let stdout = std::io::stdout();
+    if !stdout.is_terminal() {
+        return None;
+    }
+    let mut size: libc::winsize = unsafe { std::mem::zeroed() };
+    let read = unsafe { libc::ioctl(stdout.as_raw_fd(), libc::TIOCGWINSZ, &mut size) } == 0;
+    Some(Terminal {
+        columns: (read && size.ws_col > 0).then_some(usize::from(size.ws_col)),
+    })
+}
+/// The columns `text` occupies in a terminal. Measure text before decoration.
+pub fn width(text: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(text)
+}
+/// Split `text` into pieces at most `columns` wide, as a terminal wraps it: by character, not
+/// by word. A grapheme (a character with its combining marks, modifiers or joined emoji)
+/// stays whole, so a wide character never splits across pieces.
+pub fn wrap(text: &str, columns: usize) -> Vec<String> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let mut pieces = Vec::new();
+    let mut piece = String::new();
+    let mut used = 0;
+    for cluster in text.graphemes(true) {
+        let cluster_width = width(cluster);
+        if used > 0 && used + cluster_width > columns {
+            pieces.push(std::mem::take(&mut piece));
+            used = 0;
+        }
+        piece.push_str(cluster);
+        used += cluster_width;
+    }
+    if !piece.is_empty() {
+        pieces.push(piece);
+    }
+    pieces
+}
 pub fn cli_styles() -> Styles {
     Styles::styled()
         .header(HEADING)
@@ -133,6 +177,28 @@ mod tests {
             timestamp_at_offset(&timestamp, offset),
             "2026-09-02 02:55 +09:00"
         );
+    }
+
+    #[test]
+    fn wrap_splits_by_display_width_without_breaking_characters() {
+        assert_eq!(wrap("abcdef", 4), ["abcd", "ef"]);
+        // A wide character that does not fit moves whole to the next piece.
+        assert_eq!(wrap("abc日本", 4), ["abc", "日本"]);
+        // Combining marks, joined emoji and flag pairs stay with the character they follow.
+        assert_eq!(wrap("abce\u{301}f", 4), ["abce\u{301}", "f"]);
+        assert_eq!(
+            wrap("ab\u{1f469}\u{200d}\u{1f4bb}c", 3),
+            ["ab", "\u{1f469}\u{200d}\u{1f4bb}c"]
+        );
+        assert_eq!(
+            wrap("ab\u{1f44d}\u{1f3fd}c", 3),
+            ["ab", "\u{1f44d}\u{1f3fd}c"]
+        );
+        assert_eq!(
+            wrap("a\u{1f1ef}\u{1f1f5}\u{1f1fa}\u{1f1f8}", 3),
+            ["a\u{1f1ef}\u{1f1f5}", "\u{1f1fa}\u{1f1f8}"]
+        );
+        assert!(wrap("", 4).is_empty());
     }
 
     proptest! {

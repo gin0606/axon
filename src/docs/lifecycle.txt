@@ -73,6 +73,9 @@ Reading and resurfacing
   --lifecycle, --terminal and --search narrow it without running conditions;
   tasks and proposals take --kind, --label and --search. Filters combine with AND.
   list/tasks/proposals --search match only current title and description, not Notes.
+  On a terminal, list/tasks/proposals rows and the show tree line up their columns
+  and wrap long titles inside the title column. Piped output keeps one row per line
+  with columns joined by two spaces.
   Use note search 'text' for information in Notes across all Entities, including
   Completed and Cancelled work, without running conditions. Matching is literal,
   case-sensitive, with no trimming or Unicode normalization. Empty queries are

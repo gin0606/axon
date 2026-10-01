@@ -55,12 +55,21 @@ Groupは、衝突中なら `Conflicted`、保存値が `Undecided`・`Completed`
 ```text
 demo-k3m7pq2a  Group  Ready  feat  検索画面を実装する
 demo-8bxw2r7n  Issue  InProgress+Blocked  feat  検索APIを実装する
-demo-c9d4ts5e  Issue  Ready  feat  検索フォームを実装する
+demo-c9d4ts  Issue  Ready  feat  検索フォームを実装する
 demo-9f2hjx8w  Issue  Blocked  feat  検索結果を表示する
 demo-r5w8kn3d  Group  Empty  docs  検索の運用手順を整える
 ```
 
-例は架空の内容である。列の間隔やグルーピングは実装が決め、固定列や機械向けの出力形式は保証しない。
+stdoutが端末でなければ、上のように各列を2 spaceで繋いだ1 Entity 1行で出力する。stdoutが端末なら、`axon list`・`axon tasks`・`axon proposals` の一覧と `axon show` の子孫ツリーは、タイトルより前の各列をその出力に含まれる行の最大表示幅まで空白で埋め、列の開始位置を揃える。ツリーの罫線と字下げは先頭の列の幅に含める。端末の幅が分かり、タイトル列に20桁以上残る場合、残りより長いタイトルは表示幅で文字単位に折り返し、続きの行をタイトル列の開始位置から始める。子孫ツリーの続きの行には罫線を引き継ぐ。`--search` の `Matched:` 行は行の直下に続く。端末かどうかだけで決め、`NO_COLOR` や `TERM` には連動しない。端末の幅は出力時に一度だけ読む。
+
+```text
+demo-k3m7pq2a  Group  Ready               feat  検索画面を実装する
+demo-8bxw2r7n  Issue  InProgress+Blocked  feat  検索APIを実装し、結果の並び順と
+                                                件数の上限を決める
+demo-c9d4ts    Issue  Ready               feat  検索フォームを実装する
+```
+
+`axon show` の待ち理由の行は文中に行を埋め込むため、端末でも揃えず折り返さない。例は架空の内容である。列の間隔やグルーピングは実装が決め、出力ごとに列の位置が変わりうる。固定列や機械向けの出力形式は保証しない。
 
 ## `axon show` と待ち理由
 
@@ -168,7 +177,7 @@ Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへ
 
 CLIが生成するhelp・ラベル・診断は英語。利用者のタイトル・本文・Note・理由は原文を保持する。human時刻はlocal時刻と数値UTC offset。C0/C1/ESC、tab、CRは可視escapeし、本文のUnicodeと改行は保持する。
 
-装飾は対象streamがTTYでNO_COLORが存在しない場合だけ。同じ内容からANSIを除けば非TTYとテキスト・順序・空白が一致する。IDと着手はcyan＋bold、見出しはbold、成功/Readyはgreen、待ちはyellow、未判断はyellow＋bold、kind・terminal・no-op・補助情報はdim、エラーはred＋bold。ユーザー本文・タイトルは着色せず、色だけを意味の手掛かりにしない。`axon completion`は常に装飾なし。
+装飾は対象streamがTTYでNO_COLORが存在しない場合だけ。同じ内容からANSIを除けば非TTYとテキスト・順序・空白が一致する。ただし一覧と子孫ツリーの列揃えと折り返しは[行の形式](#一覧)に従い、端末でだけ空白と改行を加える。IDと着手はcyan＋bold、見出しはbold、成功/Readyはgreen、待ちはyellow、未判断はyellow＋bold、kind・terminal・no-op・補助情報はdim、エラーはred＋bold。ユーザー本文・タイトルは着色せず、色だけを意味の手掛かりにしない。`axon completion`は常に装飾なし。
 
 一覧0件はstdoutに行を出さず、短い案内をstderrへ出して終了0。候補不在から保存情報の不存在を推測しない。通常行へ毎回操作例を付けず、helpと`axon docs`へ使い方を分ける。
 

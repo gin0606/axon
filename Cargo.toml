@@ -24,6 +24,8 @@ libc = "0.2.189"
 rand = "0.10.2"
 serde_json = { version = "1.0", features = ["arbitrary_precision", "float_roundtrip", "raw_value"] }
 thiserror = "2.0.20"
+unicode-segmentation = "1.13.3"
+unicode-width = "0.2.2"
 
 [dev-dependencies]
 axon-label-conversion = { path = "crates/axon-label-conversion" }
