@@ -13,16 +13,21 @@ fn view_of(records: &Store) -> record::View {
 fn declaration_export_selectors_and_references_are_read_only() {
     let f = Fixture::new();
     f.ok(&["init", "demo"]);
-    let outer = created(&f.ok(&["capture", "--kind", "group", "--accept", "--title", "Outer"]));
+    let outer = created(&f.ok(&[
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Outer",
+    ]));
     let group = created(&f.ok(&[
-        "capture", "--kind", "group", "--accept", "--title", "Plan", "--parent", &outer,
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Plan",
+        "--parent", &outer,
     ]));
     let external = f.accepted("Outside");
     let done = created(&f.ok(&[
-        "capture", "--accept", "--title", "Finished", "--parent", &group,
+        "capture", "--label", "chore", "--accept", "--title", "Finished", "--parent", &group,
     ]));
     let cancelled = created(&f.ok(&[
         "capture",
+        "--label",
+        "chore",
         "--accept",
         "--title",
         "Cancelled",
@@ -30,10 +35,13 @@ fn declaration_export_selectors_and_references_are_read_only() {
         &group,
     ]));
     let nested = created(&f.ok(&[
-        "capture", "--kind", "group", "--accept", "--title", "Nested", "--parent", &group,
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Nested",
+        "--parent", &group,
     ]));
     let child = created(&f.ok(&[
         "capture",
+        "--label",
+        "chore",
         "--accept",
         "--title",
         "Body",
@@ -132,6 +140,8 @@ fn declaration_docs_and_template_work_with_broken_management_root() {
         "lifecycle",
         "title",
         "description",
+        "label",
+        "axon-declaration/v2",
         "parent",
         "needs",
         "prepare",
@@ -143,9 +153,14 @@ fn declaration_docs_and_template_work_with_broken_management_root() {
     ] {
         assert!(docs.contains(phrase), "{phrase}");
     }
+    for label in axon::lifecycle::Label::ALL {
+        assert!(docs.contains(label.name()), "{}", label.name());
+    }
     let output = f.run(&["docs", "declaration", "--example"]);
     assert!(output.stderr.is_empty());
     let yaml = success(output);
+    assert!(yaml.starts_with("schema: axon-declaration/v2\n"), "{yaml}");
+    assert_eq!(yaml.matches("\n    label: feat\n").count(), 3, "{yaml}");
     let d = declaration::parse(&yaml).unwrap();
     assert_eq!(d, declaration::example());
     assert_eq!(d.serialize(&view_of(&Store::new())).unwrap(), yaml);
@@ -186,12 +201,15 @@ fn declaration_prepare_check_new_plan_and_existing_changes() {
     assert_eq!(bytes, fs::read(&path).unwrap());
     let text = f.ok(&["import", "check", path.to_str().unwrap()]);
     assert_eq!(text.matches("Create ").count(), 3);
+    assert_eq!(text.matches("\n  label: feat\n").count(), 3, "{text}");
     assert!(text.contains("needs: +"));
     assert!(text.contains("Situation after: Blocked"));
     assert_eq!(before, snapshot(&f));
     assert_eq!(bytes, fs::read(&path).unwrap());
     let existing = created(&f.ok(&[
         "capture",
+        "--label",
+        "chore",
         "--accept",
         "--title",
         "Original",
@@ -229,9 +247,16 @@ fn declaration_check_rejections_preserve_storage_and_input() {
     let before = snapshot(&f);
     let mutations = [
         (
-            exported.replace("axon-declaration/v1", "wrong/v1"),
+            exported.replace("axon-declaration/v2", "wrong/v1"),
             "schema:",
         ),
+        (
+            exported.replace("axon-declaration/v2", "axon-declaration/v1"),
+            "run axon export again",
+        ),
+        (exported.replace("label: chore", "label: fix"), "schema:"),
+        (exported.replace("label: chore", "label: null"), "schema:"),
+        (exported.replace("    label: chore\n", ""), "schema:"),
         (
             exported.replace("title: Original", "title: Original\n    unknown: x"),
             "schema:",
@@ -276,8 +301,12 @@ fn declaration_check_rejections_preserve_storage_and_input() {
 fn declaration_check_rejects_local_and_core_guards() {
     let f = Fixture::new();
     f.ok(&["init", "demo"]);
-    let group = created(&f.ok(&["capture", "--kind", "group", "--accept", "--title", "Group"]));
-    let other = created(&f.ok(&["capture", "--kind", "group", "--accept", "--title", "Other"]));
+    let group = created(&f.ok(&[
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Group",
+    ]));
+    let other = created(&f.ok(&[
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Other",
+    ]));
     let a = f.accepted("A");
     let b = f.accepted("B");
     let exported = f.ok(&["export", &a]);
@@ -629,6 +658,43 @@ fn declaration_apply_registers_edits_and_retries() {
 }
 
 #[test]
+fn declaration_label_changes_show_each_side_and_apply_as_one_record() {
+    let f = Fixture::new();
+    f.ok(&["init", "demo"]);
+    let id = created(&f.ok(&[
+        "capture", "--label", "chore", "--accept", "--title", "Labelled",
+    ]));
+    let exported = f.ok(&["export", &id]);
+    assert!(exported.contains("\n    description: \"\"\n    label: chore\n    parent: null\n"));
+    let path = f.0.join("plan.yaml");
+    let edited = exported.replace("label: chore", "label: bug");
+    fs::write(&path, &edited).unwrap();
+    let before = snapshot(&f);
+    let text = f.ok(&["import", "check", path.to_str().unwrap()]);
+    assert!(
+        text.lines().any(|line| line == "  label: chore -> bug"),
+        "{text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "  title: unchanged"),
+        "{text}"
+    );
+    assert!(!text.contains("No changes"), "{text}");
+    assert_eq!(snapshot(&f), before);
+    f.ok(&["import", "apply", path.to_str().unwrap()]);
+    let after = snapshot(&f);
+    assert_eq!(after.len(), before.len() + 1);
+    let log = f.ok(&["log", &id]);
+    assert!(log.contains("Declaration applied: label"), "{log}");
+    assert!(f.ok(&["list", "--label", "bug"]).contains(&id));
+    let rewritten = fs::read_to_string(&path).unwrap();
+    assert!(rewritten.contains("label: bug"));
+    assert_eq!(rewritten, f.ok(&["export", &id]));
+    let check = f.ok(&["import", "check", path.to_str().unwrap()]);
+    assert!(check.contains("No changes"), "{check}");
+}
+
+#[test]
 fn declaration_title_changes_show_each_side_and_reject_control_characters() {
     let f = Fixture::new();
     f.ok(&["init", "demo"]);
@@ -645,6 +711,10 @@ fn declaration_title_changes_show_each_side_and_reject_control_characters() {
         "{text}"
     );
     assert!(text.contains("description: changed"));
+    assert!(
+        text.lines().any(|line| line == "  label: unchanged"),
+        "{text}"
+    );
     assert!(!text.contains("Private full description"));
     let before = snapshot(&f);
     for title in ["After\nline", "After\u{1b}[2J", &"a".repeat(201)] {
@@ -745,13 +815,13 @@ proptest::proptest! {
         f.ok(&["init", "demo"]);
         let external = if external_kind == "group" {
             created(&f.ok(&[
-                "capture", "--kind", "group", "--accept", "--title", "External",
+                "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "External",
             ]))
         } else {
             f.accepted("External")
         };
         let selected = created(&f.ok(&[
-            "capture", "--accept", "--title", "Original", "--needs", &external,
+            "capture", "--label", "chore", "--accept", "--title", "Original", "--needs", &external,
         ]));
         let original = snapshot(&f);
         let mut d = declaration::parse(&f.ok(&["export", &selected])).unwrap();

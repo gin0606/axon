@@ -1,0 +1,1 @@
+{"entity":"axon-8z98mj","record":"created","parents":[],"at":"2026-08-31T10:10:24.703095Z","recorder":{"actor":"codex","data":{}},"reason":null,"after":{"kind":"issue","lifecycle":"not-started","owner":null,"title":"グループとグループ間依存を実装する","description":"","label":"chore","condition":null,"parent":null,"needs":[]}}

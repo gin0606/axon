@@ -443,8 +443,10 @@ fn reversed(store: &Store) -> Store {
     copy
 }
 
-/// Chosen so that the IDs place another branch between the two records of the inner fork.
+/// Chosen so that the IDs place another branch between the two records of the inner fork and
+/// the history returns to a fork with a choice at least twice.
 const FORK_ACTOR: &str = "fork1";
+const THIRD_BRANCH_ACTOR: &str = "c3";
 
 #[test]
 fn history_returns_to_the_nearest_fork_when_a_branch_ends() {
@@ -458,7 +460,7 @@ fn history_returns_to_the_nearest_fork_when_a_branch_ends() {
     r1.op_as("i3", Start, "b");
     r1.op_as("i3", Release, "b");
     let mut r2 = Replica::new("r2");
-    r2.op_as("i3", Start, "c");
+    r2.op_as("i3", Start, THIRD_BRANCH_ACTOR);
     for other in [&fork, &r1, &r2] {
         r0.sync(other);
     }

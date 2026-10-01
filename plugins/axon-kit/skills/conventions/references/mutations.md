@@ -16,7 +16,7 @@
 
 ## 成功とno-op
 
-終了0と完全IDの確認文を読み、`axon show ID --details --skip-conditions`・log・個別Noteで要求した作用を検証する。`axon write`の同値や同じparent/dependency/condition・種類の値は `No changes` の成功で履歴を増やさない。ただし終了したEntityへの`axon write`は同値でも拒否される。同値lifecycleは拒否で、開始済みを新たな`axon start`成功と扱わない。作成とNote追記は非冪等で、再実行すると別IDになる。
+終了0と完全IDの確認文を読み、`axon show ID --details --skip-conditions`・log・個別Noteで要求した作用を検証する。`axon write`・`axon label set`の同値や同じparent/dependency/condition・種類の値は `No changes` の成功で履歴を増やさない。ただし終了したEntityへの`axon write`と`axon label set`は同値でも拒否される。同値lifecycleは拒否で、開始済みを新たな`axon start`成功と扱わない。作成とNote追記は非冪等で、再実行すると別IDになる。
 
 ## 失敗・部分適用・結果不明
 

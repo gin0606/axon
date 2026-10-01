@@ -14,14 +14,14 @@
 
 `axon export ID...` は一つ以上の ID を受け取り、Group ならその Group と全子孫、Issue ならその Issue を選ぶ。引数の ID は他のコマンドと同じく完全 ID または一意な suffix を受け付けるが、declaration 内の `id` と参照は完全 ID だけを使い、suffix は未解決として拒否する。複数指定は和集合とし、重複は除く。`Completed`・`Cancelled` の子孫も含める。lifecycle が読み取り専用で見えるため固定済みと分かり、除外すると「載せていないので触らない」と「終了済み」がファイル上で区別できないためである。保存先全体を一括で取得する selector は設けない。
 
-declaration の `issues` と `groups` に載っている Entity だけが編集集合である。載っていない Entity は変更しない。編集集合を広げるには対象を足して再度`axon export`する。既存 Entity の record を手で書き足しても `base` は計算できず、`base` が null の record は新規 Entity とみなされて既存 ID との衝突が競合になる。ファイルから Entity を消すことは、削除、取りやめ、所属解除、依存解除のいずれも意味しない。Group から外すには record に `parent: null` を宣言し、作業自体をやめるには通常の`axon cancel`を使う。編集集合の各 Entity については、title、description、親、outgoing dependency を完全に宣言する。親の不在は `parent: null`、outgoing dependency の不在は `needs: []` で表す。
+declaration の `issues` と `groups` に載っている Entity だけが編集集合である。載っていない Entity は変更しない。編集集合を広げるには対象を足して再度`axon export`する。既存 Entity の record を手で書き足しても `base` は計算できず、`base` が null の record は新規 Entity とみなされて既存 ID との衝突が競合になる。ファイルから Entity を消すことは、削除、取りやめ、所属解除、依存解除のいずれも意味しない。Group から外すには record に `parent: null` を宣言し、作業自体をやめるには通常の`axon cancel`を使う。編集集合の各 Entity については、title、description、label、親、outgoing dependency を完全に宣言する。親の不在は `parent: null`、outgoing dependency の不在は `needs: []` で表す。
 
 ## declaration の形式
 
-形式は strict YAML とし、schema label は `axon-declaration/v1` とする。次は既存 Group の subtree に新規 Issue を一件追加し、subtree 外の Issue へ依存を張る、`prepare` 前の例である。fingerprint は例示値である。
+形式は strict YAML とし、schema label は `axon-declaration/v2` とする。v2 は v1 の record に必須の `label` field を加えた形式である。次は既存 Group の subtree に新規 Issue を一件追加し、subtree 外の Issue へ依存を張る、`prepare` 前の例である。fingerprint は例示値である。
 
 ```yaml
-schema: axon-declaration/v1
+schema: axon-declaration/v2
 groups:
   - id: demo-k3m7pq
     key: null
@@ -32,6 +32,7 @@ groups:
       ## 目的
 
       検索フォームと結果表示を揃える。
+    label: feat
     parent: null
     needs: []
 issues:
@@ -41,6 +42,7 @@ issues:
     lifecycle: completed
     title: 検索 API を実装する
     description: レスポンス形式を固定した。
+    label: feat
     parent: { id: demo-k3m7pq }
     needs: []
   - id: demo-c9d4ts
@@ -49,6 +51,7 @@ issues:
     lifecycle: not-started
     title: 検索フォームを作る
     description: ""
+    label: feat
     parent: { id: demo-k3m7pq }
     needs:
       - { id: demo-8bxw2r }
@@ -58,6 +61,7 @@ issues:
     lifecycle: not-started
     title: 検索結果を表示する
     description: フォームの送信結果を一覧に出す。
+    label: feat
     parent: { id: demo-k3m7pq }
     needs:
       - { id: demo-8bxw2r }
@@ -81,6 +85,7 @@ root は `schema`、`groups`、`issues`、`references` の 4 field だけをこ�
 | `lifecycle` | `undecided` / `not-started` / `in-progress` / `completed` / `cancelled` | 既存は読み取り専用 | 保存された lifecycle（保存値）。Group の実効値は書かないため、Group は `in-progress` にならない。新規 Entity は `undecided` か `not-started` のどちらかを書く |
 | `title` | string | 編集可 | 空または空白だけの値、改行や制御文字を含む値、200 文字を超える値を拒否する。それ以外は保存値をそのまま扱う |
 | `description` | string | 編集可 | Markdown 本文。空文字は本文なし。trim・正規化をしない |
+| `label` | string | 編集可 | [label](lifecycle.md#label) の固定集合の値のどれか（`bug`・`feat`・`chore`・`docs`・`test`・`refactor`・`spike`）。必須で、null・空文字・集合外の値を拒否する。新規 Entity は登録時の label を書く |
 | `parent` | 参照 または null | 編集可 | 親 Group。Issue を親にする参照は拒否する |
 | `needs` | 参照の list | 編集可 | outgoing dependency。空なら `[]` |
 
@@ -92,7 +97,7 @@ root は `schema`、`groups`、`issues`、`references` の 4 field だけをこ�
 
 ## 外部参照
 
-`references` には、編集集合の `parent`・`needs` が指す編集集合外の Entity を、`id`、`kind`（`issue` / `group`）、`lifecycle`、`title` の順で一件ずつ読み取り専用として載せる。description、key、関係は持たない。レビュー側が subtree 外の依存先を ID の突き合わせなしに読めるようにするための context である。
+`references` には、編集集合の `parent`・`needs` が指す編集集合外の Entity を、`id`、`kind`（`issue` / `group`）、`lifecycle`、`title` の順で一件ずつ読み取り専用として載せる。description、label、key、関係は持たない。レビュー側が subtree 外の依存先を ID の突き合わせなしに読めるようにするための context である。
 
 `references` は `prepare` と `apply` 後の canonical rewrite で保存先の現在値から再生成する。`check`・`apply` は `references` について、要素の集合が編集集合の `parent`・`needs` が指す編集集合外の Entity の集合と一致すること、および file に書かれた値どうしの形式と ID 順が canonical であることを検査し、kind は保存先の現在値との一致を要求する。不一致は、file の書き換えと`axon export`後の保存先での変換を区別できないため、参照先の kind が保存先と一致しないことを対象 ID とともに診断して拒否し、`prepare` での再生成を案内する。`references` の `lifecycle` も保存値である。title や lifecycle の値が保存先の現在値と一致することは要求しない。過不足があれば `prepare` で再生成する。参照先の title や lifecycle が`axon export`の後に変わっても競合にせず、参照先が存在しない場合、kind が一致しない場合（参照先が`axon export`の後に変換された場合を含む）、および共通コアが拒否する状態（終了した Group を親に指定する、着手済み・完了済みの Entity を、自身か祖先が採用済みでない Group の下へ移す、外部を経由して循環を作るなど）だけを止める。`Cancelled` の Entity への依存は共通コアが通常操作で許すため、declaration でも拒否しない。編集者はそれらの値を見て編集したのではなく、参照先の値の変化まで競合にすると、大きな計画ほど無関係な変更で止まるためである。
 
@@ -109,21 +114,22 @@ canonical serializer は次の規則で出力する。
 7. LF 改行、2 space indent、document marker なし、末尾 newline 一つとする。
 8. comment は意味に含めず、canonical rewrite では保持しない。
 
-parser は strict とし、unknown field、重複 key、anchor、alias、merge key、独自 tag、複数 document、mapping 以外の root、要求型と異なる scalar を拒否する。schema label が `axon-declaration/v1` 以外の file は変換せずに拒否する。
+parser は strict とし、unknown field、重複 key、anchor、alias、merge key、独自 tag、複数 document、mapping 以外の root、要求型と異なる scalar を拒否する。schema label が `axon-declaration/v2` 以外の file は変換せずに拒否する。Entity の `label` field を持たない `axon-declaration/v1` の file もこれに当たり、v1 の `base` は v2 の fingerprint と一致しないため、診断は、既存 Entity の record を `axon export` で v2 として取り直すことと、保存先にまだない record は各 record に `label` を加えて `axon-declaration/v2` と宣言することを案内する。v1 の file の既存 Entity の record には `label` を足さず `base` も手で書き換えず、未使用の別 file へ `axon export` で取り直して未適用の編集を移す。v1 の file で `base` が null の record も、`prepare` で得た `id` が保存先に存在すれば以前の `apply` で保存済みなので、取り直す側に入れる。保存先にまだない record は、`base` が null で、`id` が null か、`axon show ID --skip-conditions` がその `id` を存在しないと診断する record である。保存先にまだない record だけの v1 の file は、各 record に `label` を加えて schema 行を v2 に書き換えてよい。取り直す record も含む v1 の file は、取り直した v2 の file へ保存先にまだない record を `label` を加えて移す。`axon export` が出す既存 Entity の record は `key` が null なので、移した record や編集がそれらを `{ key: ... }` で参照していれば `{ id: ... }` に書き換える。
 
 ## 競合検知
 
 fingerprint は `blake3:` に続く lowercase 64 桁の hex string とする。各 Entity について、次の token 列を順に encode して BLAKE3 へ渡す。
 
-1. schema label `axon-declaration/v1`
+1. schema label `axon-declaration/v2`
 2. kind（`issue` / `group`）
 3. ID
 4. lifecycle の綴り
 5. title
 6. description
-7. parent の presence（`none` / `some`）。`some` なら続けて解決済み parent ID
-8. outgoing dependency の件数を符号なし 64 bit big-endian integer で表した 8 byte
-9. prerequisite の解決済み ID を bytewise UTF-8 昇順に並べた各 token
+7. label の綴り
+8. parent の presence（`none` / `some`）。`some` なら続けて解決済み parent ID
+9. outgoing dependency の件数を符号なし 64 bit big-endian integer で表した 8 byte
+10. prerequisite の解決済み ID を bytewise UTF-8 昇順に並べた各 token
 
 一つの token は、UTF-8 byte 長を符号なし 64 bit big-endian integer で表した 8 byte と token 自体の UTF-8 byte を連結して encode する。件数だけは固定長整数として直接 encode する。`base` は`axon export`の時点で計算し、`check`・`apply` は保存先の現在値から再計算して一致を要求する。不一致は、後述の再試行の適用済み判定に該当しない限り競合として file 全体を拒否し、対象 ID を列挙する。
 
@@ -146,29 +152,29 @@ fingerprint には declaration が見せる項目だけを含める。記録 ID 
 1. strict schema、identity、参照の局所検証と、既存 Entity の ID が保存先に存在し kind が一致すること。`references` に記載された外部 Entity の存在と kind の一致も、再試行の適用済み判定より前に検証する
 2. `base` と保存先の現在値の照合、および新規 Entity の割り当て済み ID が保存先に存在しないことの確認。不一致または存在があれば後述の再試行の適用済み判定を行い、該当すれば以降の検証を省いて適用済みとして扱い、該当しなければ競合とする。`base` が一致するのに file の `lifecycle` が現在値と異なれば、読み取り専用項目の書き換えとして拒否する
 3. 参照先の存在
-4. 検証に使う記録の集合へ編集を共通コアの通常操作として仮に適用し、包含・dependency・終了構成・固定された文面の制約を通常操作と同じ意味で検査
-5. 作成、title の変更前後（改行を `\n`、制御文字を可視 escape とする一覧と同じ一行表示）、description の変更有無、parent の前後、`needs` の増減を Entity ごとに表示。差分がなければその旨を表示
+4. 検証に使う記録の集合へ編集を共通コアの通常操作として仮に適用し、包含・dependency・終了構成・固定された文面と label の制約を通常操作と同じ意味で検査
+5. 作成、title の変更前後（改行を `\n`、制御文字を可視 escape とする一覧と同じ一行表示）、description の変更有無、label の前後、parent の前後、`needs` の増減を Entity ごとに表示。label だけが異なる場合も差分として表示する。差分がなければその旨を表示
 6. 適用後の状況欄を保存情報から導出できる範囲で表示
 
 description の全文差分は file 自体の git diff に任せ、CLI では変更の有無に留める。再浮上条件は実行しない。一件でも error があれば適用可能とは表示しない。
 
-`axon import apply FILE` は保存先の書き込み lock を取得したあとに file の bytes を読んで digest を保持し、その内容と新しい記録の集合に対して `check` と同じ検証を同じ優先順位で再実行し、差分を共通コアの通常操作の列に変換して、一回の lock の下で記録として反映する。一件でも拒否されれば全件適用せず、保存先を変えない。保存する記録は変更のある Entity ごとに一つで、新規 Entity は最終値を持つ登録の記録、既存 Entity は title・description・parent・needs の最終値をまとめて持つ一つの記録（`axon log` では declaration の適用として示す）とし、検証に使った通常操作の列を個々の記録にはしない。記録は 1 件 1 file なので、反映は検証済みの全記録の一時 file を書いてから順に公開する形になり、公開の途中で rename が失敗するか process が失われた場合だけ一部の Entity の記録が公開された状態になりうる。公開は新規 Entity の登録を親と依存先が先になる順に、次いで既存 Entity の変更の順に行う。Entity ごとに記録が一つなので、各 Entity は最終値か元の値のどちらかにある。この場合は結果不明として扱い（rename の失敗なら診断に示し、process の喪失なら利用者が結果不明として扱う）、[再試行](#再試行) で残りを反映する。操作の適用順は実装が決め、有効な最終状態を中間状態の循環や前提不足で弾かないようにする。たとえば親の解除と依存の削除を追加より先に行う。新規 Entity は `lifecycle` が示す初期状態で作成し、架空の採用履歴を作らない。再浮上条件は既存 Entity では現在値を保持し、新規 Entity では未設定とする。同じ値の再指定は差分ではなく成功した no-op とする。
+`axon import apply FILE` は保存先の書き込み lock を取得したあとに file の bytes を読んで digest を保持し、その内容と新しい記録の集合に対して `check` と同じ検証を同じ優先順位で再実行し、差分を共通コアの通常操作の列に変換して、一回の lock の下で記録として反映する。一件でも拒否されれば全件適用せず、保存先を変えない。保存する記録は変更のある Entity ごとに一つで、新規 Entity は最終値を持つ登録の記録、既存 Entity は title・description・label・parent・needs の最終値をまとめて持つ一つの記録（`axon log` では declaration の適用として示す）とし、検証に使った通常操作の列を個々の記録にはしない。記録は 1 件 1 file なので、反映は検証済みの全記録の一時 file を書いてから順に公開する形になり、公開の途中で rename が失敗するか process が失われた場合だけ一部の Entity の記録が公開された状態になりうる。公開は新規 Entity の登録を親と依存先が先になる順に、次いで既存 Entity の変更の順に行う。Entity ごとに記録が一つなので、各 Entity は最終値か元の値のどちらかにある。この場合は結果不明として扱い（rename の失敗なら診断に示し、process の喪失なら利用者が結果不明として扱う）、[再試行](#再試行) で残りを反映する。操作の適用順は実装が決め、有効な最終状態を中間状態の循環や前提不足で弾かないようにする。たとえば親の解除と依存の削除を追加より先に行う。新規 Entity は `lifecycle` が示す初期状態と `label` の値で作成し、架空の採用履歴を作らない。再浮上条件は既存 Entity では現在値を保持し、新規 Entity では未設定とする。同じ値の再指定は差分ではなく成功した no-op とする。
 
 保存成功後に同じ file を canonical rewrite する。成功出力には、base の更新前に新規（`base: null`）だった record の `key -> 完全ID` の対応を一行ずつ含める。この `apply` が保存した記録の集合から、新規 Entity と既存 Entity の `base` と `lifecycle` を置き換え、`references` を再生成し、record と `needs` の並びを含む canonical 形を file 全体に再適用する。`key` と key 参照は残す。lock 解放後に保存先を読み直して他者の変更を `base` に取り込まない。rewrite は `prepare` と同じ手順で元の場所へ置き換える。rename の直前に file の bytes が読み取り時の digest と一致することを再照合し、変わっていれば file を変更せず、保存先には適用済みで declaration は更新していないことを報告する。rename 後の sync 失敗は declaration の結果不明として報告する。保存先の失敗は保存契約に従い、記録 file の rename 後の同期失敗は結果不明として扱う。保存成功後に declaration の更新だけが失敗または結果不明になった場合は、保存先が適用済みであることを明示する。
 
 ## 再試行
 
-結果不明、または保存成功後の file 更新失敗のあとは、同じ file を再度 `apply` できる。`check` と `apply` は、`base` の不一致や新規 Entity の割り当て済み ID の存在を競合と判定する前に、Entity ごとに適用済み判定を行う。編集集合の各 Entity について、保存先の現在値が declaration の最終値（title、description、parent、outgoing dependency、kind、lifecycle。新規 Entity は割り当て済み ID で存在し宣言した初期 lifecycle であること）に完全一致すればその Entity は適用済みとして扱い、`base` に一致すれば（新規 Entity ならその ID が存在しなければ）未適用として残りの差分を適用し、どちらでもなければ競合として file 全体を拒否する。全 Entity が適用済みなら保存先を no-op とし、file の rewrite だけを完了する。公開の途中で process が失われた場合に一部の記録だけが公開されていても、この判定で残りを反映できる。途中の状態が違反を含むことがある（片方だけ反映された dependency の入れ替えなど）ため、この再試行に限り、`check` と `apply` は違反のある保存先の拒否を残りの反映で消える違反には適用せず、最終値の候補が違反を持たないことを同じ検査で確認して反映する。全 Entity が適用済みの再試行は保存先に記録を足さないため、他の writer が後から作った違反があっても拒否せず、file の rewrite を完了する。`prepare` で ID を確定しているため、再実行で同じ Entity が二度作られることはない。
+結果不明、または保存成功後の file 更新失敗のあとは、同じ file を再度 `apply` できる。`check` と `apply` は、`base` の不一致や新規 Entity の割り当て済み ID の存在を競合と判定する前に、Entity ごとに適用済み判定を行う。編集集合の各 Entity について、保存先の現在値が declaration の最終値（title、description、label、parent、outgoing dependency、kind、lifecycle。新規 Entity は割り当て済み ID で存在し宣言した初期 lifecycle であること）に完全一致すればその Entity は適用済みとして扱い、`base` に一致すれば（新規 Entity ならその ID が存在しなければ）未適用として残りの差分を適用し、どちらでもなければ競合として file 全体を拒否する。全 Entity が適用済みなら保存先を no-op とし、file の rewrite だけを完了する。公開の途中で process が失われた場合に一部の記録だけが公開されていても、この判定で残りを反映できる。途中の状態が違反を含むことがある（片方だけ反映された dependency の入れ替えなど）ため、この再試行に限り、`check` と `apply` は違反のある保存先の拒否を残りの反映で消える違反には適用せず、最終値の候補が違反を持たないことを同じ検査で確認して反映する。全 Entity が適用済みの再試行は保存先に記録を足さないため、他の writer が後から作った違反があっても拒否せず、file の rewrite を完了する。`prepare` で ID を確定しているため、再実行で同じ Entity が二度作られることはない。
 
 ## 拒否する入力と失敗の区別
 
 次はいずれも file 全体を拒否し、部分適用しない。診断は原因の分類、対象 ID、固定されている項目名を示す。
 
-- strict YAML 違反、schema label の不一致、unknown field、重複 key、anchor・alias・merge key・tag
+- strict YAML 違反、schema label の不一致、unknown field、重複 key、anchor・alias・merge key・tag、`label` の欠落・null・固定集合の外の値
 - ASCII 小文字英数字とハイフン以外を含む `id`、一つの参照 mapping での id と key の併記、`id` が null で `base` が non-null の record、`base` が null の record の `key` 欠落、未解決の ID・key、同じ Entity の二重宣言、解決後の重複した `needs`、自己依存、Issue を親にする参照、新規 Entity の `lifecycle` が `undecided`・`not-started` 以外
 - 既存 Entity の `lifecycle` の書き換え、既存 Entity の record を `issues` と `groups` の間で移す kind の変更
 - `base` の不一致、または新規 Entity の割り当て済み ID が保存先に存在すること（再試行の Entity ごとの適用済み判定に該当する場合を除く）。保存先の変更と入力側の `base` の改変・null 化は区別せず、いずれも競合として扱う
-- `Completed`・`Cancelled` の title・description の差分、`Completed` の `needs` の差分、終了した Group の構成を変える所属変更、終了した Group を親にする作成・所属変更、実効値が `InProgress` か `Completed` の Entity を、移動先の Group 自身かその祖先に採用済みでないものがある場合に、その下へ移す変更、包含の循環、dependency の循環など、共通コアが通常操作でも拒否する変更。新規作成の親は終了していない Group であればよく、採用済みや着手済みである必要はない
+- `Completed`・`Cancelled` の title・description・label の差分、`Completed` の `needs` の差分、終了した Group の構成を変える所属変更、終了した Group を親にする作成・所属変更、実効値が `InProgress` か `Completed` の Entity を、移動先の Group 自身かその祖先に採用済みでないものがある場合に、その下へ移す変更、包含の循環、dependency の循環など、共通コアが通常操作でも拒否する変更。新規作成の親は終了していない Group であればよく、採用済みや着手済みである必要はない
 
 終了した Entity を別の読み取り専用セクションに分けない。共通コアは`Cancelled`の dependency 編集を許し、終了していない Group の間での終了 Entity の所属変更を許す（`Completed` の Entity の移動先は、所属なしか、自身と全祖先が採用済みの Group に限る）ため、終了 Entity にも編集できる項目が残る。同じ list に置き、項目単位で拒否する。
 

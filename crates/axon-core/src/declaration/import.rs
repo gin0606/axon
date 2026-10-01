@@ -1,4 +1,5 @@
 use super::*;
+use crate::lifecycle::Label;
 use crate::lifecycle::record::Record as StoreRecord;
 use crate::lifecycle::record::{Context, Entry, RecordKind, Store};
 
@@ -20,6 +21,7 @@ struct Desired {
     lifecycle: Lifecycle,
     title: String,
     description: String,
+    label: Label,
     parent: Option<EntityId>,
     needs: BTreeSet<EntityId>,
 }
@@ -29,6 +31,7 @@ impl Desired {
             && current.lifecycle == self.lifecycle
             && current.title == self.title
             && current.description == self.description
+            && current.label == self.label
             && current.parent == self.parent
             && current.needs == self.needs
     }
@@ -71,6 +74,8 @@ impl Declaration {
             },
             title: r.title.clone(),
             description: r.description.clone(),
+            label: Label::from_name(&r.label)
+                .map_err(|e| invalid(format!("schema: label: {e}")))?,
             parent: r.parent.as_ref().map(|p| self.resolved(p)).transpose()?,
             needs: r
                 .needs
@@ -515,6 +520,7 @@ impl Declaration {
                 owner: None,
                 title: desired.title.clone(),
                 description: desired.description.clone(),
+                label: desired.label,
                 condition: None,
                 parent: desired.parent.clone(),
                 needs: BTreeSet::new(),
@@ -534,6 +540,10 @@ impl Declaration {
                 if title.is_some() || description.is_some() {
                     let record = scratch.store.write(id, title, description, context.clone());
                     core(id, "title/description", scratch.apply(record))?;
+                }
+                if scratch.current(id)?.label != desired.label {
+                    let record = scratch.store.set_label(id, desired.label, context.clone());
+                    core(id, "label", scratch.apply(record))?;
                 }
             }
         }

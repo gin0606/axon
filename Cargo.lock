@@ -95,6 +95,7 @@ name = "axon"
 version = "0.1.0"
 dependencies = [
  "axon-core",
+ "axon-label-conversion",
  "axon-recorder",
  "blake3",
  "chrono",
@@ -120,6 +121,15 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "axon-label-conversion"
+version = "0.1.0"
+dependencies = [
+ "axon-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

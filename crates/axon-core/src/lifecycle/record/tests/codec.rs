@@ -18,6 +18,12 @@ fn store_with_every_kind() -> (Store, Vec<RecordId>) {
         .unwrap()
         .unwrap();
     ids.push(insert(&mut r.store, edit));
+    let label = r
+        .store
+        .set_label(&id("i3"), Label::Docs, r.tick())
+        .unwrap()
+        .unwrap();
+    ids.push(insert(&mut r.store, label));
     ids.push(r.move_to("i3", Some("g0")));
     ids.push(r.add_dep("i3", "g2"));
     let condition = r
@@ -30,10 +36,13 @@ fn store_with_every_kind() -> (Store, Vec<RecordId>) {
         .store
         .import(
             &id("i3"),
-            "edited".into(),
-            "desc".into(),
-            None,
-            BTreeSet::new(),
+            Imported {
+                title: "edited".into(),
+                description: "desc".into(),
+                label: Label::Bug,
+                parent: None,
+                needs: BTreeSet::new(),
+            },
             r.tick(),
         )
         .unwrap()
@@ -103,6 +112,7 @@ fn every_record_kind_round_trips_through_canonical_bytes_with_its_hash_as_id() {
             "created",
             "transition",
             "edit",
+            "label",
             "parent",
             "dependency",
             "condition",
@@ -131,13 +141,13 @@ fn key_order_and_optional_keys_follow_the_contract() {
     let start = text(1);
     assert!(start.contains("\"record\":\"transition\",\"operation\":\"start\",\"parents\":[\""));
     assert!(start.contains("\"],\"at\":\"1970-01-01T00:0"));
-    assert!(start.contains("\"recorder\":{\"actor\":\"r0\",\"data\":{\"session_id\":\"session-1\"}},\"reason\":null,\"after\":{\"kind\":\"issue\",\"lifecycle\":\"in-progress\",\"owner\":\"r0\",\"title\":\"task\",\"description\":\"body\\n日本語\",\"condition\":null,\"parent\":null,\"needs\":[]}}\n"));
+    assert!(start.contains("\"recorder\":{\"actor\":\"r0\",\"data\":{\"session_id\":\"session-1\"}},\"reason\":null,\"after\":{\"kind\":\"issue\",\"lifecycle\":\"in-progress\",\"owner\":\"r0\",\"title\":\"task\",\"description\":\"body\\n日本語\",\"label\":\"feat\",\"condition\":null,\"parent\":null,\"needs\":[]}}\n"));
     let created = text(0);
     assert!(created.contains("\"record\":\"created\",\"parents\":[],\"at\":"));
-    let resolve = text(9);
+    let resolve = text(10);
     assert!(resolve.contains("\"record\":\"resolve\",\"parents\":[\""));
     assert!(resolve.contains("\"],\"chosen\":\""));
-    let note = text(10);
+    let note = text(11);
     assert!(note.contains("\"record\":\"note\",\"parents\":[],\"nonce\":\""));
     assert!(note.ends_with("\"reason\":null,\"body\":\"a note\"}\n"));
     assert!(!note.contains("\"after\""));
@@ -145,18 +155,19 @@ fn key_order_and_optional_keys_follow_the_contract() {
 
 /// Record files written by an earlier encoder, one per record kind. Stored records stay readable
 /// only while decoding and re-encoding reproduces these bytes exactly.
-const WRITTEN_RECORDS: [&str; 11] = [
-    r#"{"entity":"i3","record":"created","parents":[],"at":"1970-01-01T00:00:03.500Z","recorder":{"actor":"setup","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"not-started","owner":null,"title":"task","description":"body\n日本語","condition":null,"parent":null,"needs":[]}}"#,
-    r#"{"entity":"i3","record":"transition","operation":"start","parents":["2a21511cbd45b559ef550bd9595ef3a61babecfcefcd61caa1661b33d61c66ee"],"at":"1970-01-01T00:01:41.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"task","description":"body\n日本語","condition":null,"parent":null,"needs":[]}}"#,
-    r#"{"entity":"i3","record":"edit","parents":["04349af49e27c28e63a4e7b2385be53a85eb07f057e2f97f83405af4d210a674"],"at":"1970-01-01T00:01:42.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","condition":null,"parent":null,"needs":[]}}"#,
-    r#"{"entity":"i3","record":"parent","parents":["1668939b50174dc2792035965e0b5dd1e99c69a3d6c89afb5ea7d7000b494d02"],"at":"1970-01-01T00:01:43.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","condition":null,"parent":"g0","needs":[]}}"#,
-    r#"{"entity":"i3","record":"dependency","parents":["4a9eafe8e3ef7fe127e7095ff618b0d5924bf2a7f709a4ef9eef206269e124c6"],"at":"1970-01-01T00:01:44.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","condition":null,"parent":"g0","needs":["g2"]}}"#,
-    r#"{"entity":"i3","record":"condition","parents":["da0d7388a814361e962ea78a46d592ef36c923e852fcfd08b1c0c436b464b494"],"at":"1970-01-01T00:01:45.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","condition":"exit 0","parent":"g0","needs":["g2"]}}"#,
-    r#"{"entity":"i3","record":"import","parents":["b11fbc9e09ce2ee264e4f0c28effa45a6c1d37f8ec2fb06c3f1f2db94046f6af"],"at":"1970-01-01T00:01:46.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","condition":"exit 0","parent":null,"needs":[]}}"#,
-    r#"{"entity":"i3","record":"transition","operation":"release","parents":["5fd9e8ee6182ef36ac2029e04c3bd4ee5d27688eb3be0016df6c2633bd33dd04"],"at":"1970-01-01T00:01:47.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"not-started","owner":null,"title":"edited","description":"desc","condition":"exit 0","parent":null,"needs":[]}}"#,
-    r#"{"entity":"i3","record":"convert","parents":["6b9f014340e86165401af5650e510b39748b7faaf8ffff2b2232e1e7404cac69"],"at":"1970-01-01T00:01:48.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"group","lifecycle":"not-started","owner":null,"title":"edited","description":"desc","condition":"exit 0","parent":null,"needs":[]}}"#,
-    r#"{"entity":"i3","record":"resolve","parents":["67c55c7d136fca429bca79efee2cb6cb9d53ce5d00431dc5b81fde8e10c568f3","71223f8c26da3acc056dc58b5da7cb1659f162111f750ee06c109cdeb7763c96"],"chosen":"67c55c7d136fca429bca79efee2cb6cb9d53ce5d00431dc5b81fde8e10c568f3","at":"1970-01-01T00:01:50.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":"pick","after":{"kind":"group","lifecycle":"undecided","owner":null,"title":"edited","description":"desc","condition":"exit 0","parent":null,"needs":[]}}"#,
-    r#"{"entity":"i3","record":"note","parents":[],"nonce":"9dcfece3cb52b8ff3dde4bb73b041297","at":"1970-01-01T00:01:51.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"body":"a note"}"#,
+const WRITTEN_RECORDS: [&str; 12] = [
+    r#"{"entity":"i3","record":"created","parents":[],"at":"1970-01-01T00:00:03.500Z","recorder":{"actor":"setup","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"not-started","owner":null,"title":"task","description":"body\n日本語","label":"feat","condition":null,"parent":null,"needs":[]}}"#,
+    r#"{"entity":"i3","record":"transition","operation":"start","parents":["95e349ab47d8d1cd4f42275d434470347c48efdeb43d4085aeb13338580feec6"],"at":"1970-01-01T00:01:41.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"task","description":"body\n日本語","label":"feat","condition":null,"parent":null,"needs":[]}}"#,
+    r#"{"entity":"i3","record":"edit","parents":["8b9bfb377789bac516817020a2ae94088a3717679873a39e490295cac2a64a6b"],"at":"1970-01-01T00:01:42.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","label":"feat","condition":null,"parent":null,"needs":[]}}"#,
+    r#"{"entity":"i3","record":"label","parents":["701ecf85fe32041e2b4336bb42b37af71d6f8adbf42779c228254f7432306751"],"at":"1970-01-01T00:01:43.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","label":"docs","condition":null,"parent":null,"needs":[]}}"#,
+    r#"{"entity":"i3","record":"parent","parents":["b714d5c2e4e729661cd599712044a62f0506a156b985944e5086ba5520acdf6c"],"at":"1970-01-01T00:01:44.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","label":"docs","condition":null,"parent":"g0","needs":[]}}"#,
+    r#"{"entity":"i3","record":"dependency","parents":["e5f30d64565d67fa22a2620200a76fec14b9188b8f028d927d74b38a2f47fc1d"],"at":"1970-01-01T00:01:45.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","label":"docs","condition":null,"parent":"g0","needs":["g2"]}}"#,
+    r#"{"entity":"i3","record":"condition","parents":["57f165a404da7a7ea25829ac54a0c4847e43eb757444052c79e4152b4deef63b"],"at":"1970-01-01T00:01:46.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","label":"docs","condition":"exit 0","parent":"g0","needs":["g2"]}}"#,
+    r#"{"entity":"i3","record":"import","parents":["88fe9a32d4947df4f0d83a6f7344233dd79236e33b30e978bb91efa7c0829fc1"],"at":"1970-01-01T00:01:47.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"in-progress","owner":"r0","title":"edited","description":"desc","label":"bug","condition":"exit 0","parent":null,"needs":[]}}"#,
+    r#"{"entity":"i3","record":"transition","operation":"release","parents":["7e446f06c056822660b822144afc121812f24a7c2b20012ae413ae7132ce9d24"],"at":"1970-01-01T00:01:48.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"issue","lifecycle":"not-started","owner":null,"title":"edited","description":"desc","label":"bug","condition":"exit 0","parent":null,"needs":[]}}"#,
+    r#"{"entity":"i3","record":"convert","parents":["5bddd081183c035566bd693431653db9e61cb96d511cc384e4a376d5ee35b3ea"],"at":"1970-01-01T00:01:49.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"after":{"kind":"group","lifecycle":"not-started","owner":null,"title":"edited","description":"desc","label":"bug","condition":"exit 0","parent":null,"needs":[]}}"#,
+    r#"{"entity":"i3","record":"resolve","parents":["446215bc8e9180b0903bd7ee129d1838c8d75d30ab2a21d931b2155d9ba6dfe9","70385063e2cb933ce5638e10200fb5a71b5849d81ab9df2f73a9007a17ca7f34"],"chosen":"70385063e2cb933ce5638e10200fb5a71b5849d81ab9df2f73a9007a17ca7f34","at":"1970-01-01T00:01:51.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":"pick","after":{"kind":"group","lifecycle":"undecided","owner":null,"title":"edited","description":"desc","label":"bug","condition":"exit 0","parent":null,"needs":[]}}"#,
+    r#"{"entity":"i3","record":"note","parents":[],"nonce":"282559de5da0c189ec16e95dad6cfce4","at":"1970-01-01T00:01:52.500Z","recorder":{"actor":"r0","data":{"session_id":"session-1"}},"reason":null,"body":"a note"}"#,
 ];
 
 #[test]
@@ -206,6 +217,48 @@ fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
             .contains("unknown operation")
     );
     assert!(error(with("\"kind\":\"issue\"", "\"kind\":\"epic\"")).contains("unknown kind"));
+    // The label is always present, spelled from the fixed set, and placed after description.
+    let names: Vec<_> = Label::ALL.iter().map(|label| label.name()).collect();
+    assert_eq!(
+        names,
+        ["bug", "feat", "chore", "docs", "test", "refactor", "spike"]
+    );
+    // Decoding reads the spellings from `ALL`, so a variant missing there would be written
+    // but never read back. The exhaustive match makes a new variant name its place in `ALL`.
+    let position = |label: Label| match label {
+        Label::Bug => 0,
+        Label::Feat => 1,
+        Label::Chore => 2,
+        Label::Docs => 3,
+        Label::Test => 4,
+        Label::Refactor => 5,
+        Label::Spike => 6,
+    };
+    assert_eq!(Label::ALL.map(position), std::array::from_fn(|index| index));
+    for label in Label::ALL {
+        assert_eq!(Label::from_name(label.name()).unwrap(), label);
+        let spelled = with("\"label\":\"feat\"", &format!("\"label\":\"{label}\""));
+        assert_eq!(spelled.unwrap().1.as_record().unwrap().after.label, label);
+    }
+    let unlabeled = error(with("\"label\":\"feat\",", ""));
+    assert!(
+        unlabeled.contains("missing key \"label\"") && unlabeled.contains("needs conversion"),
+        "{unlabeled}"
+    );
+    for outside in ["\"fix\"", "\"Feat\"", "\"\"", "null", "[\"feat\"]"] {
+        let error = error(with("\"label\":\"feat\"", &format!("\"label\":{outside}")));
+        assert!(
+            error.contains("unknown label") || error.contains("invalid type"),
+            "{outside}: {error}"
+        );
+    }
+    assert!(
+        error(with(
+            "\"description\":\"body\\n日本語\",\"label\":\"feat\"",
+            "\"label\":\"feat\",\"description\":\"body\\n日本語\""
+        ))
+        .contains("not canonical")
+    );
     assert!(
         error(with(
             "\"lifecycle\":\"in-progress\"",
@@ -266,7 +319,7 @@ fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
         ))
         .contains("exactly one parent")
     );
-    let note = String::from_utf8(encode(store.get(&ids[10]).unwrap()).unwrap()).unwrap();
+    let note = String::from_utf8(encode(store.get(&ids[11]).unwrap()).unwrap()).unwrap();
     assert!(
         error(decode(
             note.replacen("\"nonce\":\"", "\"nonce\":\"g", 1).as_bytes()
@@ -280,7 +333,7 @@ fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
         ))
         .contains("empty Note")
     );
-    let resolve = String::from_utf8(encode(store.get(&ids[9]).unwrap()).unwrap()).unwrap();
+    let resolve = String::from_utf8(encode(store.get(&ids[10]).unwrap()).unwrap()).unwrap();
     let chosen = resolve
         .split("\"chosen\":\"")
         .nth(1)
@@ -306,12 +359,12 @@ fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
 #[test]
 fn the_id_is_the_hash_of_the_bytes_so_a_changed_byte_is_a_different_record() {
     let (store, ids) = store_with_every_kind();
-    let bytes = encode(store.get(&ids[10]).unwrap()).unwrap();
+    let bytes = encode(store.get(&ids[11]).unwrap()).unwrap();
     let altered = String::from_utf8(bytes.clone())
         .unwrap()
         .replacen("a note", "a mote", 1);
     let (altered_id, _) = decode(altered.as_bytes()).unwrap();
-    assert_ne!(altered_id, ids[10]);
+    assert_ne!(altered_id, ids[11]);
     assert_eq!(RecordId::of(altered.as_bytes()), altered_id);
     assert!(error(RecordId::try_from("ABC")).contains("record ID"));
     assert!(RecordId::try_from(ids[0].to_string()).is_ok());
@@ -372,15 +425,25 @@ fn header_round_trips_and_rejects_unknown_formats_and_bad_prefixes() {
     let header = Header::new("demo-1").unwrap();
     let bytes = encode_header(&header).unwrap();
     let text = String::from_utf8(bytes.clone()).unwrap();
-    assert!(text.starts_with("{\"format\":\"axon-records/v1\",\"store\":\"store-"));
+    assert!(text.starts_with("{\"format\":\"axon-records/v2\",\"store\":\"store-"));
     assert!(text.ends_with("\",\"prefix\":\"demo-1\"}\n"));
     assert_eq!(decode_header(&bytes).unwrap(), header);
     assert!(
         error(decode_header(
-            text.replacen("axon-records/v1", "axon-lifecycle/v1", 1)
+            text.replacen("axon-records/v2", "axon-lifecycle/v1", 1)
                 .as_bytes()
         ))
         .contains("unsupported store format")
+    );
+    // The format before labels is not unknown: it names the conversion it needs.
+    let earlier = error(decode_header(
+        text.replacen("axon-records/v2", "axon-records/v1", 1)
+            .as_bytes(),
+    ));
+    assert!(earlier.starts_with(NEEDS_CONVERSION), "{earlier}");
+    assert!(
+        earlier.contains("\"axon-records/v1\"") && earlier.contains("\"axon-records/v2\""),
+        "{earlier}"
     );
     assert!(
         error(decode_header(
@@ -443,7 +506,7 @@ fn impossible_transitions_and_conversions_are_rejected_without_their_parent() {
     record.after.owner = Some("setup".into());
     assert!(error(encode(&Entry::Record(record))).contains("Undecided or NotStarted"));
     // Duplicate parents are not a canonical list.
-    let resolve = String::from_utf8(encode(store.get(&ids[9]).unwrap()).unwrap()).unwrap();
+    let resolve = String::from_utf8(encode(store.get(&ids[10]).unwrap()).unwrap()).unwrap();
     let first = resolve
         .split("\"parents\":[\"")
         .nth(1)
@@ -545,32 +608,34 @@ proptest! {
 
     #[test]
     fn generated_parent_field_matrix_rejects_forbidden_changes(suffix in "[a-z]{1,8}") {
-        // Columns: kind, lifecycle, owner, text, parent, needs, condition.
-        const ALLOWED: [[bool; 7]; 9] = [
-            [false, true, true, false, false, false, false], // transition
-            [false, false, false, true, false, false, false], // edit
-            [false, false, false, false, true, false, false], // parent
-            [false, false, false, false, false, true, false], // dependency
-            [false, false, false, false, false, false, true], // condition
-            [false, false, false, true, true, true, false], // import
-            [false, true, true, false, false, false, false], // release transition
-            [true, false, false, false, false, false, false], // convert
-            [false; 7], // resolve repeats its chosen parent
+        // Columns: kind, lifecycle, owner, text, label, parent, needs, condition.
+        const ALLOWED: [[bool; 8]; 10] = [
+            [false, true, true, false, false, false, false, false], // transition
+            [false, false, false, true, false, false, false, false], // edit
+            [false, false, false, false, true, false, false, false], // label
+            [false, false, false, false, false, true, false, false], // parent
+            [false, false, false, false, false, false, true, false], // dependency
+            [false, false, false, false, false, false, false, true], // condition
+            [false, false, false, true, true, true, true, false], // import
+            [false, true, true, false, false, false, false, false], // release transition
+            [true, false, false, false, false, false, false, false], // convert
+            [false; 8], // resolve repeats its chosen parent
         ];
-        const REJECTED_WITHOUT_PARENT: [[bool; 7]; 9] = [
-            [true, true, true, false, false, false, false],
-            [true, true, false, false, false, false, false],
-            [true, true, false, false, false, false, false],
-            [true, true, false, false, false, false, false],
-            [true, true, false, false, false, false, false],
-            [true, true, false, false, false, false, false],
-            [true, true, true, false, false, false, false],
-            [false, false, true, false, false, false, false],
-            [false, false, true, false, false, false, false],
+        const REJECTED_WITHOUT_PARENT: [[bool; 8]; 10] = [
+            [true, true, true, false, false, false, false, false],
+            [true, true, false, false, false, false, false, false],
+            [true, true, false, false, false, false, false, false],
+            [true, true, false, false, false, false, false, false],
+            [true, true, false, false, false, false, false, false],
+            [true, true, false, false, false, false, false, false],
+            [true, true, false, false, false, false, false, false],
+            [true, true, true, false, false, false, false, false],
+            [false, false, true, false, false, false, false, false],
+            [false, false, true, false, false, false, false, false],
         ];
         let (source, ids) = store_with_every_kind();
         let mut checked = 0;
-        for (row, record_id) in ids[1..10].iter().enumerate() {
+        for (row, record_id) in ids[1..11].iter().enumerate() {
             for (field, allowed) in ALLOWED[row].iter().enumerate() {
                 if *allowed { continue; }
                 let mut store = Store::new();
@@ -588,8 +653,9 @@ proptest! {
                     1 => damaged.after.lifecycle = if damaged.after.lifecycle == Lifecycle::NotStarted { Lifecycle::Undecided } else { Lifecycle::NotStarted },
                     2 => damaged.after.owner = Some(format!("owner-{suffix}")),
                     3 => damaged.after.title.push_str(&suffix),
-                    4 => damaged.after.parent = if damaged.after.parent.is_some() { None } else { Some(id("g0")) },
-                    5 => { damaged.after.needs.insert(id(&format!("need-{suffix}"))); },
+                    4 => damaged.after.label = if damaged.after.label == Label::Bug { Label::Chore } else { Label::Bug },
+                    5 => damaged.after.parent = if damaged.after.parent.is_some() { None } else { Some(id("g0")) },
+                    6 => { damaged.after.needs.insert(id(&format!("need-{suffix}"))); },
                     _ => damaged.after.condition = Some(format!("exit 0 # {suffix}")),
                 }
                 let entry = Entry::Record(damaged);

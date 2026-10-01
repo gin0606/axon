@@ -1,1 +1,0 @@
-{"entity":"axon-8eqd7s","record":"created","parents":[],"at":"2026-08-31T13:04:39.686852Z","recorder":{"actor":"codex","data":{}},"reason":null,"after":{"kind":"issue","lifecycle":"undecided","owner":null,"title":"resolve_id の doc と実装がずれているのを直す (doc は前方一致、実装は接尾辞一致)","description":"","condition":null,"parent":null,"needs":[]}}

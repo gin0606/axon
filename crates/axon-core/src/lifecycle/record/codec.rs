@@ -3,13 +3,18 @@
 //! these bytes, so `decode` accepts only canonical input: the same content always has the same
 //! bytes and therefore the same ID.
 use super::model::{Current, Entry, Header, Note, Record, RecordId, RecordKind};
-use super::{EntityId, Kind, Lifecycle, Nonce, Operation, Recorder, Result, StoreId};
+use super::{EntityId, Kind, Label, Lifecycle, Nonce, Operation, Recorder, Result, StoreId};
 use crate::lifecycle::invalid;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, ser::SerializeStruct};
 use std::collections::BTreeSet;
 
-pub const HEADER_FORMAT: &str = "axon-records/v1";
+pub const HEADER_FORMAT: &str = "axon-records/v2";
+/// The format before labels. Its records lack a label, so the store is converted once
+/// instead of being read.
+pub const EARLIER_HEADER_FORMAT: &str = "axon-records/v1";
+/// How the error of `decode_header` for an earlier format begins.
+pub const NEEDS_CONVERSION: &str = "the store needs conversion";
 
 /// The spellings of kind and lifecycle are the declaration's.
 use crate::declaration::{kind as kind_name, lifecycle as lifecycle_name};
@@ -57,6 +62,16 @@ fn operation_from(name: &str) -> Result<Operation> {
     }
 }
 
+/// A missing label marks a record written before labels, which is converted instead of read.
+fn label_from(value: Option<Option<String>>) -> Result<Label> {
+    match value {
+        None => Err(invalid(format!(
+            "missing key \"label\": a record written before labels ({EARLIER_HEADER_FORMAT}) needs conversion"
+        ))),
+        Some(None) => Err(invalid("invalid type: null label")),
+        Some(Some(name)) => Label::from_name(&name),
+    }
+}
 /// `Option<Option<T>>` distinguishes an absent key (outer None) from an explicit null.
 fn present<'de, D, T>(deserializer: D) -> std::result::Result<Option<Option<T>>, D::Error>
 where
@@ -78,6 +93,8 @@ struct AfterRow {
     owner: Option<Option<String>>,
     title: String,
     description: String,
+    #[serde(default, deserialize_with = "present")]
+    label: Option<Option<String>>,
     #[serde(default, deserialize_with = "present")]
     condition: Option<Option<String>>,
     #[serde(default, deserialize_with = "present")]
@@ -122,6 +139,7 @@ impl Serialize for CanonicalEntry<'_> {
                     owner: &'a Option<String>,
                     title: &'a str,
                     description: &'a str,
+                    label: &'static str,
                     condition: &'a Option<String>,
                     parent: &'a Option<EntityId>,
                     needs: &'a BTreeSet<EntityId>,
@@ -151,6 +169,7 @@ impl Serialize for CanonicalEntry<'_> {
                         owner: &record.after.owner,
                         title: &record.after.title,
                         description: &record.after.description,
+                        label: record.after.label.name(),
                         condition: &record.after.condition,
                         parent: &record.after.parent,
                         needs: &record.after.needs,
@@ -208,6 +227,7 @@ fn entry(mut row: Row) -> Result<Entry> {
             row.operation.take(),
         )?)?),
         "edit" => RecordKind::Edit,
+        "label" => RecordKind::Label,
         "parent" => RecordKind::Parent,
         "dependency" => RecordKind::Dependency,
         "condition" => RecordKind::Condition,
@@ -243,6 +263,7 @@ fn entry(mut row: Row) -> Result<Entry> {
             owner: required("owner", after.owner)?,
             title: after.title,
             description: after.description,
+            label: label_from(after.label)?,
             condition: required("condition", after.condition)?,
             parent: required("parent", after.parent)?,
             needs,
@@ -303,9 +324,15 @@ pub fn encode_header(header: &Header) -> Result<Vec<u8>> {
     })
 }
 
-/// Rejects an unknown format instead of converting it.
+/// Rejects an unknown format instead of converting it. The earlier format is rejected with an
+/// error that begins with `NEEDS_CONVERSION`.
 pub fn decode_header(bytes: &[u8]) -> Result<Header> {
     let row: HeaderRow = from_line(bytes).map_err(|error| invalid(format!("header: {error}")))?;
+    if row.format == EARLIER_HEADER_FORMAT {
+        return Err(invalid(format!(
+            "{NEEDS_CONVERSION}: its format {EARLIER_HEADER_FORMAT:?} predates labels; convert it to {HEADER_FORMAT:?} before use as the storage guide (docs/guide/storage.md, converting a store from before labels) describes"
+        )));
+    }
     if row.format != HEADER_FORMAT {
         return Err(invalid(format!(
             "unsupported store format {:?}",

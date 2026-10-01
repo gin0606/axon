@@ -4,7 +4,7 @@
 
 ## crate と module の地図
 
-Cargo workspace は root の `axon`、`crates/axon-core`、`crates/axon-recorder` を持つ。いずれも `publish = false` で、通常の Cargo コマンドは workspace の既定メンバーを対象にする。
+Cargo workspace は root の `axon`、`crates/axon-core`、`crates/axon-recorder`、`crates/axon-label-conversion` を持つ。いずれも `publish = false` で、通常の Cargo コマンドは workspace の既定メンバーを対象にする。`axon-label-conversion` は既定メンバーに含めないので、`cargo run` は `axon` を実行し、ツールは `-p axon-label-conversion` で指定する。`--workspace` の検証には含まれる。
 
 ```text
 axon binary: src/main.rs → src/cli/
@@ -12,6 +12,8 @@ axon binary: src/main.rs → src/cli/
     │       └── axon-core: lifecycle / declaration / read
     ├── axon-core（axon library の再公開経由）
     └── axon-recorder: 任意の記録者情報の取得
+axon-label-conversion binary: 一度限りの保存先の変換
+    └── axon-core: 記録の codec
 ```
 
 | 層 | 実装の入口 | 責務 |
@@ -21,6 +23,7 @@ axon binary: src/main.rs → src/cli/
 | adapter 共通エラー | [src/error.rs](../../src/error.rs) | root の `axon::Error` / `axon::Result` と prefix 検証。コアのエラーを包み、保存・I/O の失敗を表す |
 | CLI | [src/main.rs](../../src/main.rs)、[src/cli/mod.rs](../../src/cli/mod.rs) | `main.rs` は入口だけを持つ。`cli::mod` が dispatch、stdout/stderr、保存後の出力失敗と終了コードを処理する |
 | 記録者取得 | [crates/axon-recorder/src/lib.rs](../../crates/axon-recorder/src/lib.rs) | 継承された環境変数だけから任意の記録者情報を取得する。コアの lifecycle 判断や保存 adapter を所有しない |
+| label 導入前の保存先の変換 | [crates/axon-label-conversion/src/lib.rs](../../crates/axon-label-conversion/src/lib.rs) | `axon-records/v1` の記録を自前の最小の読み手で読み、label を足した記録をコアの encoder で因果順に書き直して新しい管理 root へ書き出し、変換前と照合する。保存 adapter と CLI に依存しない一度限りのツールで、手順は [保存先と worktree](../guide/storage.md#labelを導入する前の保存先を変換する) |
 
 `src/lib.rs` は `axon_core::{lifecycle, declaration, read}` を再公開するため、root library の利用側も同じコア API を使う。保存形式は記録 1 件 1 file の一つで、保存 adapter の crate 分割や Repository trait、形式を選ぶ dispatch は持たない。保存先の選択は `location` の探索に集約する。Git の統合に介入する仕組みは持たず、統合の結果は読取時の導出が検査する。
 
@@ -60,8 +63,9 @@ cargo tree -p axon-core --depth 1
 | コア | `cargo test --locked -p axon-core`。`lifecycle`、`declaration`、`read` のメモリ上の単体テスト |
 | 保存 adapter | `cargo test --locked -p axon --lib`。`src/file.rs`、`src/location.rs`、`src/declaration_file.rs` と関連 test module の保存・障害・process fixture |
 | CLI 内部 | `cargo test --locked -p axon --bin axon`。表示、ID 解決、外部条件 process の単体テスト |
-| 公開 CLI と保存の接続 | `cargo test --locked --test smoke`。`tests/smoke.rs` が `tests/lifecycle/{workflow,file,location,contracts,declaration}.rs` も読み込み、独立 fixture、実 Git worktree、公開出力を検証する |
+| 公開 CLI と保存の接続 | `cargo test --locked --test smoke`。`tests/smoke.rs` が `tests/lifecycle/{workflow,file,location,contracts,declaration,label_conversion}.rs` も読み込み、独立 fixture、実 Git worktree、公開出力を検証する。`label_conversion.rs` は binary が書いた保存先を v1 の形に戻して変換し、元の bytes に戻ることと拒否する入力を検証する |
 | 記録者取得 | `cargo test --locked -p axon-recorder`。環境変数からの検出の単体テスト |
+| label 導入前の保存先の変換 | `cargo test --locked -p axon-label-conversion`（対応 file の解析と label の挿入位置の単体テスト）と `cargo test --locked --test smoke label_conversion`。既定メンバーではないが root crate の dev-dependency なので、smoke の `label_conversion::` はオプションなしの `cargo test` でも実行される。lib の単体テストと binary はオプションなしの `cargo test` に含まれない |
 
 層の整理でも公開コマンド・引数・出力 bytes・終了コード、lifecycle の意味論、canonical bytes は維持する。全体検証とモデルを再検証する条件は [検証方針](verification.md) に従う。
 

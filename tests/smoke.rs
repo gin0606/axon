@@ -36,7 +36,7 @@ impl Fixture {
         success(self.run(args))
     }
     fn accepted(&self, title: &str) -> String {
-        self.ok(&["capture", "--accept", "--title", title])
+        self.ok(&["capture", "--label", "chore", "--accept", "--title", title])
             .split_whitespace()
             .next()
             .unwrap()
@@ -220,6 +220,7 @@ fn current(title: &str) -> Current {
         owner: None,
         title: title.into(),
         description: String::new(),
+        label: axon::lifecycle::Label::Chore,
         condition: None,
         parent: None,
         needs: BTreeSet::new(),
@@ -237,6 +238,8 @@ fn registration_to_group_completion_and_records() {
     let group = f
         .ok(&[
             "capture",
+            "--label",
+            "chore",
             "--kind",
             "group",
             "--title",
@@ -252,6 +255,8 @@ fn registration_to_group_completion_and_records() {
     let issue = f
         .ok(&[
             "capture",
+            "--label",
+            "chore",
             "--title",
             "実装",
             "--parent",
@@ -288,7 +293,10 @@ fn registration_to_group_completion_and_records() {
         "編集本文",
     ]);
     f.ok(&["start", &issue]);
-    assert!(f.ok(&["show", &group]).contains("Group  InProgress  計画"));
+    assert!(
+        f.ok(&["show", &group])
+            .contains("Group  InProgress  chore  計画")
+    );
     failure(f.run(&["release", &group]));
     f.ok(&["note", "add", &issue, "-m", "検証結果"]);
     failure(f.run(&["complete", &group]));
@@ -339,7 +347,9 @@ fn lifecycle_and_relation_edits_use_common_guards() {
     f.ok(&["cancel", &a]);
     f.ok(&["reconsider", &a]);
     let g = f
-        .ok(&["capture", "--kind", "group", "--title", "G"])
+        .ok(&[
+            "capture", "--label", "chore", "--kind", "group", "--title", "G",
+        ])
         .split_whitespace()
         .next()
         .unwrap()
@@ -359,6 +369,8 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
     let id = f
         .ok(&[
             "capture",
+            "--label",
+            "chore",
             "--accept",
             "--title",
             "safe",
@@ -436,7 +448,14 @@ fn concurrent_start_has_one_winner_and_other_writes_survive() {
     let children: Vec<_> = (0..8)
         .map(|n| {
             f.command()
-                .args(["capture", "--accept", "--title", &format!("entity {n}")])
+                .args([
+                    "capture",
+                    "--label",
+                    "chore",
+                    "--accept",
+                    "--title",
+                    &format!("entity {n}"),
+                ])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
@@ -478,7 +497,7 @@ fn concurrent_branches_are_read_as_a_conflict_that_stops_ordinary_operations() {
     assert_eq!(notes.matches("same").count(), 2);
     assert!(!notes.contains("Concurrent branch"));
     let show = left.ok(&["show", "t-item"]);
-    assert!(show.contains("Issue  Conflicted  t-item"), "{show}");
+    assert!(show.contains("Issue  Conflicted  chore  t-item"), "{show}");
     assert!(show.contains("Conflicted\n"), "{show}");
     let list = left.run(&["list"]);
     assert!(list.status.success());
@@ -487,7 +506,7 @@ fn concurrent_branches_are_read_as_a_conflict_that_stops_ordinary_operations() {
     let before = left.record_files();
     let rejected = failure(left.run(&["start", "t-item"]));
     assert!(rejected.contains("conflicted"), "{rejected}");
-    failure(left.run(&["capture", "--title", "blocked"]));
+    failure(left.run(&["capture", "--label", "chore", "--title", "blocked"]));
     assert_eq!(left.record_files(), before);
     left.ok(&["note", "add", "t-item", "-m", "still allowed"]);
     // Parallel writers of the same Entity both succeed: each adds its own record file.
@@ -641,7 +660,7 @@ fn unsupported_corrupt_and_earlier_format_stores_are_rejected_without_changes() 
             "wrong-format" => {
                 fs::write(
                     f.header(),
-                    "{\"format\":\"axon-records/v2\",\"store\":\"store-1\",\"prefix\":\"t\"}\n",
+                    "{\"format\":\"axon-records/v3\",\"store\":\"store-1\",\"prefix\":\"t\"}\n",
                 )
                 .unwrap();
                 f.header()
@@ -711,7 +730,9 @@ fn broken_pipe_is_success_after_storage_is_applied() {
     f.init();
     let mut child = f
         .command()
-        .args(["capture", "--accept", "--title", "retained"])
+        .args([
+            "capture", "--label", "chore", "--accept", "--title", "retained",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -735,7 +756,14 @@ fn git_repository_paths_keep_trailing_whitespace() {
     }
     success(
         command(&spaced)
-            .args(["capture", "--accept", "--title", "only in spaced"])
+            .args([
+                "capture",
+                "--label",
+                "chore",
+                "--accept",
+                "--title",
+                "only in spaced",
+            ])
             .output()
             .unwrap(),
     );
@@ -762,7 +790,14 @@ fn broken_git_marker_blocks_ancestor_storage_fallback() {
     for args in [
         vec!["list"],
         vec!["init"],
-        vec!["capture", "--accept", "--title", "must not reach outer"],
+        vec![
+            "capture",
+            "--label",
+            "chore",
+            "--accept",
+            "--title",
+            "must not reach outer",
+        ],
     ] {
         assert!(
             failure(command(&nested).args(args).output().unwrap()).contains("Git discovery failed")
@@ -799,7 +834,14 @@ fn git_cannot_skip_a_broken_inner_marker_to_an_outer_repository() {
     for args in [
         vec!["list"],
         vec!["init"],
-        vec!["capture", "--accept", "--title", "wrong store"],
+        vec![
+            "capture",
+            "--label",
+            "chore",
+            "--accept",
+            "--title",
+            "wrong store",
+        ],
     ] {
         assert!(
             failure(command(&nested).args(args).output().unwrap()).contains("Git discovery failed")
@@ -820,7 +862,14 @@ fn bare_repository_is_a_boundary_without_a_dot_git_entry() {
         for args in [
             vec!["list"],
             vec!["init"],
-            vec!["capture", "--accept", "--title", "wrong store"],
+            vec![
+                "capture",
+                "--label",
+                "chore",
+                "--accept",
+                "--title",
+                "wrong store",
+            ],
         ] {
             assert!(
                 failure(command(&cwd).args(args).output().unwrap())
@@ -845,7 +894,14 @@ fn inherited_git_overrides_do_not_select_a_foreign_store() {
         .env("GIT_DIR", repo.join(".git"))
         .env("GIT_WORK_TREE", &repo)
         .env("GIT_COMMON_DIR", repo.join(".git"))
-        .args(["capture", "--accept", "--title", "wrong store"])
+        .args([
+            "capture",
+            "--label",
+            "chore",
+            "--accept",
+            "--title",
+            "wrong store",
+        ])
         .output()
         .unwrap();
     assert!(failure(out).contains("not initialized"));
@@ -874,22 +930,31 @@ fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation
     f.init();
     let root = new_entity(
         &f,
-        &["capture", "--kind", "group", "--accept", "--title", "root"],
+        &[
+            "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "root",
+        ],
     );
     let nested = new_entity(
         &f,
         &[
-            "capture", "--kind", "group", "--accept", "--title", "nested", "--parent", &root,
+            "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "nested",
+            "--parent", &root,
         ],
     );
     let dep = f.accepted("dependency");
     let child = new_entity(
         &f,
         &[
-            "capture", "--accept", "--title", "child", "--parent", &nested, "--needs", &dep,
+            "capture", "--label", "chore", "--accept", "--title", "child", "--parent", &nested,
+            "--needs", &dep,
         ],
     );
-    let draft = new_entity(&f, &["capture", "--title", "draft", "--parent", &nested]);
+    let draft = new_entity(
+        &f,
+        &[
+            "capture", "--label", "chore", "--title", "draft", "--parent", &nested,
+        ],
+    );
     set_condition(&f, &root, "echo root >> observations; test -f open");
     set_condition(&f, &nested, "echo nested >> observations");
     set_condition(&f, &child, "echo child >> observations");
@@ -945,7 +1010,7 @@ fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation
     assert!(
         rows.lines()
             .filter(|s| s.starts_with(&root) || s.starts_with(&nested))
-            .all(|s| s.contains("Group  InProgress  "))
+            .all(|s| s.contains("Group  InProgress  chore  "))
     );
     assert_eq!(
         fs::read_to_string(f.0.join("observations")).unwrap(),
@@ -967,12 +1032,12 @@ proptest! {
     ) {
         let f = Fixture::new();
         f.init();
-        let root = new_entity(&f, &["capture", "--kind", "group", "--accept", "--title", "root"]);
+        let root = new_entity(&f, &["capture", "--label", "chore", "--kind", "group", "--accept", "--title", "root"]);
         set_condition(&f, &root, "echo root >> observations; test -f open");
         let gate = (children > 0).then(|| f.accepted("gate"));
         for index in 0..children {
             let title = format!("child-{index}");
-            let mut args = vec!["capture", "--accept", "--title", title.as_str(), "--parent", root.as_str()];
+            let mut args = vec!["capture", "--label", "chore", "--accept", "--title", title.as_str(), "--parent", root.as_str()];
             if index == 0 { args.extend(["--needs", gate.as_ref().unwrap().as_str()]); }
             let child = new_entity(&f, &args);
             set_condition(&f, &child, &format!("echo {title} >> observations"));
@@ -1013,10 +1078,10 @@ proptest! {
     ) {
         let f = Fixture::new();
         f.init();
-        let root = new_entity(&f, &["capture", "--kind", "group", "--accept", "--title", "root"]);
-        let nested = new_entity(&f, &["capture", "--kind", "group", "--accept", "--title", "nested", "--parent", &root]);
-        let deep = new_entity(&f, &["capture", "--kind", "group", "--title", "deep", "--parent", &nested]);
-        let other = new_entity(&f, &["capture", "--kind", "group", "--title", "other"]);
+        let root = new_entity(&f, &["capture", "--label", "chore", "--kind", "group", "--accept", "--title", "root"]);
+        let nested = new_entity(&f, &["capture", "--label", "chore", "--kind", "group", "--accept", "--title", "nested", "--parent", &root]);
+        let deep = new_entity(&f, &["capture", "--label", "chore", "--kind", "group", "--title", "deep", "--parent", &nested]);
+        let other = new_entity(&f, &["capture", "--label", "chore", "--kind", "group", "--title", "other"]);
         let mut nodes = vec![
             (root.clone(), None, false),
             (nested.clone(), Some(0), false),
@@ -1033,7 +1098,7 @@ proptest! {
             (format!("extra-{index}"), if *nested { 2 } else { 3 }, *undecided)
         }));
         for (title, parent, undecided) in children {
-            let mut args = vec!["capture", "--title", title.as_str(), "--parent", nodes[parent].0.as_str()];
+            let mut args = vec!["capture", "--label", "chore", "--title", title.as_str(), "--parent", nodes[parent].0.as_str()];
             if !undecided { args.push("--accept"); }
             let id = new_entity(&f, &args);
             nodes.push((id, Some(parent), undecided));
@@ -1137,9 +1202,16 @@ fn conditions_preserve_saved_state_and_explicit_operations_never_evaluate() {
     f.init();
     let root = new_entity(
         &f,
-        &["capture", "--kind", "group", "--accept", "--title", "root"],
+        &[
+            "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "root",
+        ],
     );
-    let id = new_entity(&f, &["capture", "--title", "item", "--parent", &root]);
+    let id = new_entity(
+        &f,
+        &[
+            "capture", "--label", "chore", "--title", "item", "--parent", &root,
+        ],
+    );
     let script = "echo executed >> forbidden; exit 23";
     set_condition(&f, &root, script);
     set_condition(&f, &id, script);
@@ -1641,7 +1713,14 @@ fn recorder_is_automatic_durable_optional_and_not_an_operation_guard() {
     let created = success(
         without_recorder(&mut f.command())
             .env("CODEX_THREAD_ID", "original-session")
-            .args(["capture", "--accept", "--title", "provenance"])
+            .args([
+                "capture",
+                "--label",
+                "chore",
+                "--accept",
+                "--title",
+                "provenance",
+            ])
             .output()
             .unwrap(),
     );
@@ -1702,7 +1781,7 @@ fn non_utf8_recorder_environment_does_not_block_writes() {
         without_recorder(&mut f.command())
             .env("AXON_ACTOR", &invalid)
             .env("CODEX_THREAD_ID", &invalid)
-            .args(["capture", "--title", "unknown recorder"])
+            .args(["capture", "--label", "chore", "--title", "unknown recorder"])
             .output()
             .unwrap(),
     );
@@ -1741,7 +1820,14 @@ fn claude_code_session_is_recorded_when_available() {
     let created = success(
         claude(&f)
             .env("CLAUDE_CODE_SESSION_ID", "claude-session")
-            .args(["capture", "--accept", "--title", "claude provenance"])
+            .args([
+                "capture",
+                "--label",
+                "chore",
+                "--accept",
+                "--title",
+                "claude provenance",
+            ])
             .output()
             .unwrap(),
     );
@@ -1825,3 +1911,6 @@ mod contracts;
 
 #[path = "lifecycle/declaration.rs"]
 mod declaration;
+
+#[path = "lifecycle/label_conversion.rs"]
+mod label_conversion;

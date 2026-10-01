@@ -138,6 +138,7 @@ mod tests {
                     owner: None,
                     title: "original".into(),
                     description: String::new(),
+                    label: axon::lifecycle::Label::Chore,
                     condition: None,
                     parent: None,
                     needs: BTreeSet::new(),

@@ -27,14 +27,16 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
     let f = Fixture::new();
     f.init();
     let group = f
-        .ok(&["capture", "--kind", "group", "--accept", "--title", "group"])
+        .ok(&[
+            "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "group",
+        ])
         .split_whitespace()
         .next()
         .unwrap()
         .to_string();
     let issue = f
         .ok(&[
-            "capture", "--accept", "--title", "child", "--parent", &group,
+            "capture", "--label", "chore", "--accept", "--title", "child", "--parent", &group,
         ])
         .split_whitespace()
         .next()
@@ -97,7 +99,9 @@ fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() 
     f.init();
     let id = f.accepted("job");
     let group = f
-        .ok(&["capture", "--kind", "group", "--accept", "--title", "G"])
+        .ok(&[
+            "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "G",
+        ])
         .split_whitespace()
         .next()
         .unwrap()
@@ -154,7 +158,7 @@ fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() 
             vec!["show", &id],
             vec!["start", &id],
             vec!["note", "add", &id, "-m", "rejected"],
-            vec!["capture", "--title", "rejected"],
+            vec!["capture", "--label", "chore", "--title", "rejected"],
         ] {
             let error = failure(f.run(&args));
             assert!(error.contains("corrupt"), "{label} {args:?}: {error}");
@@ -272,7 +276,7 @@ fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() 
     assert!(failure(f.run(&["list"])).contains("corrupt"));
     fs::remove_file(&forged_path).unwrap();
     assert!(f.ok(&["list"]).contains(&group));
-    assert!(f.ok(&["show", &id]).contains("Issue  Ready  job"));
+    assert!(f.ok(&["show", &id]).contains("Issue  Ready  chore  job"));
 }
 
 proptest! {
@@ -332,7 +336,7 @@ proptest! {
         }
         prop_assert!(!check.contains("Conflicted:") && !check.contains("Violation:"));
         prop_assert!(failure(f.run(&["list"])).contains("corrupt"));
-        prop_assert!(failure(f.run(&["capture", "--title", "rejected"])).contains("corrupt"));
+        prop_assert!(failure(f.run(&["capture", "--label", "chore", "--title", "rejected"])).contains("corrupt"));
         prop_assert_eq!(f.record_files(), before);
     }
 }
@@ -520,7 +524,7 @@ fn storage_check_reports_a_missing_or_unreadable_header_by_path() {
         ("missing", None),
         (
             "unknown-format",
-            Some("{\"format\":\"axon-records/v2\",\"store\":\"store-1\",\"prefix\":\"t\"}\n"),
+            Some("{\"format\":\"axon-records/v3\",\"store\":\"store-1\",\"prefix\":\"t\"}\n"),
         ),
         ("corrupt", Some("not a header\n")),
     ] {
@@ -541,6 +545,41 @@ fn storage_check_reports_a_missing_or_unreadable_header_by_path() {
             assert!(!error.contains("consistent"), "{kind}: {error}");
         }
     }
+}
+
+#[test]
+fn a_store_in_the_format_before_labels_needs_conversion_and_its_records_are_not_read() {
+    let f = Fixture::new();
+    f.init();
+    f.accepted("kept");
+    let header = fs::read_to_string(f.header()).unwrap();
+    fs::write(
+        f.header(),
+        header.replacen("axon-records/v2", "axon-records/v1", 1),
+    )
+    .unwrap();
+    // Damage under the records is not looked at: the format alone decides.
+    fs::create_dir(f.records_dir().join("foo")).unwrap();
+    let before = f.record_files();
+    for args in [
+        vec!["storage", "check"],
+        vec!["storage", "check", f.0.to_str().unwrap()],
+        vec!["list"],
+        vec!["capture", "--label", "chore", "--title", "new"],
+    ] {
+        let error = failure(f.run(&args));
+        assert!(
+            error.contains("header.json")
+                && error.contains("needs conversion")
+                && error.contains("axon-records/v1")
+                && error.contains("axon-records/v2")
+                && error.contains("docs/guide/storage.md"),
+            "{args:?}: {error}"
+        );
+        assert!(!error.contains("corrupt"), "{args:?}: {error}");
+        assert!(!error.contains("foo"), "{args:?}: {error}");
+    }
+    assert_eq!(f.record_files(), before);
 }
 
 #[test]
@@ -569,7 +608,7 @@ fn storage_check_reports_conflicts_violations_and_gaps_by_severity() {
     assert!(error.contains("1 problems"), "{error}");
     assert!(
         error.contains(&format!(
-            "Conflicted: {id}  Issue  Conflicted  contested  2 heads"
+            "Conflicted: {id}  Issue  Conflicted  chore  contested  2 heads"
         )),
         "{error}"
     );
@@ -583,19 +622,25 @@ fn storage_check_reports_conflicts_violations_and_gaps_by_severity() {
     let f = Fixture::new();
     f.init();
     let a = f
-        .ok(&["capture", "--kind", "group", "--accept", "--title", "A"])
+        .ok(&[
+            "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "A",
+        ])
         .split_whitespace()
         .next()
         .unwrap()
         .to_string();
     let b = f
-        .ok(&["capture", "--kind", "group", "--accept", "--title", "B"])
+        .ok(&[
+            "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "B",
+        ])
         .split_whitespace()
         .next()
         .unwrap()
         .to_string();
     let leaf = f
-        .ok(&["capture", "--accept", "--title", "Leaf", "--parent", &b])
+        .ok(&[
+            "capture", "--label", "chore", "--accept", "--title", "Leaf", "--parent", &b,
+        ])
         .split_whitespace()
         .next()
         .unwrap()
@@ -725,7 +770,7 @@ fn storage_check_reports_conflicts_violations_and_gaps_by_severity() {
         "{report}"
     );
     // The Entity keeps its current value and its history reads with the gap marked.
-    assert!(f.ok(&["show", &id]).contains("Issue  Ready  gapped"));
+    assert!(f.ok(&["show", &id]).contains("Issue  Ready  chore  gapped"));
     let log = f.ok(&["log", &id]);
     assert!(log.contains("parent missing"), "{log}");
     assert!(log.contains("unknown → InProgress"), "{log}");
@@ -868,14 +913,16 @@ fn concurrent_work_on_one_issue_merges_in_git_and_reads_as_a_conflict() {
     f.init();
     let group = f
         .ok(&[
-            "capture", "--kind", "group", "--accept", "--title", "delivery",
+            "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "delivery",
         ])
         .split_whitespace()
         .next()
         .unwrap()
         .to_string();
     let id = f
-        .ok(&["capture", "--accept", "--title", "job", "--parent", &group])
+        .ok(&[
+            "capture", "--label", "chore", "--accept", "--title", "job", "--parent", &group,
+        ])
         .split_whitespace()
         .next()
         .unwrap()
@@ -914,7 +961,7 @@ fn concurrent_work_on_one_issue_merges_in_git_and_reads_as_a_conflict() {
     let error = failure(a.run(&["storage", "check"]));
     assert!(error.contains(&format!("Conflicted: {id}")), "{error}");
     let show = a.ok(&["show", &id]);
-    assert!(show.contains("Issue  Conflicted  job"), "{show}");
+    assert!(show.contains("Issue  Conflicted  chore  job"), "{show}");
     assert!(!show.contains("parent missing"), "{show}");
     let log = a.ok(&["log", &id]);
     assert!(log.contains("InProgress → Completed"));
@@ -927,7 +974,7 @@ fn concurrent_work_on_one_issue_merges_in_git_and_reads_as_a_conflict() {
     // Note is refused until the conflict is resolved.
     let group_show = a.ok(&["show", &group]);
     assert!(
-        group_show.contains("Group  Empty  delivery"),
+        group_show.contains("Group  Empty  chore  delivery"),
         "{group_show}"
     );
     failure(a.run(&["start", &id]));
@@ -937,7 +984,7 @@ fn concurrent_work_on_one_issue_merges_in_git_and_reads_as_a_conflict() {
     // Taking the Completed head settles the Issue at that value; the Group reads its child
     // again, both branches' Notes stay, and ordinary operations resume.
     let listing = a.ok(&["resolve", &id]);
-    let completed = head_line(&listing, "Complete  Completed  Issue  job")
+    let completed = head_line(&listing, "Complete  Completed  Issue  chore  job")
         .split("  ")
         .next()
         .unwrap()
@@ -954,10 +1001,13 @@ fn concurrent_work_on_one_issue_merges_in_git_and_reads_as_a_conflict() {
         format!("{id}  Resolved: {completed}  Completed\n")
     );
     consistent(&a);
-    assert!(a.ok(&["show", &id]).contains("Issue  Completed  job"));
+    assert!(
+        a.ok(&["show", &id])
+            .contains("Issue  Completed  chore  job")
+    );
     let group_show = a.ok(&["show", &group]);
     assert!(
-        group_show.contains("Group  Confirmable  delivery")
+        group_show.contains("Group  Confirmable  chore  delivery")
             && group_show.contains("1/1 terminal (1 completed, 0 cancelled)"),
         "{group_show}"
     );
@@ -1101,7 +1151,7 @@ fn rebase_keeps_records_of_different_issues_and_the_same_issue_reads_as_a_confli
     for (id, title) in [(&x, "x"), (&y, "y")] {
         assert!(
             error.contains(&format!(
-                "Conflicted: {id}  Issue  Conflicted  {title}  2 heads"
+                "Conflicted: {id}  Issue  Conflicted  chore  {title}  2 heads"
             )),
             "{error}"
         );
@@ -1114,13 +1164,13 @@ fn rebase_keeps_records_of_different_issues_and_the_same_issue_reads_as_a_confli
     assert_eq!(blocks.len(), 2, "{listing}");
     for (block, (id, title)) in blocks.iter().zip([(&x, "x"), (&y, "y")]) {
         assert!(
-            block.starts_with(&format!("{id}  Issue  Conflicted  {title}\n")),
+            block.starts_with(&format!("{id}  Issue  Conflicted  chore  {title}\n")),
             "{listing}"
         );
         assert_eq!(listed_heads(block).len(), 2, "{listing}");
         assert_eq!(
             block
-                .matches(&format!("Start  InProgress  Issue  {title}"))
+                .matches(&format!("Start  InProgress  Issue  chore  {title}"))
                 .count(),
             2,
             "{listing}"
@@ -1162,7 +1212,8 @@ fn rebase_keeps_records_of_different_issues_and_the_same_issue_reads_as_a_confli
     // resolved as well.
     let remaining = c.ok(&["resolve"]);
     assert!(
-        remaining.starts_with(&format!("{y}  Issue  Conflicted  y\n")) && !remaining.contains(&x),
+        remaining.starts_with(&format!("{y}  Issue  Conflicted  chore  y\n"))
+            && !remaining.contains(&x),
         "{remaining}"
     );
     let error = failure(c.run(&["release", &x]));
@@ -1170,11 +1221,11 @@ fn rebase_keeps_records_of_different_issues_and_the_same_issue_reads_as_a_confli
     let y_head = listed_heads(&remaining).remove(0);
     c.ok(&["resolve", &y, "--head", &y_head]);
     consistent(&c);
-    assert!(c.ok(&["show", &x]).contains("Issue  InProgress  x"));
+    assert!(c.ok(&["show", &x]).contains("Issue  InProgress  chore  x"));
     let log = c.ok(&["log", &x]);
     assert!(
         log.contains(&format!(
-            "Resolved: {}  InProgress  Issue  Reason: keep this side",
+            "Resolved: {}  InProgress  Issue  chore  Reason: keep this side",
             heads[0]
         )),
         "{log}"
@@ -1210,7 +1261,7 @@ fn cherry_pick_of_a_later_commit_reports_a_gap_and_a_false_conflict_until_the_re
     );
     assert!(unmerged_paths(&f.0).is_empty());
     consistent(&f);
-    assert!(f.ok(&["show", &y]).contains("Issue  InProgress  y"));
+    assert!(f.ok(&["show", &y]).contains("Issue  InProgress  chore  y"));
     // Picking the release without the start it continues brings one record file whose parent
     // is missing: it stands beside the registration as a head.
     let pick = git_integration(&f.0, &["cherry-pick", &release]);
@@ -1227,7 +1278,10 @@ fn cherry_pick_of_a_later_commit_reports_a_gap_and_a_false_conflict_until_the_re
     );
     let listing = f.ok(&["resolve", &x]);
     let newer = head_line(&listing, "parent missing; likely newer");
-    assert!(newer.contains("Release  NotStarted  Issue  x"), "{newer}");
+    assert!(
+        newer.contains("Release  NotStarted  Issue  chore  x"),
+        "{newer}"
+    );
     assert!(
         !head_line(&listing, "created").contains("parent missing"),
         "{listing}"
@@ -1246,7 +1300,7 @@ fn cherry_pick_of_a_later_commit_reports_a_gap_and_a_false_conflict_until_the_re
         "{report}"
     );
     assert!(!report.contains("Conflicted"), "{report}");
-    assert!(f.ok(&["show", &x]).contains("Issue  Ready  x"));
+    assert!(f.ok(&["show", &x]).contains("Issue  Ready  chore  x"));
     commit_store(&f.0, "resolve");
     // The missing record arrives: the value does not change and the gap closes.
     let pick = git_integration(&f.0, &["cherry-pick", &start]);
@@ -1256,7 +1310,7 @@ fn cherry_pick_of_a_later_commit_reports_a_gap_and_a_false_conflict_until_the_re
         String::from_utf8_lossy(&pick.stderr)
     );
     consistent(&f);
-    assert!(f.ok(&["show", &x]).contains("Issue  Ready  x"));
+    assert!(f.ok(&["show", &x]).contains("Issue  Ready  chore  x"));
     assert!(!f.ok(&["log", &x]).contains("parent missing"));
 }
 
@@ -1286,13 +1340,16 @@ fn cherry_pick_of_several_records_of_one_entity_marks_the_head_above_the_gap_as_
     let listing = f.ok(&["resolve", &x]);
     assert_eq!(listed_heads(&listing).len(), 2, "{listing}");
     let newer = head_line(&listing, "parent missing; likely newer");
-    assert!(newer.contains("Start  InProgress  Issue  x"), "{newer}");
+    assert!(
+        newer.contains("Start  InProgress  Issue  chore  x"),
+        "{newer}"
+    );
     assert!(
         !head_line(&listing, "created").contains("parent missing"),
         "{listing}"
     );
     let show = f.ok(&["show", &x]);
-    assert!(show.contains("Issue  Conflicted  x"), "{show}");
+    assert!(show.contains("Issue  Conflicted  chore  x"), "{show}");
     assert!(
         head_line(&show, "parent missing; likely newer").contains("Start  InProgress"),
         "{show}"
@@ -1309,7 +1366,7 @@ fn cherry_pick_of_several_records_of_one_entity_marks_the_head_above_the_gap_as_
         "{report}"
     );
     assert!(!report.contains("Conflicted"), "{report}");
-    assert!(f.ok(&["show", &x]).contains("Issue  InProgress  x"));
+    assert!(f.ok(&["show", &x]).contains("Issue  InProgress  chore  x"));
     commit_store(&f.0, "resolve");
     // A real conflict above the gap: both heads reach the creation through the resolve, so
     // neither is marked.
@@ -1328,7 +1385,7 @@ fn cherry_pick_of_several_records_of_one_entity_marks_the_head_above_the_gap_as_
     assert_eq!(listed_heads(&listing).len(), 2, "{listing}");
     assert!(!listing.contains("parent missing"), "{listing}");
     let show = f.ok(&["show", &x]);
-    assert!(show.contains("Issue  Conflicted  x"), "{show}");
+    assert!(show.contains("Issue  Conflicted  chore  x"), "{show}");
     assert!(!show.contains("parent missing"), "{show}");
 }
 
@@ -1363,7 +1420,7 @@ fn revert_of_a_continued_commit_reports_a_gap_and_of_an_uncontinued_commit_nothi
         "{error}"
     );
     let show = f.ok(&["show", &x]);
-    assert!(show.contains("Issue  Conflicted  x"), "{show}");
+    assert!(show.contains("Issue  Conflicted  chore  x"), "{show}");
     assert!(show.contains("parent missing; likely newer"), "{show}");
     let listing = f.ok(&["resolve", &x]);
     let newer = head_line(&listing, "likely newer")
@@ -1391,7 +1448,7 @@ fn revert_of_a_continued_commit_reports_a_gap_and_of_an_uncontinued_commit_nothi
     );
     commit_store(&f.0, "restore");
     consistent(&f);
-    assert!(f.ok(&["show", &x]).contains("Issue  Ready  x"));
+    assert!(f.ok(&["show", &x]).contains("Issue  Ready  chore  x"));
     // A commit whose record nothing continues reverts without any report; the state is
     // simply the one before it.
     f.ok(&["start", &x]);
@@ -1404,7 +1461,7 @@ fn revert_of_a_continued_commit_reports_a_gap_and_of_an_uncontinued_commit_nothi
         String::from_utf8_lossy(&revert.stderr)
     );
     consistent(&f);
-    assert!(f.ok(&["show", &x]).contains("Issue  Ready  x"));
+    assert!(f.ok(&["show", &x]).contains("Issue  Ready  chore  x"));
     assert!(!f.ok(&["log", &x]).contains("parent missing"));
 }
 
@@ -1433,7 +1490,7 @@ fn squash_merge_adds_the_records_of_a_branch_without_a_report() {
     for (id, title) in [(&x, "x"), (&y, "y")] {
         assert!(
             f.ok(&["show", id])
-                .contains(&format!("Issue  InProgress  {title}"))
+                .contains(&format!("Issue  InProgress  chore  {title}"))
         );
     }
     assert!(f.ok(&["note", "list", &x]).contains("evidence"));
@@ -1446,7 +1503,9 @@ fn a_child_registered_beside_a_completed_group_is_a_violation_that_reopen_repair
     git(&f.0, &["init", "-q"]);
     f.init();
     let group = f
-        .ok(&["capture", "--kind", "group", "--accept", "--title", "plan"])
+        .ok(&[
+            "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "plan",
+        ])
         .split_whitespace()
         .next()
         .unwrap()
@@ -1458,7 +1517,7 @@ fn a_child_registered_beside_a_completed_group_is_a_violation_that_reopen_repair
     commit_store(&a.0, "complete");
     let child = b
         .ok(&[
-            "capture", "--accept", "--title", "child", "--parent", &group,
+            "capture", "--label", "chore", "--accept", "--title", "child", "--parent", &group,
         ])
         .split_whitespace()
         .next()
@@ -1489,8 +1548,14 @@ fn a_child_registered_beside_a_completed_group_is_a_violation_that_reopen_repair
     // Reopening the Group is the ordinary operation that removes the violation.
     a.ok(&["reopen", &group]);
     consistent(&a);
-    assert!(a.ok(&["show", &child]).contains("Issue  Ready  child"));
-    assert!(a.ok(&["show", &group]).contains("Group  Ready  plan"));
+    assert!(
+        a.ok(&["show", &child])
+            .contains("Issue  Ready  chore  child")
+    );
+    assert!(
+        a.ok(&["show", &group])
+            .contains("Group  Ready  chore  plan")
+    );
 }
 
 #[test]
@@ -1499,7 +1564,7 @@ fn work_left_below_a_completed_group_names_it_as_unadopted_and_not_as_unsurfaced
     git(&f.0, &["init", "-q"]);
     f.init();
     let capture = |f: &Fixture, args: &[&str]| -> String {
-        f.ok(&[&["capture", "--accept"], args].concat())
+        f.ok(&[&["capture", "--label", "chore", "--accept"], args].concat())
             .split_whitespace()
             .next()
             .unwrap()
@@ -1527,7 +1592,7 @@ fn work_left_below_a_completed_group_names_it_as_unadopted_and_not_as_unsurfaced
     let show = a.ok(&["show", &plan]);
     assert!(
         show.contains(&format!(
-            "Stalled\nAncestor must be adopted: {done}  Group  Completed  done\n"
+            "Stalled\nAncestor must be adopted: {done}  Group  Completed  chore  done\n"
         )),
         "{show}"
     );
@@ -1537,12 +1602,12 @@ fn work_left_below_a_completed_group_names_it_as_unadopted_and_not_as_unsurfaced
     // reason instead of as an unsurfaced ancestor.
     let show = a.ok(&["show", &work]);
     assert!(
-        show.starts_with(&format!("{work}  Issue  Unsurfaced  work\n")),
+        show.starts_with(&format!("{work}  Issue  Unsurfaced  chore  work\n")),
         "{show}"
     );
     assert!(
         show.contains(&format!(
-            "Required to start\nAncestor must be adopted: {done}  Group  Completed  done\n"
+            "Required to start\nAncestor must be adopted: {done}  Group  Completed  chore  done\n"
         )),
         "{show}"
     );
@@ -1554,7 +1619,7 @@ fn an_issue_below_a_group_whose_parent_registration_is_missing_names_that_ancest
     let f = Fixture::new();
     f.init();
     let capture = |args: &[&str]| -> String {
-        f.ok(&[&["capture", "--accept"], args].concat())
+        f.ok(&[&["capture", "--label", "chore", "--accept"], args].concat())
             .split_whitespace()
             .next()
             .unwrap()
@@ -1569,7 +1634,7 @@ fn an_issue_below_a_group_whose_parent_registration_is_missing_names_that_ancest
     }
     let show = f.ok(&["show", &work]);
     assert!(
-        show.starts_with(&format!("{work}  Issue  Blocked  work\n")),
+        show.starts_with(&format!("{work}  Issue  Blocked  chore  work\n")),
         "{show}"
     );
     assert!(
@@ -1589,8 +1654,8 @@ fn an_issue_below_a_group_whose_parent_registration_is_missing_names_that_ancest
     assert!(!show.contains("Parent:"), "{show}");
     let tasks = f.ok(&["tasks"]);
     assert!(
-        tasks.contains(&format!("{plan}  Group  Blocked+Invalid  plan"))
-            && tasks.contains(&format!("{work}  Issue  Blocked  work")),
+        tasks.contains(&format!("{plan}  Group  Blocked+Invalid  chore  plan"))
+            && tasks.contains(&format!("{work}  Issue  Blocked  chore  work")),
         "{tasks}"
     );
 }
@@ -1601,7 +1666,9 @@ fn resolve_shows_the_violation_the_chosen_head_leaves_behind() {
     git(&f.0, &["init", "-q"]);
     f.init();
     let group = f
-        .ok(&["capture", "--kind", "group", "--accept", "--title", "plan"])
+        .ok(&[
+            "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "plan",
+        ])
         .split_whitespace()
         .next()
         .unwrap()
@@ -1634,7 +1701,7 @@ fn resolve_shows_the_violation_the_chosen_head_leaves_behind() {
     );
     let error = failure(a.run(&["storage", "check"]));
     assert!(
-        error.contains(&format!("Violation: {x}  Issue  Blocked+Invalid  x")),
+        error.contains(&format!("Violation: {x}  Issue  Blocked+Invalid  chore  x")),
         "{error}"
     );
     a.ok(&["reopen", &group]);
@@ -1808,7 +1875,7 @@ fn operations_outside_git_start_no_git_process() {
     );
     for args in [
         vec!["init", "t"],
-        vec!["capture", "--title", "written"],
+        vec!["capture", "--label", "chore", "--title", "written"],
         vec!["list"],
     ] {
         success(f.command().env("PATH", &path).args(args).output().unwrap());
@@ -1868,7 +1935,7 @@ fn git_worktree_operations_start_few_git_processes() {
             (vec!["proposals"], 1),
             (vec!["tasks"], 1),
             (vec!["show", &id], 1),
-            (vec!["capture", "--title", "written"], 2),
+            (vec!["capture", "--label", "chore", "--title", "written"], 2),
             (vec!["note", "add", &id, "-m", "evidence"], 2),
         ] {
             let observed = calls(worktree, &args);

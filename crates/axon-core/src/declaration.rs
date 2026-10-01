@@ -1,6 +1,6 @@
 //! Strict declaration YAML and canonical export over the current values a record set derives.
 use crate::lifecycle::record::{Current, Store, View};
-use crate::lifecycle::{EntityId, Kind, Lifecycle};
+use crate::lifecycle::{EntityId, Kind, Label, Lifecycle};
 use serde::{Deserialize, Deserializer};
 use std::collections::BTreeSet;
 use std::fmt::Write;
@@ -8,7 +8,9 @@ use std::fmt::Write;
 mod import;
 pub use import::Checked;
 
-pub const SCHEMA: &str = "axon-declaration/v1";
+pub const SCHEMA: &str = "axon-declaration/v2";
+/// The schema before labels; its records lack `label` and its bases do not match v2.
+const EARLIER_SCHEMA: &str = "axon-declaration/v1";
 #[derive(Debug, thiserror::Error)]
 #[error("Declaration: {0}")]
 pub struct Error(pub String);
@@ -68,6 +70,7 @@ pub struct Record {
     pub lifecycle: String,
     pub title: String,
     pub description: String,
+    pub label: String,
     #[serde(deserialize_with = "nullable")]
     pub parent: Option<Reference>,
     #[serde(deserialize_with = "sequence")]
@@ -157,6 +160,13 @@ pub fn parse(input: &str) -> Result<Declaration> {
     }
     let probe: SchemaProbe = serde_saphyr::from_str_with_options(input, options.clone())
         .map_err(|e| invalid(format!("schema: {e}")))?;
+    if probe.schema == EARLIER_SCHEMA {
+        return Err(invalid(format!(
+            "schema: {EARLIER_SCHEMA} is not supported; records now require a label and \
+             fingerprints changed, so run axon export again to get {SCHEMA} (for records not \
+             yet in storage, add a label to each and declare {SCHEMA})"
+        )));
+    }
     if probe.schema != SCHEMA {
         return Err(invalid(format!(
             "schema: unsupported schema {}; expected {SCHEMA}",
@@ -181,6 +191,15 @@ impl Declaration {
         self.groups.iter().chain(&self.issues)
     }
     pub fn validate(&self) -> Result<()> {
+        for record in self.records() {
+            if let Err(e) = Label::from_name(&record.label) {
+                let name = record.id.as_deref().or(record.key.as_deref());
+                return Err(invalid(format!(
+                    "schema: {}: label: {e}",
+                    name.unwrap_or("unassigned")
+                )));
+            }
+        }
         self.validate_local()
             .map_err(|e| invalid(format!("identity/reference: {}", e.0)))
     }
@@ -355,6 +374,7 @@ impl Declaration {
                 writeln!(out, "    lifecycle: {}", r.lifecycle).unwrap();
                 field(&mut out, "title", &r.title, 4);
                 field(&mut out, "description", &r.description, 4);
+                writeln!(out, "    label: {}", r.label).unwrap();
                 writeln!(
                     out,
                     "    parent: {}",
@@ -597,6 +617,7 @@ pub fn fingerprint(id: &EntityId, c: &Current) -> String {
         lifecycle(c.lifecycle),
         &c.title,
         &c.description,
+        c.label.name(),
     ] {
         token(&mut hash, s);
     }
@@ -679,6 +700,7 @@ pub fn export(store: &Store, view: &View, selectors: &[EntityId]) -> Result<Decl
             lifecycle: lifecycle(c.lifecycle).into(),
             title: c.title.clone(),
             description: c.description.clone(),
+            label: c.label.name().into(),
             parent: c.parent.as_ref().map(|id| Reference::id(id.to_string())),
             needs: c
                 .needs
@@ -713,6 +735,7 @@ pub fn example() -> Declaration {
         lifecycle: "not-started".into(),
         title: title.into(),
         description: String::new(),
+        label: Label::Feat.name().into(),
         parent,
         needs,
     };

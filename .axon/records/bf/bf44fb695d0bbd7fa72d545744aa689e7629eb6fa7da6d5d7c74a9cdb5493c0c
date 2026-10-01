@@ -1,0 +1,1 @@
+{"entity":"axon-6y6w3s","record":"created","parents":[],"at":"2026-08-31T12:49:27.154817Z","recorder":{"actor":"codex","data":{}},"reason":null,"after":{"kind":"issue","lifecycle":"not-started","owner":null,"title":"DB との境界 (from_db / apply) を検査する","description":"","label":"chore","condition":null,"parent":null,"needs":["axon-nd3bds"]}}

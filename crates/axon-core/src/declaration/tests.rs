@@ -24,6 +24,7 @@ fn current(kind: Kind, title: &str) -> Current {
         owner: None,
         title: title.into(),
         description: String::new(),
+        label: crate::lifecycle::Label::Chore,
         condition: None,
         parent: None,
         needs: BTreeSet::new(),
@@ -259,12 +260,12 @@ fn strict_yaml_rejects_unsupported_constructs_and_wrong_types() {
     let text = example().serialize(&empty_view()).unwrap();
     let invalid = [
         text.replace(
-            "schema: axon-declaration/v1",
-            "schema: axon-declaration/v1\nunknown: true",
+            "schema: axon-declaration/v2",
+            "schema: axon-declaration/v2\nunknown: true",
         ),
         text.replace(
-            "schema: axon-declaration/v1",
-            "schema: axon-declaration/v1\nschema: axon-declaration/v1",
+            "schema: axon-declaration/v2",
+            "schema: axon-declaration/v2\nschema: axon-declaration/v2",
         ),
         text.replace("title: Deliver the plan", "title: &title Deliver the plan"),
         text.replace("title: Deliver the plan", "title: *title"),
@@ -303,6 +304,60 @@ fn strict_yaml_rejects_unsupported_constructs_and_wrong_types() {
             .to_string();
         assert!(e.contains(schema) && e.contains(SCHEMA), "{e}");
     }
+    // A v1 file, with or without labels, is not converted: its bases no longer match.
+    for v1 in [
+        text.replace("schema: axon-declaration/v2", "schema: axon-declaration/v1"),
+        text.replace("schema: axon-declaration/v2", "schema: axon-declaration/v1")
+            .replace("    label: feat\n", ""),
+    ] {
+        let e = parse(&v1).unwrap_err().to_string();
+        assert!(
+            e.contains("axon-declaration/v1")
+                && e.contains("axon export")
+                && e.contains(&format!("add a label to each and declare {SCHEMA}")),
+            "{e}"
+        );
+    }
+}
+#[test]
+fn label_is_required_and_limited_to_the_fixed_set() {
+    let text = example().serialize(&empty_view()).unwrap();
+    assert_eq!(text.matches("    label: feat\n").count(), 3);
+    let group = "    title: Deliver the plan\n    description: \"\"\n    label: feat\n";
+    assert!(text.contains(group), "{text}");
+    let with = |line: &str| {
+        text.replacen(
+            group,
+            &format!("    title: Deliver the plan\n    description: \"\"\n{line}"),
+            1,
+        )
+    };
+    let missing = with("");
+    assert!(parse(&missing).is_err(), "accepted {missing}");
+    for value in [
+        "null", "~", "\"\"", "Bug", "fix", "\" bug\"", "[]", "{}", "1", "bug feat",
+    ] {
+        let bad = with(&format!("    label: {value}\n"));
+        let e = parse(&bad).expect_err(&bad).to_string();
+        assert!(e.starts_with("Declaration: schema:"), "{value}: {e}");
+    }
+    let unknown = with("    label: fix\n");
+    let e = parse(&unknown).unwrap_err().to_string();
+    assert!(
+        e.contains("plan") && e.contains("label") && e.contains("spike"),
+        "{e}"
+    );
+    for label in crate::lifecycle::Label::ALL {
+        let mut d = example();
+        d.groups[0].label = label.name().into();
+        let yaml = d.serialize(&empty_view()).unwrap();
+        assert!(yaml.contains(&format!("    label: {}\n", label.name())));
+        assert_eq!(parse(&yaml).unwrap(), d);
+    }
+    // A declaration built in code is held to the same set.
+    let mut d = example();
+    d.issues[1].label = "fix".into();
+    assert!(d.serialize(&empty_view()).is_err());
 }
 #[test]
 fn canonical_order_uses_creation_then_ids_then_keys_and_resolved_needs() {
@@ -358,12 +413,13 @@ fn fingerprint_tokens_and_visible_field_changes() {
     let e = view.current(&id("demo-a")).unwrap().clone();
     let mut bytes = Vec::new();
     for token in [
-        SCHEMA,
+        "axon-declaration/v2",
         "issue",
         "demo-a",
         "not-started",
         "日本語",
         "",
+        "chore",
         "none",
     ] {
         bytes.extend((token.len() as u64).to_be_bytes());
@@ -372,7 +428,7 @@ fn fingerprint_tokens_and_visible_field_changes() {
     bytes.extend(0u64.to_be_bytes());
     let base = fingerprint(&id("demo-a"), &e);
     assert_eq!(base, format!("blake3:{}", blake3::hash(&bytes).to_hex()));
-    for change in 0..7 {
+    for change in 0..8 {
         let mut other = e.clone();
         let mut other_id = id("demo-a");
         match change {
@@ -384,6 +440,7 @@ fn fingerprint_tokens_and_visible_field_changes() {
                 other.needs.insert(id("needs"));
             }
             5 => other.kind = Kind::Group,
+            6 => other.label = crate::lifecycle::Label::Bug,
             _ => other_id = id("other"),
         }
         assert_ne!(base, fingerprint(&other_id, &other));
@@ -401,13 +458,13 @@ fn fingerprint_tokens_and_visible_field_changes() {
 fn declaration_doc_example_has_identical_canonical_bytes() {
     let doc = include_str!("../../../../docs/reference/declaration.md");
     let text = doc
-        .split("```yaml\nschema: axon-declaration/v1\n")
+        .split("```yaml\nschema: axon-declaration/v2\n")
         .nth(1)
         .unwrap()
         .split("```\n")
         .next()
         .unwrap();
-    let text = format!("schema: axon-declaration/v1\n{text}");
+    let text = format!("schema: axon-declaration/v2\n{text}");
     let d = parse(&text).unwrap();
     let mut f = Fixture::new();
     f.create("demo-k3m7pq", Kind::Group);
@@ -488,7 +545,7 @@ proptest! {
         let mut d = example();
         d.groups[0].title = title;
         let yaml = d.serialize(&empty_view()).unwrap();
-        for field in ["key", "lifecycle", "title", "description", "parent", "needs"] {
+        for field in ["key", "lifecycle", "title", "description", "label", "parent", "needs"] {
             let line = yaml.lines().find(|line| line.starts_with(&format!("    {field}:"))).unwrap();
             for damage in ["missing", "duplicate", "wrong-type"] {
                 let bad = match damage {
@@ -506,7 +563,7 @@ proptest! {
         title in "[a-zA-Z]{1,20}",
         description in declaration_text(),
     ) {
-        for selector in 0..7 {
+        for selector in 0..8 {
             let mut value = current(Kind::Issue, &title);
             value.description = description.clone();
             let entity = id("demo-a");
@@ -519,6 +576,7 @@ proptest! {
                 3 => value.parent = Some(id("parent")),
                 4 => { value.needs.insert(id("needs")); },
                 5 => value.kind = Kind::Group,
+                6 => value.label = crate::lifecycle::Label::Spike,
                 _ => other_id = id("other"),
             }
             prop_assert_ne!(base, fingerprint(&other_id, &value), "selector {}", selector);
@@ -659,6 +717,122 @@ fn prepared_plan_checks_retries_and_collisions_without_partial_matches() {
     assert_eq!(checked.records.len(), 2);
     f.apply(&retry);
     assert_eq!(f.view().known().count(), 6);
+}
+
+#[test]
+fn applying_a_declaration_keeps_the_label_of_an_existing_entity() {
+    let mut f = Fixture::new();
+    f.create("a", Kind::Issue);
+    let record = f
+        .store
+        .set_label(&id("a"), crate::lifecycle::Label::Bug, f.tick())
+        .unwrap()
+        .unwrap();
+    f.insert(record);
+    let mut d = export(&f.store, &f.view(), &[id("a")]).unwrap();
+    let input = d.serialize(&f.view()).unwrap();
+    let unchanged = d.check(&input, &f.store, f.tick()).unwrap();
+    assert!(unchanged.records.is_empty());
+    d.issues[0].title = "renamed".into();
+    let checked = f.apply(&d);
+    assert_eq!(checked.records.len(), 1);
+    assert_eq!(checked.records[0].kind, RecordKind::Import);
+    assert_eq!(checked.records[0].after.label, crate::lifecycle::Label::Bug);
+}
+
+#[test]
+fn an_edited_label_is_applied_as_one_import_record_and_a_new_entity_takes_its_label() {
+    use crate::lifecycle::Label;
+    let mut f = Fixture::new();
+    f.create("g", Kind::Group);
+    f.create("a", Kind::Issue);
+    f.set_parent("a", Some("g"));
+    let mut d = export(&f.store, &f.view(), &[id("g")]).unwrap();
+    assert!(d.records().all(|r| r.label == "chore"));
+    let before = d.clone();
+    // Only the label differs: the fingerprint still matches and the change is one record.
+    d.issues[0].label = "bug".into();
+    let input = d.serialize(&f.view()).unwrap();
+    assert_eq!(
+        input,
+        before.serialize(&f.view()).unwrap().replacen(
+            "label: chore\n    parent: { id: g }",
+            "label: bug\n    parent: { id: g }",
+            1
+        )
+    );
+    let checked = f.apply(&d);
+    assert_eq!(checked.records.len(), 1);
+    let record = &checked.records[0];
+    assert_eq!(
+        (
+            record.entity.clone(),
+            record.kind.clone(),
+            record.after.label
+        ),
+        (id("a"), RecordKind::Import, Label::Bug)
+    );
+    let mut stored = f.view().current(&id("a")).unwrap().clone();
+    assert_eq!(stored.label, Label::Bug);
+    stored.label = Label::Chore;
+    assert_eq!(
+        before.issues[0].base.as_deref(),
+        Some(fingerprint(&id("a"), &stored).as_str()),
+        "the base of the export is the value before the label changed"
+    );
+    // The applied file is fully applied; the pre-edit export now conflicts on the label.
+    let done = d.check(&input, &f.store, f.tick()).unwrap();
+    assert!(done.already_applied && done.records.is_empty());
+    let stale = before.serialize(&f.view()).unwrap();
+    let e = before
+        .check(&stale, &f.store, f.tick())
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("conflict: a"), "{e}");
+    // A label and a title change together are still one record, and a new Entity is created
+    // with its declared label.
+    let mut d = export(&f.store, &f.view(), &[id("g")]).unwrap();
+    d.groups[0].label = "spike".into();
+    d.groups[0].title = "renamed".into();
+    let mut new = example().issues.remove(0);
+    new.key = Some("added".into());
+    new.label = "docs".into();
+    new.parent = Some(Reference::id("g"));
+    d.issues.push(new);
+    d.prepare(&f.store, "demo").unwrap();
+    let checked = f.apply(&d);
+    assert_eq!(checked.records.len(), 2);
+    let created = checked
+        .records
+        .iter()
+        .find(|r| r.kind == RecordKind::Created)
+        .unwrap();
+    assert_eq!(created.after.label, Label::Docs);
+    let imported = checked
+        .records
+        .iter()
+        .find(|r| r.kind == RecordKind::Import)
+        .unwrap();
+    assert_eq!(
+        (
+            imported.entity.clone(),
+            imported.after.label,
+            imported.after.title.as_str()
+        ),
+        (id("g"), Label::Spike, "renamed")
+    );
+}
+
+#[test]
+fn a_terminal_entity_keeps_its_label() {
+    let mut f = Fixture::new();
+    f.create("a", Kind::Issue);
+    f.perform("a", Operation::Cancel);
+    let mut d = export(&f.store, &f.view(), &[id("a")]).unwrap();
+    d.issues[0].label = "bug".into();
+    let input = d.serialize(&f.view()).unwrap();
+    let e = d.check(&input, &f.store, f.tick()).unwrap_err().to_string();
+    assert!(e.contains("core rejection: a: label"), "{e}");
 }
 
 #[test]

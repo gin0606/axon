@@ -195,6 +195,34 @@ fn records_that_change_fields_outside_their_kind_are_corruption() {
         with(RecordKind::Import, &|c| c.lifecycle = Lifecycle::Cancelled)
             .contains("changes the lifecycle")
     );
+    // The label changes only through a label or import record.
+    for kind in [
+        RecordKind::Edit,
+        RecordKind::Parent,
+        RecordKind::Dependency,
+        RecordKind::Condition,
+    ] {
+        assert!(
+            with(kind.clone(), &|c| c.label = Label::Bug).contains("changes the label"),
+            "{kind:?}"
+        );
+    }
+    assert!(
+        with(RecordKind::Transition(Cancel), &|c| {
+            c.lifecycle = Lifecycle::Cancelled;
+            c.label = Label::Bug;
+        })
+        .contains("changes the label")
+    );
+    assert!(
+        with(RecordKind::Convert, &|c| {
+            c.kind = Kind::Group;
+            c.label = Label::Bug;
+        })
+        .contains("changes the label")
+    );
+    assert!(with(RecordKind::Label, &|c| c.title = "x".into()).contains("changes the text"));
+    assert!(with(RecordKind::Label, &|c| c.parent = Some(id("g0"))).contains("changes the parent"));
     // The changes a kind may make derive when built by hand too.
     let r = Replica::new("r0");
     let head = r.head("i3");
@@ -210,12 +238,24 @@ fn records_that_change_fields_outside_their_kind_are_corruption() {
         store.view().unwrap().current(&id("i3")).unwrap().title,
         "renamed"
     );
+    let mut label = r.store.record(&head).unwrap().clone();
+    label.kind = RecordKind::Label;
+    label.parents = BTreeSet::from([head.clone()]);
+    label.at = r.tick().at;
+    label.after.label = Label::Spike;
+    let mut store = r.store.clone();
+    insert(&mut store, label);
+    assert_eq!(
+        store.view().unwrap().current(&id("i3")).unwrap().label,
+        Label::Spike
+    );
     let mut import = r.store.record(&head).unwrap().clone();
     import.kind = RecordKind::Import;
     import.parents = BTreeSet::from([head]);
     import.at = r.tick().at;
     import.after.parent = Some(id("g0"));
     import.after.needs.insert(id("g2"));
+    import.after.label = Label::Refactor;
     let mut store = r.store.clone();
     insert(&mut store, import);
     assert!(store.view().unwrap().is_valid());

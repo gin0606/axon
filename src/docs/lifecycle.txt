@@ -37,10 +37,26 @@ that do not surface and the Group's own unsatisfied condition.
 parent set ID --parent G sets or moves the parent Group and parent unset ID
 removes it; neither changes lifecycle.
 
+Labels
+  Every Entity has exactly one label that classifies the kind of work. capture
+  requires --label, and label set ID VALUE changes it; there is no unset. The set
+  is fixed:
+    bug       fix behavior that differs from what is expected
+    feat      add new behavior or a feature
+    chore     maintenance that changes no behavior: dependencies, CI, settings
+    docs      documents, help or skills
+    test      add or reorganize tests
+    refactor  reorganize structure without changing behavior
+    spike     investigate in order to decide: open questions, specifications, plans
+  A Group's label is the main kind of its plan and is not derived from its
+  children. A label is not a priority: it changes no lifecycle rule, candidate
+  list or situation. Like the title and description, it is fixed once the Entity
+  is Completed or Cancelled. convert keeps the label.
+
 Daily workflow
-  axon capture --title 'Investigate a concern' -m 'Context and uncertainty'
-  axon capture --accept --title 'Deliver an adopted outcome' -F plan.md
-  axon capture --kind group --accept --title 'Deliver a plan' -F plan.md
+  axon capture --label spike --title 'Investigate a concern' -m 'Context and uncertainty'
+  axon capture --accept --label feat --title 'Deliver an adopted outcome' -F plan.md
+  axon capture --kind group --accept --label feat --title 'Deliver a plan' -F plan.md
   axon proposals
   axon tasks
   axon show ID
@@ -52,8 +68,10 @@ Reading and resurfacing
   proposals lists surfaced Undecided work. tasks lists surfaced NotStarted work and
   all InProgress work, including blocked work. Candidate conditions include every
   ancestor Group. Absence from these lists does not mean an Entity is missing.
-  list includes every saved Entity by default, in creation order. --kind,
-  --lifecycle, --terminal and --search narrow it without running conditions.
+  Each row is ID, kind, situation, label and title.
+  list includes every saved Entity by default, in creation order. --kind, --label,
+  --lifecycle, --terminal and --search narrow it without running conditions;
+  tasks and proposals take --kind, --label and --search. Filters combine with AND.
   list/tasks/proposals --search match only current title and description, not Notes.
   Use note search 'text' for information in Notes across all Entities, including
   Completed and Cancelled work, without running conditions. Matching is literal,
@@ -73,7 +91,7 @@ Reading and resurfacing
   show --details includes saved conditions and all direct relationships once.
   note list ID requires an Entity ID and reads full Notes in time order; note show
   ID NOTE_ID reads one Note. log reads the records of an Entity: state changes,
-  edits, relationship and condition changes, kind conversions (shown with the kind
+  edits, label, relationship and condition changes, kind conversions (shown with the kind
   before and after) and resolutions, preserving concurrent branches and marking
   records whose parent record is missing. --recorder-details includes optional
   stored recorder data; actor information is not ownership.
@@ -146,7 +164,7 @@ Storage and recovery
   revert: reverting a commit only removes record files, and later records that
   depend on them are left with a missing parent.
 
-Use axon help <COMMAND PATH> for exact arguments. Create with --title. A title is one line of
+Use axon help <COMMAND PATH> for exact arguments. Create with --title and --label. A title is one line of
 at most 200 characters and a --reason one line of at most 500; longer or multi-line text
 belongs in the description or a Note. Descriptions
 accept -m/--description or -F/--file (- reads stdin). Notes use

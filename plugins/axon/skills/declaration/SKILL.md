@@ -19,9 +19,9 @@ description: Axonの計画のdeclaration作成・レビュー・一括反映に�
 
 保存済みの対象・関係・必要なlogとNoteを確認し、kitの手順で取得・編集・`axon import prepare`・`axon import check`する。対象を広げる必要があれば、それが依頼のscope内か判断する。既存Entityは別fileへの`axon export`の再実行で追加し、元の編集意図を保持する。
 
-Groupから外すには対象recordの `parent: null`、依存を外すにはそのdependentの `needs` を編集する。編集集合の宣言は文面・親・outgoing dependencyの完全な最終値としてレビューする。
+Groupから外すには対象recordの `parent: null`、依存を外すにはそのdependentの `needs` を編集する。編集集合の宣言は文面・label・親・outgoing dependencyの完全な最終値としてレビューする。新規recordのlabelは`axon:conventions`の基準でrecordごとに選び、雛形の`feat`に頼らない。既存recordの目的や完了条件を変える編集では、labelも同じ基準で見直す。
 
-`axon import prepare`と`axon import apply`の出力で新規recordの `key -> 完全ID` を確認する。`axon import check`はtitleの前後を`axon list`と同じ可視化で一行表示し、descriptionは変更有無だけを示す。`axon import check`の構造差分だけで本文レビューを済ませず、fileの全文差分と目的・完了条件を照合する。外部参照のtitle・lifecycleは最新値と一致する保証がなく、incoming edgeも含まないため、判断に必要な関係先は `axon show ID --details --skip-conditions` で読む。
+`axon import prepare`と`axon import apply`の出力で新規recordの `key -> 完全ID` を確認する。`axon import check`はtitleの前後を`axon list`と同じ可視化で一行表示し、labelは前後、descriptionは変更有無だけを示す。`axon import check`の構造差分だけで本文レビューを済ませず、fileの全文差分と目的・完了条件を照合する。外部参照のtitle・lifecycleは最新値と一致する保証がなく、incoming edgeも含まないため、判断に必要な関係先は `axon show ID --details --skip-conditions` で読む。
 
 ## 反映と競合を扱う
 

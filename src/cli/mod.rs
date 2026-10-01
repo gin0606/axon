@@ -79,6 +79,7 @@ fn run(command: Command) -> Result<Output> {
         } => write::add_note(id, message, file),
         Command::Capture(args) => write::capture(args),
         Command::Write { id, title, body } => write::write(id, title, body),
+        Command::Label { command } => write::label(command),
         Command::Parent { command } => write::parent(command),
         Command::Condition { command } => write::condition(command),
         Command::Dep { command } => write::dependency(command),

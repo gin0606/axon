@@ -1,1 +1,0 @@
-{"entity":"axon-5k16k6","record":"created","parents":[],"at":"2026-08-31T12:49:27.140780Z","recorder":{"actor":"codex","data":{}},"reason":null,"after":{"kind":"issue","lifecycle":"not-started","owner":null,"title":"導出値の性質を spec の invariant と対応させて検査する","description":"","condition":null,"parent":null,"needs":[]}}

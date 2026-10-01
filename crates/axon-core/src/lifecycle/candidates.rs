@@ -159,6 +159,7 @@ mod tests {
                     owner: None,
                     title: name.into(),
                     description: String::new(),
+                    label: crate::lifecycle::Label::Chore,
                     condition: Some(name.into()),
                     parent: parent.map(id),
                     needs: BTreeSet::new(),

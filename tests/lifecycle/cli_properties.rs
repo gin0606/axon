@@ -56,7 +56,7 @@ proptest! {
             header["prefix"] = invalid.into();
             let corrupt = serde_json::to_vec(&header).unwrap();
             fs::write(good.header(), &corrupt).unwrap();
-            for args in [vec!["list"], vec!["capture", "--title", "Work"]] {
+            for args in [vec!["list"], vec!["capture", "--label", "chore", "--title", "Work"]] {
                 prop_assert_eq!(good.run(&args).status.code(), Some(1));
                 prop_assert_eq!(fs::read(good.header()).unwrap(), corrupt.as_slice());
             }
@@ -111,7 +111,7 @@ proptest! {
         f.ok(&["write", &finished, "-m", description]);
         f.ok(&["start", &finished]);
         f.ok(&["complete", &finished]);
-        let group = f.ok(&["capture", "--kind", "group", "--accept", "--title", &title]);
+        let group = f.ok(&["capture", "--label", "chore", "--kind", "group", "--accept", "--title", &title]);
         let group = group.split_whitespace().next().unwrap().to_owned();
         f.ok(&["write", &group, "-m", description]);
         let excluded = f.accepted("Other");
@@ -211,7 +211,7 @@ proptest! {
         let value = format!("{padding}{control}suffix");
         let before = f.records();
         for args in [
-            vec!["capture", "--title", &value],
+            vec!["capture", "--label", "chore", "--title", &value],
             vec!["write", &id, "--title", &value],
             vec!["start", &id, "-r", &value],
         ] {
@@ -299,7 +299,7 @@ fn one_line_fields_reject_values_over_the_length_limit_without_changing_records(
     for title_len in [199usize, 200, 201] {
         let title = "t".repeat(title_len);
         let before = f.records();
-        let out = f.run(&["capture", "--title", &title]);
+        let out = f.run(&["capture", "--label", "chore", "--title", &title]);
         if title_len > 200 {
             assert_eq!(out.status.code(), Some(1));
             assert!(failure(out).contains("the limit is"));

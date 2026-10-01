@@ -1,6 +1,6 @@
 # axon
 
-IssueとGroupで個人の仕事や計画を管理するローカルCLIです。未判断、未着手、着手中、完了、取りやめのlifecycleを使い、包含・依存、再浮上条件、Noteと状態変更履歴を扱います。
+IssueとGroupで個人の仕事や計画を管理するローカルCLIです。未判断、未着手、着手中、完了、取りやめのlifecycleを使い、包含・依存、再浮上条件、Noteと状態変更履歴を扱います。各Entityは仕事の種類を表す固定集合のlabelを必ず一つ持ちます（[値と意味](docs/guide/usage.md#labelで仕事の種類を示す)）。登録時に `axon capture --label` で付け、一覧の行で読み、`--label` で絞り込めます。
 
 [使い始める](docs/guide/getting-started.md) で、このcheckoutでビルドしたbinaryを独立した保存先で試せます。利用中の保存先や実データは自動で切り替えません。[日常の操作](docs/guide/usage.md)、[文書一覧](docs/README.md)、[モデル](spec/README.md) も参照してください。
 
