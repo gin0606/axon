@@ -263,9 +263,9 @@ proptest! {
     }
 
     #[test]
-    fn generated_partial_arrival_and_resolution(
+    fn generated_concurrent_records_and_resolution(
         actor in "[a-z]{1,6}", same in any::<bool>(), duplicate in any::<bool>(),
-        deliver_start in any::<bool>(), resolve_first in any::<bool>()
+        resolve_first in any::<bool>()
     ) {
         let mut r0 = Replica::new("r0");
         let mut r1 = Replica::new("r1");
@@ -294,6 +294,12 @@ proptest! {
         prop_assert_eq!(&r0.store.record(&resolved).unwrap().after, &r0.store.record(chosen).unwrap().after);
         prop_assert!(r0.view().is_valid());
 
+    }
+
+    #[test]
+    fn generated_partial_arrival_clears_gaps_after_delivery_or_resolution(
+        deliver_start in any::<bool>(),
+    ) {
         let mut source = Replica::new("r0");
         let start = source.op("i3", Start);
         let complete = source.op("i3", Complete);

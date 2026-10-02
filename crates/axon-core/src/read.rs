@@ -1436,8 +1436,7 @@ mod tests {
         assert!(rows.iter().all(|r| r.status == Status::Ready));
     }
 
-    #[test]
-    fn show_derives_the_situation_from_the_conditions_its_row_needs() {
+    fn show_condition_fixture() -> Fixture {
         let mut f = Fixture::new();
         f.create("outer", Kind::Group, None, &[], 1);
         f.set_condition("outer", Some("outer"));
@@ -1476,27 +1475,34 @@ mod tests {
         f.perform("finished", Operation::Start);
         f.perform("finished", Operation::Complete);
         f.create("held", Kind::Issue, Some("paused"), &["gate"], 19);
-        fn inspect_with<T>(
-            f: &Fixture,
-            name: &str,
-            results: &[(&str, bool)],
-            check: impl FnOnce(Detail<'_>, Vec<String>) -> T,
-        ) -> T {
-            let derived = f.derived();
-            let view = View::new(&f.store, &derived);
-            let mut calls = Vec::new();
-            let value = detail_with::<Error>(&view, &id(name), |entity, command| {
-                calls.push(entity.to_string());
-                assert_eq!(command, entity.to_string());
-                Ok(results
-                    .iter()
-                    .find(|(id, _)| *id == command)
-                    .map(|(_, satisfied)| *satisfied)
-                    .unwrap_or(true))
-            })
-            .unwrap();
-            check(value, calls)
-        }
+        f
+    }
+
+    fn inspect_with<T>(
+        f: &Fixture,
+        name: &str,
+        results: &[(&str, bool)],
+        check: impl FnOnce(Detail<'_>, Vec<String>) -> T,
+    ) -> T {
+        let derived = f.derived();
+        let view = View::new(&f.store, &derived);
+        let mut calls = Vec::new();
+        let value = detail_with::<Error>(&view, &id(name), |entity, command| {
+            calls.push(entity.to_string());
+            assert_eq!(command, entity.to_string());
+            Ok(results
+                .iter()
+                .find(|(id, _)| *id == command)
+                .map(|(_, satisfied)| *satisfied)
+                .unwrap_or(true))
+        })
+        .unwrap();
+        check(value, calls)
+    }
+
+    #[test]
+    fn show_evaluates_only_ancestors_and_startable_descendants_of_a_group() {
+        let f = show_condition_fixture();
         // A Group evaluates its ancestors, itself and its startable descendants only: the
         // Issue waiting for a dependency, the Undecided child and another subtree stay out.
         inspect_with(&f, "plan", &[("hidden", false)], |plan, calls| {
@@ -1525,12 +1531,22 @@ mod tests {
                 [Status::Unsurfaced, Status::Blocked, Status::Undecided]
             );
         });
+    }
+
+    #[test]
+    fn show_marks_an_issue_unsurfaced_when_its_own_condition_is_false() {
+        let f = show_condition_fixture();
         // The hidden Issue itself is Unsurfaced without naming an ancestor.
         inspect_with(&f, "hidden", &[("hidden", false)], |hidden, calls| {
             assert_eq!(calls, ["outer", "hidden"]);
             assert_eq!(hidden.row.status, Status::Unsurfaced);
             assert!(hidden.prerequisites.is_none());
         });
+    }
+
+    #[test]
+    fn show_names_the_unsurfaced_ancestor_and_stops_evaluating_descendants() {
+        let f = show_condition_fixture();
         // Below an unsurfaced ancestor nothing else is evaluated, and the ancestor is named
         // for the Group and for Issues whether or not their prerequisites are met.
         inspect_with(&f, "plan", &[("outer", false)], |plan, calls| {
@@ -1556,6 +1572,11 @@ mod tests {
             assert_eq!(ids(&prerequisites.unsurfaced_ancestors), ["outer"]);
             assert_eq!(related_ids(&prerequisites.dependencies), ["gate"]);
         });
+    }
+
+    #[test]
+    fn show_excludes_dependency_and_dependent_conditions_from_its_evaluation() {
+        let f = show_condition_fixture();
         // A surfaced Issue keeps Ready or Blocked. Its dependencies and dependents are
         // outside the range: their conditions do not run and their rows are not Unsurfaced.
         inspect_with(
@@ -1583,6 +1604,11 @@ mod tests {
             assert_eq!(calls, ["gate"]);
             assert_eq!(gate.dependents[0].status, Status::Blocked);
         });
+    }
+
+    #[test]
+    fn show_names_a_stalled_groups_own_unsatisfied_condition() {
+        let f = show_condition_fixture();
         // A Group without startable descendants still evaluates its own chain, as its tasks
         // row would, so a failing condition of its own fails the read.
         inspect_with(&f, "vacant", &[("vacant", false)], |hollow, calls| {
@@ -1597,6 +1623,11 @@ mod tests {
         inspect_with(&f, "vacant", &[], |hollow, _| {
             assert!(hollow.stall.unwrap().own_condition_unsatisfied.is_empty());
         });
+    }
+
+    #[test]
+    fn show_fails_when_a_group_without_startable_descendants_has_an_evaluation_error() {
+        let f = show_condition_fixture();
         {
             let derived = f.derived();
             let view = View::new(&f.store, &derived);
@@ -1606,6 +1637,11 @@ mod tests {
             .unwrap_err();
             assert!(error.to_string().contains("vacant failed"), "{error}");
         }
+    }
+
+    #[test]
+    fn show_hides_a_groups_candidates_when_its_own_condition_is_false() {
+        let f = show_condition_fixture();
         // A Group whose own condition fails hides its candidates without an ancestor line.
         inspect_with(&f, "other", &[("other", false)], |other, calls| {
             assert_eq!(calls, ["other"]);
@@ -1615,6 +1651,11 @@ mod tests {
             assert!(stall.unsurfaced_ancestors.is_empty());
             assert_eq!(ids(&stall.own_condition_unsatisfied), ["other"]);
         });
+    }
+
+    #[test]
+    fn show_does_not_report_a_groups_own_condition_until_its_ancestors_surface() {
+        let f = show_condition_fixture();
         // Below an unsurfaced ancestor the Group's own condition is not evaluated, so an
         // unsatisfied one is not a reason; with the ancestor surfaced it is.
         inspect_with(
@@ -1635,6 +1676,11 @@ mod tests {
             assert!(stall.unsurfaced_ancestors.is_empty());
             assert_eq!(ids(&stall.own_condition_unsatisfied), ["gated"]);
         });
+    }
+
+    #[test]
+    fn show_omits_stall_reasons_for_empty_confirmable_and_ready_groups() {
+        let f = show_condition_fixture();
         // Groups that are not stalled get no reason from their own unsatisfied condition:
         // an Empty Group that can complete, a Confirmable Group, and one with a candidate.
         inspect_with(&f, "bare", &[("bare", false)], |bare, calls| {
@@ -1651,6 +1697,11 @@ mod tests {
             assert_eq!(plan.row.status, Status::Ready);
             assert!(plan.stall.is_none());
         });
+    }
+
+    #[test]
+    fn show_names_an_in_progress_stalled_groups_own_unsatisfied_condition() {
+        let f = show_condition_fixture();
         // A stalled Group that is effectively InProgress names its own condition as itself.
         inspect_with(&f, "paused", &[("paused", false)], |paused, calls| {
             assert_eq!(calls, ["paused"]);
@@ -1670,6 +1721,11 @@ mod tests {
                 [("held".to_owned(), "gate".to_owned())]
             );
         });
+    }
+
+    #[test]
+    fn show_skips_conditions_for_undecided_and_in_progress_targets() {
+        let mut f = show_condition_fixture();
         // Undecided and InProgress targets evaluate nothing.
         inspect_with(&f, "draft", &[("draft", false)], |draft, calls| {
             assert!(calls.is_empty());
@@ -1680,12 +1736,23 @@ mod tests {
             assert!(calls.is_empty());
             assert_eq!(elsewhere.row.status, Status::InProgress);
         });
+    }
+
+    #[test]
+    fn show_does_not_stall_a_group_with_an_in_progress_descendant() {
+        let mut f = show_condition_fixture();
+        f.perform("elsewhere", Operation::Start);
         // With a descendant InProgress the Group is not stalled, whatever its own condition.
         inspect_with(&f, "other", &[("other", false)], |other, calls| {
             assert_eq!(calls, ["other"]);
             assert_eq!(other.row.status, Status::InProgress);
             assert!(other.stall.is_none());
         });
+    }
+
+    #[test]
+    fn show_propagates_ancestor_condition_errors() {
+        let f = show_condition_fixture();
         // A failing evaluation fails the whole read, and skipping conditions never evaluates.
         let derived = f.derived();
         let view = View::new(&f.store, &derived);
@@ -1694,6 +1761,13 @@ mod tests {
         })
         .unwrap_err();
         assert!(error.to_string().contains("outer failed"), "{error}");
+    }
+
+    #[test]
+    fn show_without_conditions_evaluates_nothing() {
+        let f = show_condition_fixture();
+        let derived = f.derived();
+        let view = View::new(&f.store, &derived);
         let plan = detail(&view, &id("plan")).unwrap();
         assert_eq!(plan.row.status, Status::Ready);
         assert!(plan.stall.is_none());
@@ -2023,11 +2097,10 @@ mod tests {
     }
 
     #[test]
-    fn search_and_candidates_return_values_without_formatting() {
+    fn list_returns_creation_order_and_text_match_locations() {
         let mut f = Fixture::new();
         f.create("needle", Kind::Issue, None, &[], 2);
         f.create("earlier", Kind::Issue, None, &[], 1);
-        f.set_condition("needle", Some("check"));
         {
             let derived = f.derived();
             let view = View::new(&f.store, &derived);
@@ -2038,22 +2111,14 @@ mod tests {
                 rows[1].matches,
                 [MatchLocation::Title, MatchLocation::Description]
             );
-            let mut calls = Vec::new();
-            let rows = candidates::<Error>(
-                &view,
-                CandidateList::Tasks,
-                |_| true,
-                |entity, command| {
-                    calls.push((entity.clone(), command.to_owned()));
-                    Ok(false)
-                },
-                None,
-            )
-            .unwrap();
-            assert_eq!(calls, [(id("needle"), "check".to_owned())]);
-            assert_eq!(rows.len(), 1);
-            assert_eq!(*rows[0].id, id("earlier"));
         }
+    }
+
+    #[test]
+    fn note_search_returns_creation_order_byte_ranges_and_case_sensitive_matches() {
+        let mut f = Fixture::new();
+        f.create("needle", Kind::Issue, None, &[], 2);
+        f.create("earlier", Kind::Issue, None, &[], 1);
         f.note("needle", "日本語 needle needle", 0);
         f.note("earlier", "needle first", 99);
         let derived = f.derived();
@@ -2063,6 +2128,31 @@ mod tests {
         assert_eq!(matches[1].range, 10..16);
         assert!(search_notes(&view, "NEEDLE").unwrap().is_empty());
         assert!(search_notes(&view, "").is_err());
+    }
+
+    #[test]
+    fn candidates_evaluate_conditions_and_filter_unsurfaced_rows() {
+        let mut f = Fixture::new();
+        f.create("needle", Kind::Issue, None, &[], 2);
+        f.create("earlier", Kind::Issue, None, &[], 1);
+        f.set_condition("needle", Some("check"));
+        let derived = f.derived();
+        let view = View::new(&f.store, &derived);
+        let mut calls = Vec::new();
+        let rows = candidates::<Error>(
+            &view,
+            CandidateList::Tasks,
+            |_| true,
+            |entity, command| {
+                calls.push((entity.clone(), command.to_owned()));
+                Ok(false)
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(calls, [(id("needle"), "check".to_owned())]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(*rows[0].id, id("earlier"));
     }
 
     #[test]
@@ -2089,8 +2179,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn history_preserves_causality_and_exposes_concurrent_branches_and_missing_parents() {
+    fn concurrent_history_fixture() -> Fixture {
         let mut f = Fixture::new();
         f.create("item", Kind::Issue, None, &[], 10);
         f.note("item", "base", 40);
@@ -2107,6 +2196,12 @@ mod tests {
         left.perform("item", Operation::Start);
         right.perform("item", Operation::Cancel);
         left.store.absorb(&right.store);
+        left
+    }
+
+    #[test]
+    fn notes_follow_timestamp_order_across_concurrent_record_branches() {
+        let left = concurrent_history_fixture();
         let notes = notes(&left.store, &id("item"));
         assert_eq!(
             notes
@@ -2115,6 +2210,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["left", "base", "right"]
         );
+    }
+
+    #[test]
+    fn history_preserves_causality_and_exposes_concurrent_branches() {
+        let left = concurrent_history_fixture();
         let history = history(&left.store, &id("item")).unwrap();
         assert_eq!(history.len(), 3);
         assert_eq!(history[0].record.kind, RecordKind::Created);
@@ -2122,6 +2222,11 @@ mod tests {
         assert!(!history[1].concurrent_with_previous);
         assert!(history[2].concurrent_with_previous);
         assert_eq!(history[1].before.unwrap().lifecycle, Lifecycle::NotStarted);
+    }
+
+    #[test]
+    fn conflicted_entity_details_expose_heads_without_a_current_value() {
+        let left = concurrent_history_fixture();
         let derived = left.derived();
         assert!(derived.is_conflicted(&id("item")));
         let view = View::new(&left.store, &derived);
@@ -2130,12 +2235,21 @@ mod tests {
         let detail = detail(&view, &id("item")).unwrap();
         assert_eq!(detail.heads.len(), 2);
         assert!(detail.stored.is_none() && detail.prerequisites.is_none());
+    }
+
+    #[test]
+    fn settled_entity_details_omit_the_single_head() {
         // A settled Entity has one head and shows none.
         let mut settled = Fixture::new();
         settled.create("plain", Kind::Issue, None, &[], 1);
         let derived = settled.derived();
         let view = View::new(&settled.store, &derived);
         assert!(super::detail(&view, &id("plain")).unwrap().heads.is_empty());
+    }
+
+    #[test]
+    fn history_marks_a_missing_parent_and_has_no_value_before_it() {
+        let left = concurrent_history_fixture();
         // A record whose parent is missing shows as such and has no value before it.
         let mut gapped = Store::new();
         let (last_id, last) = left

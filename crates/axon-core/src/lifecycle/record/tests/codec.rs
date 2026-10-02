@@ -191,7 +191,7 @@ fn decode_rejects_a_group_storing_in_progress() {
 }
 
 #[test]
-fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
+fn decode_rejects_empty_truncated_and_unterminated_records() {
     let (store, ids) = store_with_every_kind();
     let bytes = encode(store.get(&ids[1]).unwrap()).unwrap();
     assert!(error(decode(b"")).contains("empty"));
@@ -200,6 +200,12 @@ fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
     let mut truncated = bytes[..bytes.len() / 2].to_vec();
     truncated.push(b'\n');
     assert!(error(decode(&truncated)).contains("EOF"));
+}
+
+#[test]
+fn decode_rejects_unknown_missing_and_incompatible_record_fields() {
+    let (store, ids) = store_with_every_kind();
+    let bytes = encode(store.get(&ids[1]).unwrap()).unwrap();
     let text = String::from_utf8(bytes.clone()).unwrap();
     let with = |from: &str, to: &str| decode(text.replacen(from, to, 1).as_bytes());
     assert!(
@@ -227,6 +233,14 @@ fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
             .contains("unknown operation")
     );
     assert!(error(with("\"kind\":\"issue\"", "\"kind\":\"epic\"")).contains("unknown kind"));
+}
+
+#[test]
+fn record_labels_use_the_fixed_spellings_and_canonical_field_position() {
+    let (store, ids) = store_with_every_kind();
+    let bytes = encode(store.get(&ids[1]).unwrap()).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    let with = |from: &str, to: &str| decode(text.replacen(from, to, 1).as_bytes());
     // The label is always present, spelled from the fixed set, and placed after description.
     let names: Vec<_> = Label::ALL.iter().map(|label| label.name()).collect();
     assert_eq!(
@@ -265,6 +279,14 @@ fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
         ))
         .contains("not canonical")
     );
+}
+
+#[test]
+fn decode_rejects_invalid_lifecycle_and_ownership() {
+    let (store, ids) = store_with_every_kind();
+    let bytes = encode(store.get(&ids[1]).unwrap()).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    let with = |from: &str, to: &str| decode(text.replacen(from, to, 1).as_bytes());
     assert!(
         error(with(
             "\"lifecycle\":\"in-progress\"",
@@ -283,6 +305,14 @@ fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
         ))
         .contains("owner")
     );
+}
+
+#[test]
+fn decode_rejects_empty_titles_and_line_breaks_in_titles_and_reasons() {
+    let (store, ids) = store_with_every_kind();
+    let bytes = encode(store.get(&ids[1]).unwrap()).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    let with = |from: &str, to: &str| decode(text.replacen(from, to, 1).as_bytes());
     assert!(error(with("\"title\":\"task\"", "\"title\":\"\"")).contains("empty title"));
     assert!(
         error(with("\"title\":\"task\"", "\"title\":\"two\\nlines\""))
@@ -292,16 +322,44 @@ fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
         error(with("\"reason\":null", "\"reason\":\"two\\nlines\""))
             .contains("reason contains a line break")
     );
+}
+
+#[test]
+fn decode_rejects_invalid_entity_and_record_ids() {
+    let (store, ids) = store_with_every_kind();
+    let bytes = encode(store.get(&ids[1]).unwrap()).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    let with = |from: &str, to: &str| decode(text.replacen(from, to, 1).as_bytes());
     assert!(error(with("\"entity\":\"i3\"", "\"entity\":\"I3\"")).contains("EntityId"));
     assert!(error(with("\"parents\":[\"", "\"parents\":[\"zz")).contains("record ID"));
+}
+
+#[test]
+fn decode_rejects_unknown_fields_among_parent_and_dependency_fields() {
+    let (store, ids) = store_with_every_kind();
+    let bytes = encode(store.get(&ids[1]).unwrap()).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    let with = |from: &str, to: &str| decode(text.replacen(from, to, 1).as_bytes());
     assert!(error(with("\"parents\":[\"", "\"parents\":[],\"x\":[\"")).contains("unknown field"));
     assert!(error(with("\"needs\":[]", "\"needs\":[],\"extra\":1")).contains("unknown field"));
+}
+
+#[test]
+fn decode_rejects_non_canonical_record_bytes() {
+    let (store, ids) = store_with_every_kind();
+    let bytes = encode(store.get(&ids[1]).unwrap()).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    let with = |from: &str, to: &str| decode(text.replacen(from, to, 1).as_bytes());
     // Canonical bytes only: whitespace, key order, offsets and duplicate list items differ.
     assert!(error(with("\"reason\":null,", "\"reason\": null,")).contains("not canonical"));
     assert!(error(with("\"recorder\":{\"actor\":\"r0\",\"data\":{\"session_id\":\"session-1\"}},\"reason\":null", "\"reason\":null,\"recorder\":{\"actor\":\"r0\",\"data\":{\"session_id\":\"session-1\"}}")).contains("not canonical"));
     assert!(error(with("Z\",\"recorder\"", "+00:00\",\"recorder\"")).contains("not canonical"));
     assert!(error(decode(format!("{}\n", text).as_bytes())).contains("more than one line"));
-    // Created records have no parents; other records exactly one; notes need a nonce.
+}
+
+#[test]
+fn decode_requires_no_parents_for_created_records_and_one_parent_for_edits() {
+    let (store, ids) = store_with_every_kind();
     let created = String::from_utf8(encode(store.get(&ids[0]).unwrap()).unwrap()).unwrap();
     let parent = ids[0].to_string();
     assert!(
@@ -324,6 +382,11 @@ fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
         ))
         .contains("exactly one parent")
     );
+}
+
+#[test]
+fn decode_requires_valid_note_nonces_and_nonempty_bodies() {
+    let (store, ids) = store_with_every_kind();
     let note = String::from_utf8(encode(store.get(&ids[11]).unwrap()).unwrap()).unwrap();
     assert!(
         error(decode(
@@ -338,6 +401,11 @@ fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
         ))
         .contains("empty Note")
     );
+}
+
+#[test]
+fn decode_requires_a_resolve_choice_among_its_parents() {
+    let (store, ids) = store_with_every_kind();
     let resolve = String::from_utf8(encode(store.get(&ids[10]).unwrap()).unwrap()).unwrap();
     let chosen = resolve
         .split("\"chosen\":\"")
@@ -457,11 +525,8 @@ fn header_round_trips_and_rejects_unknown_formats_and_bad_prefixes() {
     }
 }
 
-/// A transition that no source lifecycle of its kind leads to is rejected on its own, so a
-/// record whose parent is missing cannot smuggle in an impossible state; a conversion of a
-/// started or terminal Entity likewise.
 #[test]
-fn impossible_transitions_and_conversions_are_rejected_without_their_parent() {
+fn impossible_transitions_are_rejected_without_their_parent() {
     let (store, ids) = store_with_every_kind();
     let start = store.record(&ids[1]).unwrap().clone();
     let mut reopen = start.clone();
@@ -475,6 +540,12 @@ fn impossible_transitions_and_conversions_are_rejected_without_their_parent() {
     let text = String::from_utf8(encode(&Entry::Record(start.clone())).unwrap()).unwrap();
     let edited = text.replacen("\"operation\":\"start\"", "\"operation\":\"reopen\"", 1);
     assert!(error(decode(edited.as_bytes())).contains("never leads"));
+}
+
+#[test]
+fn started_and_terminal_conversions_are_rejected_without_their_parent() {
+    let (store, ids) = store_with_every_kind();
+    let start = store.record(&ids[1]).unwrap().clone();
     let mut convert = start.clone();
     convert.kind = RecordKind::Convert;
     convert.after.kind = Kind::Group;
@@ -490,6 +561,11 @@ fn impossible_transitions_and_conversions_are_rejected_without_their_parent() {
     convert.after.owner = None;
     assert!(orphan.insert(Entry::Record(convert)).is_err());
     assert!(orphan.is_empty());
+}
+
+#[test]
+fn creation_records_require_an_undecided_or_not_started_lifecycle() {
+    let (store, ids) = store_with_every_kind();
     // A creation record starts only at Undecided or NotStarted.
     let created = String::from_utf8(encode(store.get(&ids[0]).unwrap()).unwrap()).unwrap();
     let completed = created.replacen(
@@ -502,6 +578,11 @@ fn impossible_transitions_and_conversions_are_rejected_without_their_parent() {
     record.after.lifecycle = Lifecycle::InProgress;
     record.after.owner = Some("setup".into());
     assert!(error(encode(&Entry::Record(record))).contains("Undecided or NotStarted"));
+}
+
+#[test]
+fn decode_rejects_duplicate_record_parents() {
+    let (store, ids) = store_with_every_kind();
     // Duplicate parents are not a canonical list.
     let resolve = String::from_utf8(encode(store.get(&ids[10]).unwrap()).unwrap()).unwrap();
     let first = resolve
