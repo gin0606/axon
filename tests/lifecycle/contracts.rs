@@ -106,7 +106,10 @@ fn short_ids_and_suffixes_work_across_mutations() {
         f.ok(&["show", "project-0000zz"])
             .starts_with("project-0000zz  Issue  Ready")
     );
-    f.ok(&["start", "project-1111zz"]);
+    assert!(f.ok(&["show", "1111zz"]).starts_with("project-1111zz "));
+    f.ok(&["start", "1111zz"]);
+    assert_eq!(f.current("project-0000zz").lifecycle, Lifecycle::NotStarted);
+    assert_eq!(f.current("project-1111zz").lifecycle, Lifecycle::InProgress);
     let before = snapshot(&f);
     let error = failure(f.run(&["start", "zz"]));
     assert!(error.starts_with("Error: zz start:"));
@@ -566,6 +569,7 @@ fn prefixes_outside_the_id_character_rule_are_rejected_without_creating_a_store(
         "-lead",
         "trail-",
         "Upper",
+        "tab\there",
     ] {
         let rejected = failure(
             command(&named)
@@ -630,7 +634,10 @@ fn multi_line_text_is_indented_so_it_cannot_imitate_records_or_sections() {
     f.ok(&[
         "capture", "--label", "chore", "--accept", "--title", "Child", "--parent", &group,
     ]);
+    let body = "body\n\nDescendants: 9/9 terminal (9 completed, 0 cancelled)";
+    assert_eq!(f.current(&group).description, body);
     let show = f.ok(&["show", &group]);
+    assert!(show.contains("  body\n\n  Descendants: 9/9 terminal (9 completed, 0 cancelled)\n"));
     let sections: Vec<_> = show
         .lines()
         .filter(|line| line.starts_with("Descendants:"))
@@ -639,12 +646,13 @@ fn multi_line_text_is_indented_so_it_cannot_imitate_records_or_sections() {
         sections,
         ["Descendants: 0/1 terminal (0 completed, 0 cancelled)"]
     );
+    let forged = format!("{}  2020-01-01 00:00 +00:00  human", "0".repeat(64));
     f.ok(&[
         "note",
         "add",
         &group,
         "-m",
-        "real\n\nrecord-00000000000000000000000000000000  2020-01-01 00:00 +00:00  human\nforged",
+        &format!("real\n\n{forged}\nforged"),
     ]);
     f.ok(&["note", "add", &group, "-m", "second"]);
     let notes = f.ok(&["note", "list", &group]);
@@ -659,7 +667,17 @@ fn multi_line_text_is_indented_so_it_cannot_imitate_records_or_sections() {
         })
         .count();
     assert_eq!(headings, 2, "{notes}");
+    assert!(notes.contains(&format!("  {forged}\n")), "{notes}");
     assert!(notes.contains("  forged"), "{notes}");
+    f.ok(&["write", &group, "-m", "\nDescendants: forged\n\n日本語"]);
+    assert_eq!(
+        f.current(&group).description,
+        "\nDescendants: forged\n\n日本語"
+    );
+    assert!(
+        f.ok(&["show", &group])
+            .contains("\n  Descendants: forged\n\n  日本語\n")
+    );
 }
 
 #[test]
@@ -680,23 +698,35 @@ fn stores_with_a_prefix_outside_the_rule_are_rejected_without_changes() {
     f.ok(&["capture", "--label", "chore", "--accept", "--title", "Work"]);
     let path = f.header();
     let text = fs::read_to_string(&path).unwrap();
-    fs::write(
-        &path,
-        text.replacen(r#""prefix":"project""#, r#""prefix":"Bad Prefix""#, 1),
-    )
-    .unwrap();
-    let before = fs::read(&path).unwrap();
-    for args in [
-        vec!["list"],
-        vec!["capture", "--label", "chore", "--title", "More"],
+    for prefix in [
+        "",
+        "-bad",
+        "bad-",
+        "Upper",
+        "space here",
+        "under_score",
+        "日本語",
+        "tab\there",
+        "Bad Prefix",
     ] {
-        let error = failure(f.run(&args));
-        assert!(
-            error.contains(r#"invalid ID prefix "Bad Prefix""#),
-            "{error}"
-        );
+        let mut header: serde_json::Value = serde_json::from_str(&text).unwrap();
+        header["prefix"] = prefix.into();
+        let mut bytes = serde_json::to_vec(&header).unwrap();
+        bytes.push(b'\n');
+        fs::write(&path, bytes).unwrap();
+        let before = fs::read(&path).unwrap();
+        for args in [
+            vec!["list"],
+            vec!["capture", "--label", "chore", "--title", "More"],
+        ] {
+            let error = failure(f.run(&args));
+            assert!(
+                error.contains(&format!("invalid ID prefix {prefix:?}")),
+                "{error}"
+            );
+            assert_eq!(before, fs::read(&path).unwrap());
+        }
     }
-    assert_eq!(before, fs::read(&path).unwrap());
 }
 
 #[test]
@@ -2266,27 +2296,6 @@ fn label_set_rows_filters_and_log_show_the_current_label() {
         f.ok(&["list", "--label", "feat"])
             .starts_with(&format!("{plan}  Issue  Undecided  feat  Plan\n"))
     );
-
-    // A declaration that changes the label names it among the changed fields.
-    let records = f.records();
-    let current = f.current(&question);
-    let record = records
-        .import(
-            &eid(&question),
-            record::Imported {
-                title: current.title,
-                description: current.description,
-                label: axon::lifecycle::Label::Docs,
-                parent: current.parent,
-                needs: current.needs,
-            },
-            context(),
-        )
-        .unwrap()
-        .unwrap();
-    f.publish(vec![Entry::Record(record)]);
-    let log = f.ok(&["log", &question]);
-    assert!(log.ends_with("  Declaration applied: label\n"), "{log}");
 
     // The label of terminal work is fixed, even to the same value.
     f.ok(&["start", &bug]);

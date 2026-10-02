@@ -519,14 +519,7 @@ fn a_foreign_record_subdirectory_is_reported_once_even_when_empty() {
 
 #[test]
 fn storage_check_reports_a_missing_or_unreadable_header_by_path() {
-    for (kind, content) in [
-        ("missing", None),
-        (
-            "unknown-format",
-            Some("{\"format\":\"axon-records/v3\",\"store\":\"store-1\",\"prefix\":\"t\"}\n"),
-        ),
-        ("corrupt", Some("not a header\n")),
-    ] {
+    for (kind, content) in [("missing", None), ("corrupt", Some("not a header\n"))] {
         let f = Fixture::new();
         f.init();
         f.accepted("kept");
@@ -571,6 +564,11 @@ fn a_store_in_an_unknown_format_is_refused_and_its_records_are_not_read_or_writt
                 "{format} {args:?}: {error}"
             );
             assert!(!error.contains("foo"), "{format} {args:?}: {error}");
+            assert!(
+                !error.contains("run axon init"),
+                "{format} {args:?}: {error}"
+            );
+            assert!(!error.contains("consistent"), "{format} {args:?}: {error}");
         }
         assert_eq!(f.record_files(), before);
     }

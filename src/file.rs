@@ -878,6 +878,7 @@ mod publication_tests {
                 prop_assert!(matches!(&error, Error::Invalid(_)));
                 prop_assert!(error.to_string().contains("not applied"));
             } else {
+                prop_assert!(error.to_string().contains("result unknown"));
                 let expected = format!("renamed so far: [{}]", renamed.join(", "));
                 prop_assert!(error.to_string().contains(&expected));
             }
@@ -1181,7 +1182,7 @@ mod publication_tests {
     }
 
     #[test]
-    fn failures_before_and_after_the_first_rename_are_classified_and_leave_no_temporary_file() {
+    fn a_failure_before_publish_is_not_applied_and_leaves_no_temporary_file() {
         let (root, mut store) = fixture();
         // Before any rename: nothing is applied and every temporary file is removed.
         let error = store
@@ -1196,34 +1197,6 @@ mod publication_tests {
         assert!(matches!(&error, Error::Invalid(_)));
         assert!(error.to_string().contains("not applied"), "{error}");
         assert_eq!(store.read().unwrap().1.len(), 0);
-        assert_eq!(temporary_files(&store), 0);
-        // After the first rename: the first record is published, the rest is not, the result
-        // is unknown and the untried temporary file is removed.
-        let error = store
-            .update_with(
-                |_, _, _| Ok((two_records(), ())),
-                &mut |progress| match progress {
-                    Progress::Renamed(0) => Err(invalid("injected after the first rename")),
-                    _ => Ok(()),
-                },
-            )
-            .unwrap_err();
-        assert!(matches!(&error, Error::PublicationUnknown(_)), "{error}");
-        assert!(error.to_string().contains("result unknown"), "{error}");
-        let first = store.read().unwrap().1;
-        let (first_id, _) = first.entries().next().unwrap();
-        assert!(
-            error.to_string().contains(&format!(
-                "renamed so far: [{}",
-                store
-                    .records_path()
-                    .join(first_id.subdirectory())
-                    .join(first_id.as_ref())
-                    .display()
-            )),
-            "{error}"
-        );
-        assert_eq!(first.len(), 1);
         assert_eq!(temporary_files(&store), 0);
         drop(store);
         fs::remove_dir_all(root).unwrap();

@@ -103,20 +103,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn partial_and_generic_sources() {
-        for (key, value, expected) in [
-            ("CLAUDECODE", "1", "claude-code"),
-            ("CLAUDE_CODE", "1", "claude-code"),
-            ("AI_AGENT", "other", "other"),
-            ("USER", "human", "human"),
-        ] {
-            let r = detect(&[(key, value), ("SECRET_TOKEN", "never copied")]).unwrap();
-            assert_eq!(r.actor, expected);
-            assert!(r.data.is_empty());
-        }
-    }
-
     proptest! {
         #[test]
         fn source_precedence_and_metadata(

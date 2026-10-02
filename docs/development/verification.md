@@ -65,7 +65,7 @@ cargo test --locked --workspace --lib declaration
 cargo test --locked --test smoke declaration
 ```
 
-`src/declaration_file.rs` の単体テストは、保存成功後のfile書戻し失敗と再度`axon import apply`、入力bytesの変化、保存結果の診断などI/O境界を検査します。 process fixtureは同じlib test binaryを子processにし、記録fileのrename前、複数のEntityの記録のrenameの途中、保存後の書戻し前・書戻し後で強制終了します。barrier待ちは最大10秒、到達後すぐにkillして終了を回収し、記録の集合・入力bytesと同じfileの再度`axon import apply`への収束を検査します。`src/declaration_file/relationship_tests.rs` の行列は`Cancelled` Groupへの所属拒否、`Cancelled` Entityの依存差替え、新規Groupへの移動、親子反転、進行中subtreeの移動を検査します。recordの正順・逆順・巡回順で共通コアの適用結果を比較し、`axon import prepare`でcanonical化した各入力を適用して結果の一致を確認します。これらは`--lib`としてfast gateにも含まれます。対象の検証後も、必要なfull verificationは上記の共通入口で行います。実データやPATH上のbinaryは変更しません。この機能は通常操作の意味を変えないため、検証のためだけにQuintの状態やactionを追加しません。
+`src/declaration_file.rs` の単体テストは、保存成功後のfile書戻し失敗と再度`axon import apply`、入力bytesの変化、保存結果の診断などI/O境界を検査します。 process fixtureは同じlib test binaryを子processにし、記録fileのrename前、複数のEntityの記録のrenameの途中、保存後の書戻し前・書戻し後で強制終了します。barrier待ちは最大10秒、到達後すぐにkillして終了を回収し、記録の集合・入力bytesと同じfileの再度`axon import apply`への収束を検査します。`src/declaration_file/relationship_tests.rs` の行列は`Cancelled` Groupへの所属拒否、`Cancelled` Entityの依存差替え、新規Groupへの移動、親子反転、進行中subtreeの移動を検査します。GroupとIssueのrecordをそれぞれ全順列に並べ替えて共通コアの適用結果を比較し、`axon import prepare`でcanonical化した各入力を適用して結果の一致を確認します。これらは`--lib`としてfast gateにも含まれます。対象の検証後も、必要なfull verificationは上記の共通入口で行います。実データやPATH上のbinaryは変更しません。この機能は通常操作の意味を変えないため、検証のためだけにQuintの状態やactionを追加しません。
 
 ## 設計変更の進め方
 

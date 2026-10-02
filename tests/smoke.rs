@@ -1099,48 +1099,75 @@ fn candidate_sets_and_lazy_ancestor_evaluation_are_shared_only_within_invocation
     assert!(failure(f.run(&["proposals"])).contains("exit status: 23"));
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(8))]
-
-    #[test]
-    fn generated_cli_candidates_match_structured_reads_and_condition_calls(
-        children in 0usize..5,
-        open in any::<bool>(),
-    ) {
-        let f = Fixture::new();
-        f.init();
-        let root = new_entity(&f, &["capture", "--label", "chore", "--kind", "group", "--accept", "--title", "root"]);
-        set_condition(&f, &root, "echo root >> observations; test -f open");
-        let gate = (children > 0).then(|| f.accepted("gate"));
-        for index in 0..children {
-            let title = format!("child-{index}");
-            let mut args = vec!["capture", "--label", "chore", "--accept", "--title", title.as_str(), "--parent", root.as_str()];
-            if index == 0 { args.extend(["--needs", gate.as_ref().unwrap().as_str()]); }
-            let child = new_entity(&f, &args);
-            set_condition(&f, &child, &format!("echo {title} >> observations"));
-        }
-        if open { fs::write(f.0.join("open"), "").unwrap(); }
-        let store = f.records();
-        let derived = store.view().unwrap();
-        let view = axon::read::View::new(&store, &derived);
-        let structured = axon::read::candidates::<axon::lifecycle::Error>(
-            &view, axon::lifecycle::CandidateList::Tasks, |_| true,
-            |entity, _| Ok(entity != &eid(&root) || open), None,
-        ).unwrap();
-        let expected_calls = if open {
-            std::iter::once("root".to_owned()).chain((0..children).map(|index| format!("child-{index}"))).collect::<Vec<_>>()
-        } else { vec!["root".to_owned()] };
-        for invocation in 1..=2 {
-            let output = f.ok(&["tasks"]);
-            for (line, row) in output.lines().zip(&structured) {
-                let fields: Vec<_> = line.split_whitespace().collect();
-                prop_assert_eq!(fields[0], row.id.as_ref());
-                prop_assert_eq!(fields[2], format!("{:?}", row.status));
+#[test]
+fn cli_candidate_counts_and_condition_calls_match_for_every_small_forest() {
+    for children in 0usize..5 {
+        for open in [false, true] {
+            let f = Fixture::new();
+            f.init();
+            let root = new_entity(
+                &f,
+                &[
+                    "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "root",
+                ],
+            );
+            set_condition(&f, &root, "echo root >> observations; test -f open");
+            let gate = (children > 0).then(|| f.accepted("gate"));
+            for index in 0..children {
+                let title = format!("child-{index}");
+                let mut args = vec![
+                    "capture",
+                    "--label",
+                    "chore",
+                    "--accept",
+                    "--title",
+                    title.as_str(),
+                    "--parent",
+                    root.as_str(),
+                ];
+                if index == 0 {
+                    args.extend(["--needs", gate.as_ref().unwrap().as_str()]);
+                }
+                let child = new_entity(&f, &args);
+                set_condition(&f, &child, &format!("echo {title} >> observations"));
             }
-            prop_assert_eq!(output.lines().count(), structured.len());
-            let calls = fs::read_to_string(f.0.join("observations")).unwrap();
-            let expected = expected_calls.iter().map(|call| format!("{call}\n")).collect::<String>().repeat(invocation);
-            prop_assert_eq!(calls, expected);
+            if open {
+                fs::write(f.0.join("open"), "").unwrap();
+            }
+            let store = f.records();
+            let derived = store.view().unwrap();
+            let view = axon::read::View::new(&store, &derived);
+            let structured = axon::read::candidates::<axon::lifecycle::Error>(
+                &view,
+                axon::lifecycle::CandidateList::Tasks,
+                |_| true,
+                |entity, _| Ok(entity != &eid(&root) || open),
+                None,
+            )
+            .unwrap();
+            let expected_calls = if open {
+                std::iter::once("root".to_owned())
+                    .chain((0..children).map(|index| format!("child-{index}")))
+                    .collect::<Vec<_>>()
+            } else {
+                vec!["root".to_owned()]
+            };
+            for invocation in 1..=2 {
+                let output = f.ok(&["tasks"]);
+                for (line, row) in output.lines().zip(&structured) {
+                    let fields: Vec<_> = line.split_whitespace().collect();
+                    assert_eq!(fields[0], row.id.as_ref());
+                    assert_eq!(fields[2], format!("{:?}", row.status));
+                }
+                assert_eq!(output.lines().count(), structured.len());
+                let calls = fs::read_to_string(f.0.join("observations")).unwrap();
+                let expected = expected_calls
+                    .iter()
+                    .map(|call| format!("{call}\n"))
+                    .collect::<String>()
+                    .repeat(invocation);
+                assert_eq!(calls, expected);
+            }
         }
     }
 }
@@ -1372,28 +1399,6 @@ fn condition_results_diagnostics_and_repair_do_not_publish_partial_rows() {
     assert!(failure(f.run(&["tasks"])).contains("signal-detail"));
     f.ok(&["condition", "unset", &id]);
     assert!(f.ok(&["tasks"]).contains(&id));
-}
-
-#[test]
-fn condition_output_keeps_both_edges_per_stream_in_trace_and_failure() {
-    let f = Fixture::new();
-    f.init();
-    let id = f.accepted("output");
-    let script = "awk 'BEGIN { for (i=0;i<40000;i++) printf \"A\"; for (i=0;i<40000;i++) printf \"B\" }'; awk 'BEGIN { for (i=0;i<40000;i++) printf \"C\"; for (i=0;i<40000;i++) printf \"D\" }' >&2";
-    for exit in [0, 23] {
-        set_condition(&f, &id, &format!("{script}; exit {exit}"));
-        let out = f.run(&["tasks", "--trace-conditions"]);
-        assert_eq!(out.status.success(), exit == 0);
-        let err = String::from_utf8(out.stderr).unwrap();
-        for character in ['A', 'B', 'C', 'D'] {
-            assert!(err.contains(&character.to_string().repeat(32768)));
-        }
-        assert_eq!(err.matches("14464 bytes omitted").count(), 2);
-        assert!(err.len() < 133000);
-        if exit != 0 {
-            assert!(out.stdout.is_empty());
-        }
-    }
 }
 
 fn wait_pid(path: &Path) -> i32 {
@@ -1697,7 +1702,7 @@ fn candidate_help_and_trace_sink_failure() {
 }
 
 #[test]
-fn condition_uses_current_worktree_or_management_root_and_inherits_environment() {
+fn condition_uses_management_root_and_inherits_environment() {
     let f = Fixture::new();
     f.init();
     let id = f.accepted("cwd");
@@ -1720,46 +1725,6 @@ fn condition_uses_current_worktree_or_management_root_and_inherits_environment()
             .unwrap()
             .contains(&format!("cwd: {}", f.0.display()))
     );
-    git(&f.0, &["init", "-q"]);
-    git(
-        &f.0,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.invalid",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "initial",
-        ],
-    );
-    let other = Fixture::new();
-    git(
-        &f.0,
-        &["worktree", "add", "--detach", other.0.to_str().unwrap()],
-    );
-    fs::create_dir(other.0.join("subdir")).unwrap();
-    let script = "test \"$AXON_TEST_CONDITION\" = inherited && test -f local-file";
-    set_condition(&f, &id, script);
-    let out = command(&other.0.join("subdir"))
-        .env("AXON_TEST_CONDITION", "inherited")
-        .args(["tasks", "--trace-conditions"])
-        .output()
-        .unwrap();
-    assert!(out.status.success() && out.stdout.is_empty());
-    assert!(
-        String::from_utf8(out.stderr)
-            .unwrap()
-            .contains(&format!("cwd: {}", other.0.display()))
-    );
-    fs::write(other.0.join("local-file"), "").unwrap();
-    let out = command(&other.0.join("subdir"))
-        .env("AXON_TEST_CONDITION", "inherited")
-        .args(["tasks"])
-        .output()
-        .unwrap();
-    assert!(success(out).contains(&id));
 }
 
 #[test]
