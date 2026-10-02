@@ -1788,6 +1788,7 @@ mod tests {
                 }
                 let group = detail(&view, &id("root")).unwrap();
                 prop_assert_eq!(group.row.status, leaf.row.status);
+                prop_assert_eq!(group.stall.is_some(), leaf.row.status == Status::Blocked);
                 if let Some(stall) = group.stall {
                     prop_assert_eq!(stall.dependencies.iter().map(|item| (item.id.to_string(), item.row.is_none())).collect::<Vec<_>>(), group_expected);
                 }
@@ -2331,7 +2332,7 @@ mod tests {
             right.perform("item", Operation::Cancel);
             left.store.absorb(&right.store);
             let resolved = left.store.resolve(&item, &released, None, context(seed as i64 + 300)).unwrap();
-            left.store.insert(Entry::Record(resolved)).unwrap();
+            let resolved = left.store.insert(Entry::Record(resolved)).unwrap();
 
             let without = |source: &Store, omitted: &[RecordId]| {
                 let mut store = Store::new();
@@ -2346,9 +2347,12 @@ mod tests {
             let mut true_right = Fixture { store: left.store.clone(), clock: std::cell::Cell::new(seed as i64 + 500) };
             true_left.perform("item", Operation::Start);
             true_right.perform("item", Operation::Cancel);
+            let true_heads = [
+                true_left.store.view().unwrap().head(&item).unwrap().clone(),
+                true_right.store.view().unwrap().head(&item).unwrap().clone(),
+            ];
             true_left.store.absorb(&true_right.store);
             let true_conflict = without(&true_left.store, std::slice::from_ref(&start));
-            prop_assert_eq!(true_conflict.view().unwrap().heads(&item).unwrap().len(), 2);
 
             let mut later = Fixture { store: left.store.clone(), clock: std::cell::Cell::new(seed as i64 + 600) };
             later.perform("item", Operation::Start);
@@ -2357,47 +2361,33 @@ mod tests {
             let last = later.store.view().unwrap().head(&item).unwrap().clone();
             let mut false_conflict = without(&left.store, std::slice::from_ref(&start));
             false_conflict.insert(Entry::Record(later.store.record(&last).unwrap().clone())).unwrap();
-            prop_assert_eq!(false_conflict.view().unwrap().heads(&item).unwrap().len(), 2);
 
             let mut branched = left.store.clone();
+            let mut branch_heads = Vec::new();
             for (index, extend) in branches.iter().enumerate() {
                 let mut fork = Fixture { store: left.store.clone(), clock: std::cell::Cell::new(seed as i64 + 700 + index as i64 * 10) };
                 fork.perform("item", Operation::Start);
                 if *extend {
                     fork.perform("item", Operation::Release);
                 }
+                branch_heads.push((fork.store.view().unwrap().head(&item).unwrap().clone(), false));
                 branched.absorb(&fork.store);
             }
+            if branch_heads.is_empty() {
+                branch_heads.push((resolved.clone(), false));
+            }
             let cases = [
-                (left.store.clone(), false),
-                (without(&left.store, std::slice::from_ref(&start)), true),
-                (without(&left.store, std::slice::from_ref(&released)), true),
-                (without(&left.store, &[created.clone(), start.clone()]), true),
-                (true_conflict, true),
-                (false_conflict, true),
-            ].into_iter().chain(std::iter::once((without(&branched, std::slice::from_ref(&start)), true)));
-            for (store, has_gap) in cases {
+                (left.store.clone(), false, vec![(resolved.clone(), false)]),
+                (without(&left.store, std::slice::from_ref(&start)), true, vec![(resolved.clone(), false)]),
+                (without(&left.store, std::slice::from_ref(&released)), true, vec![(start.clone(), false), (resolved.clone(), true)]),
+                (without(&left.store, &[created.clone(), start.clone()]), true, vec![(resolved.clone(), false)]),
+                (true_conflict, true, true_heads.into_iter().map(|head| (head, false)).collect()),
+                (false_conflict, true, vec![(resolved, false), (last, true)]),
+            ].into_iter().chain(std::iter::once((without(&branched, std::slice::from_ref(&start)), true, branch_heads)));
+            for (store, has_gap, expected) in cases {
                 let derived = store.view().unwrap();
                 let view = View::new(&store, &derived);
-                let records: Vec<_> = store.records().filter(|(_, record)| record.entity == item).collect();
-                let oldest = records.iter().filter(|(_, record)| record.kind == RecordKind::Created)
-                    .min_by_key(|(record_id, record)| (record.at, *record_id))
-                    .or_else(|| records.iter().filter(|(_, record)| record.parents.iter().all(|parent| !store.contains(parent)))
-                        .min_by_key(|(record_id, record)| (record.at, *record_id)))
-                    .unwrap().0;
-                for head in view.heads(&item) {
-                    let mut pending = vec![head.id];
-                    let mut seen = BTreeSet::new();
-                    while let Some(record_id) = pending.pop() {
-                        if seen.insert(record_id) && let Some(record) = store.record(record_id) {
-                            pending.extend(record.parents.iter());
-                        }
-                    }
-                    let expected = derived.gaps().contains_key(&item)
-                        && (head.record.parents.iter().any(|parent| !store.contains(parent))
-                            || !seen.contains(oldest));
-                    prop_assert_eq!(head.likely_newer, expected);
-                }
+                prop_assert_eq!(view.heads(&item).into_iter().map(|head| (head.id.clone(), head.likely_newer)).collect::<BTreeMap<_, _>>(), expected.into_iter().collect::<BTreeMap<_, _>>());
                 prop_assert_eq!(derived.gaps().contains_key(&item), has_gap);
             }
         }
@@ -2845,7 +2835,21 @@ mod tests {
                 .find(|v| v.kind == ViolationKind::ContainmentCycle)
                 .unwrap();
             assert!(cycle.related.iter().any(|r| r.id != id(name)));
-            assert!(value.descendants.unwrap().entries.len() <= 3);
+            let descendants: Vec<_> = value
+                .descendants
+                .unwrap()
+                .entries
+                .into_iter()
+                .map(|entry| entry.row.id.to_string())
+                .collect();
+            assert_eq!(
+                descendants,
+                if name == "a" {
+                    vec!["b", "leaf"]
+                } else {
+                    vec!["a", "leaf"]
+                }
+            );
         }
         let leaf = detail(&view, &id("leaf")).unwrap();
         assert!(!leaf.row.invalid);

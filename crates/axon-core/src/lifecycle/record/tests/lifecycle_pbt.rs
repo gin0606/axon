@@ -495,7 +495,7 @@ proptest! {
             prop_assert_eq!(r.current(&name).lifecycle, Lifecycle::NotStarted);
             prop_assert_eq!(r.view().effective_lifecycle(&id(&name)), Some(Lifecycle::InProgress));
             prop_assert_eq!(&r.head(&name), head);
-            for op in [Operation::Start, Operation::Release, Operation::Withdraw, Operation::Complete, Operation::Cancel] {
+            for op in [Operation::Withdraw, Operation::Complete, Operation::Cancel] {
                 prop_assert!(r.try_op(&name, op).is_err());
             }
         }

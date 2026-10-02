@@ -98,13 +98,6 @@ impl Fixture {
             .unwrap();
         self.store.insert(Entry::Record(record)).unwrap();
     }
-    fn note(&mut self, name: &str, body: &str) {
-        let note = self
-            .store
-            .add_note(&id(name), body.into(), None, self.tick())
-            .unwrap();
-        self.store.insert(Entry::Note(note)).unwrap();
-    }
     fn insert(&mut self, record: crate::lifecycle::record::Record) {
         self.store.insert(Entry::Record(record)).unwrap();
     }
@@ -445,9 +438,8 @@ fn fingerprint_tokens_and_visible_field_changes() {
         }
         assert_ne!(base, fingerprint(&other_id, &other));
     }
-    // Conditions, Notes and the recorder are not visible in a declaration.
+    // Conditions are not part of the fingerprint.
     f.set_condition("demo-a", "exit 1");
-    f.note("demo-a", "Evidence");
     let view = f.view();
     assert_eq!(
         base,
@@ -587,23 +579,26 @@ proptest! {
     }
 
     #[test]
-    fn generated_notes_and_recorders_do_not_change_fingerprint(
+    fn generated_notes_and_recorders_do_not_change_export(
         actor in "[a-z]{1,12}",
         note in "[a-zA-Z0-9]{1,30}",
     ) {
         let entity = id("demo-a");
         let value = current(Kind::Issue, "title");
-        let base = fingerprint(&entity, &value);
         let mut store = Store::new();
+        let plain = store.create(entity.clone(), value.clone(), context()).unwrap();
+        let mut baseline = Store::new();
+        baseline.insert(Entry::Record(plain)).unwrap();
+        let expected = export(&baseline, &baseline.view().unwrap(), std::slice::from_ref(&entity)).unwrap();
         let record = store.create(entity.clone(), value, Context {
             at: context().at,
             recorder: Some(Recorder { actor, data: Default::default() }),
         }).unwrap();
         store.insert(Entry::Record(record)).unwrap();
-        prop_assert_eq!(base.as_str(), fingerprint(&entity, store.view().unwrap().current(&entity).unwrap()));
+        prop_assert_eq!(export(&store, &store.view().unwrap(), std::slice::from_ref(&entity)).unwrap(), expected.clone());
         let note = store.add_note(&entity, note, None, context_at(1001)).unwrap();
         store.insert(Entry::Note(note)).unwrap();
-        prop_assert_eq!(base, fingerprint(&entity, store.view().unwrap().current(&entity).unwrap()));
+        prop_assert_eq!(export(&store, &store.view().unwrap(), &[entity]).unwrap(), expected);
     }
 }
 
@@ -991,6 +986,7 @@ fn prepare_mixed_records_and_check_replace_edges_before_adding() {
         .check(&d.serialize(&f.view()).unwrap(), &f.store, context())
         .unwrap();
     // The new Issue is published before the existing one that depends on it.
+    assert_eq!(checked.records.len(), 3);
     assert_eq!(checked.records[0].kind, RecordKind::Created);
     assert!(
         checked.records[1..]
