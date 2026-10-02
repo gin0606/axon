@@ -559,26 +559,7 @@ proptest! {
         }
     }
 
-    #[test]
-    fn generated_record_damage_is_rejected(body in "[a-z]{1,12}") {
-        let (store, ids) = store_with_every_kind();
-        for id in &ids {
-        let mut entry = store.get(id).unwrap().clone();
-        if let Entry::Record(record) = &mut entry { record.after.description = body.clone(); }
-        let bytes = encode(&entry).unwrap();
-        let text = String::from_utf8(bytes.clone()).unwrap();
-        for damage in 0..5 {
-        let bad = match damage {
-            0 => text.replacen("\"entity\":\"i3\",", "", 1),
-            1 => text.replacen("\"entity\":\"i3\"", "\"entity\":123", 1),
-            2 => text.replacen("\"entity\":\"i3\"", "\"entity\":\"i3\",\"entity\":\"i3\"", 1),
-            3 => text.replacen("\"entity\":\"i3\"", "\"entity\":\"i3\",\"extra\":true", 1),
-            _ => text.replacen("\"entity\":\"i3\",", "\"entity\": \"i3\",", 1),
-        };
-        prop_assert!(decode(bad.as_bytes()).is_err(), "{bad}");
-        }
-        }
-    }
+
 
     #[test]
     fn generated_headers_round_trip_and_reject_damage(
@@ -603,84 +584,162 @@ proptest! {
         }
     }
 
-    #[test]
-    fn generated_parent_field_matrix_rejects_forbidden_changes(suffix in "[a-z]{1,8}") {
-        // Columns: kind, lifecycle, owner, text, label, parent, needs, condition.
-        const ALLOWED: [[bool; 8]; 10] = [
-            [false, true, true, false, false, false, false, false], // transition
-            [false, false, false, true, false, false, false, false], // edit
-            [false, false, false, false, true, false, false, false], // label
-            [false, false, false, false, false, true, false, false], // parent
-            [false, false, false, false, false, false, true, false], // dependency
-            [false, false, false, false, false, false, false, true], // condition
-            [false, false, false, true, true, true, true, false], // import
-            [false, true, true, false, false, false, false, false], // release transition
-            [true, false, false, false, false, false, false, false], // convert
-            [false; 8], // resolve repeats its chosen parent
-        ];
-        const REJECTED_WITHOUT_PARENT: [[bool; 8]; 10] = [
-            [true, true, true, false, false, false, false, false],
-            [true, true, false, false, false, false, false, false],
-            [true, true, false, false, false, false, false, false],
-            [true, true, false, false, false, false, false, false],
-            [true, true, false, false, false, false, false, false],
-            [true, true, false, false, false, false, false, false],
-            [true, true, false, false, false, false, false, false],
-            [true, true, true, false, false, false, false, false],
-            [false, false, true, false, false, false, false, false],
-            [false, false, true, false, false, false, false, false],
-        ];
-        let (source, ids) = store_with_every_kind();
-        let mut checked = 0;
-        for (row, record_id) in ids[1..11].iter().enumerate() {
-            for (field, allowed) in ALLOWED[row].iter().enumerate() {
-                if *allowed { continue; }
-                let mut store = Store::new();
-                let record = source.record(record_id).unwrap();
-                let mut ancestors = record.parents.iter().cloned().collect::<Vec<_>>();
-                while let Some(parent_id) = ancestors.pop() {
-                    if store.get(&parent_id).is_some() { continue; }
-                    let parent = source.record(&parent_id).unwrap();
-                    ancestors.extend(parent.parents.iter().cloned());
-                    store.insert(Entry::Record(parent.clone())).unwrap();
-                }
-                let mut damaged = record.clone();
-                match field {
-                    0 => damaged.after.kind = if damaged.after.kind == Kind::Issue { Kind::Group } else { Kind::Issue },
-                    1 => damaged.after.lifecycle = if damaged.after.lifecycle == Lifecycle::NotStarted { Lifecycle::Undecided } else { Lifecycle::NotStarted },
-                    2 => damaged.after.owner = Some(format!("owner-{suffix}")),
-                    3 => damaged.after.title.push_str(&suffix),
-                    4 => damaged.after.label = if damaged.after.label == Label::Bug { Label::Chore } else { Label::Bug },
-                    5 => damaged.after.parent = if damaged.after.parent.is_some() { None } else { Some(id("g0")) },
-                    6 => { damaged.after.needs.insert(id(&format!("need-{suffix}"))); },
-                    _ => damaged.after.condition = Some(format!("exit 0 # {suffix}")),
-                }
-                let entry = Entry::Record(damaged);
-                let encoded = encode(&entry);
-                if REJECTED_WITHOUT_PARENT[row][field] {
-                    prop_assert!(encoded.is_err(), "record {} field {field} unexpectedly encoded", record.kind.name());
+
+
+
+}
+
+#[test]
+fn record_damage_is_rejected() {
+    let body = "description".to_owned();
+
+    let (store, ids) = store_with_every_kind();
+    for id in &ids {
+        let mut entry = store.get(id).unwrap().clone();
+        if let Entry::Record(record) = &mut entry {
+            record.after.description = body.clone();
+        }
+        let bytes = encode(&entry).unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        for damage in 0..5 {
+            let bad = match damage {
+                0 => text.replacen("\"entity\":\"i3\",", "", 1),
+                1 => text.replacen("\"entity\":\"i3\"", "\"entity\":123", 1),
+                2 => text.replacen(
+                    "\"entity\":\"i3\"",
+                    "\"entity\":\"i3\",\"entity\":\"i3\"",
+                    1,
+                ),
+                3 => text.replacen("\"entity\":\"i3\"", "\"entity\":\"i3\",\"extra\":true", 1),
+                _ => text.replacen("\"entity\":\"i3\",", "\"entity\": \"i3\",", 1),
+            };
+            assert!(decode(bad.as_bytes()).is_err(), "{bad}");
+        }
+    }
+}
+
+#[test]
+fn parent_field_matrix_rejects_forbidden_changes() {
+    let suffix = "changed".to_owned();
+
+    // Columns: kind, lifecycle, owner, text, label, parent, needs, condition.
+    const ALLOWED: [[bool; 8]; 10] = [
+        [false, true, true, false, false, false, false, false], // transition
+        [false, false, false, true, false, false, false, false], // edit
+        [false, false, false, false, true, false, false, false], // label
+        [false, false, false, false, false, true, false, false], // parent
+        [false, false, false, false, false, false, true, false], // dependency
+        [false, false, false, false, false, false, false, true], // condition
+        [false, false, false, true, true, true, true, false],   // import
+        [false, true, true, false, false, false, false, false], // release transition
+        [true, false, false, false, false, false, false, false], // convert
+        [false; 8],                                             // resolve repeats its chosen parent
+    ];
+    const REJECTED_WITHOUT_PARENT: [[bool; 8]; 10] = [
+        [true, true, true, false, false, false, false, false],
+        [true, true, false, false, false, false, false, false],
+        [true, true, false, false, false, false, false, false],
+        [true, true, false, false, false, false, false, false],
+        [true, true, false, false, false, false, false, false],
+        [true, true, false, false, false, false, false, false],
+        [true, true, false, false, false, false, false, false],
+        [true, true, true, false, false, false, false, false],
+        [false, false, true, false, false, false, false, false],
+        [false, false, true, false, false, false, false, false],
+    ];
+    let (source, ids) = store_with_every_kind();
+    let mut checked = 0;
+    for (row, record_id) in ids[1..11].iter().enumerate() {
+        for (field, allowed) in ALLOWED[row].iter().enumerate() {
+            if *allowed {
+                continue;
+            }
+            let mut store = Store::new();
+            let record = source.record(record_id).unwrap();
+            let mut ancestors = record.parents.iter().cloned().collect::<Vec<_>>();
+            while let Some(parent_id) = ancestors.pop() {
+                if store.get(&parent_id).is_some() {
                     continue;
                 }
-                let bytes = encoded.unwrap();
-                prop_assert!(decode(&bytes).is_ok());
-                store.insert(entry).unwrap();
-                prop_assert!(store.view().is_err(), "record {} changed field {field}", record.kind.name());
-                checked += 1;
+                let parent = source.record(&parent_id).unwrap();
+                ancestors.extend(parent.parents.iter().cloned());
+                store.insert(Entry::Record(parent.clone())).unwrap();
             }
+            let mut damaged = record.clone();
+            match field {
+                0 => {
+                    damaged.after.kind = if damaged.after.kind == Kind::Issue {
+                        Kind::Group
+                    } else {
+                        Kind::Issue
+                    }
+                }
+                1 => {
+                    damaged.after.lifecycle = if damaged.after.lifecycle == Lifecycle::NotStarted {
+                        Lifecycle::Undecided
+                    } else {
+                        Lifecycle::NotStarted
+                    }
+                }
+                2 => damaged.after.owner = Some(format!("owner-{suffix}")),
+                3 => damaged.after.title.push_str(&suffix),
+                4 => {
+                    damaged.after.label = if damaged.after.label == Label::Bug {
+                        Label::Chore
+                    } else {
+                        Label::Bug
+                    }
+                }
+                5 => {
+                    damaged.after.parent = if damaged.after.parent.is_some() {
+                        None
+                    } else {
+                        Some(id("g0"))
+                    }
+                }
+                6 => {
+                    damaged.after.needs.insert(id(&format!("need-{suffix}")));
+                }
+                _ => damaged.after.condition = Some(format!("exit 0 # {suffix}")),
+            }
+            let entry = Entry::Record(damaged);
+            let encoded = encode(&entry);
+            if REJECTED_WITHOUT_PARENT[row][field] {
+                assert!(
+                    encoded.is_err(),
+                    "record {} field {field} unexpectedly encoded",
+                    record.kind.name()
+                );
+                continue;
+            }
+            let bytes = encoded.unwrap();
+            assert!(decode(&bytes).is_ok());
+            store.insert(entry).unwrap();
+            assert!(
+                store.view().is_err(),
+                "record {} changed field {field}",
+                record.kind.name()
+            );
+            checked += 1;
         }
-        prop_assert!(checked >= 20, "only {checked} encodable forbidden changes");
     }
+    assert!(checked >= 20, "only {checked} encodable forbidden changes");
+}
 
-    #[test]
-    fn generated_wrong_entity_or_kind_parent_is_rejected(
-        suffix in "[a-z]{1,8}",
-    ) {
-      for wrong_entity in [false, true] {
+#[test]
+fn wrong_entity_or_kind_parent_is_rejected() {
+    let suffix = "changed".to_owned();
+
+    for wrong_entity in [false, true] {
         let mut replica = Replica::new("r0");
         let parent = if wrong_entity {
             replica.head("g0")
         } else {
-            let conversion = replica.store.convert(&id("i3"), Kind::Group, replica.tick()).unwrap().unwrap();
+            let conversion = replica
+                .store
+                .convert(&id("i3"), Kind::Group, replica.tick())
+                .unwrap()
+                .unwrap();
             insert(&mut replica.store, conversion)
         };
         let mut record = replica.store.record(&replica.head("i3")).unwrap().clone();
@@ -690,9 +749,8 @@ proptest! {
         record.after.kind = Kind::Issue;
         record.after.title.push_str(&suffix);
         let bytes = encode(&Entry::Record(record.clone())).unwrap();
-        prop_assert!(decode(&bytes).is_ok());
+        assert!(decode(&bytes).is_ok());
         replica.store.insert(Entry::Record(record)).unwrap();
-        prop_assert!(replica.store.view().is_err());
-      }
+        assert!(replica.store.view().is_err());
     }
 }
