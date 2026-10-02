@@ -556,6 +556,18 @@ fn drain_after_termination(
     }
 }
 
+fn receive_output(
+    receiver: &Receiver<StreamMessage>,
+    wait: impl Fn() -> Duration,
+    sleep: impl FnOnce(Duration),
+) -> std::result::Result<StreamMessage, RecvTimeoutError> {
+    let result = receiver.recv_timeout(wait());
+    if matches!(result, Err(RecvTimeoutError::Disconnected)) {
+        sleep(wait());
+    }
+    result
+}
+
 fn supervise(
     mut child: Child,
     timeout: Duration,
@@ -655,7 +667,11 @@ fn supervise(
                 stderr,
             }));
         }
-        match receiver.recv_timeout(WAIT_INTERVAL.min(timeout.saturating_sub(started.elapsed()))) {
+        match receive_output(
+            &receiver,
+            || WAIT_INTERVAL.min(timeout.saturating_sub(started.elapsed())),
+            std::thread::sleep,
+        ) {
             Ok(message) => {
                 if let Err(error) =
                     collect_message(message, &mut stdout, &mut stderr, &mut streams_open)
@@ -680,7 +696,6 @@ fn supervise(
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
                 streams_open = 0;
-                std::thread::sleep(WAIT_INTERVAL.min(timeout.saturating_sub(started.elapsed())));
             }
         }
         if status.is_none() {
@@ -801,20 +816,18 @@ mod tests {
         .to_string();
         assert!(error.contains("trace could not be written"));
         assert!(error.contains("flush failed"));
+    }
 
-        fn cpu_time() -> f64 {
-            let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
-            assert_eq!(unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) }, 0);
-            usage.ru_utime.tv_sec as f64
-                + usage.ru_stime.tv_sec as f64
-                + (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) as f64 / 1_000_000.0
-        }
-        let before = cpu_time();
-        Evaluation::with_timeout(std::env::current_dir().unwrap(), Duration::from_secs(2))
-            .run_command(entity, "exec >/dev/null 2>&1; sleep 0.5")
-            .unwrap();
-        assert!(
-            cpu_time() - before < 0.25,
+    #[test]
+    fn closed_output_streams_wait_before_polling_again() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        drop(sender);
+        let mut slept = None;
+        let result = receive_output(&receiver, || WAIT_INTERVAL, |wait| slept = Some(wait));
+        assert!(matches!(result, Err(RecvTimeoutError::Disconnected)));
+        assert_eq!(
+            slept,
+            Some(WAIT_INTERVAL),
             "closed streams must not busy-poll"
         );
     }
