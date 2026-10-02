@@ -181,6 +181,16 @@ fn records_written_earlier_decode_and_re_encode_to_the_same_bytes() {
 }
 
 #[test]
+fn decode_rejects_a_group_storing_in_progress() {
+    let text =
+        format!("{}\n", WRITTEN_RECORDS[1]).replace("\"kind\":\"issue\"", "\"kind\":\"group\"");
+    assert_eq!(
+        error(decode(text.as_bytes())),
+        "a Group never stores InProgress"
+    );
+}
+
+#[test]
 fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
     let (store, ids) = store_with_every_kind();
     let bytes = encode(store.get(&ids[1]).unwrap()).unwrap();
@@ -263,7 +273,6 @@ fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
         .contains("unknown lifecycle")
     );
     // Values outside the rules.
-    assert!(error(with("\"kind\":\"issue\"", "\"kind\":\"group\"")).contains("Group"));
     assert!(
         error(with("\"owner\":\"r0\"", "\"owner\":\"someone-else\"")).contains("recorder's actor")
     );

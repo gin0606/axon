@@ -964,6 +964,35 @@ mod publication_tests {
 
     #[cfg(unix)]
     #[test]
+    fn publication_rejects_a_symlinked_record_subdirectory_before_writing() {
+        let (root, store) = fixture();
+        let entries = vec![two_records().remove(0)];
+        let id = RecordId::of(&record::encode(&entries[0]).unwrap());
+        let directory = store.records_path().join(id.subdirectory());
+        let elsewhere = root.join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &directory).unwrap();
+        let error = store
+            .publish_entries_with(&entries, &mut |_| Ok(()), &mut |path, reach| {
+                sync_directory(path, reach)
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not applied"), "{error}");
+        assert!(
+            error.contains(&format!(
+                "{} is not a regular directory",
+                directory.display()
+            )),
+            "{error}"
+        );
+        assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_record_that_is_a_symlink_or_directory_is_corruption_and_never_read() {
         for symlink in [true, false] {
             let (root, mut store) = fixture();

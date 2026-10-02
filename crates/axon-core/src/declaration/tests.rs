@@ -284,7 +284,6 @@ fn strict_yaml_rejects_unsupported_constructs_and_wrong_types() {
             "      - { key: first }",
             "      - { key: first }\n      - { key: first }",
         ),
-        text.replace("key: second", "key: first"),
         format!("{text}---\n{text}"),
         "[]\n".into(),
     ];
@@ -311,6 +310,17 @@ fn strict_yaml_rejects_unsupported_constructs_and_wrong_types() {
             "{e}"
         );
     }
+}
+#[test]
+fn declaration_rejects_duplicate_record_keys_without_a_self_dependency() {
+    let mut d = example();
+    d.issues[1].needs.clear();
+    let text = d.serialize(&empty_view()).unwrap();
+    let duplicate = text.replace("key: second", "key: first");
+    assert_eq!(
+        parse(&duplicate).unwrap_err().to_string(),
+        "Declaration: identity/reference: first: invalid or duplicate key"
+    );
 }
 #[test]
 fn label_is_required_and_limited_to_the_fixed_set() {
