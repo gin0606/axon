@@ -65,7 +65,16 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
     for p in &mut processes {
         assert!(p.wait().unwrap().success());
     }
-    assert_eq!(f.records().notes_of(&eid(&issue)).len(), 8);
+    let records = f.records();
+    let notes = records.notes_of(&eid(&issue));
+    assert_eq!(notes.len(), 8);
+    assert_eq!(
+        notes
+            .iter()
+            .map(|(_, note)| note.body.clone())
+            .collect::<BTreeSet<_>>(),
+        (0..8).map(|i| format!("note {i}")).collect()
+    );
     f.ok(&["release", &issue]);
     f.ok(&["start", &issue]);
     f.ok(&["complete", &issue]);

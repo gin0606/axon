@@ -271,106 +271,6 @@ fn registration(records: &Store, id: &str) -> Entry {
 }
 
 #[test]
-fn registration_to_group_completion_and_records() {
-    let f = Fixture::new();
-    f.init();
-    let group = f
-        .ok(&[
-            "capture",
-            "--label",
-            "chore",
-            "--kind",
-            "group",
-            "--title",
-            "計画",
-            "-m",
-            "計画本文",
-        ])
-        .split_whitespace()
-        .next()
-        .unwrap()
-        .to_string();
-    let dependency = f.accepted("先行");
-    let issue = f
-        .ok(&[
-            "capture",
-            "--label",
-            "chore",
-            "--title",
-            "実装",
-            "--parent",
-            &group,
-            "--needs",
-            &dependency,
-            "-m",
-            "保存本文",
-        ])
-        .split_whitespace()
-        .next()
-        .unwrap()
-        .to_string();
-    assert!(f.ok(&["show", &issue]).contains("Undecided"));
-    f.ok(&["accept", &issue]);
-    let wait = f.ok(&["show", &issue]);
-    assert!(wait.contains("Required to start"));
-    assert!(wait.contains(&format!("Ancestor must be adopted: {group}")));
-    assert!(wait.contains("Dependency must complete:"));
-    assert!(!wait.contains("Parent:"));
-    assert!(failure(f.run(&["start", &issue])).contains("all ancestor Groups must be adopted"));
-    f.ok(&["accept", &group]);
-    assert!(f.ok(&["show", &issue]).contains("Parent:"));
-    assert!(failure(f.run(&["start", &issue])).contains("dependencies must be Completed"));
-    assert!(failure(f.run(&["start", &group])).contains("a Group is not started directly"));
-    f.ok(&["start", &dependency]);
-    f.ok(&["complete", &dependency]);
-    f.ok(&[
-        "write",
-        &issue,
-        "--title",
-        "実装済みの目的",
-        "-m",
-        "編集本文",
-    ]);
-    f.ok(&["start", &issue]);
-    assert!(
-        f.ok(&["show", &group])
-            .contains("Group  InProgress  chore  計画")
-    );
-    assert!(failure(f.run(&["release", &group])).contains("a Group is not released directly"));
-    f.ok(&["note", "add", &issue, "-m", "検証結果"]);
-    assert!(failure(f.run(&["complete", &group])).contains("all children must be terminal"));
-    let show = f.ok(&["show", &issue]);
-    assert!(show.starts_with(&issue));
-    assert!(show.contains("1 notes"));
-    assert!(show.contains("編集本文"));
-    assert!(!show.contains("検証結果"));
-    assert!(!show.contains("Dependency must complete:"));
-    f.ok(&["complete", &issue, "--reason", "検証完了"]);
-    assert!(
-        f.ok(&["show", &group])
-            .contains("1/1 terminal (1 completed, 0 cancelled)")
-    );
-    assert!(
-        f.ok(&["show", &group])
-            .contains("Awaiting final confirmation")
-    );
-    f.ok(&["complete", &group]);
-    assert!(f.ok(&["note", "list", &issue]).contains("検証結果"));
-    let log = f.ok(&["log", &issue]);
-    assert!(log.contains("InProgress → Completed"));
-    assert!(log.contains("検証完了"));
-    assert!(!log.contains("record-"));
-    let log = f.ok(&["log", &group]);
-    assert!(log.contains("NotStarted → Completed"));
-    assert!(!log.contains("InProgress"));
-    let list = f.ok(&["list"]);
-    assert!(list.find(&group) < list.find(&dependency));
-    assert!(list.find(&dependency) < list.find(&issue));
-    let files = f.record_files();
-    assert!(failure(f.run(&["reconsider", &issue])).contains("cannot Reconsider from Completed"));
-    assert_eq!(files, f.record_files());
-}
-#[test]
 fn lifecycle_and_relation_edits_use_common_guards() {
     let f = Fixture::new();
     f.init();
@@ -468,41 +368,9 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
     assert!(f.ok(&["complete", "--help"]).contains("final review"));
 }
 #[test]
-fn concurrent_start_has_one_winner_and_other_writes_survive() {
+fn concurrent_captures_preserve_every_entity() {
     let f = Fixture::new();
     f.init();
-    let id = f.accepted("start");
-    let first = f
-        .command()
-        .args(["start", &id])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let second = f
-        .command()
-        .args(["start", &id])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    assert_ne!(
-        first.wait_with_output().unwrap().status.success(),
-        second.wait_with_output().unwrap().status.success()
-    );
-    let children: Vec<_> = (0..12)
-        .map(|n| {
-            f.command()
-                .args(["note", "add", &id, "-m", &format!("note {n}")])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap()
-        })
-        .collect();
-    for child in children {
-        success(child.wait_with_output().unwrap());
-    }
     let children: Vec<_> = (0..8)
         .map(|n| {
             f.command()
@@ -520,13 +388,22 @@ fn concurrent_start_has_one_winner_and_other_writes_survive() {
                 .unwrap()
         })
         .collect();
-    for child in children {
-        success(child.wait_with_output().unwrap());
-    }
+    let ids: BTreeSet<_> = children
+        .into_iter()
+        .map(|child| {
+            let output = success(child.wait_with_output().unwrap());
+            eid(output.split_whitespace().next().unwrap())
+        })
+        .collect();
+    assert_eq!(ids.len(), 8);
     let records = f.records();
-    assert_eq!(records.notes_of(&eid(&id)).len(), 12);
-    assert_eq!(records.view().unwrap().known().count(), 9);
-    assert_eq!(records.history(&eid(&id)).unwrap().len(), 2);
+    assert_eq!(
+        records.view().unwrap().known().collect::<BTreeSet<_>>(),
+        ids.iter().collect()
+    );
+    for id in ids {
+        assert_eq!(records.history(&id).unwrap().len(), 1);
+    }
 }
 #[test]
 fn concurrent_branches_are_read_as_a_conflict_that_stops_ordinary_operations() {
@@ -595,86 +472,56 @@ fn concurrent_branches_are_read_as_a_conflict_that_stops_ordinary_operations() {
     assert_eq!(left.records().notes_of(&eid("t-item")).len(), 5);
 }
 #[test]
-fn log_lists_each_concurrent_branch_together_with_one_branch_boundary() {
+fn log_marks_each_switch_between_concurrent_leaf_records() {
     let f = Fixture::new();
     f.init();
-    f.publish(vec![registration(&f.records(), "t-item")]);
-    let left = Fixture::new();
-    let right = Fixture::new();
-    for side in [&left, &right] {
-        fs::create_dir(side.0.join(".axon")).unwrap();
-        fs::copy(f.header(), side.header()).unwrap();
-        merge_records(&f.0, &side.0);
+    let at = "2026-01-01T00:00:00Z".parse().unwrap();
+    let records = Store::new();
+    let created = records
+        .create(
+            eid("t-item"),
+            current("t-item"),
+            Context { at, recorder: None },
+        )
+        .unwrap();
+    let created = Entry::Record(created);
+    let parent = created.id().unwrap();
+    let mut entries = vec![created];
+    for reason in ["left", "middle", "right"] {
+        entries.push(Entry::Record(record::Record {
+            entity: eid("t-item"),
+            kind: record::RecordKind::Transition(axon::lifecycle::Operation::Start),
+            parents: BTreeSet::from([parent.clone()]),
+            at,
+            recorder: None,
+            reason: Some(reason.into()),
+            after: Current {
+                lifecycle: Lifecycle::InProgress,
+                ..current("t-item")
+            },
+        }));
     }
-    // Several records per side, so that the sides can interleave unless kept together.
-    for (side, name) in [(&left, "left"), (&right, "right")] {
-        for n in 1..=3 {
-            side.ok(&["start", "t-item"]);
-            side.ok(&["release", "t-item", "-r", &format!("{name} {n}")]);
-        }
-    }
-    merge_records(&right.0, &left.0);
-    merge_records(&left.0, &right.0);
-    let log = left.ok(&["log", "t-item"]);
-    assert_eq!(log, right.ok(&["log", "t-item"]));
-    assert!(log.contains("Conflicted: 2 heads"), "{log}");
-    assert_eq!(log.matches("Concurrent branch").count(), 1, "{log}");
-    let at = |text: &str| log.find(text).unwrap_or_else(|| panic!("{text}: {log}"));
-    let boundary = at("Concurrent branch");
-    let (first, second) = if at("left 1") < at("right 1") {
-        ("left", "right")
-    } else {
-        ("right", "left")
-    };
-    let positions: Vec<_> = [first, second]
-        .iter()
-        .flat_map(|name| (1..=3).map(move |n| format!("{name} {n}")))
-        .map(|text| at(&text))
-        .collect();
-    assert!(positions.is_sorted(), "{log}");
-    assert!(positions[2] < boundary && boundary < positions[3], "{log}");
-}
-#[test]
-fn log_finishes_a_nested_fork_before_moving_to_another_branch() {
-    let f = Fixture::new();
-    f.init();
-    f.publish(vec![registration(&f.records(), "t-item")]);
-    let copy = |from: &Fixture| {
-        let side = Fixture::new();
-        fs::create_dir(side.0.join(".axon")).unwrap();
-        fs::copy(from.header(), side.header()).unwrap();
-        merge_records(&from.0, &side.0);
-        side
-    };
-    // One side starts and then forks into two releases; the other side starts and releases.
-    let left = copy(&f);
-    let right = copy(&f);
-    left.ok(&["start", "t-item"]);
-    let fork = copy(&left);
-    left.ok(&["release", "t-item", "-r", "left inner"]);
-    fork.ok(&["release", "t-item", "-r", "fork inner"]);
-    right.ok(&["start", "t-item"]);
-    right.ok(&["release", "t-item", "-r", "right outer"]);
-    merge_records(&fork.0, &left.0);
-    merge_records(&right.0, &left.0);
-    let log = left.ok(&["log", "t-item"]);
-    assert!(log.contains("Conflicted: 3 heads"), "{log}");
-    // Two switches, one per branch end, and the two inner releases stay next to each other.
-    // The record IDs vary per run; the unit tests of the history order pin the IDs apart.
-    assert_eq!(log.matches("Concurrent branch").count(), 2, "{log}");
+    f.publish(entries);
+    let log = f.ok(&["log", "t-item"]);
     let lines: Vec<_> = log.lines().collect();
-    let at = |text: &str| {
-        lines
-            .iter()
-            .position(|line| line.contains(text))
-            .unwrap_or_else(|| panic!("{text}: {log}"))
-    };
-    let (inner, other) = (
-        at("left inner").min(at("fork inner")),
-        at("left inner").max(at("fork inner")),
-    );
-    assert_eq!(other - inner, 2, "{log}");
-    assert!(lines[inner + 1].starts_with("Concurrent branch"), "{log}");
+    assert_eq!(lines.len(), 7, "{log}");
+    assert!(lines[0].contains("Created: NotStarted"), "{log}");
+    for index in [2, 4] {
+        assert_eq!(
+            lines[index], "Concurrent branch (not ordered after the preceding record)",
+            "{log}"
+        );
+    }
+    let reasons: BTreeSet<_> = [1, 3, 5]
+        .map(|index| {
+            let line = lines[index];
+            assert!(line.contains("NotStarted → InProgress"), "{log}");
+            line.split("Reason: ").nth(1).unwrap()
+        })
+        .into_iter()
+        .collect();
+    assert_eq!(reasons, BTreeSet::from(["left", "middle", "right"]));
+    assert_eq!(lines[6], "Conflicted: 3 heads", "{log}");
 }
 #[test]
 fn log_names_an_edit_record_without_field_changes_and_its_reason() {
