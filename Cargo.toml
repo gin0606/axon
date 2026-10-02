@@ -10,7 +10,7 @@ readme = "README.md"
 publish = false
 
 [workspace]
-members = ["crates/axon-core", "crates/axon-label-conversion", "crates/axon-recorder"]
+members = ["crates/axon-core", "crates/axon-recorder"]
 default-members = [".", "crates/axon-core", "crates/axon-recorder"]
 
 [dependencies]
@@ -28,5 +28,4 @@ unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
 
 [dev-dependencies]
-axon-label-conversion = { path = "crates/axon-label-conversion" }
 proptest = "1.11.0"

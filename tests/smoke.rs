@@ -1911,6 +1911,3 @@ mod contracts;
 
 #[path = "lifecycle/declaration.rs"]
 mod declaration;
-
-#[path = "lifecycle/label_conversion.rs"]
-mod label_conversion;

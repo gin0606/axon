@@ -240,11 +240,7 @@ fn decode_rejects_truncated_empty_unknown_missing_and_non_canonical_input() {
         let spelled = with("\"label\":\"feat\"", &format!("\"label\":\"{label}\""));
         assert_eq!(spelled.unwrap().1.as_record().unwrap().after.label, label);
     }
-    let unlabeled = error(with("\"label\":\"feat\",", ""));
-    assert!(
-        unlabeled.contains("missing key \"label\"") && unlabeled.contains("needs conversion"),
-        "{unlabeled}"
-    );
+    assert!(error(with("\"label\":\"feat\",", "")).contains("missing key \"label\""));
     for outside in ["\"fix\"", "\"Feat\"", "\"\"", "null", "[\"feat\"]"] {
         let error = error(with("\"label\":\"feat\"", &format!("\"label\":{outside}")));
         assert!(
@@ -428,23 +424,15 @@ fn header_round_trips_and_rejects_unknown_formats_and_bad_prefixes() {
     assert!(text.starts_with("{\"format\":\"axon-records/v2\",\"store\":\"store-"));
     assert!(text.ends_with("\",\"prefix\":\"demo-1\"}\n"));
     assert_eq!(decode_header(&bytes).unwrap(), header);
-    assert!(
-        error(decode_header(
-            text.replacen("axon-records/v2", "axon-lifecycle/v1", 1)
-                .as_bytes()
-        ))
-        .contains("unsupported store format")
-    );
-    // The format before labels is not unknown: it names the conversion it needs.
-    let earlier = error(decode_header(
-        text.replacen("axon-records/v2", "axon-records/v1", 1)
-            .as_bytes(),
-    ));
-    assert!(earlier.starts_with(NEEDS_CONVERSION), "{earlier}");
-    assert!(
-        earlier.contains("\"axon-records/v1\"") && earlier.contains("\"axon-records/v2\""),
-        "{earlier}"
-    );
+    for unknown in ["axon-lifecycle/v1", "axon-records/v1", "axon-records/v3"] {
+        assert!(
+            error(decode_header(
+                text.replacen("axon-records/v2", unknown, 1).as_bytes()
+            ))
+            .contains("unsupported store format"),
+            "{unknown}"
+        );
+    }
     assert!(
         error(decode_header(
             text.replacen("\"prefix\"", "\"name\"", 1).as_bytes()

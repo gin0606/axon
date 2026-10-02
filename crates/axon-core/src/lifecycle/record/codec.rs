@@ -10,11 +10,6 @@ use serde::{Deserialize, Deserializer, Serialize, ser::SerializeStruct};
 use std::collections::BTreeSet;
 
 pub const HEADER_FORMAT: &str = "axon-records/v2";
-/// The format before labels. Its records lack a label, so the store is converted once
-/// instead of being read.
-pub const EARLIER_HEADER_FORMAT: &str = "axon-records/v1";
-/// How the error of `decode_header` for an earlier format begins.
-pub const NEEDS_CONVERSION: &str = "the store needs conversion";
 
 /// The spellings of kind and lifecycle are the declaration's.
 use crate::declaration::{kind as kind_name, lifecycle as lifecycle_name};
@@ -62,14 +57,10 @@ fn operation_from(name: &str) -> Result<Operation> {
     }
 }
 
-/// A missing label marks a record written before labels, which is converted instead of read.
 fn label_from(value: Option<Option<String>>) -> Result<Label> {
-    match value {
-        None => Err(invalid(format!(
-            "missing key \"label\": a record written before labels ({EARLIER_HEADER_FORMAT}) needs conversion"
-        ))),
-        Some(None) => Err(invalid("invalid type: null label")),
-        Some(Some(name)) => Label::from_name(&name),
+    match required("label", value)? {
+        None => Err(invalid("invalid type: null label")),
+        Some(name) => Label::from_name(&name),
     }
 }
 /// `Option<Option<T>>` distinguishes an absent key (outer None) from an explicit null.
@@ -324,15 +315,9 @@ pub fn encode_header(header: &Header) -> Result<Vec<u8>> {
     })
 }
 
-/// Rejects an unknown format instead of converting it. The earlier format is rejected with an
-/// error that begins with `NEEDS_CONVERSION`.
+/// Rejects an unknown format instead of converting it.
 pub fn decode_header(bytes: &[u8]) -> Result<Header> {
     let row: HeaderRow = from_line(bytes).map_err(|error| invalid(format!("header: {error}")))?;
-    if row.format == EARLIER_HEADER_FORMAT {
-        return Err(invalid(format!(
-            "{NEEDS_CONVERSION}: its format {EARLIER_HEADER_FORMAT:?} predates labels; convert it to {HEADER_FORMAT:?} before use as the storage guide (docs/guide/storage.md, converting a store from before labels) describes"
-        )));
-    }
     if row.format != HEADER_FORMAT {
         return Err(invalid(format!(
             "unsupported store format {:?}",
