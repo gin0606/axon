@@ -31,7 +31,7 @@ OS lock、Git index の unmerged 検査、管理 directory が通常の director
 
 ## 記録 file と codec
 
-header file `.axon/header.json` は 1 行の JSON で、`{"format":"axon-records/v2","store":"store-…","prefix":"demo"}` の形とする。store ID は `axon init` が乱数で生成する。未知 format の読取や暗黙変換はしない。label を導入する前の `axon-records/v1` は、記録を読まずに変換が要ることを示す診断で拒否し、破損としては報告しない。
+header file `.axon/header.json` は 1 行の JSON で、`{"format":"axon-records/v2","store":"store-…","prefix":"demo"}` の形とする。store ID は `axon init` が乱数で生成する。未知 format の読取や暗黙変換はしない。
 
 記録 file は `.axon/records/<記録 ID の先頭 2 文字>/<記録 ID>` に置き、内容は canonical な 1 行の JSON と末尾の LF 一つである。記録 ID は file の bytes 全体の BLAKE3 hash の小文字 16 進 64 文字で、file 名と一致する。JSON の object のキーは決定的な順、空白なし、文字列の escape は最小、記録者 metadata の JSON 数値は任意精度の表現で保持し、整数の桁あふれや小数の丸めで内容や記録の同一性を変えない。同じ内容の記録は同じ bytes に encode され、同じ記録 ID になる。
 

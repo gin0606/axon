@@ -30,7 +30,7 @@ cargo test --workspace --lib --bin axon --test smoke
 
 `cargo test` はworkspaceの記録者crate単体テストも実行する。保存・統合は `tests/lifecycle/file.rs`、保存先の初期化と探索は `tests/lifecycle/location.rs` をsmokeから実行し、実worktreeでのGit操作、index、並行writer、破損の報告を検証する。
 
-オプションなしの`cargo test`は既定メンバーのsmokeを含む全test targetの標準入口であり、上記を含まない契約はfull verificationで検査する。一度限りの変換ツール `crates/axon-label-conversion` は既定メンバーではないが、root crateがdev-dependencyとして持ちsmokeから `label_conversion::` のtestを実行するため、そのlibはオプションなしの`cargo test`、LefthookのClippyとtest、下のMSRVの検査でもcompileされる。libの単体テストはLefthookの `--workspace --lib` とfull verificationで実行し、binaryのcompileとそのClippyはfull verificationの`--workspace`だけで行う。Lefthookの各jobは失敗時にcommitを拒否し、staged Rust fileがない場合は既存の`*.rs` globによってRust検証を省略する。
+オプションなしの`cargo test`はsmokeを含む全test targetの標準入口であり、上記を含まない契約はfull verificationで検査する。Lefthookの各jobは失敗時にcommitを拒否し、staged Rust fileがない場合は既存の`*.rs` globによってRust検証を省略する。
 
 リリース前には通常 toolchain の全検証に加え、MSRVで次を実行する。
 

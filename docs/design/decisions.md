@@ -207,7 +207,9 @@ Issue・Group は最大一つの親 Group を持つ。多重所属を許すと�
 
 記録 ID は記録 file の bytes 全体の hash なので、既存の記録 file に label を足すと、その記録の ID と、それを親として参照する後続の記録の ID がすべて変わる。label のない記録を既定値付きでそのまま読む形にすると、同じ Entity の現在値を label 付きで書く新しい記録と、label のない古い記録が混在し、記録の検査（種類ごとに変えてよい項目以外が変わっていないこと）と codec の canonical 性に、format の世代による例外が残る。
 
-そこで header の format を `axon-records/v2` に上げ、v1 の保存先は変換が要ることを示して拒否する。既存の保存先は一度限りの変換ツールで、各 Entity の全記録に同じ label を入れ、因果順に記録 ID と親記録の参照を作り直して v2 にする。変換で label を個別に決める必要があるのは着手や判断の対象になる未終了の Entity だけで、終了した Entity は指定がなければ `chore` にする。branch ごとに終了の有無が異なる Entity は、両側の共通の記録が同じ記録 ID になるよう、対応で label を明示する。終了した Entity は一覧で優先を決める対象にならないため、分類の精度が判断に影響しない。`Reopen`・`Reconsider` で戻した Entity は、必要なら通常の `axon label set` で直す。
+そこで header の format を `axon-records/v2` に上げ、v1 の保存先は読まない。既存の保存先は一度限りの変換ツールで、各 Entity の全記録に同じ label を入れ、因果順に記録 ID と親記録の参照を作り直して v2 にした。変換で label を個別に決める必要があったのは着手や判断の対象になる未終了の Entity だけで、終了した Entity は指定がなければ `chore` にした。branch ごとに終了の有無が異なる Entity は、両側の共通の記録が同じ記録 ID になるよう、対応で label を明示した。終了した Entity は一覧で優先を決める対象にならないため、分類の精度が判断に影響しない。`Reopen`・`Reconsider` で戻した Entity は、必要なら通常の `axon label set` で直す。
+
+変換ツールは既存の保存先を移した後に削除し、Git の履歴にだけ残る。v1 の保存先は他の未知の format と同じ診断で拒否し、label のない記録は規則外の内容として破損になる。
 
 ## ID を `<prefix>-<ランダム8文字>` にした理由
 

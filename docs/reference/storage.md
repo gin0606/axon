@@ -60,7 +60,7 @@ gap は記録が消せないため解決記録では埋まらない。欠けた�
 
 `.axon/` 直下の header・`.gitignore`・`.gitattributes`・lock 以外の file は読まず、報告もしない。header file の欠落、読めない header、未知の format は破損と同じく操作を止める。未知の format は変換しない。
 
-現在の header の format は `axon-records/v2` である。label を導入する前の format `axon-records/v1` の保存先は、記録が label を持たないため読めない。読取と全操作（`axon storage check` を含む）は、記録を読まずに変換が要ることを示す診断で止め、暗黙に変換しない。v1 の記録へ label を足すと記録 ID（内容の hash）と親記録の参照がすべて変わるため、v2 への移行は利用者が一度限りの変換で行う（手順は [保存先と worktree](../guide/storage.md#labelを導入する前の保存先を変換する)）。v1 のまま残した branch や clone の記録 file を v2 の保存先へ Git で統合すると、label のない記録が破損になるため、統合する側も変換してから統合する。共通の記録が両側で同じ記録 ID になるよう、各 Entity に両側で同じ label が付く対応を使う（[format を上げて変換で移す理由](../design/decisions.md#format-を上げて変換で移す理由)）。
+現在の header の format は `axon-records/v2` である（[format を上げて変換で移す理由](../design/decisions.md#format-を上げて変換で移す理由)）。
 
 ## 保存先と初期化
 

@@ -358,15 +358,11 @@ impl Store {
         let header_path = self.header_path();
         let header = read_regular(&header_path)
             .and_then(|bytes| record::decode_header(&bytes).map_err(Into::into))
-            .map_err(|e| match e {
-                // An earlier format is not damage: the records are not read, only converted.
-                Error::Core(e) if e.0.starts_with(record::NEEDS_CONVERSION) => {
-                    invalid(format!("{}: {e}", header_path.display()))
-                }
-                e => invalid(format!(
+            .map_err(|e| {
+                invalid(format!(
                     "{CORRUPT_HEADER}{}: {e}; the store is not read until it is repaired",
                     header_path.display()
-                )),
+                ))
             })?;
         let mut records = record::Store::new();
         let mut corruption = Vec::new();

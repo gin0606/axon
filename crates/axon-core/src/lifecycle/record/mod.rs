@@ -14,10 +14,7 @@ mod ops;
 mod store;
 mod view;
 
-pub use codec::{
-    EARLIER_HEADER_FORMAT, HEADER_FORMAT, NEEDS_CONVERSION, decode, decode_header, encode,
-    encode_header,
-};
+pub use codec::{HEADER_FORMAT, decode, decode_header, encode, encode_header};
 pub use model::{
     Current, Entry, Header, NONCE_LENGTH, Nonce, Note, RECORD_ID_LENGTH, Record, RecordId,
     RecordKind,
