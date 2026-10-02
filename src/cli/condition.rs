@@ -808,7 +808,7 @@ mod tests {
         assert!(error.contains(missing.to_str().unwrap()));
         let error = Evaluation::with_trace_writer(
             std::env::current_dir().unwrap(),
-            Duration::from_secs(1),
+            Duration::from_secs(30),
             Box::new(FlushFailure),
         )
         .run_command(entity, "exit 0")

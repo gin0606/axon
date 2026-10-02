@@ -1237,6 +1237,13 @@ mod process_tests {
         process::{Command, Stdio},
         time::{Duration, Instant},
     };
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
     #[test]
     fn lock_holder() {
         let Some(root) = std::env::var_os("AXON_FILE_TEST_LOCK_HOLDER") else {
@@ -1253,32 +1260,33 @@ mod process_tests {
     fn killed_process_releases_stable_lock() {
         let root = std::env::temp_dir().join(format!("axon-lock-{:032x}", rand::random::<u128>()));
         fs::create_dir(&root).unwrap();
-        let mut child = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "file::process_tests::lock_holder", "--nocapture"])
-            .env("AXON_FILE_TEST_LOCK_HOLDER", &root)
-            .stdout(Stdio::null())
-            .spawn()
-            .unwrap();
+        let mut child = ChildGuard(
+            Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "file::process_tests::lock_holder", "--nocapture"])
+                .env("AXON_FILE_TEST_LOCK_HOLDER", &root)
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
         let deadline = Instant::now() + Duration::from_secs(5);
         while !root.join("ready").exists() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
-        if !root.join("ready").exists() {
-            child.kill().unwrap();
-            child.wait().unwrap();
-            panic!("lock holder did not start");
-        }
-        let (sender, receiver) = std::sync::mpsc::channel();
+        assert!(root.join("ready").exists(), "lock holder did not start");
         let path = root.join(WRITE_LOCK);
-        let thread = std::thread::spawn(move || {
-            let _lock = lock(&path).unwrap();
-            sender.send(()).unwrap();
-        });
-        assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
-        child.kill().unwrap();
-        child.wait().unwrap();
-        receiver.recv_timeout(Duration::from_secs(5)).unwrap();
-        thread.join().unwrap();
+        let contender = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        assert!(matches!(
+            contender.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        contender.try_lock().unwrap();
+        drop(contender);
         assert!(root.join(WRITE_LOCK).is_file());
         fs::remove_dir_all(root).unwrap();
     }

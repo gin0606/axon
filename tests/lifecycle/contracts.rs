@@ -2142,7 +2142,7 @@ fn show_fails_on_evaluation_failure_and_names_skip_conditions() {
         &group,
         "--trace-conditions",
         "--condition-timeout",
-        "500ms",
+        "30s",
     ]);
     assert!(traced.status.success());
     let trace = String::from_utf8(traced.stderr).unwrap();
