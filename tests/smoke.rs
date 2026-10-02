@@ -316,11 +316,11 @@ fn registration_to_group_completion_and_records() {
     assert!(wait.contains(&format!("Ancestor must be adopted: {group}")));
     assert!(wait.contains("Dependency must complete:"));
     assert!(!wait.contains("Parent:"));
-    failure(f.run(&["start", &issue]));
+    assert!(failure(f.run(&["start", &issue])).contains("all ancestor Groups must be adopted"));
     f.ok(&["accept", &group]);
     assert!(f.ok(&["show", &issue]).contains("Parent:"));
-    failure(f.run(&["start", &issue]));
-    failure(f.run(&["start", &group]));
+    assert!(failure(f.run(&["start", &issue])).contains("dependencies must be Completed"));
+    assert!(failure(f.run(&["start", &group])).contains("a Group is not started directly"));
     f.ok(&["start", &dependency]);
     f.ok(&["complete", &dependency]);
     f.ok(&[
@@ -336,9 +336,9 @@ fn registration_to_group_completion_and_records() {
         f.ok(&["show", &group])
             .contains("Group  InProgress  chore  計画")
     );
-    failure(f.run(&["release", &group]));
+    assert!(failure(f.run(&["release", &group])).contains("a Group is not released directly"));
     f.ok(&["note", "add", &issue, "-m", "検証結果"]);
-    failure(f.run(&["complete", &group]));
+    assert!(failure(f.run(&["complete", &group])).contains("all children must be terminal"));
     let show = f.ok(&["show", &issue]);
     assert!(show.starts_with(&issue));
     assert!(show.contains("1 notes"));
@@ -367,7 +367,7 @@ fn registration_to_group_completion_and_records() {
     assert!(list.find(&group) < list.find(&dependency));
     assert!(list.find(&dependency) < list.find(&issue));
     let files = f.record_files();
-    failure(f.run(&["reconsider", &issue]));
+    assert!(failure(f.run(&["reconsider", &issue])).contains("cannot Reconsider from Completed"));
     assert_eq!(files, f.record_files());
 }
 #[test]
@@ -377,14 +377,22 @@ fn lifecycle_and_relation_edits_use_common_guards() {
     let a = f.accepted("A");
     let b = f.accepted("B");
     f.ok(&["dep", "add", &a, "--needs", &b]);
-    failure(f.run(&["dep", "add", &b, "--needs", &a]));
+    assert_eq!(f.current(&a).needs, BTreeSet::from([eid(&b)]));
+    assert!(failure(f.run(&["dep", "add", &b, "--needs", &a])).contains("completion cycle"));
     f.ok(&["dep", "rm", &a, "--needs", &b]);
+    assert!(f.current(&a).needs.is_empty());
     f.ok(&["withdraw", &a]);
+    assert_eq!(f.current(&a).lifecycle, Lifecycle::Undecided);
     f.ok(&["accept", &a]);
+    assert_eq!(f.current(&a).lifecycle, Lifecycle::NotStarted);
     f.ok(&["start", &a]);
+    assert_eq!(f.current(&a).lifecycle, Lifecycle::InProgress);
     f.ok(&["release", &a]);
+    assert_eq!(f.current(&a).lifecycle, Lifecycle::NotStarted);
     f.ok(&["cancel", &a]);
+    assert_eq!(f.current(&a).lifecycle, Lifecycle::Cancelled);
     f.ok(&["reconsider", &a]);
+    assert_eq!(f.current(&a).lifecycle, Lifecycle::Undecided);
     let g = f
         .ok(&[
             "capture", "--label", "chore", "--kind", "group", "--title", "G",
@@ -394,10 +402,16 @@ fn lifecycle_and_relation_edits_use_common_guards() {
         .unwrap()
         .to_string();
     f.ok(&["parent", "set", &a, "--parent", &g]);
+    assert_eq!(f.current(&a).parent, Some(eid(&g)));
     assert!(f.ok(&["show", &g]).contains(&a));
     f.ok(&["parent", "unset", &a]);
+    assert_eq!(f.current(&a).parent, None);
     f.ok(&["cancel", &g]);
-    failure(f.run(&["parent", "set", &a, "--parent", &g]));
+    assert_eq!(f.current(&g).lifecycle, Lifecycle::Cancelled);
+    assert!(
+        failure(f.run(&["parent", "set", &a, "--parent", &g]))
+            .contains("parent must be an unfinished Group")
+    );
 }
 #[test]
 fn stdin_files_help_invalid_arguments_and_terminal_controls() {
@@ -443,9 +457,14 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
         .unwrap();
     success(child.wait_with_output().unwrap());
     assert!(f.ok(&["note", "list", &id]).contains("stdin本文"));
-    failure(f.run(&["write", &id]));
-    failure(f.run(&["note", "add", &id]));
-    failure(f.run(&["write", &id, "-m", "x", "-F", "-"]));
+    assert!(
+        failure(f.run(&["write", &id])).contains("write requires --title, --description or --file")
+    );
+    assert!(
+        failure(f.run(&["note", "add", &id]))
+            .contains("the following required arguments were not provided:\n  --message <MESSAGE>")
+    );
+    assert!(failure(f.run(&["write", &id, "-m", "x", "-F", "-"])).contains("cannot be used with"));
     assert!(f.ok(&["complete", "--help"]).contains("final review"));
 }
 #[test]
@@ -545,7 +564,10 @@ fn concurrent_branches_are_read_as_a_conflict_that_stops_ordinary_operations() {
     let before = left.record_files();
     let rejected = failure(left.run(&["start", "t-item"]));
     assert!(rejected.contains("conflicted"), "{rejected}");
-    failure(left.run(&["capture", "--label", "chore", "--title", "blocked"]));
+    assert!(
+        failure(left.run(&["capture", "--label", "chore", "--title", "blocked"]))
+            .contains("conflicted Entities block")
+    );
     assert_eq!(left.record_files(), before);
     left.ok(&["note", "add", "t-item", "-m", "still allowed"]);
     // Parallel writers of the same Entity both succeed: each adds its own record file.
@@ -716,8 +738,19 @@ fn unsupported_corrupt_and_earlier_format_stores_are_rejected_without_changes() 
         };
         let before = fs::read(&path).unwrap();
         let error = failure(f.run(&["list"]));
-        assert!(!error.contains("not initialized"), "{kind}: {error}");
-        failure(f.run(&["init"]));
+        let reason = match kind {
+            "wrong-format" => "unsupported store format \"axon-records/v3\"",
+            "corrupt-header" => "corrupt header",
+            _ => "not a store",
+        };
+        assert!(error.contains(reason), "{kind}: {error}");
+        let error = failure(f.run(&["init"]));
+        let reason = if kind == "earlier-format" {
+            "not a store: no header.json beside"
+        } else {
+            "already initialized; init never repairs or replaces an existing store"
+        };
+        assert!(error.contains(reason), "{kind}: {error}");
         assert_eq!(before, fs::read(&path).unwrap(), "{kind}");
         assert!(!f.records_dir().exists(), "{kind}");
     }
@@ -731,7 +764,10 @@ fn discovery_outside_git_and_git_boundary() {
     fs::create_dir_all(nested.join(".axon")).unwrap();
     fs::write(nested.join(".axon/write.lock"), "").unwrap();
     assert!(success(command(&nested).args(["list"]).output().unwrap()).contains(&id));
-    failure(command(&nested).args(["init"]).output().unwrap());
+    assert!(
+        failure(command(&nested).args(["init"]).output().unwrap())
+            .contains("already inside a management root")
+    );
     // A file that is not the residue of an initialization stops discovery here.
     fs::write(nested.join(".axon/state.jsonl"), "").unwrap();
     assert!(failure(command(&nested).args(["list"]).output().unwrap()).contains("not a store"));
@@ -767,16 +803,18 @@ fn concurrent_initialization_never_replaces_a_store() {
 fn broken_pipe_is_success_after_storage_is_applied() {
     let f = Fixture::new();
     f.init();
-    let mut child = f
+    // Close the only reader before spawn so the write must encounter EPIPE.
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let child = f
         .command()
         .args([
             "capture", "--label", "chore", "--accept", "--title", "retained",
         ])
-        .stdout(Stdio::piped())
+        .stdout(Stdio::from(writer))
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    drop(child.stdout.take());
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success());
     assert!(out.stderr.is_empty());

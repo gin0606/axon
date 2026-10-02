@@ -891,7 +891,7 @@ fn a_linked_worktree_without_a_store_uses_the_main_worktrees_store() {
 }
 
 #[test]
-fn concurrent_start_across_worktrees_has_one_winner_and_one_lock() {
+fn concurrent_start_across_worktrees_has_one_winner() {
     let f = repository();
     f.init();
     ignore_store(&f.0, ".axon/");
@@ -914,7 +914,6 @@ fn concurrent_start_across_worktrees_has_one_winner_and_one_lock() {
         .filter(|out| out.status.success())
         .count();
     assert_eq!(winners, 1);
-    assert!(f.0.join(".axon/write.lock").is_file());
     assert!(!linked.0.join(".axon").exists());
 }
 

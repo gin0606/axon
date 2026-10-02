@@ -480,7 +480,7 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
     assert!(docs.contains("Short flags select inline (-m) or file (-F) input"));
     assert!(docs.contains("--description or --message"));
     assert!(f.ok(&["help", "note", "show"]).contains("<NOTE_ID>"));
-    assert!(!f.ok(&["actor"]).is_empty());
+    assert_eq!(f.ok(&["actor"]), "—\n");
     let version = f.ok(&["--version"]);
     assert_eq!(f.ok(&["-V"]), version);
     assert_eq!(

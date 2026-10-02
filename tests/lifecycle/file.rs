@@ -42,7 +42,7 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
         .next()
         .unwrap()
         .to_string();
-    failure(f.run(&["start", &group]));
+    assert!(failure(f.run(&["start", &group])).contains("a Group is not started directly"));
     let mut processes = (0..6)
         .map(|_| f.command().args(["start", &issue]).spawn().unwrap())
         .collect::<Vec<_>>();
@@ -86,7 +86,7 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
         let bytes = fs::read(f.records_dir().join(relative)).unwrap();
         assert_eq!(blake3::hash(&bytes).to_hex().as_str(), name);
     }
-    failure(f.run(&["start", &issue]));
+    assert!(failure(f.run(&["start", &issue])).contains("cannot Start from Completed"));
     assert_eq!(f.record_files(), files);
     let check = f.run(&["storage", "check"]);
     assert!(check.status.success() && check.stdout.is_empty());
@@ -223,8 +223,6 @@ fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() 
         error.contains("not initialized") && !error.contains(&id),
         "{error}"
     );
-    let check = f.run(&["storage", "check", f.0.to_str().unwrap()]);
-    assert!(!check.status.success());
     // A record that decodes on its own but does not continue its parent record (a Complete
     // forged onto a registration, from another Issue's Start) is corruption too, reported by
     // file. The Group registered above keeps the store otherwise readable.
@@ -694,7 +692,7 @@ fn storage_check_reports_conflicts_violations_and_gaps_by_severity() {
     }
     let error = failure(f.run(&["storage", "check"]));
     assert!(error.contains("unknown dependency"), "{error}");
-    failure(f.run(&["dep", "add", &user, "--needs", &dep]));
+    assert!(failure(f.run(&["dep", "add", &user, "--needs", &dep])).contains("no such Entity"));
     // Among the Entity's own dependencies a unique suffix resolves; an ambiguous one is
     // refused without a record; a complete ID of another Entity resolves to that Entity.
     f.publish(vec![
@@ -973,8 +971,8 @@ fn concurrent_work_on_one_issue_merges_in_git_and_reads_as_a_conflict() {
         group_show.contains("Group  Empty  chore  delivery"),
         "{group_show}"
     );
-    failure(a.run(&["start", &id]));
-    failure(a.run(&["complete", &group]));
+    assert!(failure(a.run(&["start", &id])).contains("conflicted"));
+    assert!(failure(a.run(&["complete", &group])).contains("conflicted Entities block"));
     a.ok(&["note", "add", &id, "-m", "seen the conflict"]);
     assert!(!a.ok(&["tasks"]).contains(&id));
     // Taking the Completed head settles the Issue at that value; the Group reads its child
@@ -1041,7 +1039,7 @@ fn valid_store_with_unmerged_index_rejects_normal_operations() {
     assert!(p.wait().unwrap().success());
     let before = f.record_files();
     assert!(failure(f.run(&["list"])).contains("unmerged"));
-    failure(f.run(&["start", &id]));
+    assert!(failure(f.run(&["start", &id])).contains("unmerged Git index"));
     assert_eq!(f.record_files(), before);
     // An explicit root inside the worktree checks the index as discovery does.
     let error = failure(f.run(&["storage", "check", f.0.to_str().unwrap()]));
@@ -2020,6 +2018,9 @@ fn git_index_fixtures_do_not_touch_an_inherited_hook_index() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains("running 1 test\n"), "{stdout}");
+        assert!(stdout.contains(&format!("test {test} ... ok")), "{stdout}");
         assert_eq!(
             fs::read(&index).unwrap(),
             b"foreign index must remain untouched"

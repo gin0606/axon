@@ -132,29 +132,25 @@ fn declaration_docs_and_template_work_with_broken_management_root() {
     fs::write(f.0.join(".git"), "broken marker").unwrap();
     fs::create_dir(f.0.join(".axon")).unwrap();
     fs::write(f.0.join(".axon/header.json"), "broken storage").unwrap();
-    let docs = f.ok(&["docs", "declaration"]);
+    let docs = f
+        .ok(&["docs", "declaration"])
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     for phrase in [
-        "id",
-        "key",
-        "base",
-        "lifecycle",
-        "title",
-        "description",
-        "label",
-        "axon-declaration/v2",
-        "parent",
-        "needs",
-        "prepare",
-        "check",
-        "apply",
-        "parent: null",
-        "does not delete or cancel",
-        "untouched",
+        "The strict YAML schema is axon-declaration/v2.",
+        "Every record has id, key, base, lifecycle, title, description, label, parent and needs.",
+        "Existing records have a full id and a read-only base fingerprint and lifecycle.",
+        "New records have id: null, base: null, a unique key, and lifecycle: undecided or not-started.",
+        "References use { id: FULL-ID } or { key: local-key }.",
+        "The label is required and one of bug, feat, chore, docs, test, refactor or spike",
+        "axon import prepare plan.yaml axon import check plan.yaml axon import apply plan.yaml",
+        "Entities not listed in groups or issues are untouched.",
+        "the file does not delete or cancel it, detach it from its parent, or remove its dependencies.",
+        "To detach an Entity from a Group, write parent: null in its record.",
+        "Use needs: [] for no outgoing dependencies.",
     ] {
         assert!(docs.contains(phrase), "{phrase}");
-    }
-    for label in axon::lifecycle::Label::ALL {
-        assert!(docs.contains(label.name()), "{}", label.name());
     }
     let output = f.run(&["docs", "declaration", "--example"]);
     assert!(output.stderr.is_empty());
@@ -887,7 +883,8 @@ proptest::proptest! {
         assert_eq!(snapshot(&f), before);
         let prepared = fs::read_to_string(&path).unwrap();
         let checked = f.ok(&["import", "check", path.to_str().unwrap()]);
-        assert!(checked.contains("Create") || checked.contains("create") || checked.contains("changes"), "{checked}");
+        assert_eq!(checked.lines().filter(|line| *line == "  Create group").count(), 1, "{checked}");
+        assert_eq!(checked.lines().filter(|line| *line == "  Create issue").count(), 2, "{checked}");
         assert_eq!(fs::read_to_string(&path).unwrap(), prepared);
         assert_eq!(snapshot(&f), before);
         let applied = f.ok(&["import", "apply", path.to_str().unwrap()]);
