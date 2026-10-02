@@ -96,7 +96,7 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
 #[test]
 fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() {
     let f = Fixture::new();
-    f.init();
+    f.ok(&["init", "tmp"]);
     let id = f.accepted("job");
     let group = f
         .ok(&[
@@ -125,7 +125,8 @@ fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() 
     assert!(f.ok(&["list"]).contains(&id));
     let check = failure(f.run(&["storage", "check"]));
     assert!(
-        check.contains("1 problems") && !check.contains("tmp"),
+        check.contains("1 problems")
+            && !check.contains(temporary.file_name().unwrap().to_str().unwrap()),
         "{check}"
     );
     fs::remove_file(&temporary).unwrap();

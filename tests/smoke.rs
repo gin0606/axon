@@ -19,7 +19,33 @@ use std::{
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
+        let root = fs::canonicalize(std::env::temp_dir()).unwrap();
+        let git = isolated_git(&root)
+            .env("LC_ALL", "C")
+            .args(["rev-parse", "--git-dir"])
+            .output()
+            .unwrap();
+        let git_error = String::from_utf8_lossy(&git.stderr);
+        assert!(
+            !root.ancestors().any(|path| {
+                path.file_name() == Some(std::ffi::OsStr::new(".axon"))
+                    || [".axon", ".git"].iter().any(|name| {
+                        let marker = path.join(name);
+                        match marker.symlink_metadata() {
+                            Ok(_) => true,
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                            Err(error) => panic!(
+                                "cannot verify TMPDIR fixture boundary at {}: {error}",
+                                marker.display()
+                            ),
+                        }
+                    })
+            }) && !git.status.success()
+                && git_error.starts_with("fatal: not a git repository (or any"),
+            "test fixtures require TMPDIR outside Git repositories and .axon stores: {}\n{git_error}",
+            root.display(),
+        );
+        let path = root.join(format!(
             "axon-lifecycle-test-{:032x}",
             rand::random::<u128>()
         ));
@@ -124,6 +150,19 @@ fn command(path: &Path) -> Command {
     }
     cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null");
+    for name in [
+        "AXON_ACTOR",
+        "AXON_SESSION_ID",
+        "CODEX_THREAD_ID",
+        "CODEX_SANDBOX",
+        "CLAUDECODE",
+        "CLAUDE_CODE",
+        "CLAUDE_CODE_SESSION_ID",
+        "AI_AGENT",
+        "USER",
+    ] {
+        cmd.env_remove(name);
+    }
     cmd
 }
 fn success(output: Output) -> String {
@@ -1593,7 +1632,6 @@ fn condition_fixture_has_an_independent_lifetime_limit() {
 
 #[test]
 fn candidate_help_and_trace_sink_failure() {
-    use std::os::fd::{FromRawFd, OwnedFd};
     let f = Fixture::new();
     f.init();
     let id = f.accepted("trace");
@@ -1612,10 +1650,9 @@ fn candidate_help_and_trace_sink_failure() {
     set_condition(&f, &id, "echo ran >> observed");
     let mut cmd = f.command();
     cmd.args(["tasks", "--trace-conditions"]);
-    let mut pipe = [0; 2];
-    assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
-    assert_eq!(unsafe { libc::close(pipe[0]) }, 0);
-    let writer = unsafe { OwnedFd::from_raw_fd(pipe[1]) };
+    // Linux sets close-on-exec atomically; macOS sets it after creation, leaving an inheritance window.
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
     let out = cmd.stderr(Stdio::from(writer)).output().unwrap();
     assert!(!out.status.success() && out.stdout.is_empty());
     assert_eq!(fs::read_to_string(f.0.join("observed")).unwrap(), "ran\n");
@@ -1687,29 +1724,12 @@ fn condition_uses_current_worktree_or_management_root_and_inherits_environment()
     assert!(success(out).contains(&id));
 }
 
-fn without_recorder(command: &mut Command) -> &mut Command {
-    for name in [
-        "AXON_ACTOR",
-        "AXON_SESSION_ID",
-        "CODEX_THREAD_ID",
-        "CODEX_SANDBOX",
-        "CLAUDECODE",
-        "CLAUDE_CODE",
-        "CLAUDE_CODE_SESSION_ID",
-        "AI_AGENT",
-        "USER",
-    ] {
-        command.env_remove(name);
-    }
-    command
-}
-
 #[test]
 fn recorder_is_automatic_durable_optional_and_not_an_operation_guard() {
     let f = Fixture::new();
     f.init();
     let created = success(
-        without_recorder(&mut f.command())
+        f.command()
             .env("CODEX_THREAD_ID", "original-session")
             .args([
                 "capture",
@@ -1723,21 +1743,16 @@ fn recorder_is_automatic_durable_optional_and_not_an_operation_guard() {
             .unwrap(),
     );
     let id = created.split_whitespace().next().unwrap();
+    success(f.command().args(["start", id]).output().unwrap());
     success(
-        without_recorder(&mut f.command())
-            .args(["start", id])
-            .output()
-            .unwrap(),
-    );
-    success(
-        without_recorder(&mut f.command())
+        f.command()
             .env("CODEX_SANDBOX", "seatbelt")
             .args(["note", "add", id, "-m", "partial metadata"])
             .output()
             .unwrap(),
     );
     success(
-        without_recorder(&mut f.command())
+        f.command()
             .env("AXON_ACTOR", "another-worker")
             .args(["complete", id])
             .output()
@@ -1747,7 +1762,7 @@ fn recorder_is_automatic_durable_optional_and_not_an_operation_guard() {
     assert!(normal.contains("codex"));
     assert!(!normal.contains("original-session"));
     let details = success(
-        without_recorder(&mut f.command())
+        f.command()
             .env("CODEX_THREAD_ID", "current-session")
             .args(["log", id, "--recorder-details"])
             .output()
@@ -1776,7 +1791,7 @@ fn non_utf8_recorder_environment_does_not_block_writes() {
     f.init();
     let invalid = std::ffi::OsString::from_vec(vec![0xff]);
     let created = success(
-        without_recorder(&mut f.command())
+        f.command()
             .env("AXON_ACTOR", &invalid)
             .env("CODEX_THREAD_ID", &invalid)
             .args(["capture", "--label", "chore", "--title", "unknown recorder"])
@@ -1785,7 +1800,7 @@ fn non_utf8_recorder_environment_does_not_block_writes() {
     );
     let id = created.split_whitespace().next().unwrap();
     success(
-        without_recorder(&mut f.command())
+        f.command()
             .env("AXON_ACTOR", "custom")
             .env("AXON_SESSION_ID", &invalid)
             .args(["note", "add", id, "-m", "still saved"])
@@ -1793,7 +1808,7 @@ fn non_utf8_recorder_environment_does_not_block_writes() {
             .unwrap(),
     );
     success(
-        without_recorder(&mut f.command())
+        f.command()
             .env("CLAUDECODE", "1")
             .env("CLAUDE_CODE_SESSION_ID", invalid)
             .args(["note", "add", id, "-m", "saved from claude code"])
@@ -1812,7 +1827,7 @@ fn claude_code_session_is_recorded_when_available() {
     f.init();
     let claude = |f: &Fixture| {
         let mut command = f.command();
-        without_recorder(&mut command).env("CLAUDECODE", "1");
+        command.env("CLAUDECODE", "1");
         command
     };
     let created = success(
