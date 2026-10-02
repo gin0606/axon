@@ -22,8 +22,18 @@ fn copy_store(from: &Fixture) -> Fixture {
     copy
 }
 
-#[test]
-fn file_cli_roundtrip_and_atomic_concurrency() {
+fn assert_record_files_are_hashed(f: &Fixture) {
+    let files = f.record_files();
+    for relative in &files {
+        let name = relative.file_name().unwrap().to_str().unwrap();
+        assert_eq!(name.len(), 64);
+        assert_eq!(relative.parent().unwrap().to_str().unwrap(), &name[..2]);
+        let bytes = fs::read(f.records_dir().join(relative)).unwrap();
+        assert_eq!(blake3::hash(&bytes).to_hex().as_str(), name);
+    }
+}
+
+fn group_with_child() -> (Fixture, String, String) {
     let f = Fixture::new();
     f.init();
     let group = f
@@ -42,6 +52,12 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
         .next()
         .unwrap()
         .to_string();
+    (f, group, issue)
+}
+
+#[test]
+fn concurrent_cli_starts_publish_exactly_one_transition() {
+    let (f, group, issue) = group_with_child();
     assert!(failure(f.run(&["start", &group])).contains("a Group is not started directly"));
     let mut processes = (0..6)
         .map(|_| f.command().args(["start", &issue]).spawn().unwrap())
@@ -54,6 +70,14 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
             .count(),
         1
     );
+    assert_eq!(f.record_files().len(), 3);
+    assert_record_files_are_hashed(&f);
+}
+
+#[test]
+fn concurrent_cli_notes_preserve_every_body() {
+    let (f, _, issue) = group_with_child();
+    f.ok(&["start", &issue]);
     let mut processes = (0..8)
         .map(|i| {
             f.command()
@@ -75,6 +99,14 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
             .collect::<BTreeSet<_>>(),
         (0..8).map(|i| format!("note {i}")).collect()
     );
+    assert_eq!(f.record_files().len(), 2 + 1 + 8);
+    assert_record_files_are_hashed(&f);
+}
+
+#[test]
+fn file_cli_roundtrip_publishes_hashed_records_and_rejects_terminal_start() {
+    let (f, group, issue) = group_with_child();
+    f.ok(&["start", &issue]);
     f.ok(&["release", &issue]);
     f.ok(&["start", &issue]);
     f.ok(&["complete", &issue]);
@@ -87,14 +119,8 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
     assert!(f.ok(&["tasks"]).is_empty());
     // Every operation added exactly one file, named by the hash of its content.
     let files = f.record_files();
-    assert_eq!(files.len(), 2 + 1 + 8 + 3 + 1);
-    for relative in &files {
-        let name = relative.file_name().unwrap().to_str().unwrap();
-        assert_eq!(name.len(), 64);
-        assert_eq!(relative.parent().unwrap().to_str().unwrap(), &name[..2]);
-        let bytes = fs::read(f.records_dir().join(relative)).unwrap();
-        assert_eq!(blake3::hash(&bytes).to_hex().as_str(), name);
-    }
+    assert_eq!(files.len(), 2 + 1 + 3 + 1);
+    assert_record_files_are_hashed(&f);
     assert!(failure(f.run(&["start", &issue])).contains("cannot Start from Completed"));
     assert_eq!(f.record_files(), files);
     let check = f.run(&["storage", "check"]);
@@ -102,8 +128,7 @@ fn file_cli_roundtrip_and_atomic_concurrency() {
     assert!(String::from_utf8_lossy(&check.stderr).contains("consistent"));
 }
 
-#[test]
-fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() {
+fn corrupt_store_fixture() -> (Fixture, String, String, String) {
     let f = Fixture::new();
     f.ok(&["init", "tmp"]);
     let id = f.accepted("job");
@@ -122,9 +147,14 @@ fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() 
     other.ok(&["start", &contested]);
     merge_records(&other.0, &f.0);
     assert!(failure(f.run(&["storage", "check"])).contains("Conflicted:"));
+    (f, id, group, contested)
+}
+
+#[test]
+fn temporary_record_files_are_ignored() {
+    let (f, id, _, _) = corrupt_store_fixture();
     let files = record_paths_of(&f.0, &id);
     let record = f.records_dir().join(&files[0]);
-    let good = fs::read(&record).unwrap();
     // A stale temporary file is invisible to every read and to the check.
     let temporary = record.with_file_name(format!(
         "{}.tmp",
@@ -139,6 +169,14 @@ fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() 
         "{check}"
     );
     fs::remove_file(&temporary).unwrap();
+}
+
+#[test]
+fn corrupt_record_files_stop_reads_and_writes_before_derivation() {
+    let (f, id, _, _) = corrupt_store_fixture();
+    let files = record_paths_of(&f.0, &id);
+    let record = f.records_dir().join(&files[0]);
+    let good = fs::read(&record).unwrap();
     // Content that does not hash to the file name, a truncated file, an empty file and a
     // file whose name is not a record ID stop every read and every write.
     let stray = f.records_dir().join("notes.txt");
@@ -208,6 +246,13 @@ fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() 
     assert!(f.ok(&["list"]).contains(&id));
     // The conflict is reported again once the corruption is gone.
     assert!(failure(f.run(&["storage", "check"])).contains("Conflicted:"));
+}
+
+#[test]
+fn record_subdirectory_must_match_the_record_id() {
+    let (f, id, _, _) = corrupt_store_fixture();
+    let files = record_paths_of(&f.0, &id);
+    let good = fs::read(f.records_dir().join(&files[0])).unwrap();
     // A record file whose subdirectory does not match its name is corruption too, even when
     // its content hashes to the name.
     let name = files[0].file_name().unwrap().to_str().unwrap();
@@ -224,6 +269,11 @@ fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() 
         "{error}"
     );
     fs::remove_file(&misplaced).unwrap();
+}
+
+#[test]
+fn storage_check_explicit_root_does_not_discover_ancestor_storage() {
+    let (f, id, _, _) = corrupt_store_fixture();
     // The check of an explicit root does not discover: a nested directory checks itself.
     let nested = f.0.join("nested");
     fs::create_dir(&nested).unwrap();
@@ -232,6 +282,11 @@ fn corrupt_record_files_stop_reads_and_writes_and_temporary_files_are_ignored() 
         error.contains("not initialized") && !error.contains(&id),
         "{error}"
     );
+}
+
+#[test]
+fn invalid_record_transitions_are_reported_as_corruption() {
+    let (f, id, group, contested) = corrupt_store_fixture();
     // A record that decodes on its own but does not continue its parent record (a Complete
     // forged onto a registration, from another Issue's Start) is corruption too, reported by
     // file. The Group registered above keeps the store otherwise readable.
@@ -596,7 +651,7 @@ fn init_refuses_to_replace_an_existing_store() {
 }
 
 #[test]
-fn storage_check_reports_conflicts_violations_and_gaps_by_severity() {
+fn storage_check_reports_conflicting_heads_and_excludes_them_from_tasks() {
     // A conflict: the same Issue started on two copies of the store.
     let f = Fixture::new();
     f.init();
@@ -618,7 +673,10 @@ fn storage_check_reports_conflicts_violations_and_gaps_by_severity() {
     assert_eq!(show.matches("Start").count(), 2, "{show}");
     assert!(!f.ok(&["tasks"]).contains(&id));
     assert!(f.ok(&["list"]).contains("Conflicted"));
+}
 
+#[test]
+fn storage_check_reports_containment_and_completion_cycles() {
     // A violation: two copies each move one Group under the other.
     let f = Fixture::new();
     f.init();
@@ -686,7 +744,10 @@ fn storage_check_reports_conflicts_violations_and_gaps_by_severity() {
         "{}",
         String::from_utf8_lossy(&check.stderr)
     );
+}
 
+#[test]
+fn missing_dependencies_can_be_removed_by_unique_suffix() {
     // A dependency whose registration is missing (its file reverted) is a violation that
     // `dep rm` repairs although the target cannot be resolved as an Entity.
     let f = Fixture::new();
@@ -735,6 +796,13 @@ fn storage_check_reports_conflicts_violations_and_gaps_by_severity() {
         "{show}"
     );
     f.ok(&["dep", "rm", &user, "--needs", "t-twin-ab"]);
+}
+
+#[test]
+fn files_beside_the_header_are_neither_read_nor_changed() {
+    let f = Fixture::new();
+    f.init();
+    let user = f.accepted("user");
     // Files beside the header that are not the store's are neither read nor reported.
     fs::write(f.0.join(".axon/state.jsonl"), b"earlier format\n").unwrap();
     fs::write(f.0.join(".axon/notes.txt"), b"mine").unwrap();
@@ -748,7 +816,10 @@ fn storage_check_reports_conflicts_violations_and_gaps_by_severity() {
         b"earlier format\n"
     );
     assert_eq!(fs::read(f.0.join(".axon/notes.txt")).unwrap(), b"mine");
+}
 
+#[test]
+fn storage_check_reports_gaps_and_notes_without_entity_records() {
     // A gap: a record whose parent record file is gone, as a revert leaves it.
     let f = Fixture::new();
     f.init();
@@ -1103,8 +1174,7 @@ fn unmerged_paths(path: &Path) -> Vec<u8> {
 }
 
 #[test]
-fn rebase_keeps_records_of_different_issues_and_the_same_issue_reads_as_a_conflict_that_resolve_settles()
- {
+fn rebase_keeps_different_issues_and_exposes_concurrent_heads() {
     let (f, x) = tracked_repository("x");
     // Registered after x under an ID that sorts before it, so that creation order and ID
     // order disagree.
@@ -1158,6 +1228,37 @@ fn rebase_keeps_records_of_different_issues_and_the_same_issue_reads_as_a_confli
         );
     }
     assert!(failure(c.run(&["release", &x])).contains("resolve"));
+}
+
+fn conflicting_issues() -> (Fixture, String, String) {
+    let f = Fixture::new();
+    f.init();
+    let x = "t-item".to_owned();
+    let y = "t-00000000".to_owned();
+    f.publish(vec![
+        Entry::Record(
+            f.records()
+                .create(eid(&x), current("x"), context())
+                .unwrap(),
+        ),
+        Entry::Record(
+            f.records()
+                .create(eid(&y), current("y"), context())
+                .unwrap(),
+        ),
+    ]);
+    let c = copy_store(&f);
+    for side in [&f, &c] {
+        side.ok(&["start", &x]);
+        side.ok(&["start", &y]);
+    }
+    merge_records(&f.0, &c.0);
+    (c, x, y)
+}
+
+#[test]
+fn resolve_lists_each_conflicted_entity_and_its_own_heads() {
+    let (c, x, y) = conflicting_issues();
     // The listing shows every conflicted Entity, each row followed by its own heads and the
     // Entities separated by a blank line; with an ID, that Entity alone.
     let listing = c.ok(&["resolve"]);
@@ -1190,6 +1291,13 @@ fn rebase_keeps_records_of_different_issues_and_the_same_issue_reads_as_a_confli
         2,
         "show lists the same heads"
     );
+}
+
+#[test]
+fn resolve_validates_head_selection_and_unblocks_operations_after_every_conflict() {
+    let (c, x, y) = conflicting_issues();
+    let listing = c.ok(&["resolve", &x]);
+    let heads = listed_heads(&listing);
     // Only a head of the Entity can be chosen; a head needs an ID and a reason a head.
     let files = c.record_files();
     let error = failure(c.run(&["resolve", &x, "--head", &"0".repeat(64)]));

@@ -868,25 +868,25 @@ mod publication_tests {
             }).unwrap_err();
             for index in 0..count {
                 let published = existing[index] || index < stop || (!missing_temp && index == stop);
-                prop_assert_eq!(paths[index].exists(), published);
+                prop_assert_eq!(paths[index].exists(), published, "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
                 if !existing[index] && published {
                     renamed.push(paths[index].display().to_string());
                 }
             }
-            prop_assert_eq!(matches!(&error, Error::PublicationUnknown(_)), !renamed.is_empty());
+            prop_assert_eq!(matches!(&error, Error::PublicationUnknown(_)), !renamed.is_empty(), "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
             if renamed.is_empty() {
-                prop_assert!(matches!(&error, Error::Invalid(_)));
-                prop_assert!(error.to_string().contains("not applied"));
+                prop_assert!(matches!(&error, Error::Invalid(_)), "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
+                prop_assert!(error.to_string().contains("not applied"), "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
             } else {
-                prop_assert!(error.to_string().contains("result unknown"));
+                prop_assert!(error.to_string().contains("result unknown"), "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
                 let expected = format!("renamed so far: [{}]", renamed.join(", "));
-                prop_assert!(error.to_string().contains(&expected));
+                prop_assert!(error.to_string().contains(&expected), "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
             }
-            prop_assert_eq!(temporary_files(&store), 0);
+            prop_assert_eq!(temporary_files(&store), 0, "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
             store.update(|_, _, _| Ok((entries, ()))).unwrap();
-            prop_assert_eq!(store.read().unwrap().1.len(), count);
-            prop_assert!(paths.iter().all(|path| path.is_file()));
-            prop_assert_eq!(temporary_files(&store), 0);
+            prop_assert_eq!(store.read().unwrap().1.len(), count, "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
+            prop_assert!(paths.iter().all(|path| path.is_file()), "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
+            prop_assert_eq!(temporary_files(&store), 0, "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
             drop(store);
             fs::remove_dir_all(root).unwrap();
           }

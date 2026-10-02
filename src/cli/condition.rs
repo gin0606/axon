@@ -795,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn real_process_spawn_and_trace_flush_failures_are_errors() {
+    fn real_process_spawn_failure_is_an_error() {
         let entity: EntityId = "condition".to_string().try_into().unwrap();
         let entity = &entity;
         let missing =
@@ -806,6 +806,12 @@ mod tests {
             .to_string();
         assert!(error.contains("could not start"));
         assert!(error.contains(missing.to_str().unwrap()));
+    }
+
+    #[test]
+    fn trace_flush_failure_is_an_error() {
+        let entity: EntityId = "condition".to_string().try_into().unwrap();
+        let entity = &entity;
         let error = Evaluation::with_trace_writer(
             std::env::current_dir().unwrap(),
             Duration::from_secs(30),

@@ -271,7 +271,7 @@ fn registration(records: &Store, id: &str) -> Entry {
 }
 
 #[test]
-fn lifecycle_and_relation_edits_use_common_guards() {
+fn dependency_edits_reject_completion_cycles() {
     let f = Fixture::new();
     f.init();
     let a = f.accepted("A");
@@ -281,6 +281,13 @@ fn lifecycle_and_relation_edits_use_common_guards() {
     assert!(failure(f.run(&["dep", "add", &b, "--needs", &a])).contains("completion cycle"));
     f.ok(&["dep", "rm", &a, "--needs", &b]);
     assert!(f.current(&a).needs.is_empty());
+}
+
+#[test]
+fn lifecycle_transitions_apply_the_common_guards() {
+    let f = Fixture::new();
+    f.init();
+    let a = f.accepted("A");
     f.ok(&["withdraw", &a]);
     assert_eq!(f.current(&a).lifecycle, Lifecycle::Undecided);
     f.ok(&["accept", &a]);
@@ -293,6 +300,14 @@ fn lifecycle_and_relation_edits_use_common_guards() {
     assert_eq!(f.current(&a).lifecycle, Lifecycle::Cancelled);
     f.ok(&["reconsider", &a]);
     assert_eq!(f.current(&a).lifecycle, Lifecycle::Undecided);
+}
+
+#[test]
+fn parent_edits_apply_the_common_guards() {
+    let f = Fixture::new();
+    f.init();
+    let a = f.accepted("A");
+    f.ok(&["withdraw", &a]);
     let g = f
         .ok(&[
             "capture", "--label", "chore", "--kind", "group", "--title", "G",
@@ -314,7 +329,7 @@ fn lifecycle_and_relation_edits_use_common_guards() {
     );
 }
 #[test]
-fn stdin_files_help_invalid_arguments_and_terminal_controls() {
+fn file_descriptions_escape_terminal_controls() {
     let f = Fixture::new();
     f.init();
     let body = f.0.join("body.txt");
@@ -337,9 +352,23 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
     let show = f.ok(&["show", &id]);
     assert!(!show.contains('\x1b'));
     assert!(show.contains("  long\n  本文\\x1b[2J"));
+}
+
+#[test]
+fn titles_reject_terminal_controls() {
+    let f = Fixture::new();
+    f.init();
+    let id = f.accepted("safe");
     let rejected = failure(f.run(&["write", &id, "--title", "unsafe\x1b[2J"]));
     assert!(rejected.contains("control character"), "{rejected}");
     assert!(!rejected.contains('\x1b'));
+}
+
+#[test]
+fn notes_accept_stdin() {
+    let f = Fixture::new();
+    f.init();
+    let id = f.accepted("safe");
     let mut child = f
         .command()
         .args(["note", "add", &id, "-F", "-"])
@@ -357,6 +386,13 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
         .unwrap();
     success(child.wait_with_output().unwrap());
     assert!(f.ok(&["note", "list", &id]).contains("stdin本文"));
+}
+
+#[test]
+fn write_and_note_reject_missing_or_conflicting_text_arguments() {
+    let f = Fixture::new();
+    f.init();
+    let id = f.accepted("safe");
     assert!(
         failure(f.run(&["write", &id])).contains("write requires --title, --description or --file")
     );
@@ -365,6 +401,11 @@ fn stdin_files_help_invalid_arguments_and_terminal_controls() {
             .contains("the following required arguments were not provided:\n  --message <MESSAGE>")
     );
     assert!(failure(f.run(&["write", &id, "-m", "x", "-F", "-"])).contains("cannot be used with"));
+}
+
+#[test]
+fn completion_help_names_final_review() {
+    let f = Fixture::new();
     assert!(f.ok(&["complete", "--help"]).contains("final review"));
 }
 #[test]
@@ -405,8 +446,7 @@ fn concurrent_captures_preserve_every_entity() {
         assert_eq!(records.history(&id).unwrap().len(), 1);
     }
 }
-#[test]
-fn concurrent_branches_are_read_as_a_conflict_that_stops_ordinary_operations() {
+fn conflicted_issue_with_notes() -> Fixture {
     let f = Fixture::new();
     f.init();
     f.publish(vec![registration(&f.records(), "t-item")]);
@@ -424,6 +464,12 @@ fn concurrent_branches_are_read_as_a_conflict_that_stops_ordinary_operations() {
     right.ok(&["release", "t-item"]);
     right.ok(&["note", "add", "t-item", "-m", "same"]);
     merge_records(&right.0, &left.0);
+    left
+}
+
+#[test]
+fn concurrent_branches_are_read_as_a_conflict_that_stops_ordinary_operations() {
+    let left = conflicted_issue_with_notes();
     let log = left.ok(&["log", "t-item"]);
     assert!(log.contains("Concurrent branch"), "{log}");
     assert!(log.contains("InProgress → Completed") && log.contains("InProgress → NotStarted"));
@@ -446,6 +492,12 @@ fn concurrent_branches_are_read_as_a_conflict_that_stops_ordinary_operations() {
             .contains("conflicted Entities block")
     );
     assert_eq!(left.record_files(), before);
+    left.ok(&["note", "add", "t-item", "-m", "still allowed"]);
+}
+
+#[test]
+fn parallel_store_updates_preserve_notes_on_a_conflicted_entity() {
+    let left = conflicted_issue_with_notes();
     left.ok(&["note", "add", "t-item", "-m", "still allowed"]);
     // Parallel writers of the same Entity both succeed: each adds its own record file.
     let barrier = Arc::new(Barrier::new(2));
@@ -1521,10 +1573,8 @@ fn condition_fixture_has_an_independent_lifetime_limit() {
 }
 
 #[test]
-fn candidate_help_and_trace_sink_failure() {
+fn candidate_help_explains_condition_execution() {
     let f = Fixture::new();
-    f.init();
-    let id = f.accepted("trace");
     let help = f.ok(&["tasks", "--help"]);
     for text in [
         "--condition-timeout",
@@ -1537,6 +1587,13 @@ fn candidate_help_and_trace_sink_failure() {
     ] {
         assert!(help.contains(text));
     }
+}
+
+#[test]
+fn trace_sink_failure_stops_output_after_evaluating_conditions() {
+    let f = Fixture::new();
+    f.init();
+    let id = f.accepted("trace");
     set_condition(&f, &id, "echo ran >> observed");
     let mut cmd = f.command();
     cmd.args(["tasks", "--trace-conditions"]);

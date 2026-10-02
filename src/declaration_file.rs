@@ -148,25 +148,29 @@ mod tests {
                     };
                     assert_eq!(
                         matches!(&result, Err(super::Error::PublicationUnknown(_))),
-                        matches!(failure, "sync" | "typed")
+                        matches!(failure, "sync" | "typed"),
+                        "{failure}"
                     );
                     result
                 },
             )
             .unwrap_err()
             .to_string();
-            assert!(error.contains("Applied: storage applied"), "{error}");
+            assert!(
+                error.contains("Applied: storage applied"),
+                "{failure}: {error}"
+            );
             let applied = records(&store);
-            assert_eq!(applied.view().unwrap().known().count(), 3);
+            assert_eq!(applied.view().unwrap().known().count(), 3, "{failure}");
             if matches!(failure, "sync" | "typed") {
                 assert!(
                     error.contains("Result unknown: declaration publication"),
-                    "{error}"
+                    "{failure}: {error}"
                 );
             } else {
                 assert!(
                     error.contains("Not applied: declaration unchanged"),
-                    "{error}"
+                    "{failure}: {error}"
                 );
                 assert_eq!(
                     std::fs::read_to_string(&path).unwrap(),
@@ -180,31 +184,62 @@ mod tests {
             if failure == "drift" {
                 std::fs::write(&path, &input).unwrap();
             }
-            assert!(!super::apply(&mut store, &path, context()).unwrap().changed);
-            assert_eq!(records(&store), applied);
-            // A retry that writes nothing and then fails to rewrite says so.
-            let canonical = std::fs::read(&path).unwrap();
-            let error =
-                super::apply_with(&mut store, &path, context(), &mut |_| Ok(()), |_, _, _| {
-                    Err(invalid("injected rewrite failure"))
-                })
-                .unwrap_err()
-                .to_string();
             assert!(
-                error.contains("Applied: storage unchanged (no-op); Not applied"),
-                "{error}"
+                !super::apply(&mut store, &path, context()).unwrap().changed,
+                "{failure}"
             );
-            assert_eq!(records(&store), applied);
-            assert_eq!(std::fs::read(&path).unwrap(), canonical);
+            assert_eq!(records(&store), applied, "{failure}");
             let output = std::fs::read_to_string(&path).unwrap();
             let d = crate::declaration::parse(&output).unwrap();
-            assert!(d.records().all(|r| r.base.is_some() && r.key.is_some()));
+            assert!(
+                d.records().all(|r| r.base.is_some() && r.key.is_some()),
+                "{failure}"
+            );
             // The rewritten file matches the store with refreshed bases: nothing to publish.
             let checked = d.check(&output, &applied, context()).unwrap();
-            assert!(checked.records.is_empty() && !checked.already_applied);
+            assert!(
+                checked.records.is_empty() && !checked.already_applied,
+                "{failure}"
+            );
             drop(store);
             std::fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn no_op_rewrite_failure_preserves_storage_and_canonical_input() {
+        let root = std::env::temp_dir().join(format!("axon-apply-{:032x}", rand::random::<u128>()));
+        std::fs::create_dir(&root).unwrap();
+        let location = crate::location::Location::discover(&root, true).unwrap();
+        location.init("demo").unwrap();
+        let mut store = location.open().unwrap();
+        let before = records(&store);
+        let mut declaration = crate::declaration::example();
+        declaration.prepare(&before, "demo").unwrap();
+        let input = declaration.serialize(&before.view().unwrap()).unwrap();
+        let path = root.join("plan.yaml");
+        std::fs::write(&path, &input).unwrap();
+        let context = || crate::lifecycle::Context {
+            at: chrono::Utc::now(),
+            recorder: None,
+        };
+        super::apply(&mut store, &path, context()).unwrap();
+        let applied = records(&store);
+        // A retry that writes nothing and then fails to rewrite says so.
+        let canonical = std::fs::read(&path).unwrap();
+        let error = super::apply_with(&mut store, &path, context(), &mut |_| Ok(()), |_, _, _| {
+            Err(invalid("injected rewrite failure"))
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("Applied: storage unchanged (no-op); Not applied"),
+            "{error}"
+        );
+        assert_eq!(records(&store), applied);
+        assert_eq!(std::fs::read(&path).unwrap(), canonical);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 

@@ -312,10 +312,16 @@ fn declaration_check_rejects_local_and_core_guards() {
         fs::write(&path, &input).unwrap();
         let message = failure(f.run(&["import", "check", path.to_str().unwrap()]));
         let apply_message = failure(f.run(&["import", "apply", path.to_str().unwrap()]));
-        assert!(apply_message.contains("Not applied:"), "{apply_message}");
-        assert!(message.contains(category), "{category}: {message}");
-        assert_eq!(snapshot(&f), before);
-        assert_eq!(fs::read_to_string(&path).unwrap(), input);
+        assert!(
+            apply_message.contains("Not applied:"),
+            "input:\n{input}\n{apply_message}"
+        );
+        assert!(
+            message.contains(category),
+            "input:\n{input}\n{category}: {message}"
+        );
+        assert_eq!(snapshot(&f), before, "input:\n{input}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), input, "input:\n{input}");
     };
     for input in [
         exported.replace("title: A", "title: A\n    title: duplicate"),
