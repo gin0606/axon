@@ -1,0 +1,17 @@
+---
+name: start-group
+description: 計画済みの採用済みAxon Groupについて、配下のIssueを依存順に実装・検証・commitし、子Groupを含む全体の完了条件を確認して完了する。
+---
+
+# Groupを順に完遂する
+
+最初に[実行の共通手順](../../references/execution.md)を読む。明示的な`axon-workflow:start-group`の呼び出し、または対象Groupと全体の完遂を指定した依頼を、そのGroupの配下で実行順を選び、Issue・子Group・対象Groupを完了する権限とする。
+
+1. **計画を読む。** 指定された対象がGroupであることを確認する。対象が終了済みなら再開せず現在の状態を報告する。`axon export`で全子孫の本文・構造を読み、全祖先Groupと必要なNote・外部の依存先も確認して、作業範囲と完了条件を固定する。対象・未終了の子Group・全祖先Groupは採用済み（保存値`NotStarted`）であることを確認する。未判断の子孫や未定義の完了条件があれば、実装前に必要な判断を返す。
+2. **Issueを順次進める。** 配下全体の`NotStarted` Issueと、共通手順の継続条件を満たす`InProgress` Issueから、自身と祖先の依存先が完了したものを一つずつ選び、`axon-workflow:start`でcommitまで進める。
+3. **子Groupを閉じて繰り返す。** 子孫が終了した未終了の子Groupは、成果の統合、Group自身の完了条件と必要な検証、依存先の完了を確認し、重要な結果をNoteに保存してから`axon:work-state`で`axon complete`する。関連する未commitの記録を共通手順に従ってcommitする。これで進められるIssueがあれば手順2へ戻る。
+4. **対象Groupを閉じる。** 全子孫が終了したら、対象Groupにも手順3の最終確認・記録・完了・commitを行う。
+
+対象Groupの外にある依存先へ勝手に着手しない。進められる作業がなくなった場合や検証・commitが失敗した場合は、途中成果を保持して止める。新しいIssueの作成・採用で範囲を広げない。
+
+完了・中断時には、対象Groupの状態、完遂した範囲、主要な検証結果とcommit、残作業と阻害要因を報告する。

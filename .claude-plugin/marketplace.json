@@ -12,6 +12,10 @@
     {
       "name": "axon",
       "source": "./plugins/axon"
+    },
+    {
+      "name": "axon-workflow",
+      "source": "./examples/agent-workflow"
     }
   ]
 }

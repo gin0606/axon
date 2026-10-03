@@ -1,0 +1,26 @@
+{
+  "name": "axon-workflow",
+  "version": "0.1.0",
+  "description": "Axonを計画・実装・検証・commitの流れに組み込む、変更して使えるワークフローのサンプル。",
+  "author": {
+    "name": "gin0606"
+  },
+  "repository": "https://github.com/gin0606/axon",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Axon Workflow Sample",
+    "shortDescription": "計画からIssue・Groupの完遂までを試せるサンプル",
+    "longDescription": "簡単な計画の登録と、Issue・Groupの実装、必要な検証、完了記録、commitを扱います。独立レビューや別エージェントの起動は必須にせず、自分の運用に合わせて変更できます。axonとaxon-kit pluginが必要です。",
+    "developerName": "gin0606",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "$axon-workflow:plan この要望を簡単な計画にして、確認後にAxonへ登録してください。",
+      "$axon-workflow:start 指定した採用済みIssueを実装・検証・完了記録・commitまで進めてください。",
+      "$axon-workflow:start-group 指定した採用済みGroupを依存順に実装・検証・commitし、全体を完了してください。"
+    ]
+  }
+}
