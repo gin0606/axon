@@ -169,7 +169,7 @@ To read saved information without running any condition, add --skip-conditions; 
 pub(super) enum Import {
     /// Assign new IDs and atomically rewrite FILE as canonical YAML; storage is unchanged
     #[command(
-        after_help = "Example: axon import prepare plan.yaml\nPrints new key -> full ID mappings. Storage is unchanged.\nNext: axon import check plan.yaml"
+        after_help = "Example: axon import prepare plan.yaml\nPrints new key -> full ID mappings. Storage is unchanged.\nAn assigned new ID with a different stored value is a conflict. Export that ID into a separate file and transfer your edits; to intentionally create a new Entity, set id: null.\nNext: axon import check plan.yaml"
     )]
     Prepare { file: PathBuf },
     /// Validate canonical FILE and display changes without writing or running conditions

@@ -21,7 +21,7 @@ description: Axonのdeclarationを`axon export`し、`axon import prepare`・`ax
 
 各mutationを単独で実行し、終了コードと保存結果を個別に確認する。
 
-1. `axon import prepare FILE` は保存先を変えず、局所規則とID・kind・外部参照の存在を検査し、新規IDを確定して同じfileをcanonical rewriteする。keyと新規baseのnullを保持し、referencesを再生成する。コメントは保持しない。出力の `key -> 完全ID` を確認し、fileを読み直して内容を確認し、適用入力のbytesとdigestを固定する。`axon import prepare`成功は競合や共通コアの制約を通過したことを意味しない。
+1. `axon import prepare FILE` は保存先を変えず、局所規則とID・kind・外部参照の存在を検査し、新規IDを確定して同じfileをcanonical rewriteする。keyと新規baseのnullを保持し、referencesを再生成する。コメントは保持しない。出力の `key -> 完全ID` を確認し、fileを読み直して内容を確認し、適用入力のbytesとdigestを固定する。`base: null`のrecordで割り当て済みIDの既存Entityが宣言の最終値と一致しなければ、`new id already exists`の競合としてfileと保存先を変更せず拒否する。`axon import check`・`axon import apply`の同じ競合も、適用済みの可能性があるため別fileへの`axon export`で取り直して編集を移す。意図して新規作成する場合だけ、その新規recordに`id: null`を明示する。未使用の割り当て済みIDと内容一致の適用済みIDは保持する。`axon import prepare`成功は既存Entityのbaseの競合や共通コアの制約を通過したことを意味しない。
 2. `axon import check FILE` は全IDが確定したcanonical入力を検証し、Entityごとの作成、titleの前後（`axon list`と同じ改行・制御文字の可視化で一行表示）、descriptionの変更有無、labelの前後、親の前後、needsの増減と適用後の状況を示す。fileと保存先を変更せず、条件も実行しない。本文全文は保全した元fileとのdiffで確認する。拒否があれば原因を解決して再検査し、差分が依頼の対象・内容と一致することを呼び出し側で確認する。
 3. 呼び出し側から適用権限がある場合に `axon import apply FILE` を実行する。CLIはlock取得後の入力と記録の集合で再検証し、全件を一つのlockの下で反映する。成功後、保存した記録の集合からbase・lifecycle・referencesと並びを更新し、keyを保持して同じfileを書き戻す。成功出力の `key -> 完全ID` はbase更新前に新規だったrecordの対応を示す。`axon import check`後の編集は`axon import check`を再実行し、古い結果で変更後のfileを承認済み扱いにしない。
 4. 再 `axon import check FILE` で差分なしを確認し、必要な `axon show ID --details --skip-conditions`・logで完全ID、文面、label、関係、初期状態を照合する。差分があれば別writerによる変更も含めて調べ、完了と報告しない。保存先とfileそれぞれの結果、適用した対象と未解決事項を返す。

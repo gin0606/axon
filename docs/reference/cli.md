@@ -165,7 +165,7 @@ Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへ
 - `axon export ID...` は完全 ID または一意な suffix を一つ以上受け取り、Issue 単体または Group 全子孫の和集合を canonical YAML として stdout に出す。保存先を変更せず、条件を実行しない。
 - `axon docs declaration` は field と新規・既存の違い、`axon import prepare` → `axon import check` → `axon import apply` → 再度`axon import check` の手順を stdout に説明する。`--example` は新規計画の canonical YAML だけを stdout に出す。どちらも保存先を開かない。引数なしの `axon docs` は状態モデルと基本workflowの説明、および declaration への案内を返す。
 
-`axon import prepare FILE` は新規IDを割り当て、外部参照を再生成したcanonical YAMLで同じfileを置き換える。保存先は変更せず、成功時はfile名と保存先未変更、新規recordの `key -> 完全ID` の対応を一行ずつ表示する。書込前の失敗・bytes競合はNot applied、rename後の同期失敗はResult unknownとして診断し、残ったtemporary fileは診断で案内する。更新後にstdout出力だけが失敗した場合も、declarationがAppliedで保存先は未変更であることを示す。
+`axon import prepare FILE` は新規IDを割り当て、外部参照を再生成したcanonical YAMLで同じfileを置き換える。`base: null`のrecordで割り当て済みIDの既存Entityが宣言の最終値と一致しなければ、fileと保存先を変更せず拒否する。`prepare`・`check`・`apply`の`new id already exists`診断は対象IDを示し、別fileへの`axon export`での取り直しと編集の移行、意図した新規作成には`id: null`を使う対処を案内する。保存先は変更せず、成功時はfile名と保存先未変更、新規recordの `key -> 完全ID` の対応を一行ずつ表示する。書込前の失敗・bytes競合はNot applied、rename後の同期失敗はResult unknownとして診断し、残ったtemporary fileは診断で案内する。更新後にstdout出力だけが失敗した場合も、declarationがAppliedで保存先は未変更であることを示す。
 
 `axon import check FILE` は全IDが確定したcanonical YAMLを要求し、違えば`axon import prepare`を案内する。schema・identityと参照・読み取り専用項目・競合・共通コアの拒否を区別し、作成、titleの前後、descriptionの変更有無、labelの前後、parentの前後、needsの増減、差分なしと適用後の状況をEntityごとに表示する。titleは`axon list`と同じく改行を `\n`、制御文字を可視escapeにして一行で表示する。条件は実行せず、fileと保存先を変更しない。
 

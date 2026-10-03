@@ -649,6 +649,19 @@ fn notes_need_a_record_before_they_can_be_added() {
 }
 
 #[test]
+fn prepare_preserves_unused_handwritten_and_previously_assigned_ids() {
+    let mut f = Fixture::new();
+    let mut d = example();
+    d.groups[0].id = Some("demo-handwritten".into());
+    d.prepare(&f.store, "demo").unwrap();
+    assert_eq!(d.groups[0].id.as_deref(), Some("demo-handwritten"));
+    let prepared = d.clone();
+    d.prepare(&f.store, "demo").unwrap();
+    assert_eq!(d, prepared);
+    assert_eq!(f.apply(&d).records.len(), 3);
+}
+
+#[test]
 fn prepare_replaces_an_id_referred_to_only_by_an_orphan_note() {
     let mut f = Fixture::new();
     let orphan = crate::lifecycle::record::Note {
@@ -667,7 +680,7 @@ fn prepare_replaces_an_id_referred_to_only_by_an_orphan_note() {
 }
 
 #[test]
-fn prepare_keeps_matching_ids_and_replaces_edited_entities_and_their_dependents() {
+fn prepare_keeps_matching_ids_and_rejects_edited_entities() {
     let mut f = Fixture::new();
     let mut d = example();
     d.prepare(&f.store, "demo").unwrap();
@@ -686,24 +699,19 @@ fn prepare_keeps_matching_ids_and_replaces_edited_entities_and_their_dependents(
             .to_string()
             .contains("conflict:")
     );
-    // The edited Issue no longer holds the declared value, so its ID is taken by another
-    // writer as far as the declaration knows; the Issue that depends on it follows, and the
-    // Group that still holds its value keeps its ID.
-    retry.prepare(&f.store, "demo").unwrap();
-    assert_eq!(retry.groups[0].id, d.groups[0].id);
-    assert!(
-        retry
-            .issues
-            .iter()
-            .zip(&d.issues)
-            .all(|(a, b)| a.id != b.id)
-    );
-    let checked = retry
-        .check(&retry.serialize(&f.view()).unwrap(), &f.store, context())
-        .unwrap();
-    assert_eq!(checked.records.len(), 2);
-    f.apply(&retry);
-    assert_eq!(f.view().known().count(), 6);
+    let before = f.store.clone();
+    let error = retry.prepare(&f.store, "demo").unwrap_err().to_string();
+    for expected in [
+        "conflict:",
+        &first,
+        "new id already exists",
+        "axon export",
+        "id: null",
+    ] {
+        assert!(error.contains(expected), "{error}");
+    }
+    assert_eq!(retry, d);
+    assert_eq!(f.store, before);
 }
 
 #[test]
@@ -1172,7 +1180,7 @@ fn a_declaration_retry_cannot_leave_an_unrelated_violation_in_place() {
 }
 
 #[test]
-fn prepare_keeps_the_ids_an_interrupted_apply_published_and_replaces_only_taken_ones() {
+fn prepare_keeps_interrupted_apply_ids_and_rejects_taken_ids() {
     let mut f = Fixture::new();
     let mut d = example();
     d.prepare(&f.store, "demo").unwrap();
@@ -1189,27 +1197,27 @@ fn prepare_keeps_the_ids_an_interrupted_apply_published_and_replaces_only_taken_
     let outcome = f.apply(&retry);
     assert_eq!(outcome.records.len(), 2);
     assert_eq!(f.view().known().count(), 3);
-    // An ID another writer took for a different Entity is replaced; key references follow.
     let mut fresh = example();
     fresh.prepare(&f.store, "demo").unwrap();
     let taken = fresh.groups[0].id.clone().unwrap();
     f.create(&taken, Kind::Issue);
     let mut prepared = fresh.clone();
+    let error = prepared.prepare(&f.store, "demo").unwrap_err().to_string();
+    assert!(
+        error.contains(&format!("conflict: {taken}: new id already exists")),
+        "{error}"
+    );
+    assert_eq!(prepared, fresh);
+    // Clearing the new record's ID explicitly requests a different Entity.
+    prepared.groups[0].id = None;
     prepared.prepare(&f.store, "demo").unwrap();
     assert_ne!(prepared.groups[0].id, fresh.groups[0].id);
-    // The Issues' IDs are not in the store and are kept.
     assert!(
         prepared
             .issues
             .iter()
             .zip(&fresh.issues)
             .all(|(a, b)| a.id == b.id)
-    );
-    assert!(
-        prepared
-            .issues
-            .iter()
-            .all(|r| r.parent == Some(Reference::key("plan")))
     );
     prepared
         .check(&prepared.serialize(&f.view()).unwrap(), &f.store, context())

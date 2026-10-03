@@ -25,6 +25,12 @@ Edit the declaration, then follow these steps:
   axon import check plan.yaml
 Prepare assigns new IDs and rewrites the file without changing storage.
 Prepare prints each new record as key -> full ID.
+Assigned IDs on records with base: null are kept when unused or when the
+stored Entity matches the declared
+final value. Prepare, Check and Apply reject a different value as a conflict:
+new id already exists. It may already have been applied: export that ID into a
+separate file with axon export and transfer your edits. To intentionally create
+a new Entity, set id: null on the new record.
 Check shows old -> new titles on one line (newlines as \n and controls escaped),
 description changed/unchanged, old -> new labels, and relationship changes
 without writing.
