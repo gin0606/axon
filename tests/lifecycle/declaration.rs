@@ -547,6 +547,70 @@ fn declaration_prepare_reports_applied_file_when_output_fails() {
 }
 
 #[test]
+fn declaration_rejects_reusing_an_assigned_id_with_a_different_stored_value() {
+    for applied_before in [true, false] {
+        let f = Fixture::new();
+        f.ok(&["init", "demo"]);
+        let path = f.0.join("plan.yaml");
+        fs::write(&path, f.ok(&["docs", "declaration", "--example"])).unwrap();
+        f.ok(&["import", "prepare", path.to_str().unwrap()]);
+        let mut d = declaration::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+        let conflicting_id;
+        if applied_before {
+            let original = fs::read(&path).unwrap();
+            f.ok(&["import", "apply", path.to_str().unwrap()]);
+            fs::write(&path, &original).unwrap();
+            f.ok(&["import", "prepare", path.to_str().unwrap()]);
+            assert_eq!(fs::read(&path).unwrap(), original);
+            assert!(
+                f.ok(&["import", "apply", path.to_str().unwrap()])
+                    .contains("no-op")
+            );
+            conflicting_id = d.issues[0].id.clone().unwrap();
+            f.ok(&["write", &conflicting_id, "--title", "Edited after apply"]);
+        } else {
+            conflicting_id = f.accepted("Different Entity");
+            d.groups[0].id = Some(conflicting_id.clone());
+        }
+        let input = d.serialize(&view_of(&snapshot(&f))).unwrap();
+        fs::write(&path, &input).unwrap();
+        let before = snapshot(&f);
+        let files_before = f.record_files();
+        for command in ["prepare", "check", "apply"] {
+            let message = failure(f.run(&["import", command, path.to_str().unwrap()]));
+            for expected in [
+                &format!("conflict: {conflicting_id}: new id already exists"),
+                "axon export",
+                "separate file",
+                "transfer your edits",
+                "id: null",
+            ] {
+                assert!(message.contains(expected), "{command}: {message}");
+            }
+            assert_eq!(fs::read(&path).unwrap(), input.as_bytes());
+            assert_eq!(snapshot(&f), before);
+            assert_eq!(f.record_files(), files_before);
+        }
+        // Explicitly clearing IDs requests a new plan; key references follow its new IDs.
+        let old_ids: Vec<_> = d.records().map(|r| r.id.clone().unwrap()).collect();
+        for r in d.groups.iter_mut().chain(&mut d.issues) {
+            r.id = None;
+        }
+        fs::write(&path, d.serialize(&view_of(&before)).unwrap()).unwrap();
+        f.ok(&["import", "prepare", path.to_str().unwrap()]);
+        let new = declaration::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+        for r in new.records() {
+            let assigned = r.id.as_ref().unwrap();
+            assert!(!old_ids.contains(assigned));
+            assert!(!view_of(&before).is_known(&assigned.clone().try_into().unwrap()));
+        }
+        f.ok(&["import", "check", path.to_str().unwrap()]);
+        f.ok(&["import", "apply", path.to_str().unwrap()]);
+        assert_eq!(f.record_files().len(), files_before.len() + 3);
+    }
+}
+
+#[test]
 fn declaration_apply_registers_edits_and_retries() {
     let mut prepared = declaration::example();
     prepared.prepare(&Store::new(), "demo").unwrap();

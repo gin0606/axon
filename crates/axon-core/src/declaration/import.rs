@@ -112,7 +112,11 @@ impl Declaration {
             (Some(_), None) => Err(invalid(format!(
                 "identity/reference: {id}: ID does not exist in storage"
             ))),
-            (None, Some(_)) => Err(invalid(format!("conflict: {id}: new id already exists"))),
+            (None, Some(_)) => Err(invalid(format!(
+                "conflict: {id}: new id already exists; it may already have been applied: \
+                 run axon export {id} into a separate file and transfer your edits; \
+                 to intentionally create a new Entity, set id: null"
+            ))),
             (None, None) => Ok(Applied::Pending),
         }
     }
@@ -240,40 +244,27 @@ impl Declaration {
             .map(ToString::to_string)
             .chain(self.records().filter_map(|r| r.id.clone()))
             .collect();
-        // An assigned ID that already exists is kept when that Entity holds the declared
-        // final value (an interrupted apply published it); otherwise another writer took the
-        // ID and a fresh one is assigned. A fresh ID changes the final value of every record
-        // that refers to it, so the decision is repeated until nothing more is reassigned.
-        loop {
-            let mut reassign = BTreeSet::new();
-            for (kind, r) in self.typed_records() {
-                if r.base.is_none()
-                    && let Some(value) = &r.id
-                    && let Ok(existing) = id(value)
-                    && (view.is_known(&existing) || view.noted_only().contains(&existing))
-                    && !matches!(self.applied(&view, kind, r), Ok(Applied::Done { .. }))
-                {
-                    reassign.insert(value.clone());
-                }
-            }
-            let mut assigned = false;
-            for r in self.groups.iter_mut().chain(&mut self.issues) {
-                if r.base.is_none() && r.id.as_ref().is_none_or(|v| reassign.contains(v)) {
-                    loop {
-                        let candidate = crate::lifecycle::record::new_entity_id(prefix)
-                            .map_err(|e| invalid(e.to_string()))?
-                            .to_string();
-                        if used.insert(candidate.clone()) {
-                            r.id = Some(candidate);
-                            assigned = true;
-                            break;
-                        }
+        for r in self.groups.iter_mut().chain(&mut self.issues) {
+            // An orphan Note reserves an ID without providing an Entity to retry.
+            let assigned_id = r.id.as_deref().map(id).transpose()?;
+            let noted_only = assigned_id
+                .as_ref()
+                .is_some_and(|id| view.noted_only().contains(id));
+            if r.base.is_none() && (r.id.is_none() || noted_only) {
+                loop {
+                    let candidate = crate::lifecycle::record::new_entity_id(prefix)
+                        .map_err(|e| invalid(e.to_string()))?
+                        .to_string();
+                    if used.insert(candidate.clone()) {
+                        r.id = Some(candidate);
+                        break;
                     }
                 }
             }
-            if !assigned {
-                break;
-            }
+        }
+        // Assigned IDs are retry identities: a different current value is a conflict.
+        for (kind, r) in self.typed_records().filter(|(_, r)| r.base.is_none()) {
+            self.applied(&view, kind, r)?;
         }
         self.refresh_references(&view)?;
         self.validate()?;
