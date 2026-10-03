@@ -1129,6 +1129,60 @@ mod publication_tests {
     }
 
     #[test]
+    fn a_failed_record_directory_sync_reports_all_renamed_files_as_unknown() {
+        for stop in [1, 2] {
+            let (root, store) = fixture();
+            let entries = records(3);
+            let paths: Vec<_> = entries
+                .iter()
+                .map(|entry| {
+                    let id = RecordId::of(&record::encode(entry).unwrap());
+                    store
+                        .records_path()
+                        .join(id.subdirectory())
+                        .join(id.as_ref())
+                })
+                .collect();
+            let mut injected = false;
+            let error = store
+                .publish_entries_with(&entries, &mut |_| Ok(()), &mut |path, reach| {
+                    if path == paths[stop].parent().unwrap() && paths[stop].is_file() {
+                        injected = true;
+                        Err(std::io::Error::other("injected sync failure").into())
+                    } else {
+                        sync_directory(path, reach)
+                    }
+                })
+                .unwrap_err();
+            assert!(injected, "stop {stop}");
+            assert!(matches!(&error, Error::PublicationUnknown(_)), "{error}");
+            let renamed: Vec<_> = paths[..=stop]
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect();
+            let message = error.to_string();
+            assert!(message.contains("injected sync failure"), "{message}");
+            assert!(
+                message.contains(&format!("renamed so far: [{}]", renamed.join(", "))),
+                "{message}"
+            );
+            for (index, path) in paths.iter().enumerate() {
+                if index <= stop {
+                    assert_eq!(
+                        fs::read(path).unwrap(),
+                        record::encode(&entries[index]).unwrap()
+                    );
+                } else {
+                    assert!(!path.exists(), "{}", path.display());
+                }
+            }
+            assert_eq!(temporary_files(&store), 0);
+            drop(store);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
     fn a_publication_stopped_after_a_rename_ends_with_a_durable_sync() {
         let (root, store) = fixture();
         let base = store.records_path();
