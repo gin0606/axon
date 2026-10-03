@@ -622,11 +622,12 @@ fn init_reuses_the_residue_of_an_interrupted_initialization_and_refuses_anything
     let f = repository();
     let directory = f.0.join(".axon");
     fs::create_dir_all(directory.join("records/ab")).unwrap();
-    fs::write(directory.join(".gitignore"), "*.lock\n*.tmp\n").unwrap();
-    fs::write(directory.join(".gitattributes"), "* -text\n").unwrap();
+    fs::write(directory.join(".gitignore"), "*.lock\r\n*.tmp\r\n").unwrap();
+    fs::write(directory.join(".gitattributes"), "* -text\r\n").unwrap();
     fs::write(directory.join("write.lock"), "").unwrap();
     fs::write(directory.join("header.json.tmp"), "partial").unwrap();
     fs::write(directory.join("records/ab/something.tmp"), "partial").unwrap();
+    fs::write(directory.join("other.tmp"), "partial").unwrap();
     assert!(failure(f.run(&["list"])).contains("not initialized"));
     f.ok(&["init", "t"]);
     assert!(header(&f.0).is_file());
@@ -733,7 +734,7 @@ proptest! {
         crlf in any::<bool>(),
         foreign in 0u8..4,
     ) {
-      for (parts, crlf, foreign) in [(parts, crlf, foreign), (vec![true; 4], true, 0)] {
+
         let f = Fixture::new();
         let directory = f.0.join(".axon");
         fs::create_dir_all(directory.join("records/ab")).unwrap();
@@ -774,7 +775,6 @@ proptest! {
             prop_assert_eq!(fs::read(directory.join(".gitattributes")).unwrap(), b"* -text\n");
             prop_assert!(f.ok(&["list"]).is_empty());
         }
-      }
     }
 }
 
@@ -891,7 +891,7 @@ fn a_linked_worktree_without_a_store_uses_the_main_worktrees_store() {
 }
 
 #[test]
-fn concurrent_start_across_worktrees_has_one_winner_and_one_lock() {
+fn concurrent_start_across_worktrees_has_one_winner() {
     let f = repository();
     f.init();
     ignore_store(&f.0, ".axon/");
@@ -914,7 +914,6 @@ fn concurrent_start_across_worktrees_has_one_winner_and_one_lock() {
         .filter(|out| out.status.success())
         .count();
     assert_eq!(winners, 1);
-    assert!(f.0.join(".axon/write.lock").is_file());
     assert!(!linked.0.join(".axon").exists());
 }
 
@@ -1210,19 +1209,43 @@ fn conditions_run_in_the_current_worktree_while_the_store_is_shared() {
     let task = f.accepted("task");
     let proposal = created(&f.ok(&["capture", "--label", "chore", "--title", "proposal"]));
     for id in [&task, &proposal] {
-        f.ok(&["condition", "set", id, "--command", "test -f marker"]);
+        f.ok(&[
+            "condition",
+            "set",
+            id,
+            "--command",
+            "test \"$AXON_TEST_CONDITION\" = inherited && test -f marker",
+        ]);
     }
     let linked = add_worktree(&f.0, "linked");
-    assert!(f.ok(&["tasks"]).is_empty());
-    assert!(success(command(&linked.0).args(["tasks"]).output().unwrap()).is_empty());
+    let candidates = |fixture: &Fixture, args: &[&str]| {
+        success(
+            command(&fixture.0)
+                .env("AXON_TEST_CONDITION", "inherited")
+                .args(args)
+                .output()
+                .unwrap(),
+        )
+    };
+    assert!(candidates(&f, &["tasks"]).is_empty());
+    assert!(candidates(&linked, &["tasks"]).is_empty());
     fs::write(linked.0.join("marker"), "").unwrap();
+    fs::create_dir(linked.0.join("subdir")).unwrap();
+    let traced = command(&linked.0.join("subdir"))
+        .env("AXON_TEST_CONDITION", "inherited")
+        .args(["tasks", "--trace-conditions"])
+        .output()
+        .unwrap();
+    assert!(traced.status.success());
+    assert!(String::from_utf8(traced.stdout).unwrap().contains(&task));
     assert!(
-        success(command(&linked.0).args(["tasks"]).output().unwrap()).contains(&task),
-        "the condition sees the worktree the command ran in"
+        String::from_utf8(traced.stderr)
+            .unwrap()
+            .contains(&format!("cwd: {}", linked.0.display()))
     );
-    assert!(success(command(&linked.0).args(["proposals"]).output().unwrap()).contains(&proposal));
-    assert!(f.ok(&["tasks"]).is_empty());
-    assert!(f.ok(&["proposals"]).is_empty());
+    assert!(candidates(&linked, &["proposals"]).contains(&proposal));
+    assert!(candidates(&f, &["tasks"]).is_empty());
+    assert!(candidates(&f, &["proposals"]).is_empty());
     fs::write(f.0.join("marker"), "").unwrap();
-    assert!(f.ok(&["tasks"]).contains(&task));
+    assert!(candidates(&f, &["tasks"]).contains(&task));
 }

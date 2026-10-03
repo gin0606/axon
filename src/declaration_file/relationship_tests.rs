@@ -2,7 +2,6 @@ use crate::declaration::*;
 use crate::lifecycle::EntityId;
 use crate::lifecycle::record::{Context, Current, Entry, Kind, Lifecycle, Operation, Store};
 use chrono::{TimeZone, Utc};
-use proptest::prelude::*;
 use std::collections::BTreeSet;
 
 fn id(s: &str) -> EntityId {
@@ -83,19 +82,12 @@ fn reorder_records(text: &str, group_order: usize, issue_order: usize) -> String
     let mut blocks: Vec<String> = Vec::new();
     let mut order = 0;
     let flush = |blocks: &mut Vec<String>, result: &mut String, order| {
-        if order == 1 {
-            blocks.reverse();
-        } else if order == 2 && !blocks.is_empty() {
-            blocks.rotate_left(1);
-        } else if order > 2 {
-            let mut seed = order as u64;
-            for i in (1..blocks.len()).rev() {
-                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-                blocks.swap(i, (seed as usize) % (i + 1));
-            }
-        }
-        for block in blocks.drain(..) {
-            result.push_str(&block);
+        let mut remaining = std::mem::take(blocks);
+        let mut order = order;
+        while !remaining.is_empty() {
+            let index = order % remaining.len();
+            order /= remaining.len();
+            result.push_str(&remaining.remove(index));
         }
     };
     for line in text.split_inclusive('\n') {
@@ -117,9 +109,8 @@ fn reorder_records(text: &str, group_order: usize, issue_order: usize) -> String
     result
 }
 
-/// Applies each relationship change with its records in every `(group, issue)` order of
-/// `reorder_records` and requires the same result and canonical output as the first order.
-fn assert_order_independent(title: &str, orders: &[(usize, usize)]) {
+#[test]
+fn relationship_changes_are_order_independent() {
     for case in [
         "cancelled-parent",
         "cancelled-dependencies",
@@ -169,11 +160,15 @@ fn assert_order_independent(title: &str, orders: &[(usize, usize)]) {
             "active-subtree" => d.groups[2].parent = Some(Reference::id("h")),
             _ => unreachable!(),
         }
-        d.groups[1].title = title.into();
+        d.groups[1].title = "Renamed".into();
         d.prepare(&before, "demo").unwrap();
         let text = d.serialize(&before_view).unwrap();
         let mut canonical_result = None;
-        for &(group_order, issue_order) in orders {
+        let group_orders = (1..=d.groups.len()).product::<usize>();
+        let issue_orders = (1..=d.issues.len()).product::<usize>();
+        for (group_order, issue_order) in
+            (0..group_orders).flat_map(|group| (0..issue_orders).map(move |issue| (group, issue)))
+        {
             let root = std::env::temp_dir()
                 .join(format!("axon-relations-{:032x}", rand::random::<u128>()));
             std::fs::create_dir(&root).unwrap();
@@ -186,7 +181,7 @@ fn assert_order_independent(title: &str, orders: &[(usize, usize)]) {
             assert_eq!(store.read().unwrap().1, before);
             let input = reorder_records(&text, group_order, issue_order);
             let mut parsed = parse(&input).unwrap();
-            if group_order == 1 {
+            if group_order == d.groups.len() - 1 {
                 assert_eq!(parsed.groups.first(), d.groups.last());
             }
             if issue_order == 1 {
@@ -263,22 +258,5 @@ fn assert_order_independent(title: &str, orders: &[(usize, usize)]) {
             drop(store);
             std::fs::remove_dir_all(root).unwrap();
         }
-    }
-}
-
-#[test]
-fn relationship_changes_are_order_independent() {
-    assert_order_independent("Renamed", &[(0, 0), (1, 0), (0, 1), (1, 1), (2, 2)]);
-}
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(4))]
-    #[test]
-    fn generated_orders_of_relationship_changes_match_the_file_order(
-        title in "[A-Za-z][A-Za-z0-9]{0,12}",
-        group_order in 3usize..1000,
-        issue_order in 3usize..1000,
-    ) {
-        assert_order_independent(&title, &[(0, 0), (group_order, issue_order)]);
     }
 }

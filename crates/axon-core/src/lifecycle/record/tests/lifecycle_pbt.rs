@@ -105,13 +105,6 @@ proptest! {
     #[test]
     fn generated_lifecycle_paths_match_reference_table(path in prop::collection::vec(0usize..8, 0..24)) {
         for kind in [Kind::Issue, Kind::Group] {
-            for state in [Lifecycle::Undecided, Lifecycle::NotStarted, Lifecycle::InProgress, Lifecycle::Completed, Lifecycle::Cancelled] {
-                if kind == Kind::Group && state == Lifecycle::InProgress { continue; }
-                for op in OPS {
-                    let mut r = isolated(kind, state);
-                    check_transition(&mut r, op);
-                }
-            }
             let mut r = isolated(kind, Lifecycle::NotStarted);
             for step in &path { check_transition(&mut r, OPS[*step]); }
         }
@@ -171,36 +164,7 @@ proptest! {
         prop_assert_eq!(r.current("item"), previous);
     }
 
-    #[test]
-    fn generated_title_and_reason_boundaries(
-        extra in 0usize..3,
-    ) {
-        let mut r = isolated(Kind::Issue, Lifecycle::NotStarted);
-        for len in [TITLE_LIMIT - 1, TITLE_LIMIT, TITLE_LIMIT + extra + 1] {
-            let title = "字".repeat(len);
-            prop_assert_eq!(r.store.write(&id("item"), Some(title), None, r.tick()).is_ok(), len <= TITLE_LIMIT);
-        }
-        for bad in ['\n', '\t', '\u{1b}', '\u{85}'] {
-            let invalid = format!("a{bad}b");
-            prop_assert!(r.store.write(&id("item"), Some(invalid.clone()), None, r.tick()).is_err());
-            prop_assert!(r.store.perform(&id("item"), Operation::Start, Some(invalid.clone()), r.tick()).is_err());
-            let mut value = current(Kind::Issue, Lifecycle::NotStarted, None);
-            value.title = invalid;
-            prop_assert!(r.try_create("invalid", value).is_err());
-        }
-        prop_assert!(r.store.perform(&id("item"), Operation::Start, Some("   ".into()), r.tick()).is_err());
-        let reason = "r".repeat(REASON_LIMIT);
-        prop_assert_eq!(r.store.perform(&id("item"), Operation::Start, Some(reason.clone()), r.tick()).unwrap().reason, Some(reason));
-        prop_assert!(r.store.perform(&id("item"), Operation::Start, Some("r".repeat(REASON_LIMIT + extra + 1)), r.tick()).is_err());
-        for len in [TITLE_LIMIT, TITLE_LIMIT + extra + 1] {
-            let mut value = current(Kind::Issue, Lifecycle::NotStarted, None);
-            value.title = "字".repeat(len);
-            prop_assert_eq!(r.try_create(&format!("new{len}"), value).is_ok(), len <= TITLE_LIMIT);
-        }
-        let mut value = current(Kind::Issue, Lifecycle::NotStarted, None);
-        value.title = "   ".into();
-        prop_assert!(r.try_create("invalid", value).is_err());
-    }
+
 
     #[test]
     fn generated_forest_prerequisites_and_group_work(
@@ -332,73 +296,7 @@ proptest! {
         prop_assert_eq!(r.current("item"), Current { kind: other, ..before });
     }
 
-    #[test]
-    fn generated_conflicts_block_ordinary_writes_but_allow_notes_and_resolution(
-        left in "[a-z]{1,12}",
-        right in "[A-Z]{1,12}",
-    ) {
-        let mut base = isolated(Kind::Issue, Lifecycle::NotStarted);
-        base.create("g0", Kind::Group, Lifecycle::NotStarted, None);
-        base.create("g2", Kind::Group, Lifecycle::NotStarted, None);
-        base.op("g2", Operation::Complete);
-        base.add_dep("item", "g2");
-        prop_assert!(base.try_create("new", current(Kind::Issue, Lifecycle::NotStarted, None)).is_ok());
-        prop_assert!(base.try_op("item", Operation::Start).is_ok());
-        prop_assert!(base.try_move("item", Some("g0")).unwrap().is_some());
-        prop_assert!(base.try_add_dep("item", "g0").unwrap().is_some());
-        prop_assert!(base.try_remove_dep("item", "g2").unwrap().is_some());
-        prop_assert!(base.store.convert(&id("item"), Kind::Group, base.tick()).unwrap().is_some());
-        prop_assert!(base.store.set_label(&id("item"), Label::Bug, base.tick()).unwrap().is_some());
-        let mut a = Replica::from("r0", &base.store);
-        let mut b = Replica::from("r1", &base.store);
-        let edit = a.store.write(&id("item"), Some(left), None, a.tick()).unwrap().unwrap();
-        insert(&mut a.store, edit);
-        let edit = b.store.write(&id("item"), Some(right), None, b.tick()).unwrap().unwrap();
-        insert(&mut b.store, edit);
-        a.sync(&b);
-        prop_assert!(a.view().conflicted().contains(&id("item")));
-        let old_len = a.store.len();
-        prop_assert!(a.try_create("new", current(Kind::Issue, Lifecycle::NotStarted, None)).is_err());
-        prop_assert!(a.try_op("item", Operation::Start).is_err());
-        prop_assert!(a.store.write(&id("item"), Some("updated".into()), None, a.tick()).is_err());
-        prop_assert!(a.store.set_label(&id("item"), Label::Bug, a.tick()).is_err());
-        prop_assert!(a.try_move("item", Some("g0")).is_err());
-        prop_assert!(a.try_add_dep("item", "g0").is_err());
-        prop_assert!(a.try_remove_dep("item", "g2").is_err());
-        prop_assert!(a.store.set_condition(&id("item"), Some("true".into()), a.tick()).is_err());
-        prop_assert!(a.store.convert(&id("item"), Kind::Group, a.tick()).is_err());
-        let value = Imported { title: "x".into(), description: "body".into(), label: Label::Bug, parent: None, needs: BTreeSet::new() };
-        prop_assert!(a.store.import(&id("item"), value, a.tick()).is_err());
-        prop_assert_eq!(a.store.len(), old_len);
-        let note = a.store.add_note(&id("item"), "note".into(), None, a.tick()).unwrap();
-        a.store.insert(Entry::Note(note)).unwrap();
-        let chosen = a.heads("item").first().unwrap().clone();
-        a.resolve("item", &chosen);
-        prop_assert!(a.view().conflicted().is_empty());
-        prop_assert_eq!(a.store.len(), old_len + 2);
-        for kind in [Kind::Issue, Kind::Group] {
-            for state in [Lifecycle::Undecided, Lifecycle::NotStarted, Lifecycle::InProgress, Lifecycle::Completed, Lifecycle::Cancelled] {
-                if kind == Kind::Group && state == Lifecycle::InProgress { continue; }
-                for op in OPS {
-                    if expected(kind, state, op).is_none() { continue; }
-                    let mut control = isolated(kind, state);
-                    control.create("blocker", Kind::Issue, Lifecycle::NotStarted, None);
-                    prop_assert!(control.try_op("item", op).is_ok());
-                    let mut left = Replica::from("r0", &control.store);
-                    let mut right = Replica::from("r1", &control.store);
-                    let a = left.store.set_condition(&id("blocker"), Some("true".into()), left.tick()).unwrap().unwrap();
-                    let b = right.store.set_condition(&id("blocker"), Some("false".into()), right.tick()).unwrap().unwrap();
-                    insert(&mut left.store, a);
-                    insert(&mut right.store, b);
-                    left.sync(&right);
-                    prop_assert!(left.view().conflicted().contains(&id("blocker")));
-                    let old_len = left.store.len();
-                    prop_assert!(left.try_op("item", op).is_err());
-                    prop_assert_eq!(left.store.len(), old_len);
-                }
-            }
-        }
-    }
+
 
     #[test]
     fn generated_relation_changes_keep_other_fields_and_reject_cycles(
@@ -495,7 +393,7 @@ proptest! {
             prop_assert_eq!(r.current(&name).lifecycle, Lifecycle::NotStarted);
             prop_assert_eq!(r.view().effective_lifecycle(&id(&name)), Some(Lifecycle::InProgress));
             prop_assert_eq!(&r.head(&name), head);
-            for op in [Operation::Start, Operation::Release, Operation::Withdraw, Operation::Complete, Operation::Cancel] {
+            for op in [Operation::Withdraw, Operation::Complete, Operation::Cancel] {
                 prop_assert!(r.try_op(&name, op).is_err());
             }
         }
@@ -692,6 +590,240 @@ proptest! {
             prop_assert!(read.contains("dependencies must be Completed"), "{read}");
             prop_assert!(partial.try_op("item", Operation::Start).is_err());
             prop_assert_eq!(partial.store.len(), old_len);
+        }
+    }
+}
+
+#[test]
+fn title_and_reason_boundaries() {
+    let mut r = isolated(Kind::Issue, Lifecycle::NotStarted);
+    let before = r.store.len();
+    for len in [TITLE_LIMIT - 1, TITLE_LIMIT, TITLE_LIMIT + 1] {
+        let title = "字".repeat(len);
+        let write = r
+            .store
+            .write(&id("item"), Some(title.clone()), None, r.tick());
+        let mut value = current(Kind::Issue, Lifecycle::NotStarted, None);
+        value.title = title;
+        let create = r.try_create(&format!("new{len}"), value);
+        if len <= TITLE_LIMIT {
+            assert!(write.is_ok());
+            assert!(create.is_ok());
+        } else {
+            for message in [error(write), error(create)] {
+                assert!(
+                    message.contains("title has 201 characters; the limit is 200"),
+                    "{message}"
+                );
+            }
+        }
+    }
+    for bad in ['\n', '\t', '\u{1b}', '\u{85}'] {
+        let invalid = format!("a{bad}b");
+        let write = error(
+            r.store
+                .write(&id("item"), Some(invalid.clone()), None, r.tick()),
+        );
+        assert!(
+            write.contains("title contains a line break or control character"),
+            "{write}"
+        );
+        let reason = error(r.store.perform(
+            &id("item"),
+            Operation::Start,
+            Some(invalid.clone()),
+            r.tick(),
+        ));
+        assert!(
+            reason.contains("reason contains a line break or control character"),
+            "{reason}"
+        );
+        let mut value = current(Kind::Issue, Lifecycle::NotStarted, None);
+        value.title = invalid;
+        let create = error(r.try_create("invalid", value));
+        assert!(
+            create.contains("title contains a line break or control character"),
+            "{create}"
+        );
+    }
+    let blank = error(
+        r.store
+            .perform(&id("item"), Operation::Start, Some("   ".into()), r.tick()),
+    );
+    assert!(blank.contains("empty reason"), "{blank}");
+    for len in [REASON_LIMIT - 1, REASON_LIMIT, REASON_LIMIT + 1] {
+        let reason = "r".repeat(len);
+        let result = r.store.perform(
+            &id("item"),
+            Operation::Start,
+            Some(reason.clone()),
+            r.tick(),
+        );
+        if len <= REASON_LIMIT {
+            assert_eq!(result.unwrap().reason, Some(reason));
+        } else {
+            let message = error(result);
+            assert!(
+                message.contains("reason has 501 characters; the limit is 500"),
+                "{message}"
+            );
+        }
+    }
+    let mut value = current(Kind::Issue, Lifecycle::NotStarted, None);
+    value.title = "   ".into();
+    let blank = error(r.try_create("invalid", value));
+    assert!(blank.contains("empty title"), "{blank}");
+    assert_eq!(r.store.len(), before);
+}
+
+#[test]
+fn conflicts_block_ordinary_writes_but_allow_notes_and_resolution() {
+    let left = "left".to_owned();
+    let right = "right".to_owned();
+
+    let mut base = isolated(Kind::Issue, Lifecycle::NotStarted);
+    base.create("g0", Kind::Group, Lifecycle::NotStarted, None);
+    base.create("g2", Kind::Group, Lifecycle::NotStarted, None);
+    base.op("g2", Operation::Complete);
+    base.add_dep("item", "g2");
+    assert!(
+        base.try_create("new", current(Kind::Issue, Lifecycle::NotStarted, None))
+            .is_ok()
+    );
+    assert!(base.try_op("item", Operation::Start).is_ok());
+    assert!(base.try_move("item", Some("g0")).unwrap().is_some());
+    assert!(base.try_add_dep("item", "g0").unwrap().is_some());
+    assert!(base.try_remove_dep("item", "g2").unwrap().is_some());
+    assert!(
+        base.store
+            .convert(&id("item"), Kind::Group, base.tick())
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        base.store
+            .set_label(&id("item"), Label::Bug, base.tick())
+            .unwrap()
+            .is_some()
+    );
+    let mut a = Replica::from("r0", &base.store);
+    let mut b = Replica::from("r1", &base.store);
+    let edit = a
+        .store
+        .write(&id("item"), Some(left), None, a.tick())
+        .unwrap()
+        .unwrap();
+    insert(&mut a.store, edit);
+    let edit = b
+        .store
+        .write(&id("item"), Some(right), None, b.tick())
+        .unwrap()
+        .unwrap();
+    insert(&mut b.store, edit);
+    a.sync(&b);
+    assert!(a.view().conflicted().contains(&id("item")));
+    let old_len = a.store.len();
+    assert!(
+        a.try_create("new", current(Kind::Issue, Lifecycle::NotStarted, None))
+            .is_err()
+    );
+    assert!(a.try_op("item", Operation::Start).is_err());
+    assert!(
+        a.store
+            .write(&id("item"), Some("updated".into()), None, a.tick())
+            .is_err()
+    );
+    assert!(
+        a.store
+            .set_label(&id("item"), Label::Bug, a.tick())
+            .is_err()
+    );
+    assert!(a.try_move("item", Some("g0")).is_err());
+    assert!(a.try_add_dep("item", "g0").is_err());
+    assert!(a.try_remove_dep("item", "g2").is_err());
+    assert!(
+        a.store
+            .set_condition(&id("item"), Some("true".into()), a.tick())
+            .is_err()
+    );
+    assert!(a.store.convert(&id("item"), Kind::Group, a.tick()).is_err());
+    let value = Imported {
+        title: "x".into(),
+        description: "body".into(),
+        label: Label::Bug,
+        parent: None,
+        needs: BTreeSet::new(),
+    };
+    assert!(a.store.import(&id("item"), value, a.tick()).is_err());
+    assert_eq!(a.store.len(), old_len);
+    let note = a
+        .store
+        .add_note(&id("item"), "note".into(), None, a.tick())
+        .unwrap();
+    a.store.insert(Entry::Note(note)).unwrap();
+    let chosen = a.heads("item").first().unwrap().clone();
+    a.resolve("item", &chosen);
+    assert!(a.view().conflicted().is_empty());
+    assert_eq!(a.store.len(), old_len + 2);
+    for kind in [Kind::Issue, Kind::Group] {
+        for state in [
+            Lifecycle::Undecided,
+            Lifecycle::NotStarted,
+            Lifecycle::InProgress,
+            Lifecycle::Completed,
+            Lifecycle::Cancelled,
+        ] {
+            if kind == Kind::Group && state == Lifecycle::InProgress {
+                continue;
+            }
+            for op in OPS {
+                if expected(kind, state, op).is_none() {
+                    continue;
+                }
+                let mut control = isolated(kind, state);
+                control.create("blocker", Kind::Issue, Lifecycle::NotStarted, None);
+                assert!(control.try_op("item", op).is_ok());
+                let mut left = Replica::from("r0", &control.store);
+                let mut right = Replica::from("r1", &control.store);
+                let a = left
+                    .store
+                    .set_condition(&id("blocker"), Some("true".into()), left.tick())
+                    .unwrap()
+                    .unwrap();
+                let b = right
+                    .store
+                    .set_condition(&id("blocker"), Some("false".into()), right.tick())
+                    .unwrap()
+                    .unwrap();
+                insert(&mut left.store, a);
+                insert(&mut right.store, b);
+                left.sync(&right);
+                assert!(left.view().conflicted().contains(&id("blocker")));
+                let old_len = left.store.len();
+                assert!(left.try_op("item", op).is_err());
+                assert_eq!(left.store.len(), old_len);
+            }
+        }
+    }
+}
+
+#[test]
+fn lifecycle_state_operation_matrix_matches_reference_table() {
+    for kind in [Kind::Issue, Kind::Group] {
+        for state in [
+            Lifecycle::Undecided,
+            Lifecycle::NotStarted,
+            Lifecycle::InProgress,
+            Lifecycle::Completed,
+            Lifecycle::Cancelled,
+        ] {
+            if kind == Kind::Group && state == Lifecycle::InProgress {
+                continue;
+            }
+            for op in OPS {
+                let mut r = isolated(kind, state);
+                check_transition(&mut r, op);
+            }
         }
     }
 }

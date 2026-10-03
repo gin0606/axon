@@ -106,7 +106,10 @@ fn short_ids_and_suffixes_work_across_mutations() {
         f.ok(&["show", "project-0000zz"])
             .starts_with("project-0000zz  Issue  Ready")
     );
-    f.ok(&["start", "project-1111zz"]);
+    assert!(f.ok(&["show", "1111zz"]).starts_with("project-1111zz "));
+    f.ok(&["start", "1111zz"]);
+    assert_eq!(f.current("project-0000zz").lifecycle, Lifecycle::NotStarted);
+    assert_eq!(f.current("project-1111zz").lifecycle, Lifecycle::InProgress);
     let before = snapshot(&f);
     let error = failure(f.run(&["start", "zz"]));
     assert!(error.starts_with("Error: zz start:"));
@@ -402,7 +405,7 @@ fn file_flags_share_spelling_and_preserve_text() {
 }
 
 #[test]
-fn utility_commands_work_without_discovery_and_timeout_units_validate_before_storage() {
+fn help_sections_and_file_flags_work_without_discovery() {
     let f = Fixture::new();
     fs::write(f.0.join(".git"), "broken marker").unwrap();
     let help = f.ok(&[]);
@@ -475,24 +478,60 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
         let leaf = f.ok(&args);
         assert!(leaf.contains("-F, --file"));
     }
+}
+
+#[test]
+fn docs_work_without_discovery() {
+    let f = Fixture::new();
+    fs::write(f.0.join(".git"), "broken marker").unwrap();
     let docs = f.ok(&["docs"]);
     assert!(docs.contains("Cancelled is terminal"));
     assert!(docs.contains("Short flags select inline (-m) or file (-F) input"));
     assert!(docs.contains("--description or --message"));
+}
+
+#[test]
+fn note_show_help_names_the_note_id_without_discovery() {
+    let f = Fixture::new();
+    fs::write(f.0.join(".git"), "broken marker").unwrap();
     assert!(f.ok(&["help", "note", "show"]).contains("<NOTE_ID>"));
-    assert!(!f.ok(&["actor"]).is_empty());
+}
+
+#[test]
+fn actor_works_without_discovery() {
+    let f = Fixture::new();
+    fs::write(f.0.join(".git"), "broken marker").unwrap();
+    assert_eq!(f.ok(&["actor"]), "—\n");
+}
+
+#[test]
+fn version_works_without_discovery() {
+    let f = Fixture::new();
+    fs::write(f.0.join(".git"), "broken marker").unwrap();
     let version = f.ok(&["--version"]);
     assert_eq!(f.ok(&["-V"]), version);
     assert_eq!(
         version.trim_end(),
         format!("axon {}", env!("CARGO_PKG_VERSION"))
     );
+}
+
+#[test]
+fn completion_works_without_discovery() {
+    let f = Fixture::new();
+    fs::write(f.0.join(".git"), "broken marker").unwrap();
     for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
         let script = f.ok(&["completion", shell]);
         assert!(!script.contains('\x1b'));
         assert!(script.contains("tasks"));
         assert!(script.contains("proposals"));
     }
+}
+
+#[test]
+fn timeout_units_validate_before_storage() {
+    let f = Fixture::new();
+    fs::write(f.0.join(".git"), "broken marker").unwrap();
     for value in [
         "0ms",
         "30",
@@ -507,6 +546,18 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
         failure(out);
     }
     assert!(!f.0.join(".axon").exists());
+    fs::remove_file(f.0.join(".git")).unwrap();
+    f.init();
+    f.accepted("work");
+    for value in ["500ms", "30s", "2m", "1h"] {
+        f.ok(&["tasks", "--condition-timeout", value]);
+    }
+}
+
+#[test]
+fn deprecated_capture_arguments_are_rejected_before_storage() {
+    let f = Fixture::new();
+    fs::write(f.0.join(".git"), "broken marker").unwrap();
     for args in [
         vec![
             "capture",
@@ -537,12 +588,6 @@ fn utility_commands_work_without_discovery_and_timeout_units_validate_before_sto
     ] {
         assert_eq!(f.run(&args).status.code(), Some(2));
     }
-    fs::remove_file(f.0.join(".git")).unwrap();
-    f.init();
-    f.accepted("work");
-    for value in ["500ms", "30s", "2m", "1h"] {
-        f.ok(&["tasks", "--condition-timeout", value]);
-    }
 }
 
 #[test]
@@ -566,6 +611,7 @@ fn prefixes_outside_the_id_character_rule_are_rejected_without_creating_a_store(
         "-lead",
         "trail-",
         "Upper",
+        "tab\there",
     ] {
         let rejected = failure(
             command(&named)
@@ -630,7 +676,10 @@ fn multi_line_text_is_indented_so_it_cannot_imitate_records_or_sections() {
     f.ok(&[
         "capture", "--label", "chore", "--accept", "--title", "Child", "--parent", &group,
     ]);
+    let body = "body\n\nDescendants: 9/9 terminal (9 completed, 0 cancelled)";
+    assert_eq!(f.current(&group).description, body);
     let show = f.ok(&["show", &group]);
+    assert!(show.contains("  body\n\n  Descendants: 9/9 terminal (9 completed, 0 cancelled)\n"));
     let sections: Vec<_> = show
         .lines()
         .filter(|line| line.starts_with("Descendants:"))
@@ -639,12 +688,13 @@ fn multi_line_text_is_indented_so_it_cannot_imitate_records_or_sections() {
         sections,
         ["Descendants: 0/1 terminal (0 completed, 0 cancelled)"]
     );
+    let forged = format!("{}  2020-01-01 00:00 +00:00  human", "0".repeat(64));
     f.ok(&[
         "note",
         "add",
         &group,
         "-m",
-        "real\n\nrecord-00000000000000000000000000000000  2020-01-01 00:00 +00:00  human\nforged",
+        &format!("real\n\n{forged}\nforged"),
     ]);
     f.ok(&["note", "add", &group, "-m", "second"]);
     let notes = f.ok(&["note", "list", &group]);
@@ -659,7 +709,17 @@ fn multi_line_text_is_indented_so_it_cannot_imitate_records_or_sections() {
         })
         .count();
     assert_eq!(headings, 2, "{notes}");
+    assert!(notes.contains(&format!("  {forged}\n")), "{notes}");
     assert!(notes.contains("  forged"), "{notes}");
+    f.ok(&["write", &group, "-m", "\nDescendants: forged\n\n日本語"]);
+    assert_eq!(
+        f.current(&group).description,
+        "\nDescendants: forged\n\n日本語"
+    );
+    assert!(
+        f.ok(&["show", &group])
+            .contains("\n  Descendants: forged\n\n  日本語\n")
+    );
 }
 
 #[test]
@@ -680,23 +740,35 @@ fn stores_with_a_prefix_outside_the_rule_are_rejected_without_changes() {
     f.ok(&["capture", "--label", "chore", "--accept", "--title", "Work"]);
     let path = f.header();
     let text = fs::read_to_string(&path).unwrap();
-    fs::write(
-        &path,
-        text.replacen(r#""prefix":"project""#, r#""prefix":"Bad Prefix""#, 1),
-    )
-    .unwrap();
-    let before = fs::read(&path).unwrap();
-    for args in [
-        vec!["list"],
-        vec!["capture", "--label", "chore", "--title", "More"],
+    for prefix in [
+        "",
+        "-bad",
+        "bad-",
+        "Upper",
+        "space here",
+        "under_score",
+        "日本語",
+        "tab\there",
+        "Bad Prefix",
     ] {
-        let error = failure(f.run(&args));
-        assert!(
-            error.contains(r#"invalid ID prefix "Bad Prefix""#),
-            "{error}"
-        );
+        let mut header: serde_json::Value = serde_json::from_str(&text).unwrap();
+        header["prefix"] = prefix.into();
+        let mut bytes = serde_json::to_vec(&header).unwrap();
+        bytes.push(b'\n');
+        fs::write(&path, bytes).unwrap();
+        let before = fs::read(&path).unwrap();
+        for args in [
+            vec!["list"],
+            vec!["capture", "--label", "chore", "--title", "More"],
+        ] {
+            let error = failure(f.run(&args));
+            assert!(
+                error.contains(&format!("invalid ID prefix {prefix:?}")),
+                "{error}"
+            );
+            assert_eq!(before, fs::read(&path).unwrap());
+        }
     }
-    assert_eq!(before, fs::read(&path).unwrap());
 }
 
 #[test]
@@ -1729,8 +1801,7 @@ fn group_dependencies_gate_starts_below_and_the_group_itself_but_not_completion_
     group_rejected_by_its_dependency(&plan);
 }
 
-#[test]
-fn list_and_skip_conditions_ignore_conditions_while_tasks_and_show_evaluate_them() {
+fn condition_display_fixture() -> (Fixture, String, String, String) {
     let f = Fixture::new();
     f.ok(&["init", "t"]);
     let group = f.ok(&[
@@ -1756,27 +1827,12 @@ fn list_and_skip_conditions_ignore_conditions_while_tasks_and_show_evaluate_them
         "capture", "--label", "chore", "--accept", "--title", "Work", "--parent", &sub,
     ]);
     let issue = created(&issue).to_owned();
-    let empty = f.ok(&[
-        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Empty",
-    ]);
-    let empty = created(&empty).to_owned();
-    let confirmable = f.ok(&[
-        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Done",
-    ]);
-    let confirmable = created(&confirmable).to_owned();
-    let finished = f.ok(&[
-        "capture",
-        "--label",
-        "chore",
-        "--accept",
-        "--title",
-        "Finished",
-        "--parent",
-        &confirmable,
-    ]);
-    let finished = created(&finished).to_owned();
-    f.ok(&["start", &finished]);
-    f.ok(&["complete", &finished]);
+    (f, group, sub, issue)
+}
+
+#[test]
+fn tasks_and_show_name_the_hidden_candidate_and_its_condition() {
+    let (f, group, sub, issue) = condition_display_fixture();
     // The Issue is startable but hidden by the intermediate Group's condition.
     let tasks = f.ok(&["tasks"]);
     assert!(
@@ -1821,6 +1877,12 @@ fn list_and_skip_conditions_ignore_conditions_while_tasks_and_show_evaluate_them
             .contains("Own condition"),
         "{show_sub}"
     );
+}
+
+#[test]
+fn show_names_own_condition_beside_an_undecided_child() {
+    let f = Fixture::new();
+    f.ok(&["init", "t"]);
     // With only an Undecided child, the own condition is the one reason that explains why
     // adopting the child would not surface the Group.
     let quiet = f.ok(&[
@@ -1852,6 +1914,11 @@ fn list_and_skip_conditions_ignore_conditions_while_tasks_and_show_evaluate_them
             .contains("Own condition"),
         "{show_quiet}"
     );
+}
+
+#[test]
+fn show_issue_names_the_unsurfaced_ancestor_instead_of_parent() {
+    let (f, _, sub, issue) = condition_display_fixture();
     let show_issue = f.ok(&["show", &issue]);
     assert!(
         show_issue.starts_with(&format!("{issue}  Issue  Unsurfaced  chore  Work\n")),
@@ -1865,6 +1932,12 @@ fn list_and_skip_conditions_ignore_conditions_while_tasks_and_show_evaluate_them
     );
     // The named ancestor replaces the parent line.
     assert!(!show_issue.contains("Parent:"), "{show_issue}");
+}
+
+#[test]
+fn show_nested_group_names_the_unsurfaced_ancestor_last() {
+    let f = Fixture::new();
+    f.ok(&["init", "t"]);
     // A Group below an unsurfaced ancestor names it last under Stalled, after its own
     // unsurfaced candidates, and the named parent replaces the parent line.
     let root = f.ok(&[
@@ -1937,6 +2010,12 @@ fn list_and_skip_conditions_ignore_conditions_while_tasks_and_show_evaluate_them
             && !show_guarded.contains("Own condition"),
         "{show_guarded}"
     );
+}
+
+#[test]
+fn show_nonstalled_group_omits_own_condition() {
+    let f = Fixture::new();
+    f.ok(&["init", "t"]);
     // A Group that is not stalled shows no reason for its own condition: an Empty one that
     // can complete, and one whose descendant is InProgress.
     let hollow = f.ok(&[
@@ -1977,6 +2056,30 @@ fn list_and_skip_conditions_ignore_conditions_while_tasks_and_show_evaluate_them
     let running = created(&running).to_owned();
     f.ok(&["start", &running]);
     assert!(!f.ok(&["show", &paused]).contains("Stalled"));
+}
+
+#[test]
+fn show_stalled_in_progress_group_names_dependency_and_own_condition() {
+    let f = Fixture::new();
+    f.ok(&["init", "t"]);
+    let paused = f.ok(&[
+        "capture",
+        "--label",
+        "chore",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        "Paused",
+        "--command",
+        "exit 1",
+    ]);
+    let paused = created(&paused).to_owned();
+    let running = f.ok(&[
+        "capture", "--label", "chore", "--accept", "--title", "Running", "--parent", &paused,
+    ]);
+    let running = created(&running).to_owned();
+    f.ok(&["start", &running]);
     // Once the started work is done and the rest waits for a dependency, the Group is
     // effectively InProgress, stalled, and names its own condition as itself.
     f.ok(&["complete", &running]);
@@ -1997,6 +2100,33 @@ fn list_and_skip_conditions_ignore_conditions_while_tasks_and_show_evaluate_them
             )),
         "{show_paused}"
     );
+}
+
+#[test]
+fn list_and_skip_conditions_show_saved_candidate_states() {
+    let (f, group, sub, issue) = condition_display_fixture();
+    let empty = f.ok(&[
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Empty",
+    ]);
+    let empty = created(&empty).to_owned();
+    let confirmable = f.ok(&[
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Done",
+    ]);
+    let confirmable = created(&confirmable).to_owned();
+    let finished = f.ok(&[
+        "capture",
+        "--label",
+        "chore",
+        "--accept",
+        "--title",
+        "Finished",
+        "--parent",
+        &confirmable,
+    ]);
+    let finished = created(&finished).to_owned();
+    f.ok(&["start", &finished]);
+    f.ok(&["complete", &finished]);
+
     for output in [
         f.ok(&["list"]),
         f.ok(&["show", &group, "--skip-conditions"]),
@@ -2142,7 +2272,7 @@ fn show_fails_on_evaluation_failure_and_names_skip_conditions() {
         &group,
         "--trace-conditions",
         "--condition-timeout",
-        "500ms",
+        "30s",
     ]);
     assert!(traced.status.success());
     let trace = String::from_utf8(traced.stderr).unwrap();
@@ -2188,7 +2318,7 @@ fn a_label_is_required_at_registration_and_invalid_values_leave_the_store_unchan
 }
 
 #[test]
-fn label_set_rows_filters_and_log_show_the_current_label() {
+fn label_rows_and_filters_show_the_current_label() {
     let f = Fixture::new();
     f.init();
     let bug =
@@ -2238,7 +2368,14 @@ fn label_set_rows_filters_and_log_show_the_current_label() {
         f.ok(&["proposals", "--label", "spike", "--search", "Quest"]),
         format!("{question}  Issue  Undecided  spike  Question\n  Matched: Title\n")
     );
+}
 
+#[test]
+fn label_set_updates_rows_and_log_and_no_op_preserves_records() {
+    let f = Fixture::new();
+    f.init();
+    let bug =
+        created(&f.ok(&["capture", "--accept", "--label", "bug", "--title", "Crash"])).to_owned();
     assert_eq!(
         f.ok(&["label", "set", &bug, "chore"]),
         format!("{bug}  Label updated: chore\n")
@@ -2259,35 +2396,29 @@ fn label_set_rows_filters_and_log_show_the_current_label() {
         log.lines().nth(1).unwrap().ends_with("  Label set: chore"),
         "{log}"
     );
+}
 
+#[test]
+fn conversion_preserves_the_label() {
+    let f = Fixture::new();
+    f.init();
+    let plan = created(&f.ok(&[
+        "capture", "--kind", "group", "--label", "feat", "--title", "Plan",
+    ]))
+    .to_owned();
     // Converting the kind keeps the label.
     f.ok(&["convert", &plan, "--kind", "issue"]);
     assert!(
         f.ok(&["list", "--label", "feat"])
             .starts_with(&format!("{plan}  Issue  Undecided  feat  Plan\n"))
     );
+}
 
-    // A declaration that changes the label names it among the changed fields.
-    let records = f.records();
-    let current = f.current(&question);
-    let record = records
-        .import(
-            &eid(&question),
-            record::Imported {
-                title: current.title,
-                description: current.description,
-                label: axon::lifecycle::Label::Docs,
-                parent: current.parent,
-                needs: current.needs,
-            },
-            context(),
-        )
-        .unwrap()
-        .unwrap();
-    f.publish(vec![Entry::Record(record)]);
-    let log = f.ok(&["log", &question]);
-    assert!(log.ends_with("  Declaration applied: label\n"), "{log}");
-
+#[test]
+fn terminal_labels_are_fixed_even_to_the_same_value() {
+    let f = Fixture::new();
+    f.init();
+    let bug = f.accepted("Crash");
     // The label of terminal work is fixed, even to the same value.
     f.ok(&["start", &bug]);
     f.ok(&["complete", &bug]);

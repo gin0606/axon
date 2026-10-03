@@ -93,19 +93,26 @@ fn conversion_is_rejected_while_in_progress_terminal_or_with_children() {
     );
 }
 
-/// Judging every record by the Entity's current kind would reject both histories above; the
-/// set instead rejects records that do not fit the kind at their own time.
 #[test]
-fn transitions_that_break_the_rules_of_their_own_kind_are_corruption() {
-    let mut r = Replica::new("r0");
+fn encode_rejects_a_group_storing_in_progress() {
+    let r = Replica::new("r0");
     let head = r.head("g2");
     let mut start = r.store.record(&head).unwrap().clone();
     start.kind = RecordKind::Transition(Start);
     start.parents = BTreeSet::from([head.clone()]);
     start.at = r.tick().at;
     start.after.lifecycle = Lifecycle::InProgress;
-    // A Group never stores InProgress, so the record itself is invalid.
-    assert!(error(encode(&Entry::Record(start.clone()))).contains("Group"));
+    assert_eq!(
+        error(encode(&Entry::Record(start))),
+        "a Group never stores InProgress"
+    );
+}
+
+/// Judging every record by the Entity's current kind would reject both histories above; the
+/// set instead rejects records that do not fit the kind at their own time.
+#[test]
+fn transitions_that_break_the_rules_of_their_own_kind_are_corruption() {
+    let mut r = Replica::new("r0");
     // A Complete of an Issue whose parent record is NotStarted skips the Start.
     let head = r.head("i3");
     let mut complete = r.store.record(&head).unwrap().clone();

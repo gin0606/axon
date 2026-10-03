@@ -14,7 +14,6 @@ fn the_daily_workflow_runs_from_registration_to_group_completion() {
         "chore",
         "--kind",
         "group",
-        "--accept",
         "--title",
         "納品",
         "-m",
@@ -24,9 +23,29 @@ fn the_daily_workflow_runs_from_registration_to_group_completion() {
         "capture", "--label", "chore", "--title", "調査", "--parent", &group,
     ]));
     let second = created(f.ok(&[
-        "capture", "--label", "chore", "--accept", "--title", "実装", "--parent", &group,
-        "--needs", &first,
+        "capture",
+        "--label",
+        "chore",
+        "--title",
+        "実装",
+        "--parent",
+        &group,
+        "--needs",
+        &first,
+        "-m",
+        "保存本文",
     ]));
+    assert!(f.ok(&["show", &second]).contains("Undecided"));
+    f.ok(&["accept", &second]);
+    let wait = f.ok(&["show", &second]);
+    assert!(wait.contains("Required to start"));
+    assert!(wait.contains(&format!("Ancestor must be adopted: {group}")));
+    assert!(wait.contains("Dependency must complete:"));
+    assert!(!wait.contains("Parent:"));
+    assert!(failure(f.run(&["start", &second])).contains("all ancestor Groups must be adopted"));
+    f.ok(&["accept", &group]);
+    assert!(f.ok(&["show", &second]).contains("Parent:"));
+    assert!(failure(f.run(&["start", &second])).contains("dependencies must be Completed"));
     assert!(f.ok(&["proposals"]).contains(&first));
     f.ok(&["accept", &first]);
     assert!(f.ok(&["proposals"]).is_empty());
@@ -37,44 +56,41 @@ fn the_daily_workflow_runs_from_registration_to_group_completion() {
     assert!(f.ok(&["tasks"]).contains(&second));
     let rejected = failure(f.run(&["start", &group]));
     assert!(rejected.contains("not started directly"), "{rejected}");
-    let mut attempts = (0..4)
-        .map(|_| {
-            f.command()
-                .args(["start", &first])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap()
-        })
-        .collect::<Vec<_>>();
-    let statuses = attempts
-        .drain(..)
-        .map(|p| p.wait_with_output().unwrap().status.success())
-        .collect::<Vec<_>>();
-    assert_eq!(statuses.iter().filter(|s| **s).count(), 1);
-    failure(f.run(&["start", &second]));
-    let notes = (0..4)
-        .map(|n| {
-            f.command()
-                .args(["note", "add", &first, "-m", &format!("結果 {n}")])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap()
-        })
-        .collect::<Vec<_>>();
-    for child in notes {
-        success(child.wait_with_output().unwrap());
-    }
-    let saved = f.ok(&["note", "list", &first, "--recorder-details"]);
-    for n in 0..4 {
-        assert!(saved.contains(&format!("結果 {n}")));
-    }
+    f.ok(&["start", &first]);
+    assert!(
+        f.ok(&["show", &group])
+            .contains("Group  InProgress  chore  納品")
+    );
+    assert!(failure(f.run(&["release", &group])).contains("a Group is not released directly"));
+    assert!(failure(f.run(&["start", &second])).contains("dependencies must be Completed"));
+    f.ok(&["note", "add", &first, "-m", "調査結果"]);
+    assert!(
+        f.ok(&["note", "list", &first, "--recorder-details"])
+            .contains("調査結果")
+    );
     f.ok(&["complete", &first]);
+    f.ok(&[
+        "write",
+        &second,
+        "--title",
+        "実装済みの目的",
+        "-m",
+        "編集本文",
+    ]);
     f.ok(&["start", &second]);
-    failure(f.run(&["complete", &group]));
+    assert!(failure(f.run(&["complete", &group])).contains("all children must be terminal"));
     f.ok(&["note", "add", &second, "-m", "成果を統合・検証済み"]);
-    f.ok(&["complete", &second]);
+    let show = f.ok(&["show", &second]);
+    assert!(show.starts_with(&second));
+    assert!(show.contains("1 notes"));
+    assert!(show.contains("編集本文"));
+    assert!(!show.contains("成果を統合・検証済み"));
+    assert!(!show.contains("Dependency must complete:"));
+    f.ok(&["complete", &second, "--reason", "検証完了"]);
+    let log = f.ok(&["log", &second]);
+    assert!(log.contains("InProgress → Completed"));
+    assert!(log.contains("検証完了"));
+    assert!(!log.contains("record-"));
     let review = f.ok(&["show", &group]);
     assert!(review.contains("2/2 terminal (2 completed, 0 cancelled)"));
     assert!(review.contains("Awaiting final confirmation"));
@@ -88,7 +104,17 @@ fn the_daily_workflow_runs_from_registration_to_group_completion() {
     );
     f.ok(&["complete", &group]);
     assert!(f.ok(&["tasks"]).is_empty());
-    assert!(f.ok(&["log", &group]).contains("NotStarted → Completed"));
+    let log = f.ok(&["log", &group]);
+    assert!(log.contains("NotStarted → Completed"));
+    assert!(!log.contains("InProgress"));
+    let list = f.ok(&["list"]);
+    let positions: Vec<_> = [&group, &first, &second]
+        .map(|id| list.find(id).unwrap())
+        .into();
+    assert!(positions.is_sorted(), "{list}");
+    let files = f.record_files();
+    assert!(failure(f.run(&["reconsider", &second])).contains("cannot Reconsider from Completed"));
+    assert_eq!(files, f.record_files());
 }
 
 #[test]

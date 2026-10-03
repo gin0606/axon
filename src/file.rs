@@ -868,24 +868,25 @@ mod publication_tests {
             }).unwrap_err();
             for index in 0..count {
                 let published = existing[index] || index < stop || (!missing_temp && index == stop);
-                prop_assert_eq!(paths[index].exists(), published);
+                prop_assert_eq!(paths[index].exists(), published, "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
                 if !existing[index] && published {
                     renamed.push(paths[index].display().to_string());
                 }
             }
-            prop_assert_eq!(matches!(&error, Error::PublicationUnknown(_)), !renamed.is_empty());
+            prop_assert_eq!(matches!(&error, Error::PublicationUnknown(_)), !renamed.is_empty(), "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
             if renamed.is_empty() {
-                prop_assert!(matches!(&error, Error::Invalid(_)));
-                prop_assert!(error.to_string().contains("not applied"));
+                prop_assert!(matches!(&error, Error::Invalid(_)), "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
+                prop_assert!(error.to_string().contains("not applied"), "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
             } else {
+                prop_assert!(error.to_string().contains("result unknown"), "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
                 let expected = format!("renamed so far: [{}]", renamed.join(", "));
-                prop_assert!(error.to_string().contains(&expected));
+                prop_assert!(error.to_string().contains(&expected), "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
             }
-            prop_assert_eq!(temporary_files(&store), 0);
+            prop_assert_eq!(temporary_files(&store), 0, "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
             store.update(|_, _, _| Ok((entries, ()))).unwrap();
-            prop_assert_eq!(store.read().unwrap().1.len(), count);
-            prop_assert!(paths.iter().all(|path| path.is_file()));
-            prop_assert_eq!(temporary_files(&store), 0);
+            prop_assert_eq!(store.read().unwrap().1.len(), count, "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
+            prop_assert!(paths.iter().all(|path| path.is_file()), "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
+            prop_assert_eq!(temporary_files(&store), 0, "scenario {}, stop {}, existing {:?}", scenario, stop, existing);
             drop(store);
             fs::remove_dir_all(root).unwrap();
           }
@@ -957,6 +958,35 @@ mod publication_tests {
         assert_eq!(loaded.corruption.len(), 1);
         assert_eq!(loaded.corruption[0].path, Path::new(id.subdirectory()));
         assert!(store.update(|_, _, _| Ok((records, ()))).is_err());
+        assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publication_rejects_a_symlinked_record_subdirectory_before_writing() {
+        let (root, store) = fixture();
+        let entries = vec![two_records().remove(0)];
+        let id = RecordId::of(&record::encode(&entries[0]).unwrap());
+        let directory = store.records_path().join(id.subdirectory());
+        let elsewhere = root.join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &directory).unwrap();
+        let error = store
+            .publish_entries_with(&entries, &mut |_| Ok(()), &mut |path, reach| {
+                sync_directory(path, reach)
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not applied"), "{error}");
+        assert!(
+            error.contains(&format!(
+                "{} is not a regular directory",
+                directory.display()
+            )),
+            "{error}"
+        );
         assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
         drop(store);
         fs::remove_dir_all(root).unwrap();
@@ -1152,7 +1182,7 @@ mod publication_tests {
     }
 
     #[test]
-    fn failures_before_and_after_the_first_rename_are_classified_and_leave_no_temporary_file() {
+    fn a_failure_before_publish_is_not_applied_and_leaves_no_temporary_file() {
         let (root, mut store) = fixture();
         // Before any rename: nothing is applied and every temporary file is removed.
         let error = store
@@ -1168,34 +1198,6 @@ mod publication_tests {
         assert!(error.to_string().contains("not applied"), "{error}");
         assert_eq!(store.read().unwrap().1.len(), 0);
         assert_eq!(temporary_files(&store), 0);
-        // After the first rename: the first record is published, the rest is not, the result
-        // is unknown and the untried temporary file is removed.
-        let error = store
-            .update_with(
-                |_, _, _| Ok((two_records(), ())),
-                &mut |progress| match progress {
-                    Progress::Renamed(0) => Err(invalid("injected after the first rename")),
-                    _ => Ok(()),
-                },
-            )
-            .unwrap_err();
-        assert!(matches!(&error, Error::PublicationUnknown(_)), "{error}");
-        assert!(error.to_string().contains("result unknown"), "{error}");
-        let first = store.read().unwrap().1;
-        let (first_id, _) = first.entries().next().unwrap();
-        assert!(
-            error.to_string().contains(&format!(
-                "renamed so far: [{}",
-                store
-                    .records_path()
-                    .join(first_id.subdirectory())
-                    .join(first_id.as_ref())
-                    .display()
-            )),
-            "{error}"
-        );
-        assert_eq!(first.len(), 1);
-        assert_eq!(temporary_files(&store), 0);
         drop(store);
         fs::remove_dir_all(root).unwrap();
     }
@@ -1208,6 +1210,13 @@ mod process_tests {
         process::{Command, Stdio},
         time::{Duration, Instant},
     };
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
     #[test]
     fn lock_holder() {
         let Some(root) = std::env::var_os("AXON_FILE_TEST_LOCK_HOLDER") else {
@@ -1224,32 +1233,33 @@ mod process_tests {
     fn killed_process_releases_stable_lock() {
         let root = std::env::temp_dir().join(format!("axon-lock-{:032x}", rand::random::<u128>()));
         fs::create_dir(&root).unwrap();
-        let mut child = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "file::process_tests::lock_holder", "--nocapture"])
-            .env("AXON_FILE_TEST_LOCK_HOLDER", &root)
-            .stdout(Stdio::null())
-            .spawn()
-            .unwrap();
+        let mut child = ChildGuard(
+            Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "file::process_tests::lock_holder", "--nocapture"])
+                .env("AXON_FILE_TEST_LOCK_HOLDER", &root)
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
         let deadline = Instant::now() + Duration::from_secs(5);
         while !root.join("ready").exists() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
-        if !root.join("ready").exists() {
-            child.kill().unwrap();
-            child.wait().unwrap();
-            panic!("lock holder did not start");
-        }
-        let (sender, receiver) = std::sync::mpsc::channel();
+        assert!(root.join("ready").exists(), "lock holder did not start");
         let path = root.join(WRITE_LOCK);
-        let thread = std::thread::spawn(move || {
-            let _lock = lock(&path).unwrap();
-            sender.send(()).unwrap();
-        });
-        assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
-        child.kill().unwrap();
-        child.wait().unwrap();
-        receiver.recv_timeout(Duration::from_secs(5)).unwrap();
-        thread.join().unwrap();
+        let contender = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        assert!(matches!(
+            contender.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        contender.try_lock().unwrap();
+        drop(contender);
         assert!(root.join(WRITE_LOCK).is_file());
         fs::remove_dir_all(root).unwrap();
     }

@@ -98,13 +98,6 @@ impl Fixture {
             .unwrap();
         self.store.insert(Entry::Record(record)).unwrap();
     }
-    fn note(&mut self, name: &str, body: &str) {
-        let note = self
-            .store
-            .add_note(&id(name), body.into(), None, self.tick())
-            .unwrap();
-        self.store.insert(Entry::Note(note)).unwrap();
-    }
     fn insert(&mut self, record: crate::lifecycle::record::Record) {
         self.store.insert(Entry::Record(record)).unwrap();
     }
@@ -256,7 +249,7 @@ fn canonical_scalar_styles_and_literal_chomping() {
     }
 }
 #[test]
-fn strict_yaml_rejects_unsupported_constructs_and_wrong_types() {
+fn strict_yaml_rejects_unsupported_constructs_wrong_types_and_invalid_references() {
     let text = example().serialize(&empty_view()).unwrap();
     let invalid = [
         text.replace(
@@ -291,19 +284,27 @@ fn strict_yaml_rejects_unsupported_constructs_and_wrong_types() {
             "      - { key: first }",
             "      - { key: first }\n      - { key: first }",
         ),
-        text.replace("key: second", "key: first"),
         format!("{text}---\n{text}"),
         "[]\n".into(),
     ];
     for bad in invalid {
         assert!(parse(&bad).is_err(), "accepted {bad}");
     }
+}
+
+#[test]
+fn unsupported_declaration_schemas_name_the_expected_schema() {
     for schema in ["other/v1", "future/v2"] {
         let e = parse(&format!("schema: {schema}\n"))
             .unwrap_err()
             .to_string();
-        assert!(e.contains(schema) && e.contains(SCHEMA), "{e}");
+        assert!(e.contains(schema) && e.contains(SCHEMA), "{schema}: {e}");
     }
+}
+
+#[test]
+fn legacy_declaration_schemas_require_a_fresh_export_with_labels() {
+    let text = example().serialize(&empty_view()).unwrap();
     // A v1 file, with or without labels, is not converted: its bases no longer match.
     for v1 in [
         text.replace("schema: axon-declaration/v2", "schema: axon-declaration/v1"),
@@ -315,9 +316,20 @@ fn strict_yaml_rejects_unsupported_constructs_and_wrong_types() {
             e.contains("axon-declaration/v1")
                 && e.contains("axon export")
                 && e.contains(&format!("add a label to each and declare {SCHEMA}")),
-            "{e}"
+            "{v1}: {e}"
         );
     }
+}
+#[test]
+fn declaration_rejects_duplicate_record_keys_without_a_self_dependency() {
+    let mut d = example();
+    d.issues[1].needs.clear();
+    let text = d.serialize(&empty_view()).unwrap();
+    let duplicate = text.replace("key: second", "key: first");
+    assert_eq!(
+        parse(&duplicate).unwrap_err().to_string(),
+        "Declaration: identity/reference: first: invalid or duplicate key"
+    );
 }
 #[test]
 fn label_is_required_and_limited_to_the_fixed_set() {
@@ -444,10 +456,12 @@ fn fingerprint_tokens_and_visible_field_changes() {
             _ => other_id = id("other"),
         }
         assert_ne!(base, fingerprint(&other_id, &other));
+        let changed = fingerprint(&other_id, &other);
+        other.condition = Some("exit 1".into());
+        assert_eq!(changed, fingerprint(&other_id, &other));
     }
-    // Conditions, Notes and the recorder are not visible in a declaration.
+    // Conditions are not part of the fingerprint.
     f.set_condition("demo-a", "exit 1");
-    f.note("demo-a", "Evidence");
     let view = f.view();
     assert_eq!(
         base,
@@ -504,111 +518,38 @@ proptest! {
         }
     }
 
-    #[test]
-    fn generated_yaml_damage_is_rejected(
-        title in "[a-zA-Z]{1,12}",
-    ) {
-        let mut d = example();
-        d.groups[0].title = title;
-        let yaml = d.serialize(&empty_view()).unwrap();
-        for field in ["schema", "groups", "issues", "references"] {
-            let line = yaml.lines().find(|line| line.starts_with(&format!("{field}:"))).unwrap();
-            // The whole value is replaced, so a block sequence under the key does not turn
-            // the damage into a syntax error.
-            let block: String = yaml
-                .lines()
-                .skip_while(|l| *l != line)
-                .enumerate()
-                .take_while(|(i, l)| *i == 0 || l.is_empty() || l.starts_with(' '))
-                .map(|(_, l)| format!("{l}\n"))
-                .collect();
-            for replacement in ["null", "true", "123", "{}"] {
-                let bad = yaml.replacen(&block, &format!("{field}: {replacement}\n"), 1);
-                let result = parse(&bad);
-                prop_assert!(result.is_err(), "{bad}");
-                let error = result.unwrap_err().to_string();
-                // The lists are rejected by their type, not by the text left around them.
-                prop_assert!(
-                    field == "schema" || error.contains("expected a sequence"),
-                    "{error}\n{bad}"
-                );
-            }
-            let duplicate = yaml.replacen(line, &format!("{line}\n{line}"), 1);
-            prop_assert!(parse(&duplicate).is_err(), "{duplicate}");
-        }
-    }
+
+
+
+
+
 
     #[test]
-    fn generated_record_field_damage_is_rejected(
-        title in "[a-zA-Z]{1,12}",
-    ) {
-        let mut d = example();
-        d.groups[0].title = title;
-        let yaml = d.serialize(&empty_view()).unwrap();
-        for field in ["key", "lifecycle", "title", "description", "label", "parent", "needs"] {
-            let line = yaml.lines().find(|line| line.starts_with(&format!("    {field}:"))).unwrap();
-            for damage in ["missing", "duplicate", "wrong-type"] {
-                let bad = match damage {
-                    "missing" => yaml.replacen(&format!("{line}\n"), "", 1),
-                    "duplicate" => yaml.replacen(line, &format!("{line}\n{line}"), 1),
-                    _ => yaml.replacen(line, &format!("    {field}: {{ bad: value }}"), 1),
-                };
-                prop_assert!(parse(&bad).is_err(), "{field}/{damage}: {bad}");
-            }
-        }
-    }
-
-    #[test]
-    fn generated_visible_fingerprint_fields_change_it(
-        title in "[a-zA-Z]{1,20}",
-        description in declaration_text(),
-    ) {
-        for selector in 0..8 {
-            let mut value = current(Kind::Issue, &title);
-            value.description = description.clone();
-            let entity = id("demo-a");
-            let base = fingerprint(&entity, &value);
-            let mut other_id = entity.clone();
-            match selector {
-                0 => value.title.push('!'),
-                1 => value.description.push('!'),
-                2 => value.lifecycle = Lifecycle::Completed,
-                3 => value.parent = Some(id("parent")),
-                4 => { value.needs.insert(id("needs")); },
-                5 => value.kind = Kind::Group,
-                6 => value.label = crate::lifecycle::Label::Spike,
-                _ => other_id = id("other"),
-            }
-            prop_assert_ne!(base, fingerprint(&other_id, &value), "selector {}", selector);
-            let unchanged = fingerprint(&other_id, &value);
-            value.condition = Some("exit 1".into());
-            prop_assert_eq!(unchanged, fingerprint(&other_id, &value), "selector {}", selector);
-        }
-    }
-
-    #[test]
-    fn generated_notes_and_recorders_do_not_change_fingerprint(
+    fn generated_notes_and_recorders_do_not_change_export(
         actor in "[a-z]{1,12}",
         note in "[a-zA-Z0-9]{1,30}",
     ) {
         let entity = id("demo-a");
         let value = current(Kind::Issue, "title");
-        let base = fingerprint(&entity, &value);
         let mut store = Store::new();
+        let plain = store.create(entity.clone(), value.clone(), context()).unwrap();
+        let mut baseline = Store::new();
+        baseline.insert(Entry::Record(plain)).unwrap();
+        let expected = export(&baseline, &baseline.view().unwrap(), std::slice::from_ref(&entity)).unwrap();
         let record = store.create(entity.clone(), value, Context {
             at: context().at,
             recorder: Some(Recorder { actor, data: Default::default() }),
         }).unwrap();
         store.insert(Entry::Record(record)).unwrap();
-        prop_assert_eq!(base.as_str(), fingerprint(&entity, store.view().unwrap().current(&entity).unwrap()));
+        prop_assert_eq!(export(&store, &store.view().unwrap(), std::slice::from_ref(&entity)).unwrap(), expected.clone());
         let note = store.add_note(&entity, note, None, context_at(1001)).unwrap();
         store.insert(Entry::Note(note)).unwrap();
-        prop_assert_eq!(base, fingerprint(&entity, store.view().unwrap().current(&entity).unwrap()));
+        prop_assert_eq!(export(&store, &store.view().unwrap(), &[entity]).unwrap(), expected);
     }
 }
 
 #[test]
-fn prepared_plan_checks_retries_and_collisions_without_partial_matches() {
+fn prepared_plan_publishes_parents_and_dependencies_before_their_users() {
     let mut f = Fixture::new();
     let mut d = example();
     d.prepare(&f.store, "demo").unwrap();
@@ -644,8 +585,26 @@ fn prepared_plan_checks_retries_and_collisions_without_partial_matches() {
     let applied = f.apply(&d);
     assert_eq!(applied.records.len(), 3);
     assert_eq!(applied.after.view().unwrap().known().count(), 3);
+}
+
+#[test]
+fn a_fully_applied_plan_is_an_empty_retry() {
+    let mut f = Fixture::new();
+    let mut d = example();
+    d.prepare(&f.store, "demo").unwrap();
+    let yaml = d.serialize(&f.view()).unwrap();
+    f.apply(&d);
     let retried = d.check(&yaml, &f.store, context()).unwrap();
     assert!(retried.already_applied && retried.records.is_empty());
+}
+
+#[test]
+fn a_conflict_elsewhere_rejects_even_a_fully_applied_plan() {
+    let mut f = Fixture::new();
+    let mut d = example();
+    d.prepare(&f.store, "demo").unwrap();
+    let yaml = d.serialize(&f.view()).unwrap();
+    f.apply(&d);
     // A conflict elsewhere in the store rejects even a completed retry.
     let mut other = Fixture {
         store: f.store.clone(),
@@ -663,18 +622,35 @@ fn prepared_plan_checks_retries_and_collisions_without_partial_matches() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("conflicted"), "{error}");
+}
+
+#[test]
+fn an_unedited_export_is_not_an_already_applied_plan() {
+    let mut f = Fixture::new();
+    let mut d = example();
+    d.prepare(&f.store, "demo").unwrap();
+    let applied = f.apply(&d);
     // An export that was never edited is not "already applied": nothing was applied.
     let unedited = export(&f.store, &f.view(), &[applied.records[0].entity.clone()]).unwrap();
     let checked = unedited
         .check(&unedited.serialize(&f.view()).unwrap(), &f.store, context())
         .unwrap();
     assert!(!checked.already_applied && checked.records.is_empty());
-    // An ID that only Notes refer to is taken as well.
+}
+
+#[test]
+fn notes_need_a_record_before_they_can_be_added() {
+    let f = Fixture::new();
     let note = f
         .store
         .add_note(&id("demo-noted"), "orphan".into(), None, context())
         .map(Entry::Note);
     assert!(note.is_err(), "a Note needs a record; insert one directly");
+}
+
+#[test]
+fn prepare_replaces_an_id_referred_to_only_by_an_orphan_note() {
+    let mut f = Fixture::new();
     let orphan = crate::lifecycle::record::Note {
         entity: id("demo-noted"),
         nonce: crate::lifecycle::record::Nonce::generate(),
@@ -688,6 +664,17 @@ fn prepared_plan_checks_retries_and_collisions_without_partial_matches() {
     with_noted.groups[0].id = Some("demo-noted".into());
     with_noted.prepare(&f.store, "demo").unwrap();
     assert_ne!(with_noted.groups[0].id.as_deref(), Some("demo-noted"));
+}
+
+#[test]
+fn prepare_keeps_matching_ids_and_replaces_edited_entities_and_their_dependents() {
+    let mut f = Fixture::new();
+    let mut d = example();
+    d.prepare(&f.store, "demo").unwrap();
+    let yaml = d.serialize(&f.view()).unwrap();
+    f.apply(&d);
+    f.create("elsewhere", Kind::Issue);
+    f.perform("elsewhere", Operation::Cancel);
     let mut retry = d.clone();
     retry.prepare(&f.store, "demo").unwrap();
     assert_eq!(retry, d);
@@ -741,7 +728,7 @@ fn applying_a_declaration_keeps_the_label_of_an_existing_entity() {
 }
 
 #[test]
-fn an_edited_label_is_applied_as_one_import_record_and_a_new_entity_takes_its_label() {
+fn an_edited_label_is_applied_as_one_import_record_with_retry_and_stale_base_checks() {
     use crate::lifecycle::Label;
     let mut f = Fixture::new();
     f.create("g", Kind::Group);
@@ -789,6 +776,18 @@ fn an_edited_label_is_applied_as_one_import_record_and_a_new_entity_takes_its_la
         .unwrap_err()
         .to_string();
     assert!(e.contains("conflict: a"), "{e}");
+}
+
+#[test]
+fn label_and_title_edits_share_one_import_record_and_new_entities_take_their_labels() {
+    use crate::lifecycle::Label;
+    let mut f = Fixture::new();
+    f.create("g", Kind::Group);
+    f.create("a", Kind::Issue);
+    f.set_parent("a", Some("g"));
+    let mut initial = export(&f.store, &f.view(), &[id("g")]).unwrap();
+    initial.issues[0].label = "bug".into();
+    f.apply(&initial);
     // A label and a title change together are still one record, and a new Entity is created
     // with its declared label.
     let mut d = export(&f.store, &f.view(), &[id("g")]).unwrap();
@@ -883,8 +882,7 @@ fn partial_publication_is_completed_by_a_retry_without_duplicate_records() {
     d.clone().prepare(&f.store, "demo").unwrap();
 }
 
-#[test]
-fn check_core_constraints_and_references() {
+fn core_constraint_fixture() -> Fixture {
     let mut f = Fixture::new();
     for (name, kind) in [
         ("g", Kind::Group),
@@ -894,30 +892,52 @@ fn check_core_constraints_and_references() {
     ] {
         f.create(name, kind);
     }
-    let reject = |d: &Declaration, f: &Fixture, field: &str| {
-        let bytes = d.serialize(&f.view()).unwrap();
-        let error = d
-            .check(&bytes, &f.store, context())
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains(field), "{field}: {error}");
-    };
+    f
+}
+
+fn reject_declaration(d: &Declaration, f: &Fixture, field: &str) {
+    let bytes = d.serialize(&f.view()).unwrap();
+    let error = d
+        .check(&bytes, &f.store, context())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains(field), "{field}: {error}");
+}
+
+#[test]
+fn declarations_reject_dependency_cycles() {
+    let f = core_constraint_fixture();
     let mut d = export(&f.store, &f.view(), &[id("a"), id("b")]).unwrap();
     d.issues[0].needs.push(Reference::id("b"));
     d.issues[1].needs.push(Reference::id("a"));
-    reject(&d, &f, "core rejection: b: needs");
+    reject_declaration(&d, &f, "core rejection: b: needs");
+}
+
+#[test]
+fn declarations_reject_containment_cycles() {
+    let f = core_constraint_fixture();
     let mut d = export(&f.store, &f.view(), &[id("g"), id("h")]).unwrap();
     d.groups[0].parent = Some(Reference::id("h"));
     d.groups[1].parent = Some(Reference::id("g"));
-    reject(&d, &f, "parent");
+    reject_declaration(&d, &f, "parent");
+}
+
+#[test]
+fn declarations_reject_moving_in_progress_work_under_unadopted_groups() {
+    let mut f = core_constraint_fixture();
     f.perform("a", Operation::Start);
     // InProgress work moves only under adopted Groups.
     f.perform("g", Operation::Withdraw);
     let mut d = export(&f.store, &f.view(), &[id("a")]).unwrap();
     d.issues[0].parent = Some(Reference::id("g"));
     d.refresh_references(&f.view()).unwrap();
-    reject(&d, &f, "parent");
-    f.perform("g", Operation::Accept);
+    reject_declaration(&d, &f, "parent");
+}
+
+#[test]
+fn declarations_reject_editing_terminal_entity_text_and_dependencies() {
+    let mut f = core_constraint_fixture();
+    f.perform("a", Operation::Start);
     f.perform("a", Operation::Complete);
     for field in ["title", "description", "needs"] {
         let mut d = export(&f.store, &f.view(), &[id("a")]).unwrap();
@@ -927,24 +947,47 @@ fn check_core_constraints_and_references() {
             _ => d.issues[0].needs.push(Reference::id("b")),
         }
         d.refresh_references(&f.view()).unwrap();
-        reject(&d, &f, field);
+        reject_declaration(&d, &f, field);
     }
+}
+
+#[test]
+fn an_unchanged_terminal_entity_declaration_has_no_records() {
+    let mut f = core_constraint_fixture();
+    f.perform("a", Operation::Start);
+    f.perform("a", Operation::Complete);
     // A terminal Entity exported and applied as it is passes: its text is not edited.
     let d = export(&f.store, &f.view(), &[id("a")]).unwrap();
     let checked = d
         .check(&d.serialize(&f.view()).unwrap(), &f.store, context())
         .unwrap();
     assert!(checked.records.is_empty() && !checked.already_applied);
+}
+
+#[test]
+fn declarations_reject_moves_into_or_out_of_terminal_groups() {
+    let mut f = core_constraint_fixture();
+    f.perform("a", Operation::Start);
+    f.perform("a", Operation::Complete);
     f.set_parent("a", Some("g"));
     f.perform("g", Operation::Complete);
     let mut d = export(&f.store, &f.view(), &[id("a")]).unwrap();
     d.issues[0].parent = None;
     d.refresh_references(&f.view()).unwrap();
-    reject(&d, &f, "parent");
+    reject_declaration(&d, &f, "parent");
     let mut d = export(&f.store, &f.view(), &[id("b")]).unwrap();
     d.issues[0].parent = Some(Reference::id("g"));
     d.refresh_references(&f.view()).unwrap();
-    reject(&d, &f, "parent");
+    reject_declaration(&d, &f, "parent");
+}
+
+#[test]
+fn stale_reference_annotations_do_not_change_declaration_checks() {
+    let mut f = core_constraint_fixture();
+    f.perform("a", Operation::Start);
+    f.perform("a", Operation::Complete);
+    f.set_parent("a", Some("g"));
+    f.perform("g", Operation::Complete);
     let mut d = export(&f.store, &f.view(), &[id("b")]).unwrap();
     d.issues[0].needs.push(Reference::id("a"));
     d.refresh_references(&f.view()).unwrap();
@@ -991,6 +1034,7 @@ fn prepare_mixed_records_and_check_replace_edges_before_adding() {
         .check(&d.serialize(&f.view()).unwrap(), &f.store, context())
         .unwrap();
     // The new Issue is published before the existing one that depends on it.
+    assert_eq!(checked.records.len(), 3);
     assert_eq!(checked.records[0].kind, RecordKind::Created);
     assert!(
         checked.records[1..]
@@ -1000,7 +1044,7 @@ fn prepare_mixed_records_and_check_replace_edges_before_adding() {
 }
 
 #[test]
-fn conflicted_and_violating_stores_reject_declarations_except_a_completing_retry() {
+fn conflicted_stores_reject_exporting_the_conflict_and_preparing_any_plan() {
     let mut f = Fixture::new();
     f.create("a", Kind::Issue);
     f.create("b", Kind::Issue);
@@ -1028,6 +1072,11 @@ fn conflicted_and_violating_stores_reject_declarations_except_a_completing_retry
             .to_string()
             .contains("conflicted")
     );
+}
+
+#[test]
+fn violating_stores_allow_export_but_reject_preparing_and_checking_fresh_plans() {
+    let mut d = example();
     // A violation: a Completed dependent whose dependency was reopened elsewhere.
     let mut f = Fixture::new();
     f.create("dep", Kind::Issue);
@@ -1059,6 +1108,11 @@ fn conflicted_and_violating_stores_reject_declarations_except_a_completing_retry
         .unwrap_err()
         .to_string();
     assert!(error.contains("structural violations"), "{error}");
+    let _ = clean.apply(&prepared);
+}
+
+#[test]
+fn a_declaration_retry_can_finish_publication_and_repair_its_violation() {
     // A retry whose remaining records remove the violation is allowed.
     let mut f = Fixture::new();
     f.create("x", Kind::Issue);
@@ -1082,7 +1136,10 @@ fn conflicted_and_violating_stores_reject_declarations_except_a_completing_retry
         .insert(Entry::Record(retried.records[0].clone()))
         .unwrap();
     assert!(f.view().is_valid());
-    let _ = clean.apply(&prepared);
+}
+
+#[test]
+fn a_declaration_retry_cannot_leave_an_unrelated_violation_in_place() {
     // A retry whose remaining records leave an unrelated violation in place is rejected.
     let mut f = Fixture::new();
     f.create("x", Kind::Issue);
@@ -1364,76 +1421,179 @@ proptest! {
     }
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(16))]
+#[test]
+fn yaml_damage_is_rejected() {
+    let title = "Title".to_owned();
 
-    #[test]
-    fn generated_invalid_stores_keep_fresh_plans_out_but_allow_repairing_retries(
-        title in "[A-Za-z][A-Za-z0-9]{0,12}",
-    ) {
-      for conflicted_child in [false, true] {
+    let mut d = example();
+    d.groups[0].title = title;
+    let yaml = d.serialize(&empty_view()).unwrap();
+    for field in ["schema", "groups", "issues", "references"] {
+        let line = yaml
+            .lines()
+            .find(|line| line.starts_with(&format!("{field}:")))
+            .unwrap();
+        // The whole value is replaced, so a block sequence under the key does not turn
+        // the damage into a syntax error.
+        let block: String = yaml
+            .lines()
+            .skip_while(|l| *l != line)
+            .enumerate()
+            .take_while(|(i, l)| *i == 0 || l.is_empty() || l.starts_with(' '))
+            .map(|(_, l)| format!("{l}\n"))
+            .collect();
+        for replacement in ["null", "true", "123", "{}"] {
+            let bad = yaml.replacen(&block, &format!("{field}: {replacement}\n"), 1);
+            let result = parse(&bad);
+            assert!(result.is_err(), "{bad}");
+            let error = result.unwrap_err().to_string();
+            // The lists are rejected by their type, not by the text left around them.
+            assert!(
+                field == "schema" || error.contains("expected a sequence"),
+                "{error}\n{bad}"
+            );
+        }
+        let duplicate = yaml.replacen(line, &format!("{line}\n{line}"), 1);
+        assert!(parse(&duplicate).is_err(), "{duplicate}");
+    }
+}
+
+#[test]
+fn record_field_damage_is_rejected() {
+    let title = "Title".to_owned();
+
+    let mut d = example();
+    d.groups[0].title = title;
+    let yaml = d.serialize(&empty_view()).unwrap();
+    for field in [
+        "key",
+        "lifecycle",
+        "title",
+        "description",
+        "label",
+        "parent",
+        "needs",
+    ] {
+        let line = yaml
+            .lines()
+            .find(|line| line.starts_with(&format!("    {field}:")))
+            .unwrap();
+        for damage in ["missing", "duplicate", "wrong-type"] {
+            let bad = match damage {
+                "missing" => yaml.replacen(&format!("{line}\n"), "", 1),
+                "duplicate" => yaml.replacen(line, &format!("{line}\n{line}"), 1),
+                _ => yaml.replacen(line, &format!("    {field}: {{ bad: value }}"), 1),
+            };
+            assert!(parse(&bad).is_err(), "{field}/{damage}: {bad}");
+        }
+    }
+}
+
+#[test]
+fn invalid_stores_keep_fresh_plans_out_but_allow_repairing_retries() {
+    let title = "Title".to_owned();
+
+    for conflicted_child in [false, true] {
         let mut f = Fixture::new();
         f.create("g", Kind::Group);
         f.create("a", Kind::Issue);
         f.set_parent("a", Some("g"));
         f.create("unrelated", Kind::Issue);
-        let mut other = Fixture { store: f.store.clone(), clock: std::cell::Cell::new(6000) };
+        let mut other = Fixture {
+            store: f.store.clone(),
+            clock: std::cell::Cell::new(6000),
+        };
         let conflicted = if conflicted_child { "a" } else { "unrelated" };
         f.write(conflicted, &format!("Left {title}"));
         other.write(conflicted, &format!("Right {title}"));
         f.store.absorb(&other.store);
         let exported = export(&f.store, &f.view(), &[id("g")]);
         if conflicted_child {
-            prop_assert!(exported.unwrap_err().to_string().contains("conflicted"));
+            assert!(exported.unwrap_err().to_string().contains("conflicted"));
         } else {
-            prop_assert_eq!(exported.unwrap().issues.len(), 1);
+            assert_eq!(exported.unwrap().issues.len(), 1);
         }
         let mut fresh = example();
         fresh.groups[0].title = title.clone();
         let input = fresh.serialize(&f.view()).unwrap();
-        prop_assert!(fresh.prepare(&f.store, "demo").unwrap_err().to_string().contains("conflicted"));
-        prop_assert_eq!(input, fresh.serialize(&f.view()).unwrap());
-      }
-
-        for missing_parent in [false, true] {
-            let mut source = Fixture::new();
-            source.create("missing", if missing_parent { Kind::Group } else { Kind::Issue });
-            let mut value = current(Kind::Issue, &title);
-            if missing_parent {
-                value.parent = Some(id("missing"));
-            } else {
-                value.needs.insert(id("missing"));
-            }
-            let record = source.store.create(id("child"), value, context()).unwrap();
-            let mut alone = Fixture::new();
-            alone.insert(record);
-            let view = alone.view();
-            let declaration = export(&alone.store, &view, &[id("child")]).unwrap();
-            prop_assert!(declaration.references.is_empty());
-            let input = declaration.serialize(&view).unwrap();
-            prop_assert!(declaration.clone().prepare(&alone.store, "demo").unwrap_err().to_string().contains("does not exist"));
-            prop_assert!(declaration.check(&input, &alone.store, context()).unwrap_err().to_string().contains("does not exist"));
-        }
-
-        let mut f = Fixture::new();
-        f.create("x", Kind::Issue);
-        f.create("y", Kind::Issue);
-        f.add_dependency("x", "y");
-        let mut swap = export(&f.store, &f.view(), &[id("x"), id("y")]).unwrap();
-        swap.issues[0].needs.clear();
-        swap.issues[1].needs = vec![Reference::id("x")];
-        swap.issues[1].title = title;
-        let input = swap.serialize(&f.view()).unwrap();
-        let checked = swap.check(&input, &f.store, context()).unwrap();
-        prop_assert_eq!(checked.records.len(), 2);
-        f.insert(checked.records[1].clone());
-        prop_assert!(!f.view().is_valid());
-        let mut fresh = example();
-        prop_assert!(fresh.prepare(&f.store, "demo").unwrap_err().to_string().contains("structural violations"));
-        let retry = swap.check(&input, &f.store, context()).unwrap();
-        prop_assert_eq!(retry.records.len(), 1);
-        f.insert(retry.records[0].clone());
-        prop_assert!(f.view().is_valid());
-        prop_assert!(swap.check(&input, &f.store, context()).unwrap().already_applied);
+        assert!(
+            fresh
+                .prepare(&f.store, "demo")
+                .unwrap_err()
+                .to_string()
+                .contains("conflicted")
+        );
+        assert_eq!(input, fresh.serialize(&f.view()).unwrap());
     }
+
+    for missing_parent in [false, true] {
+        let mut source = Fixture::new();
+        source.create(
+            "missing",
+            if missing_parent {
+                Kind::Group
+            } else {
+                Kind::Issue
+            },
+        );
+        let mut value = current(Kind::Issue, &title);
+        if missing_parent {
+            value.parent = Some(id("missing"));
+        } else {
+            value.needs.insert(id("missing"));
+        }
+        let record = source.store.create(id("child"), value, context()).unwrap();
+        let mut alone = Fixture::new();
+        alone.insert(record);
+        let view = alone.view();
+        let declaration = export(&alone.store, &view, &[id("child")]).unwrap();
+        assert!(declaration.references.is_empty());
+        let input = declaration.serialize(&view).unwrap();
+        assert!(
+            declaration
+                .clone()
+                .prepare(&alone.store, "demo")
+                .unwrap_err()
+                .to_string()
+                .contains("does not exist")
+        );
+        assert!(
+            declaration
+                .check(&input, &alone.store, context())
+                .unwrap_err()
+                .to_string()
+                .contains("does not exist")
+        );
+    }
+
+    let mut f = Fixture::new();
+    f.create("x", Kind::Issue);
+    f.create("y", Kind::Issue);
+    f.add_dependency("x", "y");
+    let mut swap = export(&f.store, &f.view(), &[id("x"), id("y")]).unwrap();
+    swap.issues[0].needs.clear();
+    swap.issues[1].needs = vec![Reference::id("x")];
+    swap.issues[1].title = title;
+    let input = swap.serialize(&f.view()).unwrap();
+    let checked = swap.check(&input, &f.store, context()).unwrap();
+    assert_eq!(checked.records.len(), 2);
+    f.insert(checked.records[1].clone());
+    assert!(!f.view().is_valid());
+    let mut fresh = example();
+    assert!(
+        fresh
+            .prepare(&f.store, "demo")
+            .unwrap_err()
+            .to_string()
+            .contains("structural violations")
+    );
+    let retry = swap.check(&input, &f.store, context()).unwrap();
+    assert_eq!(retry.records.len(), 1);
+    f.insert(retry.records[0].clone());
+    assert!(f.view().is_valid());
+    assert!(
+        swap.check(&input, &f.store, context())
+            .unwrap()
+            .already_applied
+    );
 }

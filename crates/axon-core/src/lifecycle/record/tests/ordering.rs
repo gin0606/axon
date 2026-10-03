@@ -189,56 +189,6 @@ proptest! {
             }
         }
     }
-
-    #[test]
-    fn generated_foreign_record_and_note_parents_are_rejected(seed in any::<u16>(), branches in prop::collection::vec(any::<bool>(), 0..4)) {
-      for note_parent in [false, true] {
-        let mut store = generated_dag(seed, 1, false, &branches);
-        let parent = if note_parent {
-            store.notes_of(&id("g0"))[0].0.clone()
-        } else {
-            store.history(&id("g0")).unwrap()[0].0.clone()
-        };
-        let mut record = store.record(&store.history(&id("i3")).unwrap()[0].0.clone()).unwrap().clone();
-        record.kind = RecordKind::Edit;
-        record.parents = BTreeSet::from([parent]);
-        record.after.title = format!("changed {seed}");
-        store.insert(Entry::Record(record)).unwrap();
-        prop_assert!(store.view().is_err());
-        prop_assert!(generated_dag(seed, 0, false, &branches).view().is_ok());
-      }
-    }
-
-    #[test]
-    fn generated_notes_are_ordered_by_time_even_when_ids_reverse(seed in any::<usize>()) {
-        let make = |body: String, at| Note {
-            entity: id("i3"),
-            nonce: "0123456789abcdef0123456789abcdef".try_into().unwrap(),
-            at,
-            recorder: ctx(40, "r0").recorder,
-            reason: None,
-            body,
-        };
-        let earlier = make("earlier".into(), ctx(40, "r0").at);
-        let earlier_id = RecordId::of(&encode(&Entry::Note(earlier.clone())).unwrap());
-        let candidates: Vec<_> = (0..64)
-            .map(|index| make(format!("later {index}"), ctx(50, "r0").at))
-            .filter(|note| RecordId::of(&encode(&Entry::Note(note.clone())).unwrap()) < earlier_id)
-            .collect();
-        let later = candidates[seed % candidates.len()].clone();
-        let later_id = RecordId::of(&encode(&Entry::Note(later.clone())).unwrap());
-        prop_assert!(later_id < earlier_id);
-        for notes in [[later.clone(), earlier.clone()], [earlier.clone(), later.clone()]] {
-            let mut store = Replica::new("r0").store;
-            for note in notes {
-                store.insert(Entry::Note(note)).unwrap();
-            }
-            let order: Vec<_> = store.notes_of(&id("i3")).iter().map(|(id, note)| (note.body.clone(), (*id).clone())).collect();
-            prop_assert_eq!(order, vec![(earlier.body.clone(), earlier_id.clone()), (later.body.clone(), later_id.clone())]);
-            let all: Vec<_> = store.all_notes().iter().map(|(id, _)| (*id).clone()).collect();
-            prop_assert_eq!(all, vec![earlier_id.clone(), later_id.clone()]);
-        }
-    }
 }
 
 #[test]

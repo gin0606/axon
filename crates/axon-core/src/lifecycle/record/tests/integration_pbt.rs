@@ -263,9 +263,9 @@ proptest! {
     }
 
     #[test]
-    fn generated_partial_arrival_and_resolution(
+    fn generated_concurrent_records_and_resolution(
         actor in "[a-z]{1,6}", same in any::<bool>(), duplicate in any::<bool>(),
-        deliver_start in any::<bool>(), resolve_first in any::<bool>()
+        resolve_first in any::<bool>()
     ) {
         let mut r0 = Replica::new("r0");
         let mut r1 = Replica::new("r1");
@@ -294,6 +294,12 @@ proptest! {
         prop_assert_eq!(&r0.store.record(&resolved).unwrap().after, &r0.store.record(chosen).unwrap().after);
         prop_assert!(r0.view().is_valid());
 
+    }
+
+    #[test]
+    fn generated_partial_arrival_clears_gaps_after_delivery_or_resolution(
+        deliver_start in any::<bool>(),
+    ) {
         let mut source = Replica::new("r0");
         let start = source.op("i3", Start);
         let complete = source.op("i3", Complete);
@@ -313,43 +319,63 @@ proptest! {
         prop_assert_eq!(lifecycle(&target.view(), "i3"), Lifecycle::Completed);
     }
 
-    #[test]
-    fn generated_cycles_reject_new_edges_and_allow_repair(
-        reverse in any::<bool>()
-    ) {
-      for waiting in [false, true] {
-       for chord in [false, true] {
-        let mut r0 = Replica::new("r0");
-        let mut r1 = Replica::new("r1");
-        r0.create("i4", Kind::Issue, Lifecycle::NotStarted, None);
-        r1.sync(&r0);
-        let (a, b, c) = if reverse { ("g2", "i3", "i4") } else { ("i4", "i3", "g2") };
-        r0.add_dep(a, b);
-        r0.add_dep(b, c);
-        r1.add_dep(c, a);
-        r0.sync(&r1);
-        check_graph(&r0);
-        prop_assert_eq!(reference_cycle_members(&r0.view()), BTreeSet::from([id(a), id(b), id(c)]));
-        if waiting {
-            r0.add_dep("i1", b);
-            check_graph(&r0);
-            prop_assert!(!r0.view().in_violation(&id("i1")));
-        }
-        let before = r0.store.len();
-        let rejected = if chord { r0.try_add_dep(a, c) } else { r0.try_add_dep(c, b) };
-        prop_assert!(rejected.is_err());
-        prop_assert_eq!(r0.store.len(), before);
-        check_graph(&r0);
-        r0.remove_dep(b, c);
-        check_graph(&r0);
-        prop_assert!(r0.view().is_valid());
-       }
-      }
-    }
 
-    #[test]
-    fn generated_second_cycle_and_inherited_dependency(actor in "[a-z]{1,6}") {
-      for extra_waiter in [false, true] {
+
+
+
+
+}
+
+#[test]
+fn cycles_reject_new_edges_and_allow_repair() {
+    for reverse in [false, true] {
+        for waiting in [false, true] {
+            for chord in [false, true] {
+                let mut r0 = Replica::new("r0");
+                let mut r1 = Replica::new("r1");
+                r0.create("i4", Kind::Issue, Lifecycle::NotStarted, None);
+                r1.sync(&r0);
+                let (a, b, c) = if reverse {
+                    ("g2", "i3", "i4")
+                } else {
+                    ("i4", "i3", "g2")
+                };
+                r0.add_dep(a, b);
+                r0.add_dep(b, c);
+                r1.add_dep(c, a);
+                r0.sync(&r1);
+                check_graph(&r0);
+                assert_eq!(
+                    reference_cycle_members(&r0.view()),
+                    BTreeSet::from([id(a), id(b), id(c)])
+                );
+                if waiting {
+                    r0.add_dep("i1", b);
+                    check_graph(&r0);
+                    assert!(!r0.view().in_violation(&id("i1")));
+                }
+                let before = r0.store.len();
+                let rejected = if chord {
+                    r0.try_add_dep(a, c)
+                } else {
+                    r0.try_add_dep(c, b)
+                };
+                assert!(rejected.is_err());
+                assert_eq!(r0.store.len(), before);
+                check_graph(&r0);
+                r0.remove_dep(b, c);
+                check_graph(&r0);
+                assert!(r0.view().is_valid());
+            }
+        }
+    }
+}
+
+#[test]
+fn second_cycle_and_inherited_dependency() {
+    let actor = "actor";
+
+    for extra_waiter in [false, true] {
         let mut r0 = Replica::new("r0");
         let mut r1 = Replica::new("r1");
         r0.create("i4", Kind::Issue, Lifecycle::NotStarted, None);
@@ -362,51 +388,85 @@ proptest! {
         r1.add_dep("i3", "g2");
         r0.sync(&r1);
         check_graph(&r0);
-        prop_assert!(r0.view().is_conflicted(&id("i1")));
+        assert!(r0.view().is_conflicted(&id("i1")));
         let chosen = r0.heads("i1").first().unwrap().clone();
         r0.resolve("i1", &chosen);
         r0.add_dep("g0", "i4");
-        if extra_waiter { r0.add_dep("i5", "g2"); }
+        if extra_waiter {
+            r0.add_dep("i5", "g2");
+        }
         check_graph(&r0);
         let before = r0.store.len();
-        prop_assert!(r0.try_move("i4", Some("g0")).is_err());
-        prop_assert_eq!(r0.store.len(), before);
+        assert!(r0.try_move("i4", Some("g0")).is_err());
+        assert_eq!(r0.store.len(), before);
         r1.add_dep("i4", "g0");
         r0.sync(&r1);
         check_graph(&r0);
-        prop_assert!(r0.view().in_violation(&id("i4")));
+        assert!(r0.view().in_violation(&id("i4")));
         r0.add_dep("g2", "i4");
         let before = r0.store.len();
-        prop_assert!(r0.try_add_dep("i4", "g2").is_err());
-        prop_assert_eq!(r0.store.len(), before);
+        assert!(r0.try_add_dep("i4", "g2").is_err());
+        assert_eq!(r0.store.len(), before);
         r0.remove_dep("g2", "i3");
         r0.remove_dep("i4", "g0");
         check_graph(&r0);
-        prop_assert!(r0.view().is_valid());
-      }
+        assert!(r0.view().is_valid());
     }
+}
 
-    #[test]
-    fn generated_waiver_only_repairs_affected_entity(initially_undecided in any::<bool>(), switch_back in any::<bool>()) {
-        let mut r0 = Replica::new("r0");
-        let mut r1 = Replica::new("r1");
-        r0.op("i1", Cancel);
-        r0.op("g0", Complete);
-        r1.create("i4", Kind::Issue, if initially_undecided { Lifecycle::Undecided } else { Lifecycle::NotStarted }, Some("g0"));
-        r1.sync(&r0);
-        check_graph(&r1);
-        prop_assert_eq!(r1.violations("i4"), BTreeSet::from([ViolationKind::OpenUnderTerminal]));
-        if initially_undecided { r1.op("i4", Accept); } else { r1.op("i4", Withdraw); }
-        if switch_back {
-            if initially_undecided { r1.op("i4", Withdraw); } else { r1.op("i4", Accept); }
+#[test]
+fn waiver_only_repairs_affected_entity() {
+    for initially_undecided in [false, true] {
+        for switch_back in [false, true] {
+            let mut r0 = Replica::new("r0");
+            let mut r1 = Replica::new("r1");
+            r0.op("i1", Cancel);
+            r0.op("g0", Complete);
+            r1.create(
+                "i4",
+                Kind::Issue,
+                if initially_undecided {
+                    Lifecycle::Undecided
+                } else {
+                    Lifecycle::NotStarted
+                },
+                Some("g0"),
+            );
+            r1.sync(&r0);
+            check_graph(&r1);
+            assert_eq!(
+                r1.violations("i4"),
+                BTreeSet::from([ViolationKind::OpenUnderTerminal])
+            );
+            if initially_undecided {
+                r1.op("i4", Accept);
+            } else {
+                r1.op("i4", Withdraw);
+            }
+            if switch_back {
+                if initially_undecided {
+                    r1.op("i4", Withdraw);
+                } else {
+                    r1.op("i4", Accept);
+                }
+            }
+            check_graph(&r1);
+            assert_eq!(
+                r1.violations("i4"),
+                BTreeSet::from([ViolationKind::OpenUnderTerminal])
+            );
+            let before = r1.store.len();
+            assert!(
+                r1.try_create(
+                    "i5",
+                    current(Kind::Issue, Lifecycle::NotStarted, Some("g0"))
+                )
+                .is_err()
+            );
+            assert_eq!(r1.store.len(), before);
+            r1.op("i4", Cancel);
+            check_graph(&r1);
+            assert!(r1.view().is_valid());
         }
-        check_graph(&r1);
-        prop_assert_eq!(r1.violations("i4"), BTreeSet::from([ViolationKind::OpenUnderTerminal]));
-        let before = r1.store.len();
-        prop_assert!(r1.try_create("i5", current(Kind::Issue, Lifecycle::NotStarted, Some("g0"))).is_err());
-        prop_assert_eq!(r1.store.len(), before);
-        r1.op("i4", Cancel);
-        check_graph(&r1);
-        prop_assert!(r1.view().is_valid());
     }
 }

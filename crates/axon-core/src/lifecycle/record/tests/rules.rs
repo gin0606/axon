@@ -159,7 +159,7 @@ fn text_edit_contract_and_notes_hold_for_issues_and_groups() {
 }
 
 #[test]
-fn invalid_operations_and_empty_information_leave_no_partial_change() {
+fn invalid_operations_and_empty_information_are_rejected() {
     let mut r = empty();
     r.create("item", Kind::Issue, Lifecycle::Undecided, None);
     assert!(

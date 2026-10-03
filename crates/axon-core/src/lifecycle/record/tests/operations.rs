@@ -195,12 +195,8 @@ fn waivers_work_only_for_entities_inside_a_violation() {
     assert_eq!(lifecycle(&r1.view(), "i1"), Lifecycle::Cancelled);
 }
 
-/// The waivers still let lifecycle operations repair, as long as the result adds no
-/// violation: under a terminal parent an unfinished Entity in violation can change while it
-/// stays unfinished and can end, and a Completed dependency whose Completed dependents
-/// already have an unfinished dependency can be reopened.
 #[test]
-fn waived_lifecycle_operations_that_add_no_violation_succeed() {
+fn unfinished_work_under_a_terminal_parent_can_be_withdrawn_accepted_and_cancelled() {
     // Terminal parent: i4 flowed under the Completed g0 on the other side.
     let mut r0 = Replica::new("r0");
     let mut r1 = Replica::new("r1");
@@ -221,6 +217,10 @@ fn waived_lifecycle_operations_that_add_no_violation_succeed() {
     );
     r1.op("i4", Cancel);
     assert!(r1.view().is_valid());
+}
+
+#[test]
+fn reopening_a_violating_dependency_can_repair_already_violating_dependents() {
     // Completed dependents: i3 depends on g2, i4 on i3 and g2; one side completes i3 and i4,
     // the other reopens g2. Both are Completed with an unfinished dependency, so reopening
     // i3 despite its Completed dependent i4 adds nothing, and reopening i4 repairs the rest.
@@ -256,6 +256,10 @@ fn waived_lifecycle_operations_that_add_no_violation_succeed() {
     assert!(r0.violations("i3").is_empty());
     r0.op("i4", Reopen);
     assert!(r0.view().is_valid());
+}
+
+#[test]
+fn reopening_a_violating_dependency_cannot_add_a_violation_to_a_completed_dependent() {
     // With a Completed dependent that has no unfinished dependency yet (i5 depends on i3
     // only), reopening i3 would add a violation to i5, so the read side and the writer both
     // reject it until i5 is reopened.
@@ -288,6 +292,10 @@ fn waived_lifecycle_operations_that_add_no_violation_succeed() {
     r0.op("i3", Reopen);
     r0.op("i4", Reopen);
     assert!(r0.view().is_valid());
+}
+
+#[test]
+fn reopening_a_non_violating_dependency_still_requires_reopening_its_dependents() {
     // The waiver reaches only an Entity in violation: i3 is Completed with nothing wrong, and
     // its Completed dependent i4 already has an unfinished dependency, yet i3 stays fixed.
     let mut shared = Replica::new("r0");
@@ -311,6 +319,10 @@ fn waived_lifecycle_operations_that_add_no_violation_succeed() {
     );
     assert!(error(r0.view().check_operation(&id("i3"), Reopen)).contains("reopened first"));
     assert!(error(r0.try_op("i3", Reopen)).contains("reopened first"));
+}
+
+#[test]
+fn reconsidering_a_cancelled_entity_with_a_missing_parent_adds_no_violation() {
     // A missing parent (the Cancel arrived without the Group's records) blocks nothing beyond
     // what the waiver allows: Reconsider adds no violation and passes.
     let mut r0 = Replica::new("r0");
@@ -332,6 +344,10 @@ fn waived_lifecycle_operations_that_add_no_violation_succeed() {
     );
     r1.sync(&r0);
     assert!(r1.view().is_valid());
+}
+
+#[test]
+fn an_issue_with_integrated_children_cannot_add_violations_or_end_before_its_children() {
     // An Issue that gained children through an integration (converted on one side, given a
     // child on the other) cannot end while the child is unfinished: the read side anticipates
     // the violation the writer would reject.
@@ -364,9 +380,12 @@ fn waived_lifecycle_operations_that_add_no_violation_succeed() {
         let rejected = error(r0.try_op("g9", operation));
         assert!(
             rejected.contains("would add a structural violation"),
-            "{rejected}"
+            "{operation:?}: {rejected}"
         );
-        assert!(rejected.contains("c (unadopted ancestor)"), "{rejected}");
+        assert!(
+            rejected.contains("c (unadopted ancestor)"),
+            "{operation:?}: {rejected}"
+        );
     }
     assert_eq!(r0.view().violations(), &before);
     r0.op("c", Release);
@@ -451,7 +470,7 @@ fn cycle_members(names: &[&str]) -> BTreeSet<Violation> {
 }
 
 #[test]
-fn a_new_edge_on_a_cycle_is_rejected_even_between_its_members() {
+fn a_chord_on_a_completion_cycle_is_rejected_but_waiting_on_it_and_moving_off_it_pass() {
     // g2 -> i3 -> i4 -> g2. A chord g2 -> i4 adds no member, yet it would stay a cycle
     // after i3 -> i4 is removed, so it is rejected. An Entity off the cycle may still wait on
     // it, and removing an edge repairs the store.
@@ -475,7 +494,10 @@ fn a_new_edge_on_a_cycle_is_rejected_even_between_its_members() {
     assert_eq!(r0.view().violations(), &cycle);
     r0.remove_dep("i3", "i4");
     assert!(r0.view().is_valid());
+}
 
+#[test]
+fn joining_separate_completion_cycles_is_rejected_but_one_way_waiting_passes() {
     // Two separate cycles, g0 <-> i4 (with g0's child i1 through g0's dependency) and
     // g2 <-> i3. g2 -> i4 closes nothing and passes; i4 -> g2 would then close a cycle
     // between members of both and is rejected. Removing the two original back edges leaves
@@ -499,7 +521,10 @@ fn a_new_edge_on_a_cycle_is_rejected_even_between_its_members() {
     assert_eq!(r0.view().violations(), &cycle_members(&["g0", "i1", "i4"]));
     r0.remove_dep("i4", "g0");
     assert!(r0.view().is_valid());
+}
 
+#[test]
+fn moving_a_cycle_member_under_a_member_is_rejected_but_a_non_member_can_move_in() {
     // A move is held to the same rule. On g2 -> child i3 -> i4 -> g2, moving i4 under g2
     // would make the parent wait on its new child on the cycle; i1, off the cycle, moves in.
     let mut r0 = Replica::new("r0");
@@ -518,7 +543,10 @@ fn a_new_edge_on_a_cycle_is_rejected_even_between_its_members() {
     assert_eq!(r0.view().violations(), &cycle);
     r0.remove_dep("i4", "g2");
     assert!(r0.view().is_valid());
+}
 
+#[test]
+fn a_move_or_dependency_that_adds_a_descendants_cycle_edge_is_rejected() {
     // Only a descendant's new edge closes the cycle: on i1 -> i4 -> i3 -> i1 with g2 waiting
     // on i3, moving g0 under g2 makes its child i1 inherit the dependency on i3.
     let mut r0 = Replica::new("r0");
@@ -539,7 +567,10 @@ fn a_new_edge_on_a_cycle_is_rejected_even_between_its_members() {
     r0.remove_dep("i3", "i1");
     r0.move_to("g0", Some("g2"));
     assert!(r0.view().is_valid());
+}
 
+#[test]
+fn a_direct_dependency_cannot_repeat_an_inherited_cycle_edge() {
     // The edges count per relation, not per pair. On i1 -> i3 (inherited from g0) -> i1, a
     // dependency of i1 on i3 repeats the pair yet would keep the cycle after g0's is removed.
     let mut r0 = Replica::new("r0");
@@ -552,6 +583,10 @@ fn a_new_edge_on_a_cycle_is_rejected_even_between_its_members() {
     assert!(rejected.contains("i1 waiting on i3"), "{rejected}");
     r0.remove_dep("g0", "i3");
     assert!(r0.view().is_valid());
+}
+
+#[test]
+fn a_move_cannot_add_an_inherited_copy_of_a_direct_cycle_edge() {
     // The same for a move: i1 already waits on i3 on its own; under g2, which depends on i3,
     // it would inherit that edge too.
     let mut r0 = Replica::new("r0");
@@ -565,7 +600,10 @@ fn a_new_edge_on_a_cycle_is_rejected_even_between_its_members() {
     assert!(rejected.contains("i1 waiting on i3"), "{rejected}");
     r0.remove_dep("i3", "i1");
     assert!(r0.view().is_valid());
+}
 
+#[test]
+fn registering_a_missing_parent_cannot_add_an_inherited_cycle_edge() {
     // A registration too: i6 arrived without its parent g5 and is on a cycle with i3. g5
     // registered with a dependency on i3 would make i6 inherit it; without it, it passes.
     let mut r0 = Replica::new("r0");
@@ -588,7 +626,10 @@ fn a_new_edge_on_a_cycle_is_rejected_even_between_its_members() {
     r0.create("g5", Kind::Group, Lifecycle::NotStarted, None);
     r0.remove_dep("i3", "i6");
     assert!(r0.view().is_valid());
+}
 
+#[test]
+fn moving_between_siblings_can_keep_a_cycle_edge_inherited_from_their_common_ancestor() {
     // An ancestor both parent chains share adds no relation: i1 inherits g2's dependency on
     // i3 under g0 and still does under the sibling g4, so the move passes.
     let mut r0 = Replica::new("r0");
@@ -603,7 +644,10 @@ fn a_new_edge_on_a_cycle_is_rejected_even_between_its_members() {
     assert_eq!(r0.view().violations(), &cycle_members(&["i1", "i3"]));
     r0.remove_dep("i3", "i1");
     assert!(r0.view().is_valid());
+}
 
+#[test]
+fn registering_a_missing_parent_under_an_ancestor_cannot_close_a_cycle() {
     // A registration whose parent chain closes the cycle: i3 arrived under g4 without it, on
     // i1 <-> i3, and g2 depends on i1. g4 registered under g2 would make i3 inherit that
     // dependency; unassigned, it passes.
@@ -629,7 +673,10 @@ fn a_new_edge_on_a_cycle_is_rejected_even_between_its_members() {
     r0.create("g4", Kind::Group, Lifecycle::NotStarted, None);
     r0.remove_dep("i1", "i3");
     assert!(r0.view().is_valid());
+}
 
+#[test]
+fn moving_under_an_ancestor_cannot_add_a_self_cycle_through_its_dependency() {
     // A cycle of one: on i3 <-> i4 with g2 depending on i3, moving i3 under g2's child g0
     // makes i3 inherit its own dependency. No other new edge is on a cycle.
     let mut r0 = Replica::new("r0");
@@ -702,7 +749,7 @@ fn lifecycle_prerequisites_follow_containment_and_dependencies() {
 }
 
 #[test]
-fn text_condition_and_import_records_carry_the_value_after_and_skip_no_ops() {
+fn text_edits_carry_the_value_after_skip_no_ops_and_reject_invalid_titles() {
     let mut r = Replica::new("r0");
     let edit = r
         .store
@@ -728,6 +775,11 @@ fn text_condition_and_import_records_carry_the_value_after_and_skip_no_ops() {
         )
         .contains("line break")
     );
+}
+
+#[test]
+fn condition_records_carry_the_value_after_skip_no_ops_and_reject_empty_conditions() {
+    let mut r = Replica::new("r0");
     let condition = r
         .store
         .set_condition(&id("i3"), Some("exit 0".into()), r.tick())
@@ -745,6 +797,11 @@ fn text_condition_and_import_records_carry_the_value_after_and_skip_no_ops() {
         error(r.store.set_condition(&id("i3"), Some(" ".into()), r.tick()))
             .contains("empty condition")
     );
+}
+
+#[test]
+fn terminal_entities_reject_text_edits() {
+    let mut r = Replica::new("r0");
     r.op("i3", Start);
     r.op("i3", Complete);
     assert!(
@@ -754,6 +811,10 @@ fn text_condition_and_import_records_carry_the_value_after_and_skip_no_ops() {
         )
         .contains("fixed")
     );
+}
+
+#[test]
+fn import_records_carry_the_final_value_after_and_skip_no_ops() {
     // Import: one record with the final value, validated as the sequence of operations.
     let mut r = Replica::new("r0");
     r.add_dep("i3", "g2");
@@ -798,6 +859,10 @@ fn text_condition_and_import_records_carry_the_value_after_and_skip_no_ops() {
             .unwrap()
             .is_none()
     );
+}
+
+#[test]
+fn imports_remove_dependencies_before_moving_but_still_reject_genuine_cycles() {
     // A dependency swap that would cycle in one order succeeds because removals precede the
     // move; a genuine cycle is still rejected.
     let mut r = Replica::new("r0");
