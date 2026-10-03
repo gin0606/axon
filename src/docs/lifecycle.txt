@@ -177,3 +177,8 @@ values beginning with a hyphen use the equals form, for example --description='-
 
 Use axon docs declaration for plan declaration fields and the bulk-edit workflow.
 Use axon docs declaration --example for a new-plan YAML template.
+
+ANSI decoration is disabled per stream when it is not a terminal, or for all
+output with a non-empty NO_COLOR, TERM=dumb or the global --no-color flag.
+An empty NO_COLOR allows decoration. Export, completion and declaration examples
+are always unstyled.

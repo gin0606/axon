@@ -838,7 +838,7 @@ pub fn render_root_help() -> String {
         ),
     ];
     let mut text = format!(
-        "A local issue tracker for Issues and Groups\n\n{} axon <COMMAND>\n",
+        "A local issue tracker for Issues and Groups\n\n{} axon [OPTIONS] <COMMAND>\n",
         display::heading("Usage:")
     );
     for (heading, names) in sections {
@@ -857,7 +857,7 @@ pub fn render_root_help() -> String {
             ));
         }
     }
-    text.push_str(&format!("\n{}\n  axon help <COMMAND PATH>  Show detailed command help\n  axon docs                 Explain the lifecycle and daily workflow\n\n{}\n  -h, --help     Print help\n  -V, --version  Print version\n", display::heading("More help:"), display::heading("Options:")));
+    text.push_str(&format!("\n{}\n  axon help <COMMAND PATH>  Show detailed command help\n  axon docs                 Explain the lifecycle and daily workflow\n\n{}\n      --no-color  Disable ANSI decoration in all output, including help and diagnostics\n  -h, --help      Print help\n  -V, --version   Print version\n", display::heading("More help:"), display::heading("Options:")));
     text
 }
 
