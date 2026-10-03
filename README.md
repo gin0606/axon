@@ -16,6 +16,8 @@ Rust 1.89以上で `cargo build --locked --bin axon` を実行し、生成され
 
 独自スキルでも `axon-kit` の操作契約を守ります。`axon` のスキルを呼び出す場合は、その協業方針に従います。方針を変えたい部分は独自スキルとして実装し、`axon-kit` を使います。
 
+[ワークフローのサンプル](examples/agent-workflow/README.md) は、`axon`と`axon-kit`を使って計画の登録からIssue・Groupの実装・検証・commitまで進める`axon-workflow` pluginです。そのまま導入して試したり、自分の運用に合わせて変更したりできます。
+
 `axon export ID...` で計画を canonical YAML として取得できます。新規計画の雛形は `axon docs declaration --example`、field と編集手順は `axon docs declaration` を参照してください。
 
 ## 開発
