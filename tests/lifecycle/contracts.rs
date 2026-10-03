@@ -525,6 +525,7 @@ fn completion_works_without_discovery() {
         assert!(!script.contains('\x1b'));
         assert!(script.contains("tasks"));
         assert!(script.contains("proposals"));
+        assert!(script.contains("no-color"), "{shell}: {script}");
     }
 }
 
@@ -859,6 +860,26 @@ fn terminal_output(f: &Fixture, args: &[&str], no_color: bool) -> String {
 /// Output on a terminal `columns` wide; 0 leaves the width unknown.
 #[cfg(unix)]
 fn sized_terminal_output(f: &Fixture, args: &[&str], no_color: bool, columns: u16) -> String {
+    let mut cmd = color_command(f, args);
+    if no_color {
+        cmd.env("NO_COLOR", "1");
+    }
+    success(terminal_process(cmd, false, columns))
+}
+
+#[cfg(unix)]
+fn color_command(f: &Fixture, args: &[&str]) -> Command {
+    let mut cmd = f.command();
+    cmd.args(args)
+        .env("TERM", "xterm-256color")
+        .env_remove("NO_COLOR")
+        .env_remove("CLICOLOR")
+        .env_remove("CLICOLOR_FORCE");
+    cmd
+}
+
+#[cfg(unix)]
+fn terminal_process(mut cmd: Command, stderr: bool, columns: u16) -> Output {
     use std::io::Read;
     use std::os::fd::FromRawFd;
     let (mut master, mut slave) = (0, 0);
@@ -883,24 +904,26 @@ fn sized_terminal_output(f: &Fixture, args: &[&str], no_color: bool, columns: u1
     );
     let mut reader = unsafe { fs::File::from_raw_fd(master) };
     let writer = unsafe { fs::File::from_raw_fd(slave) };
-    let mut cmd = f.command();
-    cmd.args(args)
-        .env("TERM", "xterm-256color")
-        .env_remove("NO_COLOR");
-    if no_color {
-        cmd.env("NO_COLOR", "");
-    }
+    // Compare the application's bytes, without the terminal translating LF to CRLF.
+    let mut attributes = unsafe { std::mem::zeroed::<libc::termios>() };
+    assert_eq!(unsafe { libc::tcgetattr(slave, &mut attributes) }, 0);
+    attributes.c_oflag &= !libc::OPOST;
+    assert_eq!(
+        unsafe { libc::tcsetattr(slave, libc::TCSANOW, &attributes) },
+        0
+    );
     for fd in [master, slave] {
         assert_eq!(
             unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
             0
         );
     }
-    let child = cmd
-        .stdout(Stdio::from(writer))
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    if stderr {
+        cmd.stdout(Stdio::piped()).stderr(Stdio::from(writer));
+    } else {
+        cmd.stdout(Stdio::from(writer)).stderr(Stdio::piped());
+    }
+    let child = cmd.spawn().unwrap();
     drop(cmd);
     let reader_thread = std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -915,14 +938,14 @@ fn sized_terminal_output(f: &Fixture, args: &[&str], no_color: bool, columns: u1
         }
         bytes
     });
-    let out = child.wait_with_output().unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let mut out = child.wait_with_output().unwrap();
     let bytes = reader_thread.join().unwrap();
-    String::from_utf8(bytes).unwrap().replace("\r\n", "\n")
+    if stderr {
+        out.stderr = bytes;
+    } else {
+        out.stdout = bytes;
+    }
+    out
 }
 fn strip_sgr(value: &str) -> String {
     let mut text = String::new();
@@ -942,6 +965,214 @@ fn strip_sgr(value: &str) -> String {
     }
     text
 }
+
+#[cfg(unix)]
+#[test]
+fn color_controls_apply_to_help_output_and_diagnostics_per_stream() {
+    let f = Fixture::new();
+    f.init();
+    let id = f.accepted("USER_TITLE");
+    f.accepted("A longer title to exercise terminal column alignment");
+    let cases = [
+        (vec![], 0, true, false),
+        (vec!["help"], 0, true, false),
+        (vec!["--help"], 0, true, false),
+        (vec!["complete", "--help"], 0, true, false),
+        (vec!["help", "note", "show"], 0, true, false),
+        (vec!["show", &id], 0, true, false),
+        (vec!["list"], 0, true, false),
+        (vec!["write", &id, "--title", "USER_TITLE"], 0, true, false),
+        (vec!["docs"], 0, false, false),
+        (vec!["docs", "declaration"], 0, false, false),
+        (vec!["show", "t-missing"], 1, false, true),
+        (vec!["show"], 2, false, true),
+        (vec!["unknown-command"], 2, false, true),
+        (vec!["show", &id, "--unknown"], 2, false, true),
+        (vec!["docs", "unknown-topic"], 2, false, true),
+    ];
+    for (args, code, stdout_style, stderr_style) in cases {
+        for terminal in [None, Some(false), Some(true)] {
+            let run = |extra: Option<&str>, no_color: Option<&str>, term: &str| {
+                let mut cmd = color_command(&f, &args);
+                cmd.env("TERM", term);
+                if let Some(value) = no_color {
+                    cmd.env("NO_COLOR", value);
+                }
+                if let Some(flag) = extra {
+                    cmd.arg(flag);
+                }
+                match terminal {
+                    None => cmd.output().unwrap(),
+                    Some(stderr) => terminal_process(cmd, stderr, 70),
+                }
+            };
+            let colored = run(None, None, "xterm-256color");
+            assert_eq!(colored.status.code(), Some(code), "{args:?}");
+            assert_eq!(
+                colored.stdout.contains(&0x1b),
+                terminal == Some(false) && stdout_style,
+                "stdout: {args:?}, {terminal:?}: {colored:?}"
+            );
+            assert_eq!(
+                colored.stderr.contains(&0x1b),
+                terminal == Some(true) && stderr_style,
+                "stderr: {args:?}, {terminal:?}: {colored:?}"
+            );
+            let plain_stdout = strip_sgr(std::str::from_utf8(&colored.stdout).unwrap());
+            let plain_stderr = strip_sgr(std::str::from_utf8(&colored.stderr).unwrap());
+            let empty = run(None, Some(""), "xterm-256color");
+            assert_eq!(empty.stdout, colored.stdout, "{args:?}");
+            assert_eq!(empty.stderr, colored.stderr, "{args:?}");
+            for (flag, no_color, term) in [
+                (None, Some("1"), "xterm-256color"),
+                (None, Some("0"), "xterm-256color"),
+                (None, Some(" "), "xterm-256color"),
+                (None, None, "dumb"),
+                (None, Some(""), "dumb"),
+                (Some("--no-color"), None, "xterm-256color"),
+                (Some("--no-color"), Some(""), "xterm-256color"),
+            ] {
+                let plain = run(flag, no_color, term);
+                assert_eq!(plain.status.code(), Some(code), "{args:?}");
+                assert_eq!(plain.stdout, plain_stdout.as_bytes(), "{args:?}");
+                // Clap includes a flag used at the leaf in its missing-argument usage.
+                let expected_stderr = if args == ["show"] && flag.is_some() {
+                    plain_stderr
+                        .replace("Usage: axon show <ID>", "Usage: axon show --no-color <ID>")
+                } else {
+                    plain_stderr.clone()
+                };
+                assert_eq!(plain.stderr, expected_stderr.as_bytes(), "{args:?}");
+            }
+            let mut cmd = color_command(&f, &["--no-color"]);
+            cmd.args(&args);
+            let plain = match terminal {
+                None => cmd.output().unwrap(),
+                Some(stderr) => terminal_process(cmd, stderr, 70),
+            };
+            assert_eq!(plain.status.code(), Some(code), "{args:?}");
+            assert_eq!(plain.stdout, plain_stdout.as_bytes(), "{args:?}");
+            assert_eq!(plain.stderr, plain_stderr.as_bytes(), "{args:?}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn no_color_does_not_hide_missing_option_values_or_write_records() {
+    let f = Fixture::new();
+    f.init();
+    let id = f.accepted("USER_TITLE");
+    let before = f.record_files();
+    for args in [
+        vec!["list", "--search", "--no-color", "TEXT"],
+        vec!["write", &id, "--title", "--no-color", "TEXT"],
+        vec![
+            "capture",
+            "--title",
+            "--no-color",
+            "TEXT",
+            "--label",
+            "feat",
+        ],
+        vec!["note", "add", &id, "--message", "--no-color", "TEXT"],
+    ] {
+        let out = terminal_process(color_command(&f, &args), true, 70);
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");
+        assert!(out.stdout.is_empty());
+        assert!(!out.stderr.contains(&0x1b));
+        assert!(
+            String::from_utf8(out.stderr)
+                .unwrap()
+                .contains("a value is required")
+        );
+        assert_eq!(f.record_files(), before, "{args:?}");
+    }
+    for args in [
+        vec!["note", "help", "show", "--no-color"],
+        vec!["help", "note", "--no-color", "show"],
+    ] {
+        let plain = success(terminal_process(color_command(&f, &args), false, 70));
+        assert!(plain.contains("Usage: axon note show"));
+        assert!(!plain.contains('\x1b'));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn help_and_parse_errors_preserve_the_invoked_program_name() {
+    use std::os::unix::process::CommandExt;
+    let f = Fixture::new();
+    fs::write(f.0.join(".git"), "broken marker").unwrap();
+    for (args, code, usage) in [
+        (
+            vec!["complete", "--help"],
+            0,
+            "Usage: task-tracker complete",
+        ),
+        (vec!["show"], 2, "Usage: task-tracker show"),
+    ] {
+        for no_color in [false, true] {
+            let mut cmd = color_command(&f, &args);
+            cmd.arg0("task-tracker");
+            if no_color {
+                cmd.arg("--no-color");
+            }
+            let out = cmd.output().unwrap();
+            assert_eq!(out.status.code(), Some(code));
+            let text = String::from_utf8([out.stdout, out.stderr].concat()).unwrap();
+            assert!(text.contains(usage), "{text}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn generated_output_stays_unstyled_and_global_flag_respects_positional_text() {
+    let f = Fixture::new();
+    f.init();
+    let id = f.accepted("USER_TITLE");
+    for args in [
+        vec!["export", &id],
+        vec!["docs", "declaration", "--example"],
+        vec!["completion", "bash"],
+        vec!["completion", "zsh"],
+        vec!["completion", "fish"],
+        vec!["completion", "powershell"],
+        vec!["completion", "elvish"],
+    ] {
+        let plain = success(color_command(&f, &args).output().unwrap());
+        assert!(!plain.contains('\x1b'));
+        assert_eq!(
+            success(terminal_process(color_command(&f, &args), false, 70)),
+            plain
+        );
+        let mut cmd = color_command(&f, &["--no-color"]);
+        cmd.args(&args);
+        assert_eq!(success(terminal_process(cmd, false, 70)), plain);
+    }
+    let args = ["show", "--", "--no-color"];
+    let out = terminal_process(color_command(&f, &args), true, 70);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stderr.contains(&0x1b));
+    assert!(
+        String::from_utf8(out.stderr)
+            .unwrap()
+            .contains("--no-color")
+    );
+
+    for args in [vec!["--help"], vec!["help", "note", "show"]] {
+        assert!(success(color_command(&f, &args).output().unwrap()).contains("--no-color"));
+    }
+    // Other libraries' force-color variables must not override the per-stream contract.
+    for args in [vec!["show", &id], vec!["complete", "--help"], vec!["show"]] {
+        let mut cmd = color_command(&f, &args);
+        cmd.env("CLICOLOR_FORCE", "1");
+        let out = cmd.output().unwrap();
+        assert!(!out.stdout.contains(&0x1b) && !out.stderr.contains(&0x1b));
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn tty_decoration_preserves_text_and_does_not_style_user_content() {

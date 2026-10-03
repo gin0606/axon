@@ -177,7 +177,7 @@ Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへ
 
 CLIが生成するhelp・ラベル・診断は英語。利用者のタイトル・本文・Note・理由は原文を保持する。human時刻はlocal時刻と数値UTC offset。C0/C1/ESC、tab、CRは可視escapeし、本文のUnicodeと改行は保持する。
 
-装飾は対象streamがTTYでNO_COLORが存在しない場合だけ。同じ内容からANSIを除けば非TTYとテキスト・順序・空白が一致する。ただし一覧と子孫ツリーの列揃えと折り返しは[行の形式](#一覧)に従い、端末でだけ空白と改行を加える。IDと着手はcyan＋bold、見出しはbold、成功/Readyはgreen、待ちはyellow、未判断はyellow＋bold、kind・terminal・no-op・補助情報はdim、エラーはred＋bold。ユーザー本文・タイトルは着色せず、色だけを意味の手掛かりにしない。`axon completion`は常に装飾なし。
+装飾は対象streamがTTYで、非空の`NO_COLOR`、`TERM=dumb`、`--no-color`のいずれも指定されていない場合だけ。stdoutとstderrは個別にTTYを判定し、空の`NO_COLOR`は装飾を無効化しない。`--no-color`はsubcommandの前後で使えるglobal optionで、helpと診断を含む全ての人向け出力に作用する。同じ内容からANSIを除けば非TTYとテキスト・順序・空白が一致する。ただし一覧と子孫ツリーの列揃えと折り返しは[行の形式](#一覧)に従い、端末でだけ空白と改行を加える。IDと着手はcyan＋bold、見出しはbold、成功/Readyはgreen、待ちはyellow、未判断はyellow＋bold、kind・terminal・no-op・補助情報はdim、エラーはred＋bold。ユーザー本文・タイトルは着色せず、色だけを意味の手掛かりにしない。`axon export`・`axon completion`・`axon docs declaration --example`は常に装飾なし。
 
 一覧0件はstdoutに行を出さず、短い案内をstderrへ出して終了0。候補不在から保存情報の不存在を推測しない。通常行へ毎回操作例を付けず、helpと`axon docs`へ使い方を分ける。
 

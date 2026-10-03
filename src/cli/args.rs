@@ -11,11 +11,13 @@ use std::{io::Read, path::PathBuf, time::Duration};
 #[command(
     version,
     styles = display::cli_styles(),
-    color = display::cli_color(),
     about = "A local issue tracker for Issues and Groups",
     after_help = "Use axon docs for the lifecycle and daily workflow. Group complete explicitly confirms that the entire plan has passed final review."
 )]
 pub(super) struct Cli {
+    /// Disable ANSI decoration in all output, including help and diagnostics
+    #[arg(long, global = true)]
+    pub(super) no_color: bool,
     #[command(subcommand)]
     pub(super) command: Command,
 }

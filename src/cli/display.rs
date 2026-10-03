@@ -33,6 +33,20 @@ fn timestamp_at_offset(timestamp: &DateTime<Utc>, offset: FixedOffset) -> String
 
 use clap::builder::styling::{AnsiColor, Color, Style, Styles};
 use std::io::IsTerminal;
+use std::sync::OnceLock;
+
+static COLOR_DISABLED: OnceLock<bool> = OnceLock::new();
+
+pub fn configure_color(no_color: bool) {
+    let disabled = no_color
+        || std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty())
+        || std::env::var_os("TERM").is_some_and(|value| value == "dumb");
+    let _ = COLOR_DISABLED.set(disabled);
+}
+
+fn color_enabled(terminal: bool) -> bool {
+    terminal && !COLOR_DISABLED.get().copied().unwrap_or(false)
+}
 
 const HEADING: Style = Style::new().bold();
 const ID: Style = Style::new()
@@ -47,7 +61,7 @@ const FAILURE: Style = Style::new()
 const MUTED: Style = Style::new().dimmed();
 
 fn paint(style: Style, text: impl std::fmt::Display, terminal: bool) -> String {
-    if terminal && std::env::var_os("NO_COLOR").is_none() {
+    if color_enabled(terminal) {
         format!("{style}{text}{style:#}")
     } else {
         text.to_string()
@@ -98,8 +112,8 @@ pub fn situation(text: &str) -> String {
     };
     paint(style, text, std::io::stdout().is_terminal())
 }
-/// Stdout as a terminal, which lines up rows in columns. Like decoration, this follows only
-/// whether stdout is a terminal, so output that programs read keeps one row per line.
+/// Stdout as a terminal, which lines up rows in columns independently of color settings,
+/// so output that programs read keeps one row per line.
 pub struct Terminal {
     /// The terminal's width, read once; `None` when it cannot be read.
     pub columns: Option<usize>,
@@ -155,11 +169,16 @@ pub fn cli_styles() -> Styles {
         .context_value(Style::new())
 }
 
-pub fn cli_color() -> clap::ColorChoice {
-    if std::env::var_os("NO_COLOR").is_some() {
-        clap::ColorChoice::Never
+pub fn cli_color(stderr: bool) -> clap::ColorChoice {
+    let terminal = if stderr {
+        std::io::stderr().is_terminal()
     } else {
-        clap::ColorChoice::Auto
+        std::io::stdout().is_terminal()
+    };
+    if color_enabled(terminal) {
+        clap::ColorChoice::Always
+    } else {
+        clap::ColorChoice::Never
     }
 }
 

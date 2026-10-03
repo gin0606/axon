@@ -8,7 +8,10 @@ mod store;
 mod write;
 use args::{Cli, Command, Notes, operation_label};
 use axon::{Result, lifecycle::Operation};
-use clap::Parser;
+use clap::{
+    CommandFactory, Parser,
+    error::{ContextKind, ContextValue},
+};
 use render::render_root_help;
 use std::io::Write;
 
@@ -101,13 +104,55 @@ fn run(command: Command) -> Result<Output> {
 }
 
 pub(crate) fn main() -> std::process::ExitCode {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let root_help = args.is_empty()
-        || (args.len() == 1 && ["help", "-h", "--help"].iter().any(|v| args[0] == *v));
+    let mut args = std::env::args_os();
+    let program = args.next().expect("process has a program name");
+    let args: Vec<_> = args.collect();
+    // Help and parse errors can exit before Clap returns the global flag. No argument
+    // accepts a separate hyphen-prefixed value; after `--` this token is positional text.
+    let no_color = args
+        .iter()
+        .take_while(|arg| *arg != "--")
+        .any(|arg| arg == "--no-color");
+    display::configure_color(no_color);
+    let mut positional = false;
+    let help_args: Vec<_> = args
+        .iter()
+        .filter(|arg| {
+            positional |= *arg == "--";
+            positional || *arg != "--no-color"
+        })
+        .collect();
+    let root_help = help_args.is_empty()
+        || (help_args.len() == 1 && ["help", "-h", "--help"].iter().any(|v| help_args[0] == *v));
     let result = if root_help {
         Ok(output(render_root_help(), false))
     } else {
-        let command = Cli::parse().command;
+        let parsed =
+            Cli::try_parse_from(std::iter::once(program.clone()).chain(args.iter().cloned()));
+        // Clap's synthetic `help` command treats trailing flags as command names.
+        // Retry only that rejection; normal parsing must retain option/value boundaries.
+        let parsed = parsed.or_else(|error| {
+            if no_color
+                && matches!(error.get(ContextKind::InvalidSubcommand), Some(ContextValue::String(value)) if value == "--no-color")
+            {
+                Cli::try_parse_from(
+                    [program, "--no-color".into()]
+                        .into_iter()
+                        .chain(help_args.into_iter().cloned()),
+                )
+            } else {
+                Err(error)
+            }
+        });
+        let cli = match parsed {
+            Ok(cli) => cli,
+            Err(error) => {
+                let color = display::cli_color(error.use_stderr());
+                error.with_cmd(&Cli::command().color(color)).exit();
+            }
+        };
+        debug_assert_eq!(cli.no_color, no_color);
+        let command = cli.command;
         let label = operation_label(&command);
         run(command).map_err(|error| axon::Error::Invalid(format!("{label}: {error}")))
     };
