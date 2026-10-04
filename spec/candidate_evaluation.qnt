@@ -36,9 +36,9 @@ module candidate_evaluation {
     previousCache: Id -> ObservationResult,
   }
   type ListingEvent = ListingInitialized | Began | EvaluatedEntity(Id)
-    | Published | SettingEdited(Id) | PlanChanged
+    | Published | SettingEdited(Id) | EntitySetChanged
   type ListingObservation = {
-    beforePlan: PlanState,
+    beforeEntitySet: EntitySetState,
     beforeSettings: Id -> Setting,
     beforeListing: Listing,
     event: ListingEvent,
@@ -60,7 +60,7 @@ module candidate_evaluation {
     settings' = IDS.mapBy(_ => Unset),
     listing' = emptyListing(JudgmentList),
     listingObservation' = {
-      beforePlan: initialPlan,
+      beforeEntitySet: initialEntitySet,
       beforeSettings: IDS.mapBy(_ => Unset), beforeListing: emptyListing(JudgmentList),
       event: ListingInitialized,
     },
@@ -73,7 +73,7 @@ module candidate_evaluation {
   // Group は stored が InProgress にならないため、候補自身でない進行中の祖先だけを評価する経路はない。
   // show は対象が tasks の行になる場合（stored が NotStarted）だけ、対象自身と、Group なら着手可能な
   // 子孫の Issue を対象にする。祖先は requiredEntities が加える。Undecided・進行中・終了した対象は評価しない。
-  pure def baseCandidates(s: PlanState, kind: ListingKind): Set[Id] = {
+  pure def baseCandidates(s: EntitySetState, kind: ListingKind): Set[Id] = {
     val selected = match kind {
       | JudgmentList => s.registered.filter(e => storedOf(s, e) == Undecided)
       | TasksList => s.registered.filter(e => storedOf(s, e) == NotStarted)
@@ -83,25 +83,25 @@ module candidate_evaluation {
     }
     selected.filter(e => ancestorsOf(s, e).forall(a => not(terminal(storedOf(s, a)))))
   }
-  pure def requiredEntities(s: PlanState, q: Listing): Set[Id] =
+  pure def requiredEntities(s: EntitySetState, q: Listing): Set[Id] =
     q.base.union(q.base.map(e => ancestorsOf(s, e)).flatten())
-  pure def parentsSatisfied(s: PlanState, q: Listing, e: Id): bool =
+  pure def parentsSatisfied(s: EntitySetState, q: Listing, e: Id): bool =
     ancestorsOf(s, e).forall(a => q.cache.get(a) == Satisfied)
-  pure def pending(s: PlanState, q: Listing): Set[Id] =
+  pure def pending(s: EntitySetState, q: Listing): Set[Id] =
     requiredEntities(s, q).filter(e => q.cache.get(e) == Unevaluated and parentsSatisfied(s, q, e))
 
   // tasks は浮上した対象に加えて、浮上に関係なく進行中の Issue と実効が InProgress の Group を含む。
-  pure def workingEntities(s: PlanState): Set[Id] =
+  pure def workingEntities(s: EntitySetState): Set[Id] =
     workingIssues(s).union(workingGroups(s))
-  pure def visible(s: PlanState, q: Listing): Set[Id] = {
+  pure def visible(s: EntitySetState, q: Listing): Set[Id] = {
     val surfacedBase = q.base.filter(e => q.cache.get(e) == Satisfied and parentsSatisfied(s, q, e))
     if (q.kind == TasksList) surfacedBase.union(workingEntities(s)) else surfacedBase
   }
   def recordListing(event: ListingEvent): ListingObservation = {
-    beforePlan: plan, beforeSettings: settings, beforeListing: listing, event: event,
+    beforeEntitySet: entitySet, beforeSettings: settings, beforeListing: listing, event: event,
   }
   action preserveBase = all {
-    plan' = plan, conditions' = conditions, observation' = observation, history' = history,
+    entitySet' = entitySet, conditions' = conditions, observation' = observation, history' = history,
   }
 
   // 取得は開始・Entity ごとの評価・公開の3段で進む。開始時に対象を確定し、
@@ -110,7 +110,7 @@ module candidate_evaluation {
     listing.status != Running,
     preserveBase,
     settings' = settings,
-    listing' = { ...emptyListing(kind), status: Running, base: baseCandidates(plan, kind),
+    listing' = { ...emptyListing(kind), status: Running, base: baseCandidates(entitySet, kind),
       previousCache: listing.cache },
     listingObservation' = recordListing(Began),
   }
@@ -119,7 +119,7 @@ module candidate_evaluation {
   // 未設定は常に成立とする。判定失敗はその場で取得全体を失敗にし、途中の候補を公開しない。
   action evaluateEntity(e: Id, result: ObservationResult): bool = all {
     listing.status == Running,
-    pending(plan, listing).contains(e),
+    pending(entitySet, listing).contains(e),
     Set(Satisfied, Unsatisfied, EvaluationFailed).contains(result),
     settings.get(e) == Unset implies result == Satisfied,
     preserveBase,
@@ -136,10 +136,10 @@ module candidate_evaluation {
   // 未評価の必要 Entity が残っていないときにだけ結果を公開する。
   action publishListing = all {
     listing.status == Running,
-    pending(plan, listing).size() == 0,
+    pending(entitySet, listing).size() == 0,
     preserveBase,
     settings' = settings,
-    listing' = { ...listing, status: Succeeded(visible(plan, listing)) },
+    listing' = { ...listing, status: Succeeded(visible(entitySet, listing)) },
     listingObservation' = recordListing(Published),
   }
 
@@ -149,29 +149,29 @@ module candidate_evaluation {
   // 並行更新や snapshot の実装契約を決めるものではない。
   action editSetting(e: Id, setting: Setting): bool = all {
     listing.status != Running,
-    plan.registered.contains(e),
+    entitySet.registered.contains(e),
     settings.get(e) != setting,
     preserveBase,
     settings' = settings.set(e, setting),
     listing' = emptyListing(listing.kind),
     listingObservation' = recordListing(SettingEdited(e)),
   }
-  action changePlan = all {
+  action changeEntitySet = all {
     listing.status != Running,
     step,
     settings' = settings,
     listing' = emptyListing(listing.kind),
-    listingObservation' = recordListing(PlanChanged),
+    listingObservation' = recordListing(EntitySetChanged),
   }
 
-  // 取得の各段と、取得外の条件編集・計画変更を混ぜて探索する。show の対象は全 ID から選ぶ。
+  // 取得の各段と、取得外の条件編集・Entity集合の変更を混ぜて探索する。show の対象は全 ID から選ぶ。
   action queryStep = {
     nondet e = IDS.oneOf()
     nondet setting = Set(Unset, ExternalCommand(0), ExternalCommand(1)).oneOf()
     nondet kind = Set(JudgmentList, TasksList).union(IDS.map(id => ShowTarget(id))).oneOf()
     nondet result = Set(Satisfied, Unsatisfied, EvaluationFailed).oneOf()
     any {
-      changePlan,
+      changeEntitySet,
       editSetting(e, setting),
       beginListing(kind),
       evaluateEntity(e, result),
@@ -195,7 +195,7 @@ module candidate_evaluation {
         any { performIssue(id, op), performGroup(id, op, true) },
         settings' = settings,
         listing' = emptyListing(listing.kind),
-        listingObservation' = recordListing(PlanChanged),
+        listingObservation' = recordListing(EntitySetChanged),
       },
       editSetting(e, setting),
       beginListing(TasksList),
@@ -213,7 +213,7 @@ module candidate_evaluation {
       | Unevaluated => unseen
       | _ => false
     })
-  pure def abstractCandidates(s: PlanState, q: Listing, unseen: bool): Set[Id] = {
+  pure def abstractCandidates(s: EntitySetState, q: Listing, unseen: bool): Set[Id] = {
     val c = observedConditions(q, unseen)
     match q.kind {
       | JudgmentList => judgments(s, c)
@@ -223,7 +223,7 @@ module candidate_evaluation {
   }
   // show の対象の状況と詰まっている理由を、未評価の入力の仮定ごとに求める。
   // Group は行の状況と理由、Issue は浮上しているか（Ready・Blocked か Unsurfaced か）が読み手に見える導出。
-  pure def shownSituation(s: PlanState, q: Listing, t: Id, unseen: bool): (TaskStatus, Set[StallReason], bool) = {
+  pure def shownSituation(s: EntitySetState, q: Listing, t: Id, unseen: bool): (TaskStatus, Set[StallReason], bool) = {
     val c = observedConditions(q, unseen)
     if (kindOf(s, t) == Group)
       (groupStatus(s, c, t), stallReasons(s, c, t), false)
@@ -231,13 +231,13 @@ module candidate_evaluation {
       (Blocked, Set(), surfaced(s, c, t))
   }
 
-  // invariant: 取得と外部の結果が保存する計画・条件を変えないこと、評価回数の上限、
+  // invariant: 取得と外部の結果がEntity集合の状態・条件を変えないこと、評価回数の上限、
   // 評価してよい範囲、未設定が成立になること、呼び出しごとの初期化と呼び出し内の cache 共有、
   // 失敗が単一の Entity に対応して即座に取得を終えること、
   // 公開した結果が抽象モデルの一覧の行と一致し、tasks が進行中をすべて含むこと、
   // 条件編集と明示操作が評価を呼ばないこと、進行中の Issue を評価しないこと。
-  val invQueryPreservesPlan = listingObservation.event != PlanChanged
-    implies plan == listingObservation.beforePlan
+  val invQueryPreservesEntitySet = listingObservation.event != EntitySetChanged
+    implies entitySet == listingObservation.beforeEntitySet
   val invSettingsOwnership = match listingObservation.event {
     | SettingEdited(e) => IDS.exclude(Set(e)).forall(other =>
         settings.get(other) == listingObservation.beforeSettings.get(other))
@@ -246,9 +246,9 @@ module candidate_evaluation {
   val invAtMostOnce = IDS.forall(e => Set(0, 1).contains(listing.counts.get(e))
     and ((listing.counts.get(e) == 0) iff (listing.cache.get(e) == Unevaluated)))
   val invEvaluationScope = IDS.forall(e => listing.counts.get(e) == 1 implies and {
-    requiredEntities(plan, listing).contains(e),
-    not(terminal(storedOf(plan, e))),
-    parentsSatisfied(plan, listing, e),
+    requiredEntities(entitySet, listing).contains(e),
+    not(terminal(storedOf(entitySet, e))),
+    parentsSatisfied(entitySet, listing, e),
   })
   val invUnsetSatisfied = IDS.forall(e =>
     settings.get(e) == Unset and listing.counts.get(e) == 1 implies listing.cache.get(e) == Satisfied)
@@ -276,43 +276,43 @@ module candidate_evaluation {
   }
   val invSuccessfulListingComplete = match listing.status {
     | Succeeded(result) => and {
-        result == abstractCandidates(plan, listing, false),
-        result == abstractCandidates(plan, listing, true),
-        pending(plan, listing).size() == 0,
+        result == abstractCandidates(entitySet, listing, false),
+        result == abstractCandidates(entitySet, listing, true),
+        pending(entitySet, listing).size() == 0,
       }
     | _ => true
   }
   val invNoEvaluationForEditsOrWork = match listingObservation.event {
     | SettingEdited(_) => listing.status == Idle and IDS.forall(e => listing.counts.get(e) == 0)
-    | PlanChanged => listing.status == Idle and IDS.forall(e => listing.counts.get(e) == 0)
+    | EntitySetChanged => listing.status == Idle and IDS.forall(e => listing.counts.get(e) == 0)
     | _ => true
   }
   val invBaseStableDuringQuery = listing.status != Idle
-    implies listing.base == baseCandidates(plan, listing.kind)
-  val invNoUnresolvedPublication = listing.status == Running and pending(plan, listing).size() == 0
+    implies listing.base == baseCandidates(entitySet, listing.kind)
+  val invNoUnresolvedPublication = listing.status == Running and pending(entitySet, listing).size() == 0
     implies listing.base.forall(e => listing.cache.get(e) != Unevaluated
-      or ancestorsOf(plan, e).exists(a => listing.cache.get(a) == Unsatisfied))
+      or ancestorsOf(entitySet, e).exists(a => listing.cache.get(a) == Unsatisfied))
   val invTasksIncludesWorking = match listing.status {
-    | Succeeded(result) => listing.kind == TasksList implies workingEntities(plan).subseteq(result)
+    | Succeeded(result) => listing.kind == TasksList implies workingEntities(entitySet).subseteq(result)
     | _ => true
   }
   // 進行中の Issue は stored が InProgress なのでどちらの一覧の対象にもならず、
   // 子を持たないので祖先としても評価されない。tasks には評価なしで載る。show の対象にもならない。
   val invWorkingIssuesNotEvaluated =
-    workingIssues(plan).forall(e => listing.counts.get(e) == 0)
+    workingIssues(entitySet).forall(e => listing.counts.get(e) == 0)
   // show が評価する範囲は、同じ計画で tasks が評価する範囲に含まれる。
   // 構成の確認: show の対象は stored が NotStarted の Entity に限り、それは tasks の対象でもある。
   val invShowRangeWithinTasks = match listing.kind {
-    | ShowTarget(_) => listing.status != Idle implies requiredEntities(plan, listing).subseteq(
-        baseCandidates(plan, TasksList).union(baseCandidates(plan, TasksList).map(e => ancestorsOf(plan, e)).flatten()))
+    | ShowTarget(_) => listing.status != Idle implies requiredEntities(entitySet, listing).subseteq(
+        baseCandidates(entitySet, TasksList).union(baseCandidates(entitySet, TasksList).map(e => ancestorsOf(entitySet, e)).flatten()))
     | _ => true
   }
   // show の対象の状況と詰まっている理由は評価した範囲で決まる。未評価の入力をすべて成立と仮定しても、
   // すべて未成立と仮定しても、Group の状況と理由、Issue が着手候補かどうかは変わらない。
   val invShowSituationDetermined = match listing.kind {
     | ShowTarget(t) => match listing.status {
-      | Succeeded(_) => (plan.registered.contains(t) and storedOf(plan, t) == NotStarted) implies
-          shownSituation(plan, listing, t, true) == shownSituation(plan, listing, t, false)
+      | Succeeded(_) => (entitySet.registered.contains(t) and storedOf(entitySet, t) == NotStarted) implies
+          shownSituation(entitySet, listing, t, true) == shownSituation(entitySet, listing, t, false)
       | _ => true
     }
     | _ => true
@@ -376,38 +376,38 @@ module candidate_evaluation {
   }
   val wHiddenDescendantSkipped = listingObservation.event == Published and listing.base.exists(e =>
     settings.get(e) != Unset and listing.cache.get(e) == Unevaluated
-      and ancestorsOf(plan, e).exists(a => listing.cache.get(a) == Unsatisfied))
-  val wSharedParentOnce = listingObservation.event == Published and groups(plan).exists(g =>
-    listing.base.filter(e => ancestorsOf(plan, e).contains(g)).size() >= 2
+      and ancestorsOf(entitySet, e).exists(a => listing.cache.get(a) == Unsatisfied))
+  val wSharedParentOnce = listingObservation.event == Published and groups(entitySet).exists(g =>
+    listing.base.filter(e => ancestorsOf(entitySet, e).contains(g)).size() >= 2
       and settings.get(g) != Unset and listing.counts.get(g) == 1)
-  val wTerminalSkipped = listingObservation.event == Published and plan.registered.exists(e =>
-    terminal(storedOf(plan, e)) and settings.get(e) != Unset and listing.counts.get(e) == 0)
+  val wTerminalSkipped = listingObservation.event == Published and entitySet.registered.exists(e =>
+    terminal(storedOf(entitySet, e)) and settings.get(e) != Unset and listing.counts.get(e) == 0)
   val wDependencyBlockedVisible = listingObservation.event == Published and listing.kind == TasksList
-    and visible(plan, listing).exists(e => storedOf(plan, e) == NotStarted
-      and not(depsComplete(plan, e)))
+    and visible(entitySet, listing).exists(e => storedOf(entitySet, e) == NotStarted
+      and not(depsComplete(entitySet, e)))
   // 祖先に未判断の Group がある未着手も隠さず tasks に出す（状況は Issue と子のある Group で Blocked、子のない Group で Empty）。
   val wUnadoptedAncestorVisible = listingObservation.event == Published and listing.kind == TasksList
-    and visible(plan, listing).exists(e => storedOf(plan, e) == NotStarted
-      and ancestorsOf(plan, e).exists(a => storedOf(plan, a) == Undecided))
+    and visible(entitySet, listing).exists(e => storedOf(entitySet, e) == NotStarted
+      and ancestorsOf(entitySet, e).exists(a => storedOf(entitySet, a) == Undecided))
   // 進行中の Issue は評価しないため、未成立の結果を持ちながら載るのは進行中の Group だけである。
   val wWorkingHiddenVisible = listingObservation.event == Published and listing.kind == TasksList
-    and workingEntities(plan).exists(e => listing.cache.get(e) == Unsatisfied
-      and visible(plan, listing).contains(e))
+    and workingEntities(entitySet).exists(e => listing.cache.get(e) == Unsatisfied
+      and visible(entitySet, listing).contains(e))
   // 主に進行中の Issue が該当し、祖先が未成立の進行中の Group も評価なしで載る。
   val wWorkingConditionSkipped = listingObservation.event == Published and listing.kind == TasksList
-    and workingEntities(plan).exists(e => settings.get(e) != Unset
-      and listing.counts.get(e) == 0 and visible(plan, listing).contains(e))
+    and workingEntities(entitySet).exists(e => settings.get(e) != Unset
+      and listing.counts.get(e) == 0 and visible(entitySet, listing).contains(e))
   // 実効 lifecycle が InProgress の Group は stored が NotStarted なので、それ自身の浮上判定として評価される。
   val wWorkingGroupEvaluated = listingObservation.event == Published and listing.kind == TasksList
     and (match listing.status {
-      | Succeeded(result) => groups(plan).exists(g => effective(plan, g) == InProgress
+      | Succeeded(result) => groups(entitySet).exists(g => effective(entitySet, g) == InProgress
           and listing.counts.get(g) == 1 and result.contains(g))
       | _ => false
     })
   val wGroupRowVisible = listingObservation.event == Published and listing.kind == TasksList
     and (match listing.status {
-      | Succeeded(result) => groups(plan).exists(g => storedOf(plan, g) == NotStarted
-          and effective(plan, g) == NotStarted and result.contains(g))
+      | Succeeded(result) => groups(entitySet).exists(g => storedOf(entitySet, g) == NotStarted
+          and effective(entitySet, g) == NotStarted and result.contains(g))
       | _ => false
     })
   val wReopenedVisible = listingObservation.event == Published and listing.kind == TasksList
@@ -416,19 +416,19 @@ module candidate_evaluation {
       | _ => false
     })
   val wJudgmentDespiteDependency = listingObservation.event == Published and listing.kind == JudgmentList
-    and listing.base.exists(e => not(depsComplete(plan, e)) and visible(plan, listing).contains(e))
-  val wStartAfterEvaluationFailure = listingObservation.event == PlanChanged
+    and listing.base.exists(e => not(depsComplete(entitySet, e)) and visible(entitySet, listing).contains(e))
+  val wStartAfterEvaluationFailure = listingObservation.event == EntitySetChanged
     and (match observation.event {
       | LifecycleOperation(change) => change.op == Start
         and listingObservation.beforeListing.status == Failed(change.id)
       | _ => false
     })
   val wNestedAncestorSkipped = wHiddenDescendantSkipped and listing.base.exists(e =>
-    ancestorsOf(plan, e).size() >= 2 and settings.get(e) != Unset
+    ancestorsOf(entitySet, e).size() >= 2 and settings.get(e) != Unset
       and listing.cache.get(e) == Unevaluated
-      and ancestorsOf(plan, e).exists(a => listing.cache.get(a) == Unsatisfied))
+      and ancestorsOf(entitySet, e).exists(a => listing.cache.get(a) == Unsatisfied))
   val wNoEligibleSkipsConfigured = wEmptyListing and listing.base.size() == 0
-    and plan.registered.exists(e => settings.get(e) != Unset)
+    and entitySet.registered.exists(e => settings.get(e) != Unset)
     and IDS.forall(e => listing.counts.get(e) == 0)
 
   // witness: show の表示。Group の対象で浮上していない着手可能な子孫を評価して見つける、
@@ -439,18 +439,18 @@ module candidate_evaluation {
     | _ => Set()
   }
   val wShowGroupHiddenCandidate = listingObservation.event == Published and shownTarget.exists(t =>
-    kindOf(plan, t) == Group and descendants(plan, t).exists(d =>
-      startableIssues(plan).contains(d) and listing.cache.get(d) == Unsatisfied))
+    kindOf(entitySet, t) == Group and descendants(entitySet, t).exists(d =>
+      startableIssues(entitySet).contains(d) and listing.cache.get(d) == Unsatisfied))
   val wShowIssueUnderUnsurfacedAncestor = listingObservation.event == Published and shownTarget.exists(t =>
-    kindOf(plan, t) == Issue and listing.base.contains(t) and listing.counts.get(t) == 0
-      and ancestorsOf(plan, t).exists(a => listing.cache.get(a) == Unsatisfied))
+    kindOf(entitySet, t) == Issue and listing.base.contains(t) and listing.counts.get(t) == 0
+      and ancestorsOf(entitySet, t).exists(a => listing.cache.get(a) == Unsatisfied))
   val wShowNothingEvaluated = listingObservation.event == Published and shownTarget.exists(t =>
-    plan.registered.contains(t) and storedOf(plan, t) != NotStarted
-      and plan.registered.exists(e => settings.get(e) != Unset)
+    entitySet.registered.contains(t) and storedOf(entitySet, t) != NotStarted
+      and entitySet.registered.exists(e => settings.get(e) != Unset)
       and IDS.forall(e => listing.counts.get(e) == 0))
   val wShowNarrowerThanTasks = listingObservation.event == Published and shownTarget.size() > 0
-    and baseCandidates(plan, TasksList).exists(e => settings.get(e) != Unset
-      and not(requiredEntities(plan, listing).contains(e)))
+    and baseCandidates(entitySet, TasksList).exists(e => settings.get(e) != Unset
+      and not(requiredEntities(entitySet, listing).contains(e)))
   val wShowFailure = shownTarget.size() > 0 and (match listingObservation.event {
     | EvaluatedEntity(e) => listing.status == Failed(e)
     | _ => false
