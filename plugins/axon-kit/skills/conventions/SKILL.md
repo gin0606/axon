@@ -11,6 +11,10 @@ description: Axonのlifecycle・情報モデルとCLI保存操作の共通契約
 
 code表記でない英単語はAxonの操作を指さない。field名、記録の名詞、他ツールの識別子などの場合がある。一般的な作業の中断・完了・統合・リリースは日本語で書く。この表記規約はリポジトリが書く日本語の文書・skillを対象とし、英語のCLI出力・help・内蔵文書には及ばない。
 
+declarationはYAMLの一括宣言を指す。タイトルはtitle、本文はdescriptionを指し、両方を指すときは「タイトルと本文」と書く。文面は一般語として使えるが、項目を厳密に指定するときは項目名を列挙する。
+
+一般の作業計画には「計画」やplanを使える。Groupの構成・範囲を指すときは「Groupと全子孫」など対象を明示し、計画の作成とGroup全体の成果の最終確認を区別する。「採用」も一般語として使えるが、方針とEntityの判断を併せて述べるときは「方針の決定」「Issueの採用」のように対象を示す。方針への賛同だけでEntityの採用や実装の権限を得たと解釈しない。
+
 ## 対象環境を固定する
 
 呼び出し側が指定したrepositoryまたは管理rootで操作する。binaryが指定されていればそれを使い、指定がなければその環境の `axon` を発見し、`axon --version` と `axon --help` を確認する。`axon tasks|accept|cancel|reopen|resolve|convert|label`・`axon storage check` の有無と必要なleaf helpの構文をこのpluginの契約と照合して、実行ファイルとworking directoryを以後の操作で固定する。別repositoryのソースcheckoutは不要。このplugin内のreferenceと選択したCLIの `axon docs`・helpで手順を完結させる。

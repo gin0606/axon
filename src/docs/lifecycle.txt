@@ -16,8 +16,8 @@ Lifecycle
   Notes can be appended even after work is terminal.
   convert ID --kind issue|group changes the kind of an Undecided or NotStarted
   Entity (release an InProgress Issue first; a Group with children stays a
-  Group) and nothing else. A Group's description states the outcome of the whole
-  plan and what its final review confirms, so reread it after converting. The
+  Group) and nothing else. A Group's description states its overall outcomes
+  and what its final review confirms, so reread it after converting. The
   kind is not a lifecycle transition and takes no --reason.
 
 A Group is never started or released. A NotStarted Group is InProgress while a direct
@@ -30,7 +30,7 @@ Completed and every ancestor Group to be adopted; explicit dependencies of ances
 are not a prerequisite of its completion. Cancelled is terminal but does not satisfy
 a dependency. Group completion requires all direct children to be terminal; an empty
 Group completes as well. Running complete on a Group explicitly confirms final
-review of the entire plan, including the outcomes and Notes of its descendants.
+review of the outcomes of the Group and all its descendants, including their Notes.
 list, tasks and show show a Group as Empty, Confirmable, Ready, InProgress or
 Blocked, and show explains a stalled Group under Stalled, including candidates
 that do not surface and the Group's own unsatisfied condition.
@@ -48,9 +48,9 @@ Labels
     test      add or reorganize tests
     refactor  reorganize structure without changing behavior
     spike     investigate in order to decide: open questions, specifications, plans
-  A Group's label is the main kind of its plan and is not derived from its
-  children. A label is not a priority: it changes no lifecycle rule, candidate
-  list or situation. Like the title and description, it is fixed once the Entity
+  A Group's label is the main kind of work across the Group and is not derived
+  from its children. A label is not a priority: it changes no lifecycle rule,
+  candidate list or situation. Like the title and description, it is fixed once the Entity
   is Completed or Cancelled. convert keeps the label.
 
 Daily workflow
@@ -175,7 +175,7 @@ accept -m/--description or -F/--file (- reads stdin). Notes use
 inline long names identify the field (--description or --message). For option
 values beginning with a hyphen use the equals form, for example --description='--text'.
 
-Use axon docs declaration for plan declaration fields and the bulk-edit workflow.
+Use axon docs declaration for YAML declaration fields and the bulk-edit workflow.
 Use axon docs declaration --example for a new-plan YAML template.
 
 ANSI decoration is disabled per stream when it is not a terminal, or for all

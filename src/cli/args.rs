@@ -12,7 +12,7 @@ use std::{io::Read, path::PathBuf, time::Duration};
     version,
     styles = display::cli_styles(),
     about = "A local issue tracker for Issues and Groups",
-    after_help = "Use axon docs for the lifecycle and daily workflow. Group complete explicitly confirms that the entire plan has passed final review."
+    after_help = "Use axon docs for the lifecycle and daily workflow. Group complete explicitly confirms that the outcomes of the Group and all its descendants have passed final review."
 )]
 pub(super) struct Cli {
     /// Disable ANSI decoration in all output, including help and diagnostics
@@ -108,7 +108,7 @@ To read saved information without running any condition, add --skip-conditions; 
     Start(Change),
     /// Release an InProgress Issue back to NotStarted
     Release(Change),
-    /// Complete work; for a Group, explicitly confirm final review of the entire plan
+    /// Complete work; for a Group, explicitly confirm final review of its overall outcomes
     Complete(Change),
     /// Cancel work
     Cancel(Change),
@@ -118,7 +118,7 @@ To read saved information without running any condition, add --skip-conditions; 
     Reopen(Change),
     /// Convert an unstarted Entity between Issue and Group without changing anything else
     #[command(
-        after_help = "Example: axon convert ID --kind group\nOnly an Undecided or NotStarted Entity converts; release an InProgress Issue first, and a Group with children is not converted to an Issue. Lifecycle, parent, dependencies, text, label, condition and Notes stay as they are. Converting to the kind the Entity already has is No changes. The kind is not a lifecycle transition, so there is no --reason.\nA Group's description states the outcome of the whole plan and what its final review confirms, so reread an Issue's description after converting it."
+        after_help = "Example: axon convert ID --kind group\nOnly an Undecided or NotStarted Entity converts; release an InProgress Issue first, and a Group with children is not converted to an Issue. Lifecycle, parent, dependencies, text, label, condition and Notes stay as they are. Converting to the kind the Entity already has is No changes. The kind is not a lifecycle transition, so there is no --reason.\nA Group's description states its overall outcomes and what its final review confirms, so reread an Issue's description after converting it."
     )]
     Convert {
         id: String,
@@ -300,7 +300,7 @@ pub(super) struct Change {
 }
 /// The label help shared by the commands that take one.
 const LABEL_HELP: &str = "Every Entity has exactly one label from a fixed set: bug, feat, chore, docs, test, refactor, spike.
-A label classifies the kind of work; it is not a priority and changes no lifecycle rule, candidate list or situation. A Group's label is the main kind of its plan.
+A label classifies the kind of work; it is not a priority and changes no lifecycle rule, candidate list or situation. A Group's label is the main kind of work across the Group.
 There is no unset, and the label of a Completed or Cancelled Entity cannot be changed.";
 #[derive(Subcommand)]
 pub(super) enum LabelCommand {

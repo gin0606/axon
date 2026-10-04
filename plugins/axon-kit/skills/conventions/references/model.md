@@ -17,7 +17,7 @@ lifecycleには保存値と実効値がある。Issueの実効値は保存値と
 
 同値のlifecycle遷移は拒否される。親は一つのGroup。Groupは`Start`・`Release`を持たず、Groupへの`axon start`・`axon release`は拒否される。Groupの実効値は配下から導出され、配下のlifecycle操作や、着手・完了したEntityの移動で変わる。それによってGroup自身の保存値と履歴は変わらない。
 
-Issueの`Start`には全祖先が採用済みで、自身と全祖先の直接dependencyが全員`Completed`であることが必要。親の実効値が`InProgress`であることは要求しない。`Complete`には全祖先が採用済みで、自身の直接dependencyが全員`Completed`であることが必要。Groupの`Complete`・`Cancel`は直属の子が全員終了していること（直属の子がないGroupと全子`Cancelled`のGroupも満たす）を要し、Groupの`Complete`は子のterminal化に加え計画全体の最終確認を表す。Groupの`Withdraw`は実効値が`NotStarted`のときだけ、着手・完了した子孫を持つGroupの`Accept`は全祖先が採用済みのときだけ行える。実効値が`InProgress`か`Completed`のEntityの移動先は、所属なしか、移動先を含む全祖先が採用済みのGroupに限る。
+Issueの`Start`には全祖先が採用済みで、自身と全祖先の直接dependencyが全員`Completed`であることが必要。親の実効値が`InProgress`であることは要求しない。`Complete`には全祖先が採用済みで、自身の直接dependencyが全員`Completed`であることが必要。Groupの`Complete`・`Cancel`は直属の子が全員終了していること（直属の子がないGroupと全子`Cancelled`のGroupも満たす）を要し、Groupの`Complete`は子のterminal化に加えGroup全体の成果の最終確認を表す。Groupの`Withdraw`は実効値が`NotStarted`のときだけ、着手・完了した子孫を持つGroupの`Accept`は全祖先が採用済みのときだけ行える。実効値が`InProgress`か`Completed`のEntityの移動先は、所属なしか、移動先を含む全祖先が採用済みのGroupに限る。
 
 `Completed`から抜ける経路は`Reopen`だけで、全祖先が採用済みであり、自身を依存先に持つ`Completed`のEntityがないことを要する。`Reopen`は対象だけを`NotStarted`へ戻し、子や依存元を変えない。`Completed`の依存元があれば、依存元から順に`Reopen`する。終了したGroupの配下は構成もlifecycleも固定され、`Reopen`・`Reconsider`を含むlifecycle操作と所属変更は、そのGroupを戻すまで拒否される。条件の編集、`Cancelled`のEntityのdependency編集、Noteの追記は固定されない。終了したGroupの構成を変える正規の手順は、そのGroupを`Reopen`・`Reconsider`で戻すことで、それ以外の状態の往復や別保存経路で循環・構成固定などのguardを迂回しない。取消が子を自動取消することもない。Git統合などで生じた構造の違反に含まれるEntityには、修復のためにこれらの固定の一部が免除される（[保存先と復旧](storage.md)）。
 
@@ -37,7 +37,7 @@ Groupの行の状況は、保存値が`Undecided`・`Completed`・`Cancelled`な
 
 ## 情報を混同しない
 
-title・本文は現在の定義で、未終了の間は`axon write`で編集できる。labelは仕事の種類を表す分類で、各Entityが次の固定集合から必ず一つ持つ。未設定・解除はなく、集合外の値は拒否される。未終了の間は`axon label set ID VALUE`で変更でき、終了後は文面と同じく固定される。Groupのlabelは計画の主な種類で、配下から導出せず一致も要求しない。labelは優先度ではなく、lifecycle遷移の前提、包含・dependencyの制約、候補集合、状況、条件の評価に影響しない。`axon convert`もlabelを変えない。
+title・本文は現在の定義で、未終了の間は`axon write`で編集できる。labelは仕事の種類を表す分類で、各Entityが次の固定集合から必ず一つ持つ。未設定・解除はなく、集合外の値は拒否される。未終了の間は`axon label set ID VALUE`で変更でき、終了後は文面と同じく固定される。GroupのlabelはGroup全体の仕事の主な種類で、配下から導出せず一致も要求しない。labelは優先度ではなく、lifecycle遷移の前提、包含・dependencyの制約、候補集合、状況、条件の評価に影響しない。`axon convert`もlabelを変えない。
 
 | label | 意味 |
 | --- | --- |

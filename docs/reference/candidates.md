@@ -41,7 +41,7 @@ Group の行の状況は配下から導出し、次の表を上から順に見�
 | 状況 | 条件 | 次の一手 |
 | --- | --- | --- |
 | `Empty` | 直属の子がない | 計画を書く。最終確認が通れば完了できる場合も `Empty` で、`axon complete` の可否は変えない |
-| `Confirmable` | 最終確認が通れば `Complete` できる | 計画全体を最終確認し、`axon complete` する |
+| `Confirmable` | 最終確認が通れば `Complete` できる | Group全体の成果を最終確認し、`axon complete` する |
 | `Ready` | 着手候補の Issue を子孫に持つ | 子孫の Issue に着手する |
 | `InProgress` | 実効値が `InProgress` | 配下の仕事が始まっている |
 | `Blocked` | 直属の子があり、上のどれにも当たらない | 詰まっている理由を解く |
