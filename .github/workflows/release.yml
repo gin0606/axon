@@ -1,0 +1,168 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate the release tag
+        id: version
+        run: |
+          version=$(python3 scripts/release.py validate-tag "$GITHUB_REF_NAME")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Check tap credentials
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: gin0606
+          repositories: homebrew-tap
+          permission-contents: write
+      - name: Check plugin versions
+        run: python3 scripts/update-plugin-versions.py --check
+      - name: Test plugin version generation
+        run: python3 scripts/test-plugin-versions.py
+      - name: Test release guards
+        run: python3 scripts/test-release.py
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace
+      - name: Check this repository's Axon store
+        run: cargo run --locked --quiet -- storage check
+      - name: Check MSRV
+        run: |
+          rustup toolchain install 1.89.0 --profile minimal
+          cargo +1.89.0 check --locked --all-targets --all-features
+
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+      VERSION: ${{ needs.validate.outputs.version }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup target add "$TARGET"
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+      - name: Build and check the binary
+        run: |
+          cargo build --locked --release --bin axon --target "$TARGET"
+          test "$("target/$TARGET/release/axon" --version)" = "axon $VERSION"
+          "target/$TARGET/release/axon" --help
+      - name: Package the binary
+        run: |
+          directory="axon-v${VERSION}-${TARGET}"
+          mkdir "$directory"
+          cp "target/$TARGET/release/axon" LICENSE "$directory/"
+          tar -czf "$directory.tar.gz" "$directory"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: axon-${{ matrix.target }}
+          path: axon-v${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: gin0606
+          repositories: homebrew-tap
+          permission-contents: write
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: gin0606/homebrew-tap
+          token: ${{ steps.app-token.outputs.token }}
+          path: tap
+      - name: Refuse to roll back the tap
+        run: python3 scripts/release.py check-formula-version "$VERSION" tap/axon.rb
+      - name: Publish or reuse release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/publish-release.sh
+      - name: Generate the Homebrew formula from published archives
+        run: |
+          python3 scripts/release.py formula "$VERSION" published tap/axon.rb
+          ruby -c tap/axon.rb
+      - name: Push the Homebrew formula
+        working-directory: tap
+        run: |
+          git add axon.rb
+          if git diff --cached --quiet; then
+            echo "The tap already points at this release"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update axon formula to v$VERSION" -m "Install the published macOS binaries without requiring Rust."
+          git push
+
+  verify-homebrew:
+    needs: [validate, publish]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - name: Install and test the published formula
+        run: |
+          brew install gin0606/tap/axon
+          brew test gin0606/tap/axon
+          binary="$(brew --prefix gin0606/tap/axon)/bin/axon"
+          test "$("$binary" --version)" = "axon $VERSION"
+          trial=$(mktemp -d)
+          cd "$trial"
+          "$binary" init trial
+          "$binary" capture --label docs --title 'Write a guide' -m 'Explain installation and basic usage.'
+          "$binary" storage check

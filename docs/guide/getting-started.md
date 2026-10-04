@@ -1,16 +1,40 @@
 # 使い始める
 
-AxonはIssueとGroupを一つのlifecycleで管理します。以下はソースからビルドし、独立した保存先で登録から完了までを試す手順です。
+AxonはIssueとGroupを一つのlifecycleで管理します。以下はHomebrewで導入し、独立した保存先で登録から完了までを試す手順です。
 
 ## インストールと対応環境
 
-macOSをサポート対象とし、LinuxとWSL2は未検証のbest effort、native Windowsは非対応です。最低Rust versionは1.89、開発toolchainは [検証方針](../development/verification.md) を参照してください。
-
-この checkout でビルドし、試用先からも同じ実行ファイルを呼べるよう絶対パスを設定します。
+配布バイナリはmacOS 15（Sequoia）以上のApple Silicon / Intelに対応します。[Homebrew](https://brew.sh)で導入でき、Rustは不要です。LinuxとWSL2はソースビルドでの未検証のbest effort、native Windowsは非対応です。
 
 ```sh
-cargo build --locked --bin axon
-AXON_BIN="$(pwd)/target/debug/axon"
+brew install gin0606/tap/axon
+```
+
+更新には次を使います。
+
+```sh
+brew update
+brew upgrade gin0606/tap/axon
+```
+
+### 開発者向けのソースビルド
+
+最低Rust versionは1.89、開発toolchainは [検証方針](../development/verification.md) を参照してください。
+
+```sh
+git clone https://github.com/gin0606/axon.git
+cd axon
+cargo install --locked --path .
+```
+
+Cargoの実行ファイルの保存先（通常は `~/.cargo/bin`）を `PATH` に追加してください。checkout内だけで試す場合は `cargo build --locked --bin axon` でビルドし、以下の `AXON_BIN` に `target/debug/axon` の絶対パスを指定します。
+
+## 独立した保存先で試す
+
+Homebrewで導入した実行ファイルを固定し、一時ディレクトリで試します。
+
+```sh
+AXON_BIN="$(brew --prefix gin0606/tap/axon)/bin/axon"
 "$AXON_BIN" --version
 "$AXON_BIN" --help
 AXON_TRIAL_DIR="$(mktemp -d)"
