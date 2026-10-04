@@ -11,6 +11,6 @@ description: Axonの指定Issueの`axon start`・`axon release`と、指定Issue
 
 `axon complete`は目的・完了条件、実装、必要な検証・reviewが客観的に満たされ、残作業がない場合に実行する。直属の子のないGroupも最終確認を省かない。Groupは全子孫の終了だけでは不十分で、目的・成果の統合・検証を計画全体として確認し、明示的な`axon complete`を最終確認済みの入力にする。親Groupの`axon complete`は、子の終了とは別にその操作の権限が与えられている場合だけ実行する。
 
-`Completed`を`NotStarted`へ戻す`axon reopen`は、その判断が与えられた場合だけ`axon:triage`で扱う。
+`Completed`を`NotStarted`へ戻す`axon reopen`は、その判断が与えられた場合だけ`axon:update`で扱う。
 
 確定結果Noteの保存、最終lifecycle、dependent・祖先と候補一覧への影響を照合する。実装・commitなどの権限は呼び出し元workflowの範囲に従う。
