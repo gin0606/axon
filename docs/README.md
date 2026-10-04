@@ -31,10 +31,10 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 | --- | --- |
 | [モデル](../spec/README.md) | Quintモデルの対象範囲、検証する性質、再現手順 |
 | [層構造の地図](development/architecture.md) | crate・module の配置、依存方向、各層のテスト入口 |
-| [共通コア](development/lifecycle-core.md) | 通常操作、記録の集合と導出、衝突と解決、codec |
-| [Declaration](development/lifecycle-declaration.md) | strict YAML、`axon export`・`axon import`、共通コアとfile書戻しの境界 |
-| [CLIと保存の接続](development/lifecycle-cli.md) | 公開操作と保存adapterの接続 |
-| [file保存とGit統合](development/lifecycle-file.md) | 初期化と探索、記録fileとcodec、writer、worktree、`axon storage check`・`axon resolve` |
+| [共通コア](development/lifecycle-core.md) | 操作・記録間の検査と codec の責務 |
+| [Declaration](development/lifecycle-declaration.md) | 適用候補の検査、保存と file 書戻しの境界 |
+| [CLIと保存の接続](development/lifecycle-cli.md) | 独立した試用、保存と出力の境界、内部 Git 呼出し |
+| [file保存とGit統合](development/lifecycle-file.md) | 保存形式、公開の順序と失敗境界、統合の検査手順 |
 | [記録者連携](development/lifecycle-recorder.md) | 自動取得と保存済み詳細 |
 | [検証方針](development/verification.md) | CI、declarationを含む独立fixture、モデル検証の分担 |
 | [設計判断](design/decisions.md) | 現在の契約がその形になっている理由と、採らなかった案 |
@@ -45,6 +45,7 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 
 - 現在のルールは担当する契約文書で定義する。別の文書で説明するときは要約とリンクにする。
 - 契約は現在形で書く。理解に必要な短い理由は契約の近くに残し、長い比較や判断の背景は design に置く。
+- development は責務と依存方向、変更時に守る不変条件、検証の入口を示す。関数の処理順や個々のテストケースは列挙せず、コードへリンクする。互換性を定める保存形式や、保証を成立させる処理順は残す。
 - 検証方法は development、検証結果には実施時点と対象・条件を記す。
 - 未決事項の採否や作業状況は Axon で管理し、docs に現況一覧を複製しない。
 - 文書を移動・分割したら、README、AGENTS.md、モデル冒頭などの参照元も更新する。
