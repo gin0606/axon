@@ -13,4 +13,4 @@ description: Axonの指定Issueの`axon start`・`axon release`と、指定Issue
 
 `Completed`を`NotStarted`へ戻す`axon reopen`は、その判断が与えられた場合だけ`axon:update`で扱う。
 
-確定結果Noteの保存、最終lifecycle、dependent・祖先と候補一覧への影響を照合する。実装・commitなどの権限は呼び出し元workflowの範囲に従う。
+共通規約または上位workflowが求めるNoteを保存した場合はその結果を確認し、最終lifecycle、dependent・祖先と候補一覧への影響を照合する。実装・commitなどの権限は呼び出し元workflowの範囲に従う。
