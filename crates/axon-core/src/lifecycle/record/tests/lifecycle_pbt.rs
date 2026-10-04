@@ -124,7 +124,7 @@ proptest! {
         let mut r = isolated(kind, state);
         let before = r.current("item");
         let old_len = r.store.len();
-        let edit = r.store.write(&id("item"), Some(title.clone()), Some(body.clone()), r.tick());
+        let edit = r.store.write(&id("item"), Some(title.clone()), Some(body.clone()), None, r.tick());
         prop_assert_eq!(edit.is_ok(), matches!(state, Lifecycle::Undecided | Lifecycle::NotStarted | Lifecycle::InProgress));
         if let Ok(Some(record)) = edit {
             prop_assert_eq!(&record.kind, &RecordKind::Edit);
@@ -141,7 +141,7 @@ proptest! {
         }
         let old_len = r.store.len();
         let before_condition = r.current("item");
-        let change = r.store.set_condition(&id("item"), Some(condition.clone()), r.tick()).unwrap().unwrap();
+        let change = r.store.set_condition(&id("item"), Some(condition.clone()), None, r.tick()).unwrap().unwrap();
         prop_assert_eq!(&change.kind, &RecordKind::Condition);
         prop_assert_eq!(&change.after, &Current {
             condition: Some(condition.clone()),
@@ -149,7 +149,7 @@ proptest! {
         });
         insert(&mut r.store, change);
         prop_assert_eq!(r.store.len(), old_len + 1);
-        prop_assert!(r.store.set_condition(&id("item"), Some(condition), r.tick()).unwrap().is_none());
+        prop_assert!(r.store.set_condition(&id("item"), Some(condition), None, r.tick()).unwrap().is_none());
         let context = r.tick();
         let note = format!("note {body}");
         let a = r.store.add_note(&id("item"), note.clone(), None, context.clone()).unwrap();
@@ -240,8 +240,8 @@ proptest! {
                     let name = format!("g{missing}");
                     let mut left = Replica::from("r0", &source.store);
                     let mut right = Replica::from("r1", &source.store);
-                    let a = left.store.set_condition(&id(&name), Some("true".into()), left.tick()).unwrap().unwrap();
-                    let b = right.store.set_condition(&id(&name), Some("false".into()), right.tick()).unwrap().unwrap();
+                    let a = left.store.set_condition(&id(&name), Some("true".into()), None, left.tick()).unwrap().unwrap();
+                    let b = right.store.set_condition(&id(&name), Some("false".into()), None, right.tick()).unwrap().unwrap();
                     let a = insert(&mut left.store, a);
                     let b = insert(&mut right.store, b);
                     partial.sync_one(&left, &source.head(&name));
@@ -277,18 +277,18 @@ proptest! {
         r.create("dep", Kind::Group, Lifecycle::NotStarted, None);
         r.move_to("item", Some("anchor"));
         r.add_dep("item", "dep");
-        let edit = r.store.write(&id("item"), Some(format!("edited {title}")), None, r.tick()).unwrap().unwrap();
+        let edit = r.store.write(&id("item"), Some(format!("edited {title}")), None, None, r.tick()).unwrap().unwrap();
         insert(&mut r.store, edit);
-        let relabel = r.store.set_label(&id("item"), Label::ALL[label], r.tick()).unwrap();
+        let relabel = r.store.set_label(&id("item"), Label::ALL[label], None, r.tick()).unwrap();
         if let Some(record) = relabel {
             insert(&mut r.store, record);
         }
         prop_assert_eq!(r.current("item").label, Label::ALL[label]);
         let before = r.current("item");
         let old_len = r.store.len();
-        prop_assert!(r.store.convert(&id("item"), kind, r.tick()).unwrap().is_none());
+        prop_assert!(r.store.convert(&id("item"), kind, None, r.tick()).unwrap().is_none());
         prop_assert_eq!(r.store.len(), old_len);
-        let record = r.store.convert(&id("item"), other, r.tick()).unwrap().unwrap();
+        let record = r.store.convert(&id("item"), other, None, r.tick()).unwrap().unwrap();
         prop_assert_eq!(&record.kind, &RecordKind::Convert);
         prop_assert_eq!(&record.after, &Current { kind: other, ..before.clone() });
         insert(&mut r.store, record);
@@ -421,14 +421,14 @@ proptest! {
         r.create("dependency", Kind::Issue, Lifecycle::NotStarted, None);
         let old_len = r.store.len();
         let other_kind = if kind == Kind::Issue { Kind::Group } else { Kind::Issue };
-        prop_assert!(r.store.write(&id("item"), Some("task".into()), None, r.tick()).is_err());
-        prop_assert!(r.store.convert(&id("item"), other_kind, r.tick()).is_err());
+        prop_assert!(r.store.write(&id("item"), Some("task".into()), None, None, r.tick()).is_err());
+        prop_assert!(r.store.convert(&id("item"), other_kind, None, r.tick()).is_err());
         prop_assert_eq!(r.store.len(), old_len);
         let before = r.current("item");
-        let condition_record = r.store.set_condition(&id("item"), Some(condition.clone()), r.tick()).unwrap().unwrap();
+        let condition_record = r.store.set_condition(&id("item"), Some(condition.clone()), None, r.tick()).unwrap().unwrap();
         prop_assert_eq!(&condition_record.after, &Current { condition: Some(condition.clone()), ..before.clone() });
         insert(&mut r.store, condition_record);
-        prop_assert!(r.store.set_condition(&id("item"), Some(condition), r.tick()).unwrap().is_none());
+        prop_assert!(r.store.set_condition(&id("item"), Some(condition), None, r.tick()).unwrap().is_none());
         let moved = r.try_move("item", Some("destination")).unwrap().unwrap();
         insert(&mut r.store, moved);
         prop_assert_eq!(r.current("item").parent, Some(id("destination")));
@@ -574,8 +574,8 @@ proptest! {
                 }
                 let mut left = Replica::from("r0", &source.store);
                 let mut right = Replica::from("r1", &source.store);
-                let a = left.store.set_condition(&id(&target), Some("true".into()), left.tick()).unwrap().unwrap();
-                let b = right.store.set_condition(&id(&target), Some("false".into()), right.tick()).unwrap().unwrap();
+                let a = left.store.set_condition(&id(&target), Some("true".into()), None, left.tick()).unwrap().unwrap();
+                let b = right.store.set_condition(&id(&target), Some("false".into()), None, right.tick()).unwrap().unwrap();
                 let a = insert(&mut left.store, a);
                 let b = insert(&mut right.store, b);
                 partial.sync_one(&left, &a);
@@ -602,7 +602,7 @@ fn title_and_reason_boundaries() {
         let title = "字".repeat(len);
         let write = r
             .store
-            .write(&id("item"), Some(title.clone()), None, r.tick());
+            .write(&id("item"), Some(title.clone()), None, None, r.tick());
         let mut value = current(Kind::Issue, Lifecycle::NotStarted, None);
         value.title = title;
         let create = r.try_create(&format!("new{len}"), value);
@@ -622,7 +622,7 @@ fn title_and_reason_boundaries() {
         let invalid = format!("a{bad}b");
         let write = error(
             r.store
-                .write(&id("item"), Some(invalid.clone()), None, r.tick()),
+                .write(&id("item"), Some(invalid.clone()), None, None, r.tick()),
         );
         assert!(
             write.contains("title contains a line break or control character"),
@@ -696,13 +696,13 @@ fn conflicts_block_ordinary_writes_but_allow_notes_and_resolution() {
     assert!(base.try_remove_dep("item", "g2").unwrap().is_some());
     assert!(
         base.store
-            .convert(&id("item"), Kind::Group, base.tick())
+            .convert(&id("item"), Kind::Group, None, base.tick())
             .unwrap()
             .is_some()
     );
     assert!(
         base.store
-            .set_label(&id("item"), Label::Bug, base.tick())
+            .set_label(&id("item"), Label::Bug, None, base.tick())
             .unwrap()
             .is_some()
     );
@@ -710,13 +710,13 @@ fn conflicts_block_ordinary_writes_but_allow_notes_and_resolution() {
     let mut b = Replica::from("r1", &base.store);
     let edit = a
         .store
-        .write(&id("item"), Some(left), None, a.tick())
+        .write(&id("item"), Some(left), None, None, a.tick())
         .unwrap()
         .unwrap();
     insert(&mut a.store, edit);
     let edit = b
         .store
-        .write(&id("item"), Some(right), None, b.tick())
+        .write(&id("item"), Some(right), None, None, b.tick())
         .unwrap()
         .unwrap();
     insert(&mut b.store, edit);
@@ -730,12 +730,12 @@ fn conflicts_block_ordinary_writes_but_allow_notes_and_resolution() {
     assert!(a.try_op("item", Operation::Start).is_err());
     assert!(
         a.store
-            .write(&id("item"), Some("updated".into()), None, a.tick())
+            .write(&id("item"), Some("updated".into()), None, None, a.tick())
             .is_err()
     );
     assert!(
         a.store
-            .set_label(&id("item"), Label::Bug, a.tick())
+            .set_label(&id("item"), Label::Bug, None, a.tick())
             .is_err()
     );
     assert!(a.try_move("item", Some("g0")).is_err());
@@ -743,10 +743,14 @@ fn conflicts_block_ordinary_writes_but_allow_notes_and_resolution() {
     assert!(a.try_remove_dep("item", "g2").is_err());
     assert!(
         a.store
-            .set_condition(&id("item"), Some("true".into()), a.tick())
+            .set_condition(&id("item"), Some("true".into()), None, a.tick())
             .is_err()
     );
-    assert!(a.store.convert(&id("item"), Kind::Group, a.tick()).is_err());
+    assert!(
+        a.store
+            .convert(&id("item"), Kind::Group, None, a.tick())
+            .is_err()
+    );
     let value = Imported {
         title: "x".into(),
         description: "body".into(),
@@ -787,12 +791,12 @@ fn conflicts_block_ordinary_writes_but_allow_notes_and_resolution() {
                 let mut right = Replica::from("r1", &control.store);
                 let a = left
                     .store
-                    .set_condition(&id("blocker"), Some("true".into()), left.tick())
+                    .set_condition(&id("blocker"), Some("true".into()), None, left.tick())
                     .unwrap()
                     .unwrap();
                 let b = right
                     .store
-                    .set_condition(&id("blocker"), Some("false".into()), right.tick())
+                    .set_condition(&id("blocker"), Some("false".into()), None, right.tick())
                     .unwrap()
                     .unwrap();
                 insert(&mut left.store, a);

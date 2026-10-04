@@ -22,19 +22,25 @@ fn every_operation_except_resolve_and_note_is_rejected_while_any_entity_is_confl
         error(r.try_create("i4", current(Kind::Issue, Lifecycle::NotStarted, None)))
             .contains(blocked)
     );
-    assert!(error(r.store.write(&id("i3"), Some("x".into()), None, r.tick())).contains(blocked));
-    assert!(error(r.store.set_label(&id("i3"), Label::Bug, r.tick())).contains(blocked));
+    assert!(
+        error(
+            r.store
+                .write(&id("i3"), Some("x".into()), None, None, r.tick())
+        )
+        .contains(blocked)
+    );
+    assert!(error(r.store.set_label(&id("i3"), Label::Bug, None, r.tick())).contains(blocked));
     assert!(error(r.try_move("i3", Some("g2"))).contains(blocked));
     assert!(error(r.try_add_dep("i3", "g2")).contains(blocked));
     assert!(error(r.try_remove_dep("i3", "g2")).contains(blocked));
     assert!(
         error(
             r.store
-                .set_condition(&id("i3"), Some("true".into()), r.tick())
+                .set_condition(&id("i3"), Some("true".into()), None, r.tick())
         )
         .contains(blocked)
     );
-    assert!(error(r.store.convert(&id("i3"), Kind::Group, r.tick())).contains(blocked));
+    assert!(error(r.store.convert(&id("i3"), Kind::Group, None, r.tick())).contains(blocked));
     assert!(
         error(r.store.import(
             &id("i3"),
@@ -357,7 +363,7 @@ fn an_issue_with_integrated_children_cannot_add_violations_or_end_before_its_chi
     let mut r1 = Replica::from("r1", &shared.store);
     let converted = r0
         .store
-        .convert(&id("g9"), Kind::Issue, r0.tick())
+        .convert(&id("g9"), Kind::Issue, None, r0.tick())
         .unwrap()
         .unwrap();
     insert(&mut r0.store, converted);
@@ -753,7 +759,7 @@ fn text_edits_carry_the_value_after_skip_no_ops_and_reject_invalid_titles() {
     let mut r = Replica::new("r0");
     let edit = r
         .store
-        .write(&id("i3"), Some("renamed".into()), None, r.tick())
+        .write(&id("i3"), Some("renamed".into()), None, None, r.tick())
         .unwrap()
         .unwrap();
     assert_eq!(edit.kind, RecordKind::Edit);
@@ -761,17 +767,21 @@ fn text_edits_carry_the_value_after_skip_no_ops_and_reject_invalid_titles() {
     insert(&mut r.store, edit);
     assert!(
         r.store
-            .write(&id("i3"), Some("renamed".into()), None, r.tick())
+            .write(&id("i3"), Some("renamed".into()), None, None, r.tick())
             .unwrap()
             .is_none()
     );
     assert!(
-        error(r.store.write(&id("i3"), Some(" ".into()), None, r.tick())).contains("empty title")
+        error(
+            r.store
+                .write(&id("i3"), Some(" ".into()), None, None, r.tick())
+        )
+        .contains("empty title")
     );
     assert!(
         error(
             r.store
-                .write(&id("i3"), Some("a\nb".into()), None, r.tick())
+                .write(&id("i3"), Some("a\nb".into()), None, None, r.tick())
         )
         .contains("line break")
     );
@@ -782,20 +792,23 @@ fn condition_records_carry_the_value_after_skip_no_ops_and_reject_empty_conditio
     let mut r = Replica::new("r0");
     let condition = r
         .store
-        .set_condition(&id("i3"), Some("exit 0".into()), r.tick())
+        .set_condition(&id("i3"), Some("exit 0".into()), None, r.tick())
         .unwrap()
         .unwrap();
     assert_eq!(condition.kind, RecordKind::Condition);
     insert(&mut r.store, condition);
     assert!(
         r.store
-            .set_condition(&id("i3"), Some("exit 0".into()), r.tick())
+            .set_condition(&id("i3"), Some("exit 0".into()), None, r.tick())
             .unwrap()
             .is_none()
     );
     assert!(
-        error(r.store.set_condition(&id("i3"), Some(" ".into()), r.tick()))
-            .contains("empty condition")
+        error(
+            r.store
+                .set_condition(&id("i3"), Some(" ".into()), None, r.tick())
+        )
+        .contains("empty condition")
     );
 }
 
@@ -807,7 +820,7 @@ fn terminal_entities_reject_text_edits() {
     assert!(
         error(
             r.store
-                .write(&id("i3"), Some("late".into()), None, r.tick())
+                .write(&id("i3"), Some("late".into()), None, None, r.tick())
         )
         .contains("fixed")
     );
@@ -908,14 +921,14 @@ fn a_label_changes_like_text_and_leaves_everything_else_alone() {
     // The same label is no change, for an unfinished Entity.
     assert!(
         r.store
-            .set_label(&id("i3"), Label::Feat, r.tick())
+            .set_label(&id("i3"), Label::Feat, None, r.tick())
             .unwrap()
             .is_none()
     );
     let head = r.head("i3");
     let record = r
         .store
-        .set_label(&id("i3"), Label::Bug, r.tick())
+        .set_label(&id("i3"), Label::Bug, None, r.tick())
         .unwrap()
         .unwrap();
     assert_eq!(record.kind, RecordKind::Label);
@@ -941,7 +954,7 @@ fn a_label_changes_like_text_and_leaves_everything_else_alone() {
         let other = *Label::ALL.iter().find(|label| **label != own).unwrap();
         for label in [own, other] {
             assert!(
-                error(r.store.set_label(&id(name), label, r.tick()))
+                error(r.store.set_label(&id(name), label, None, r.tick()))
                     .contains("terminal label is fixed"),
                 "{name} {label}"
             );
@@ -1151,7 +1164,7 @@ fn registration_and_conversion_never_add_a_violation() {
     let mut r1 = Replica::from("r1", &shared.store);
     let convert = r0
         .store
-        .convert(&id("i"), Kind::Group, r0.tick())
+        .convert(&id("i"), Kind::Group, None, r0.tick())
         .unwrap()
         .unwrap();
     let converted = insert(&mut r0.store, convert);
@@ -1165,7 +1178,7 @@ fn registration_and_conversion_never_add_a_violation() {
             ViolationKind::UnadoptedAncestor
         ])
     );
-    assert!(error(r1.store.convert(&id("i"), Kind::Group, r1.tick())).contains("violation"));
+    assert!(error(r1.store.convert(&id("i"), Kind::Group, None, r1.tick())).contains("violation"));
     r1.sync_one(&r0, &converted);
     assert_eq!(
         r1.violations("i3"),
@@ -1308,4 +1321,62 @@ fn unsettled_references_fail_the_prerequisites_without_being_misreported() {
     assert!(
         error(view.check_operation(&id("i1"), Start)).contains("dependencies must be Completed")
     );
+}
+
+#[test]
+fn single_edit_apis_validate_reasons_before_noops_and_preserve_them_in_records() {
+    fn edit(r: &Replica, operation: usize, reason: Option<String>) -> Result<Option<Record>> {
+        let target = id("i3");
+        match operation {
+            0 => r
+                .store
+                .write(&target, Some("revised".into()), None, reason, r.tick()),
+            1 => r.store.set_label(&target, Label::Bug, reason, r.tick()),
+            2 => r
+                .store
+                .set_parent(&target, Some(id("g2")), reason, r.tick()),
+            3 => r.store.add_dependency(&target, &id("g2"), reason, r.tick()),
+            4 => r
+                .store
+                .remove_dependency(&target, &id("g2"), reason, r.tick()),
+            5 => r
+                .store
+                .set_condition(&target, Some("exit 2".into()), reason, r.tick()),
+            6 => r.store.convert(&target, Kind::Group, reason, r.tick()),
+            _ => unreachable!(),
+        }
+    }
+    for operation in 0..7 {
+        let mut r = Replica::new("r0");
+        if operation == 4 {
+            r.add_dep("i3", "g2");
+        }
+        let reason = "理".repeat(500);
+        let invalid = [
+            "".to_owned(),
+            " ".into(),
+            "a\nb".into(),
+            "a\rb".into(),
+            "a\tb".into(),
+            "a\u{7f}b".into(),
+            "理".repeat(501),
+        ];
+        for changed in [false, true] {
+            let before = r.store.clone();
+            for invalid in &invalid {
+                assert!(error(edit(&r, operation, Some(invalid.clone()))).contains("reason"));
+                assert_eq!(r.store, before);
+            }
+            let result = edit(&r, operation, Some(reason.clone())).unwrap();
+            if changed {
+                assert!(result.is_none());
+                assert_eq!(r.store, before);
+            } else {
+                let record = result.unwrap();
+                assert_eq!(record.reason.as_deref(), Some(reason.as_str()));
+                assert_eq!(edit(&r, operation, None).unwrap().unwrap().reason, None);
+                insert(&mut r.store, record);
+            }
+        }
+    }
 }

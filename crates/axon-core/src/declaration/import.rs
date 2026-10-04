@@ -482,11 +482,13 @@ impl Declaration {
             if *existing {
                 let old = scratch.current(id)?.clone();
                 if old.parent != desired.parent {
-                    let record = scratch.store.set_parent(id, None, context.clone());
+                    let record = scratch.store.set_parent(id, None, None, context.clone());
                     core(id, "parent", scratch.apply(record))?;
                 }
                 for target in old.needs.difference(&desired.needs) {
-                    let record = scratch.store.remove_dependency(id, target, context.clone());
+                    let record = scratch
+                        .store
+                        .remove_dependency(id, target, None, context.clone());
                     core(id, "needs", scratch.apply(record))?;
                 }
             }
@@ -529,27 +531,34 @@ impl Declaration {
                 let description =
                     (old.description != desired.description).then(|| desired.description.clone());
                 if title.is_some() || description.is_some() {
-                    let record = scratch.store.write(id, title, description, context.clone());
+                    let record = scratch
+                        .store
+                        .write(id, title, description, None, context.clone());
                     core(id, "title/description", scratch.apply(record))?;
                 }
                 if scratch.current(id)?.label != desired.label {
-                    let record = scratch.store.set_label(id, desired.label, context.clone());
+                    let record = scratch
+                        .store
+                        .set_label(id, desired.label, None, context.clone());
                     core(id, "label", scratch.apply(record))?;
                 }
             }
         }
         for (_, id, _, desired) in &records {
             if scratch.current(id)?.parent != desired.parent {
-                let record = scratch
-                    .store
-                    .set_parent(id, desired.parent.clone(), context.clone());
+                let record =
+                    scratch
+                        .store
+                        .set_parent(id, desired.parent.clone(), None, context.clone());
                 core(id, "parent", scratch.apply(record))?;
             }
         }
         for (_, id, _, desired) in &records {
             for target in &desired.needs {
                 if !scratch.current(id)?.needs.contains(target) {
-                    let record = scratch.store.add_dependency(id, target, context.clone());
+                    let record = scratch
+                        .store
+                        .add_dependency(id, target, None, context.clone());
                     core(id, "needs", scratch.apply(record))?;
                 }
             }

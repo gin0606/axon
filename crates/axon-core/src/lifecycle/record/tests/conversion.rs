@@ -18,7 +18,7 @@ fn issue_started_and_released_then_converted_to_group_is_a_valid_history() {
     r.op("i3", Release);
     let convert = r
         .store
-        .convert(&id("i3"), Kind::Group, r.tick())
+        .convert(&id("i3"), Kind::Group, None, r.tick())
         .unwrap()
         .unwrap();
     let convert = insert(&mut r.store, convert);
@@ -60,7 +60,7 @@ fn group_completed_and_reopened_then_converted_to_issue_is_a_valid_history() {
     r.op("g2", Reopen);
     let convert = r
         .store
-        .convert(&id("g2"), Kind::Issue, r.tick())
+        .convert(&id("g2"), Kind::Issue, None, r.tick())
         .unwrap()
         .unwrap();
     let convert = insert(&mut r.store, convert);
@@ -77,19 +77,21 @@ fn group_completed_and_reopened_then_converted_to_issue_is_a_valid_history() {
 fn conversion_is_rejected_while_in_progress_terminal_or_with_children() {
     let mut r = Replica::new("r0");
     r.op("i3", Start);
-    assert!(error(r.store.convert(&id("i3"), Kind::Group, r.tick())).contains("release"));
+    assert!(error(r.store.convert(&id("i3"), Kind::Group, None, r.tick())).contains("release"));
     r.op("i3", Complete);
     assert!(
-        error(r.store.convert(&id("i3"), Kind::Group, r.tick())).contains("reopen or reconsider")
+        error(r.store.convert(&id("i3"), Kind::Group, None, r.tick()))
+            .contains("reopen or reconsider")
     );
-    let rejected = error(r.store.convert(&id("g0"), Kind::Issue, r.tick()));
+    let rejected = error(r.store.convert(&id("g0"), Kind::Issue, None, r.tick()));
     assert!(
         rejected.contains("children") && rejected.contains("i1"),
         "{rejected}"
     );
     r.op("g2", Cancel);
     assert!(
-        error(r.store.convert(&id("g2"), Kind::Issue, r.tick())).contains("reopen or reconsider")
+        error(r.store.convert(&id("g2"), Kind::Issue, None, r.tick()))
+            .contains("reopen or reconsider")
     );
 }
 

@@ -13,6 +13,7 @@ fn store_with_every_kind() -> (Store, Vec<RecordId>) {
             &id("i3"),
             Some("edited".into()),
             Some("desc".into()),
+            None,
             r.tick(),
         )
         .unwrap()
@@ -20,7 +21,7 @@ fn store_with_every_kind() -> (Store, Vec<RecordId>) {
     ids.push(insert(&mut r.store, edit));
     let label = r
         .store
-        .set_label(&id("i3"), Label::Docs, r.tick())
+        .set_label(&id("i3"), Label::Docs, None, r.tick())
         .unwrap()
         .unwrap();
     ids.push(insert(&mut r.store, label));
@@ -28,7 +29,7 @@ fn store_with_every_kind() -> (Store, Vec<RecordId>) {
     ids.push(r.add_dep("i3", "g2"));
     let condition = r
         .store
-        .set_condition(&id("i3"), Some("exit 0".into()), r.tick())
+        .set_condition(&id("i3"), Some("exit 0".into()), None, r.tick())
         .unwrap()
         .unwrap();
     ids.push(insert(&mut r.store, condition));
@@ -51,7 +52,7 @@ fn store_with_every_kind() -> (Store, Vec<RecordId>) {
     ids.push(r.op("i3", Release));
     let convert = r
         .store
-        .convert(&id("i3"), Kind::Group, r.tick())
+        .convert(&id("i3"), Kind::Group, None, r.tick())
         .unwrap()
         .unwrap();
     ids.push(insert(&mut r.store, convert));
@@ -818,7 +819,7 @@ fn wrong_entity_or_kind_parent_is_rejected() {
         } else {
             let conversion = replica
                 .store
-                .convert(&id("i3"), Kind::Group, replica.tick())
+                .convert(&id("i3"), Kind::Group, None, replica.tick())
                 .unwrap()
                 .unwrap();
             insert(&mut replica.store, conversion)

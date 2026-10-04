@@ -62,7 +62,7 @@ impl Scenario {
     fn set_parent(&mut self, name: &str, parent: &str) {
         let record = self
             .store
-            .set_parent(&id(name), Some(id(parent)), self.tick())
+            .set_parent(&id(name), Some(id(parent)), None, self.tick())
             .unwrap()
             .unwrap();
         self.store.insert(Entry::Record(record)).unwrap();
@@ -70,7 +70,7 @@ impl Scenario {
     fn add_dependency(&mut self, name: &str, target: &str) {
         let record = self
             .store
-            .add_dependency(&id(name), &id(target), self.tick())
+            .add_dependency(&id(name), &id(target), None, self.tick())
             .unwrap()
             .unwrap();
         self.store.insert(Entry::Record(record)).unwrap();
