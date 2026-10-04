@@ -136,6 +136,7 @@ fn text_edit_contract_and_notes_hold_for_issues_and_groups() {
                 &id("item"),
                 Some(format!("changed {step}")),
                 Some(format!("new description {step}")),
+                None,
                 r.tick(),
             );
             assert_eq!(result.is_ok(), editable, "{kind:?} {:?}", before.lifecycle);
@@ -168,6 +169,7 @@ fn invalid_operations_and_empty_information_are_rejected() {
                 &id("item"),
                 Some(" \n".into()),
                 Some("must not persist".into()),
+                None,
                 r.tick()
             )
             .is_err()
@@ -359,7 +361,7 @@ fn reopen_returns_to_not_started_and_waits_for_completed_dependents() {
     // Reopened work is editable, keeps its dependencies and starts again.
     let edit = r
         .store
-        .write(&id("base"), Some("revised".into()), None, r.tick())
+        .write(&id("base"), Some("revised".into()), None, None, r.tick())
         .unwrap()
         .expect("a change");
     insert(&mut r.store, edit);
@@ -556,7 +558,7 @@ fn condition_edits_are_atomic_and_do_not_change_lifecycle_or_records() {
             let head = r.head("item");
             let record = r
                 .store
-                .set_condition(&id("item"), command.clone(), r.tick())
+                .set_condition(&id("item"), command.clone(), None, r.tick())
                 .unwrap()
                 .expect("a change");
             // The condition is its own record; lifecycle and every other field stay.
@@ -574,12 +576,12 @@ fn condition_edits_are_atomic_and_do_not_change_lifecycle_or_records() {
         }
         assert!(
             r.store
-                .set_condition(&id("item"), Some("  ".into()), r.tick())
+                .set_condition(&id("item"), Some("  ".into()), None, r.tick())
                 .is_err()
         );
         assert!(
             r.store
-                .set_condition(&id("missing"), None, r.tick())
+                .set_condition(&id("missing"), None, None, r.tick())
                 .is_err()
         );
     }

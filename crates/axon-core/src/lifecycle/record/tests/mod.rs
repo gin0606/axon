@@ -131,33 +131,35 @@ impl Replica {
         let context = self.tick();
         let record = self
             .store
-            .set_parent(&id(name), parent.map(id), context)
+            .set_parent(&id(name), parent.map(id), None, context)
             .unwrap()
             .expect("a change");
         insert(&mut self.store, record)
     }
     fn try_move(&mut self, name: &str, parent: Option<&str>) -> Result<Option<Record>> {
         let context = self.tick();
-        self.store.set_parent(&id(name), parent.map(id), context)
+        self.store
+            .set_parent(&id(name), parent.map(id), None, context)
     }
     fn add_dep(&mut self, name: &str, target: &str) -> RecordId {
         let context = self.tick();
         let record = self
             .store
-            .add_dependency(&id(name), &id(target), context)
+            .add_dependency(&id(name), &id(target), None, context)
             .unwrap()
             .expect("a change");
         insert(&mut self.store, record)
     }
     fn try_add_dep(&mut self, name: &str, target: &str) -> Result<Option<Record>> {
         let context = self.tick();
-        self.store.add_dependency(&id(name), &id(target), context)
+        self.store
+            .add_dependency(&id(name), &id(target), None, context)
     }
     fn remove_dep(&mut self, name: &str, target: &str) -> RecordId {
         let context = self.tick();
         let record = self
             .store
-            .remove_dependency(&id(name), &id(target), context)
+            .remove_dependency(&id(name), &id(target), None, context)
             .unwrap()
             .expect("a change");
         insert(&mut self.store, record)
@@ -165,7 +167,7 @@ impl Replica {
     fn try_remove_dep(&mut self, name: &str, target: &str) -> Result<Option<Record>> {
         let context = self.tick();
         self.store
-            .remove_dependency(&id(name), &id(target), context)
+            .remove_dependency(&id(name), &id(target), None, context)
     }
     fn create(
         &mut self,

@@ -48,10 +48,12 @@ impl Store {
         id: &EntityId,
         title: Option<String>,
         description: Option<String>,
+        reason: Option<String>,
         context: Context,
     ) -> Result<Option<Record>> {
+        validate_reason(&reason)?;
         let view = self.settled_view()?;
-        write_in(&view, id, title, description, context)
+        write_in(&view, id, title, description, reason, context)
     }
     /// Sets the label of an unfinished Entity. None when unchanged; a terminal Entity is
     /// rejected before that, even for its own label.
@@ -59,18 +61,22 @@ impl Store {
         &self,
         id: &EntityId,
         label: Label,
+        reason: Option<String>,
         context: Context,
     ) -> Result<Option<Record>> {
+        validate_reason(&reason)?;
         let view = self.settled_view()?;
-        set_label_in(&view, id, label, context)
+        set_label_in(&view, id, label, reason, context)
     }
     /// Sets or clears the condition command without evaluating it. None when unchanged.
     pub fn set_condition(
         &self,
         id: &EntityId,
         command: Option<String>,
+        reason: Option<String>,
         context: Context,
     ) -> Result<Option<Record>> {
+        validate_reason(&reason)?;
         let view = self.settled_view()?;
         let current = view.require_settled(id)?;
         if current.condition == command {
@@ -86,7 +92,7 @@ impl Store {
             id,
             RecordKind::Condition,
             after,
-            None,
+            reason,
             context,
         )))
     }
@@ -96,10 +102,12 @@ impl Store {
         &self,
         id: &EntityId,
         parent: Option<EntityId>,
+        reason: Option<String>,
         context: Context,
     ) -> Result<Option<Record>> {
+        validate_reason(&reason)?;
         let view = self.settled_view()?;
-        set_parent_in(self, &view, id, parent, context)
+        set_parent_in(self, &view, id, parent, reason, context)
     }
     /// Adds a dependency. None when present. The result may not add a violation nor put the
     /// new edge on a completion cycle, even between Entities already on one.
@@ -107,23 +115,34 @@ impl Store {
         &self,
         id: &EntityId,
         target: &EntityId,
+        reason: Option<String>,
         context: Context,
     ) -> Result<Option<Record>> {
+        validate_reason(&reason)?;
         let view = self.settled_view()?;
-        add_dependency_in(self, &view, id, target, context)
+        add_dependency_in(self, &view, id, target, reason, context)
     }
     pub fn remove_dependency(
         &self,
         id: &EntityId,
         target: &EntityId,
+        reason: Option<String>,
         context: Context,
     ) -> Result<Option<Record>> {
+        validate_reason(&reason)?;
         let view = self.settled_view()?;
-        remove_dependency_in(&view, id, target, context)
+        remove_dependency_in(&view, id, target, reason, context)
     }
     /// Converts between Issue and Group. None when the Entity already has that kind. The
     /// result may not add a violation.
-    pub fn convert(&self, id: &EntityId, kind: Kind, context: Context) -> Result<Option<Record>> {
+    pub fn convert(
+        &self,
+        id: &EntityId,
+        kind: Kind,
+        reason: Option<String>,
+        context: Context,
+    ) -> Result<Option<Record>> {
+        validate_reason(&reason)?;
         let view = self.settled_view()?;
         let current = view.require_settled(id)?;
         if current.kind == kind {
@@ -151,7 +170,7 @@ impl Store {
             kind,
             ..current.clone()
         };
-        let record = follow(&view, id, RecordKind::Convert, after, None, context);
+        let record = follow(&view, id, RecordKind::Convert, after, reason, context);
         without_new_violations(self, &view, record).map(Some)
     }
     /// The final value `axon import apply` gives an existing Entity, validated as the sequence
@@ -185,23 +204,30 @@ impl Store {
         let title = (before.title != title).then_some(title);
         let description = (before.description != description).then_some(description);
         if title.is_some() || description.is_some() {
-            let record = write_in(&view, id, title, description, context.clone())?;
+            let record = write_in(&view, id, title, description, None, context.clone())?;
             apply(&mut scratch, record)?;
         }
         if before.label != label {
-            let record = set_label_in(&scratch.view()?, id, label, context.clone())?;
+            let record = set_label_in(&scratch.view()?, id, label, None, context.clone())?;
             apply(&mut scratch, record)?;
         }
         for target in before.needs.difference(&needs) {
             let view = scratch.view()?;
-            let record = remove_dependency_in(&view, id, target, context.clone())?;
+            let record = remove_dependency_in(&view, id, target, None, context.clone())?;
             apply(&mut scratch, record)?;
         }
-        let record = set_parent_in(&scratch, &scratch.view()?, id, parent, context.clone())?;
+        let record = set_parent_in(
+            &scratch,
+            &scratch.view()?,
+            id,
+            parent,
+            None,
+            context.clone(),
+        )?;
         apply(&mut scratch, record)?;
         for target in needs.difference(&before.needs) {
             let view = scratch.view()?;
-            let record = add_dependency_in(&scratch, &view, id, target, context.clone())?;
+            let record = add_dependency_in(&scratch, &view, id, target, None, context.clone())?;
             apply(&mut scratch, record)?;
         }
         let after = scratch.view()?.require_settled(id)?.clone();
@@ -458,6 +484,7 @@ fn write_in(
     id: &EntityId,
     title: Option<String>,
     description: Option<String>,
+    reason: Option<String>,
     context: Context,
 ) -> Result<Option<Record>> {
     let current = view.require_settled(id)?;
@@ -480,7 +507,7 @@ fn write_in(
         id,
         RecordKind::Edit,
         after,
-        None,
+        reason,
         context,
     )))
 }
@@ -489,6 +516,7 @@ fn set_label_in(
     view: &View,
     id: &EntityId,
     label: Label,
+    reason: Option<String>,
     context: Context,
 ) -> Result<Option<Record>> {
     let current = view.require_settled(id)?;
@@ -507,7 +535,7 @@ fn set_label_in(
         id,
         RecordKind::Label,
         after,
-        None,
+        reason,
         context,
     )))
 }
@@ -517,6 +545,7 @@ fn set_parent_in(
     view: &View,
     id: &EntityId,
     parent: Option<EntityId>,
+    reason: Option<String>,
     context: Context,
 ) -> Result<Option<Record>> {
     let current = view.require_settled(id)?;
@@ -549,7 +578,7 @@ fn set_parent_in(
         parent,
         ..current.clone()
     };
-    let record = follow(view, id, RecordKind::Parent, after, None, context);
+    let record = follow(view, id, RecordKind::Parent, after, reason, context);
     without_new_violations_or_cycle(store, view, record).map(Some)
 }
 
@@ -558,6 +587,7 @@ fn add_dependency_in(
     view: &View,
     id: &EntityId,
     target: &EntityId,
+    reason: Option<String>,
     context: Context,
 ) -> Result<Option<Record>> {
     let current = view.require_settled(id)?;
@@ -570,7 +600,7 @@ fn add_dependency_in(
     require_dependency_target(view, id, target)?;
     let mut after = current.clone();
     after.needs.insert(target.clone());
-    let record = follow(view, id, RecordKind::Dependency, after, None, context);
+    let record = follow(view, id, RecordKind::Dependency, after, reason, context);
     without_new_violations_or_cycle(store, view, record).map(Some)
 }
 
@@ -578,6 +608,7 @@ fn remove_dependency_in(
     view: &View,
     id: &EntityId,
     target: &EntityId,
+    reason: Option<String>,
     context: Context,
 ) -> Result<Option<Record>> {
     let current = view.require_settled(id)?;
@@ -594,7 +625,7 @@ fn remove_dependency_in(
         id,
         RecordKind::Dependency,
         after,
-        None,
+        reason,
         context,
     )))
 }

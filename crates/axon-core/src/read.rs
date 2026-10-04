@@ -1074,7 +1074,7 @@ mod tests {
         fn add_dependency(&mut self, name: &str, target: &str) {
             let record = self
                 .store
-                .add_dependency(&id(name), &id(target), self.tick())
+                .add_dependency(&id(name), &id(target), None, self.tick())
                 .unwrap()
                 .unwrap();
             self.insert(record);
@@ -1082,7 +1082,7 @@ mod tests {
         fn set_condition(&mut self, name: &str, command: Option<&str>) {
             let record = self
                 .store
-                .set_condition(&id(name), command.map(String::from), self.tick())
+                .set_condition(&id(name), command.map(String::from), None, self.tick())
                 .unwrap()
                 .unwrap();
             self.insert(record);
@@ -1121,7 +1121,7 @@ mod tests {
         f.create("item", Kind::Issue, None, &[], 1);
         let record = f
             .store
-            .set_label(&id("item"), crate::lifecycle::Label::Bug, f.tick())
+            .set_label(&id("item"), crate::lifecycle::Label::Bug, None, f.tick())
             .unwrap()
             .unwrap();
         f.insert(record);
@@ -1850,11 +1850,11 @@ mod tests {
             }
             f.create("leaf", Kind::Issue, Some(&format!("group-{}", length - 1)), &[], length as i64 + 1);
             let mut other = Fixture { store: f.store.clone(), clock: std::cell::Cell::new(500) };
-            let first = other.store.set_parent(&id("group-0"), Some(id(&format!("group-{}", length - 1))), other.tick()).unwrap().unwrap();
+            let first = other.store.set_parent(&id("group-0"), Some(id(&format!("group-{}", length - 1))), None, other.tick()).unwrap().unwrap();
             other.insert(first);
             let last = format!("group-{}", length - 1);
             let before_last = format!("group-{}", length - 2);
-            let second = f.store.set_parent(&id(&last), Some(id(&before_last)), f.tick()).unwrap().unwrap();
+            let second = f.store.set_parent(&id(&last), Some(id(&before_last)), None, f.tick()).unwrap().unwrap();
             f.insert(second);
             f.store.absorb(&other.store);
             let derived = f.derived();
@@ -1918,9 +1918,9 @@ mod tests {
             let broken_id = id(&format!("group-{broken}"));
             if mode == 1 {
                 let mut other = Fixture { store: f.store.clone(), clock: std::cell::Cell::new(500) };
-                let theirs = other.store.write(&broken_id, Some("theirs".into()), None, other.tick()).unwrap().unwrap();
+                let theirs = other.store.write(&broken_id, Some("theirs".into()), None, None, other.tick()).unwrap().unwrap();
                 other.insert(theirs);
-                let ours = f.store.write(&broken_id, Some("ours".into()), None, f.tick()).unwrap().unwrap();
+                let ours = f.store.write(&broken_id, Some("ours".into()), None, None, f.tick()).unwrap().unwrap();
                 f.insert(ours);
                 f.store.absorb(&other.store);
             } else if mode == 0 {
@@ -2605,7 +2605,13 @@ mod tests {
         };
         let record = other
             .store
-            .write(&id("plan"), Some("renamed".into()), None, other.tick())
+            .write(
+                &id("plan"),
+                Some("renamed".into()),
+                None,
+                None,
+                other.tick(),
+            )
             .unwrap()
             .unwrap();
         other.insert(record);
@@ -2729,13 +2735,19 @@ mod tests {
         };
         let record = other
             .store
-            .write(&id("outer"), Some("theirs".into()), None, other.tick())
+            .write(
+                &id("outer"),
+                Some("theirs".into()),
+                None,
+                None,
+                other.tick(),
+            )
             .unwrap()
             .unwrap();
         other.insert(record);
         let record = f
             .store
-            .write(&id("outer"), Some("ours".into()), None, f.tick())
+            .write(&id("outer"), Some("ours".into()), None, None, f.tick())
             .unwrap()
             .unwrap();
         f.insert(record);
@@ -2840,14 +2852,20 @@ mod tests {
         other.perform("mid", Operation::Withdraw);
         let record = other
             .store
-            .write(&id("outer"), Some("theirs".into()), None, other.tick())
+            .write(
+                &id("outer"),
+                Some("theirs".into()),
+                None,
+                None,
+                other.tick(),
+            )
             .unwrap()
             .unwrap();
         other.insert(record);
         f.perform("work", Operation::Start);
         let record = f
             .store
-            .write(&id("outer"), Some("ours".into()), None, f.tick())
+            .write(&id("outer"), Some("ours".into()), None, None, f.tick())
             .unwrap()
             .unwrap();
         f.insert(record);
@@ -2888,13 +2906,13 @@ mod tests {
         };
         let record = other
             .store
-            .set_parent(&id("a"), Some(id("b")), other.tick())
+            .set_parent(&id("a"), Some(id("b")), None, other.tick())
             .unwrap()
             .unwrap();
         other.insert(record);
         let record = f
             .store
-            .set_parent(&id("b"), Some(id("a")), f.tick())
+            .set_parent(&id("b"), Some(id("a")), None, f.tick())
             .unwrap()
             .unwrap();
         f.insert(record);

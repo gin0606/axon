@@ -94,6 +94,9 @@ To read saved information without running any condition, add --skip-conditions; 
         command: Notes,
     },
     /// Read the records of an Entity: state changes, edits, relationships, conversions and resolutions
+    #[command(
+        after_help = "Currently includes saved reasons for every displayed record kind, including creation and import, but excludes Notes. These display choices may change when history presentation is redesigned."
+    )]
     Log {
         id: String,
         /// Include the stored recorder data as JSON
@@ -118,13 +121,15 @@ To read saved information without running any condition, add --skip-conditions; 
     Reopen(Change),
     /// Convert an unstarted Entity between Issue and Group without changing anything else
     #[command(
-        after_help = "Example: axon convert ID --kind group\nOnly an Undecided or NotStarted Entity converts; release an InProgress Issue first, and a Group with children is not converted to an Issue. Lifecycle, parent, dependencies, text, label, condition and Notes stay as they are. Converting to the kind the Entity already has is No changes. The kind is not a lifecycle transition, so there is no --reason.\nA Group's description states its overall outcomes and what its final review confirms, so reread an Issue's description after converting it."
+        after_help = "Example: axon convert ID --kind group\nOnly an Undecided or NotStarted Entity converts; release an InProgress Issue first, and a Group with children is not converted to an Issue. Lifecycle, parent, dependencies, text, label, condition and Notes stay as they are. Converting to the kind the Entity already has is No changes.\nA Group's description states its overall outcomes and what its final review confirms, so reread an Issue's description after converting it."
     )]
     Convert {
         id: String,
         /// The kind to convert to
         #[arg(long, value_enum)]
         kind: EntityKind,
+        #[arg(short, long, help = REASON_HELP)]
+        reason: Option<String>,
     },
     /// List conflicted Entities with their heads, or resolve one by taking a head's value
     #[command(
@@ -136,8 +141,7 @@ To read saved information without running any condition, add --skip-conditions; 
         /// The complete record ID of the head whose value the Entity takes
         #[arg(long, value_name = "RECORD_ID", requires = "id")]
         head: Option<String>,
-        /// Why this head is taken: one line, stored in the resolve record like other reasons
-        #[arg(short, long, requires = "head")]
+        #[arg(short, long, requires = "head", help = REASON_HELP)]
         reason: Option<String>,
     },
     /// Change the label that classifies the kind of work, without changing lifecycle
@@ -153,6 +157,8 @@ To read saved information without running any condition, add --skip-conditions; 
         title: Option<String>,
         #[command(flatten)]
         body: Body,
+        #[arg(short, long, help = REASON_HELP)]
+        reason: Option<String>,
     },
     /// Add or remove explicit dependencies
     Dep {
@@ -238,9 +244,15 @@ pub(super) enum Condition {
         id: String,
         #[arg(long)]
         command: String,
+        #[arg(short, long, help = REASON_HELP)]
+        reason: Option<String>,
     },
     /// Remove the condition without changing lifecycle
-    Unset { id: String },
+    Unset {
+        id: String,
+        #[arg(short, long, help = REASON_HELP)]
+        reason: Option<String>,
+    },
 }
 #[derive(Args)]
 pub(super) struct Body {
@@ -295,9 +307,10 @@ pub(super) struct Create {
 #[derive(Args)]
 pub(super) struct Change {
     pub(super) id: String,
-    #[arg(short, long)]
+    #[arg(short, long, help = REASON_HELP)]
     pub(super) reason: Option<String>,
 }
+const REASON_HELP: &str = "Optional decision reason, saved with the operation and readable in axon log. One nonblank line, at most 500 characters; no control characters. No changes means the reason is not saved; use axon note add to record it alone. Keep the current work definition in the description and supporting detail in Notes; a reason does not replace either.";
 /// The label help shared by the commands that take one.
 const LABEL_HELP: &str = "Every Entity has exactly one label from a fixed set: bug, feat, chore, docs, test, refactor, spike.
 A label classifies the kind of work; it is not a priority and changes no lifecycle rule, candidate list or situation. A Group's label is the main kind of work across the Group.
@@ -310,6 +323,8 @@ pub(super) enum LabelCommand {
         id: String,
         #[arg(value_enum)]
         value: LabelValue,
+        #[arg(short, long, help = REASON_HELP)]
+        reason: Option<String>,
     },
 }
 /// A label given on the command line, spelled as the common core spells it.
@@ -347,9 +362,15 @@ pub(super) enum Parent {
         id: String,
         #[arg(long)]
         parent: String,
+        #[arg(short, long, help = REASON_HELP)]
+        reason: Option<String>,
     },
     /// Remove the parent Group
-    Unset { id: String },
+    Unset {
+        id: String,
+        #[arg(short, long, help = REASON_HELP)]
+        reason: Option<String>,
+    },
 }
 #[derive(Subcommand)]
 pub(super) enum Dependency {
@@ -357,11 +378,15 @@ pub(super) enum Dependency {
         id: String,
         #[arg(long)]
         needs: String,
+        #[arg(short, long, help = REASON_HELP)]
+        reason: Option<String>,
     },
     Rm {
         id: String,
         #[arg(long)]
         needs: String,
+        #[arg(short, long, help = REASON_HELP)]
+        reason: Option<String>,
     },
 }
 #[derive(Subcommand)]
@@ -533,7 +558,7 @@ pub fn operation_label(command: &Command) -> String {
             command: Condition::Set { id, .. },
         } => ("condition set", Some(id)),
         Command::Condition {
-            command: Condition::Unset { id },
+            command: Condition::Unset { id, .. },
         } => ("condition unset", Some(id)),
         Command::Dep {
             command: Dependency::Add { id, .. },
@@ -545,7 +570,7 @@ pub fn operation_label(command: &Command) -> String {
             command: Parent::Set { id, .. },
         } => ("parent set", Some(id)),
         Command::Parent {
-            command: Parent::Unset { id },
+            command: Parent::Unset { id, .. },
         } => ("parent unset", Some(id)),
         Command::Note {
             command: Notes::Add { id, .. },

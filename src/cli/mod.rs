@@ -81,7 +81,12 @@ fn run(command: Command) -> Result<Output> {
             command: Notes::Add { id, message, file },
         } => write::add_note(id, message, file),
         Command::Capture(args) => write::capture(args),
-        Command::Write { id, title, body } => write::write(id, title, body),
+        Command::Write {
+            id,
+            title,
+            body,
+            reason,
+        } => write::write(id, title, body, reason),
         Command::Label { command } => write::label(command),
         Command::Parent { command } => write::parent(command),
         Command::Condition { command } => write::condition(command),
@@ -94,7 +99,7 @@ fn run(command: Command) -> Result<Output> {
         Command::Cancel(args) => write::transition(args, Operation::Cancel),
         Command::Reconsider(args) => write::transition(args, Operation::Reconsider),
         Command::Reopen(args) => write::transition(args, Operation::Reopen),
-        Command::Convert { id, kind } => write::convert(id, kind.kind()),
+        Command::Convert { id, kind, reason } => write::convert(id, kind.kind(), reason),
         Command::Resolve { id, head, reason } => match (id, head) {
             (Some(id), Some(head)) => write::resolve_conflict(id, head, reason),
             (id, None) => read::conflicts(id),

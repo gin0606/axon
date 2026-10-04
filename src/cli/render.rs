@@ -502,10 +502,10 @@ fn describe(entry: &read::RecordEntry<'_>) -> String {
         .map(|r| format!("  Reason: {}", display::line(r)))
         .unwrap_or_default();
     let before = entry.before;
-    match &record.kind {
+    let description = match &record.kind {
         RecordKind::Created => format!("Created: {:?}", after.lifecycle),
         RecordKind::Transition(_) => format!(
-            "{} → {:?}{reason}",
+            "{} → {:?}",
             before
                 .map(|b| format!("{:?}", b.lifecycle))
                 .unwrap_or_else(|| "unknown".into()),
@@ -524,7 +524,7 @@ fn describe(entry: &read::RecordEntry<'_>) -> String {
                 None => vec!["title/description"],
             };
             if changed.is_empty() {
-                format!("Edited: no field changes{reason}")
+                "Edited: no field changes".into()
             } else {
                 format!("Edited: {}", changed.join(", "))
             }
@@ -585,10 +585,11 @@ fn describe(entry: &read::RecordEntry<'_>) -> String {
             format!("Declaration applied: {}", changed.join(", "))
         }
         RecordKind::Resolve { chosen } => format!(
-            "Resolved: {chosen}  {:?}  {:?}  {}{reason}",
+            "Resolved: {chosen}  {:?}  {:?}  {}",
             after.lifecycle, after.kind, after.label
         ),
-    }
+    };
+    format!("{description}{reason}")
 }
 /// A conversion as `convert` confirms it and `log` shows it.
 pub(super) fn converted(before: Kind, after: Kind) -> String {
@@ -971,6 +972,78 @@ pub(super) fn storage_report(view: &read::View<'_>) -> StorageReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn current_log_renders_reasons_for_every_record_kind() {
+        use axon::lifecycle::{Label, Lifecycle, Operation, record::Record};
+        let record_id = RecordId::of(b"record");
+        let before = Current {
+            kind: Kind::Issue,
+            lifecycle: Lifecycle::NotStarted,
+            owner: None,
+            title: "Before".into(),
+            description: String::new(),
+            label: Label::Chore,
+            condition: None,
+            parent: None,
+            needs: Default::default(),
+        };
+        let kinds = [
+            (RecordKind::Created, "Created:"),
+            (RecordKind::Transition(Operation::Accept), "NotStarted →"),
+            (RecordKind::Edit, "Edited:"),
+            (RecordKind::Label, "Label set:"),
+            (RecordKind::Parent, "Parent:"),
+            (RecordKind::Dependency, "Dependency added:"),
+            (RecordKind::Condition, "Condition unset"),
+            (RecordKind::Convert, "Converted:"),
+            (RecordKind::Import, "Declaration applied:"),
+            (
+                RecordKind::Resolve {
+                    chosen: record_id.clone(),
+                },
+                "Resolved:",
+            ),
+        ];
+        for (kind, prefix) in kinds {
+            let mut record = Record {
+                entity: "t-item".to_owned().try_into().unwrap(),
+                kind,
+                parents: Default::default(),
+                at: chrono::Utc::now(),
+                recorder: None,
+                reason: None,
+                after: Current {
+                    title: "After".into(),
+                    needs: ["t-dep".to_owned().try_into().unwrap()].into(),
+                    ..before.clone()
+                },
+            };
+            for reason in [None, Some("why 日本語".to_owned())] {
+                record.reason = reason.clone();
+                for previous in [Some(&before), None, Some(&record.after)] {
+                    let line = describe(&read::RecordEntry {
+                        id: &record_id,
+                        record: &record,
+                        before: previous,
+                        concurrent_with_previous: false,
+                        parent_missing: previous.is_none(),
+                    });
+                    if previous == Some(&before) {
+                        assert!(line.starts_with(prefix), "{line}");
+                    }
+                    assert_eq!(
+                        line.matches("Reason:").count(),
+                        usize::from(reason.is_some()),
+                        "{line}"
+                    );
+                    if reason.is_some() {
+                        assert!(line.ends_with("  Reason: why 日本語"), "{line}");
+                    }
+                }
+            }
+        }
+    }
 
     fn table_row(indent: &str, continued: &str, cells: &[&str], title: &str) -> TableRow {
         TableRow {

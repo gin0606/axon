@@ -18,11 +18,18 @@ use std::{collections::BTreeSet, path::PathBuf};
 /// One ordinary mutation: resolve against the locked record set, produce at most one record,
 /// publish it and confirm from the result.
 fn mutate(
+    reason_supplied: bool,
     change: impl FnOnce(&Store, &View) -> Result<(Option<Record>, String)>,
 ) -> Result<Output> {
     let (_, mut store) = open()?;
     let (text, saved) = store.update(|_, records, view| {
-        let (record, text) = change(records, view)?;
+        let (record, mut text) = change(records, view)?;
+        if record.is_none() && reason_supplied {
+            text = format!(
+                "{}  Reason not saved; use axon note add to record it.\n",
+                text.trim_end()
+            );
+        }
         let saved = record.is_some();
         Ok((
             record.into_iter().map(Entry::Record).collect(),
@@ -156,16 +163,21 @@ pub(super) fn capture(args: Create) -> Result<Output> {
     Ok(output(text, true))
 }
 
-pub(super) fn write(value: String, title: Option<String>, body: Body) -> Result<Output> {
+pub(super) fn write(
+    value: String,
+    title: Option<String>,
+    body: Body,
+    reason: Option<String>,
+) -> Result<Output> {
     let body = body.read()?;
     if title.is_none() && body.is_none() {
         return Err(axon::Error::Invalid(
             "write requires --title, --description or --file".into(),
         ));
     }
-    mutate(|records, view| {
+    mutate(reason.is_some(), |records, view| {
         let id = resolve(view, &value)?;
-        let record = records.write(&id, title, body, context())?;
+        let record = records.write(&id, title, body, reason, context())?;
         let mut changes = Vec::new();
         if let Some(record) = &record {
             let before = view.current(&id).expect("settled Entity");
@@ -191,10 +203,11 @@ pub(super) fn label(command: LabelCommand) -> Result<Output> {
     let LabelCommand::Set {
         id: value,
         value: label,
+        reason,
     } = command;
-    mutate(|records, view| {
+    mutate(reason.is_some(), |records, view| {
         let id = resolve(view, &value)?;
-        let record = records.set_label(&id, label.0, context())?;
+        let record = records.set_label(&id, label.0, reason, context())?;
         let text = confirmation(
             &id,
             &format!(
@@ -235,14 +248,14 @@ pub(super) fn add_note(
     Ok(output(text, true))
 }
 pub(super) fn parent(command: Parent) -> Result<Output> {
-    let (value, parent) = match command {
-        Parent::Set { id, parent } => (id, Some(parent)),
-        Parent::Unset { id } => (id, None),
+    let (value, parent, reason) = match command {
+        Parent::Set { id, parent, reason } => (id, Some(parent), reason),
+        Parent::Unset { id, reason } => (id, None, reason),
     };
-    mutate(|records, view| {
+    mutate(reason.is_some(), |records, view| {
         let id = resolve(view, &value)?;
         let parent = parent.map(|p| resolve(view, &p)).transpose()?;
-        let record = records.set_parent(&id, parent.clone(), context())?;
+        let record = records.set_parent(&id, parent.clone(), reason, context())?;
         let text = confirmation(
             &id,
             &format!(
@@ -257,14 +270,18 @@ pub(super) fn parent(command: Parent) -> Result<Output> {
     })
 }
 pub(super) fn condition(command: Condition) -> Result<Output> {
-    let (value, command) = match command {
-        Condition::Set { id, command } => (id, Some(command)),
-        Condition::Unset { id } => (id, None),
+    let (value, command, reason) = match command {
+        Condition::Set {
+            id,
+            command,
+            reason,
+        } => (id, Some(command), reason),
+        Condition::Unset { id, reason } => (id, None, reason),
     };
-    mutate(|records, view| {
+    mutate(reason.is_some(), |records, view| {
         let id = resolve(view, &value)?;
         let unset = command.is_none();
-        let record = records.set_condition(&id, command, context())?;
+        let record = records.set_condition(&id, command, reason, context())?;
         let text = confirmation(
             &id,
             if record.is_none() {
@@ -279,11 +296,11 @@ pub(super) fn condition(command: Condition) -> Result<Output> {
     })
 }
 pub(super) fn dependency(command: Dependency) -> Result<Output> {
-    let (value, needs, add) = match command {
-        Dependency::Add { id, needs } => (id, needs, true),
-        Dependency::Rm { id, needs } => (id, needs, false),
+    let (value, needs, add, reason) = match command {
+        Dependency::Add { id, needs, reason } => (id, needs, true, reason),
+        Dependency::Rm { id, needs, reason } => (id, needs, false, reason),
     };
-    mutate(|records, view| {
+    mutate(reason.is_some(), |records, view| {
         let id = resolve(view, &value)?;
         // A removal names one of the Entity's own dependencies, which need not exist as an
         // Entity (a violation Git left behind); an addition names an Entity.
@@ -297,9 +314,9 @@ pub(super) fn dependency(command: Dependency) -> Result<Output> {
         };
 
         let record = if add {
-            records.add_dependency(&id, &needs, context())?
+            records.add_dependency(&id, &needs, reason, context())?
         } else {
-            records.remove_dependency(&id, &needs, context())?
+            records.remove_dependency(&id, &needs, reason, context())?
         };
         let result = match (add, record.is_some()) {
             (true, true) => "Dependency added:",
@@ -342,10 +359,10 @@ fn resolve_dependency(view: &View, id: &EntityId, value: &str) -> Result<Option<
         ))),
     }
 }
-pub(super) fn convert(value: String, kind: Kind) -> Result<Output> {
-    mutate(|records, view| {
+pub(super) fn convert(value: String, kind: Kind, reason: Option<String>) -> Result<Output> {
+    mutate(reason.is_some(), |records, view| {
         let id = resolve(view, &value)?;
-        let record = records.convert(&id, kind, context())?;
+        let record = records.convert(&id, kind, reason, context())?;
         let text = confirmation(
             &id,
             &match &record {
@@ -367,7 +384,7 @@ pub(super) fn resolve_conflict(
     head: String,
     reason: Option<String>,
 ) -> Result<Output> {
-    mutate(|records, view| {
+    mutate(reason.is_some(), |records, view| {
         let id = resolve(view, &value)?;
         let head = RecordId::try_from(head.as_str())?;
         let record = records.resolve(&id, &head, reason, context())?;
@@ -385,7 +402,7 @@ pub(super) fn resolve_conflict(
     })
 }
 pub(super) fn transition(args: Change, operation: Operation) -> Result<Output> {
-    mutate(|records, view| {
+    mutate(args.reason.is_some(), |records, view| {
         let id = resolve(view, &args.id)?;
         let record = records.perform(&id, operation, args.reason, context())?;
         let effect = match operation {

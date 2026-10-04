@@ -69,7 +69,7 @@ impl Fixture {
     fn write(&mut self, name: &str, title: &str) {
         let record = self
             .store
-            .write(&id(name), Some(title.into()), None, self.tick())
+            .write(&id(name), Some(title.into()), None, None, self.tick())
             .unwrap()
             .unwrap();
         self.store.insert(Entry::Record(record)).unwrap();
@@ -77,7 +77,7 @@ impl Fixture {
     fn set_parent(&mut self, name: &str, parent: Option<&str>) {
         let record = self
             .store
-            .set_parent(&id(name), parent.map(id), self.tick())
+            .set_parent(&id(name), parent.map(id), None, self.tick())
             .unwrap()
             .unwrap();
         self.store.insert(Entry::Record(record)).unwrap();
@@ -85,7 +85,7 @@ impl Fixture {
     fn add_dependency(&mut self, name: &str, target: &str) {
         let record = self
             .store
-            .add_dependency(&id(name), &id(target), self.tick())
+            .add_dependency(&id(name), &id(target), None, self.tick())
             .unwrap()
             .unwrap();
         self.store.insert(Entry::Record(record)).unwrap();
@@ -93,7 +93,7 @@ impl Fixture {
     fn set_condition(&mut self, name: &str, command: &str) {
         let record = self
             .store
-            .set_condition(&id(name), Some(command.into()), self.tick())
+            .set_condition(&id(name), Some(command.into()), None, self.tick())
             .unwrap()
             .unwrap();
         self.store.insert(Entry::Record(record)).unwrap();
@@ -720,7 +720,7 @@ fn applying_a_declaration_keeps_the_label_of_an_existing_entity() {
     f.create("a", Kind::Issue);
     let record = f
         .store
-        .set_label(&id("a"), crate::lifecycle::Label::Bug, f.tick())
+        .set_label(&id("a"), crate::lifecycle::Label::Bug, None, f.tick())
         .unwrap()
         .unwrap();
     f.insert(record);

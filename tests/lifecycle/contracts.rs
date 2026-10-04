@@ -1983,7 +1983,7 @@ fn reopen_returns_completed_work_and_groups_are_never_started_or_released() {
 }
 
 #[test]
-fn convert_changes_only_the_kind_of_unstarted_work_and_takes_no_reason() {
+fn convert_changes_only_the_kind_of_unstarted_work() {
     let f = Fixture::new();
     f.ok(&["init", "t"]);
     let dependency = f.accepted("Dependency");
@@ -2020,13 +2020,6 @@ fn convert_changes_only_the_kind_of_unstarted_work_and_takes_no_reason() {
     assert!(show.contains("1 notes") && show.contains("body") && show.contains(&dependency));
     assert!(show.contains("Condition: true"), "{show}");
     assert!(f.ok(&["log", &issue]).contains("Converted: Issue → Group"));
-    // A conversion is not a lifecycle transition, so there is no reason to record.
-    assert_eq!(
-        f.run(&["convert", &issue, "--kind", "issue", "-r", "why"])
-            .status
-            .code(),
-        Some(2)
-    );
     // NotStarted converts back; InProgress needs a release first; a Group with children and
     // a terminal Entity are not converted.
     f.ok(&["accept", &issue]);
@@ -2910,4 +2903,188 @@ fn heads_that_differ_only_by_label_show_their_own_label_and_resolve_takes_one() 
             .starts_with("t-item  Issue  Ready  docs  t-item\n")
     );
     assert_eq!(left.ok(&["list", "--label", "bug"]), "");
+}
+
+#[test]
+fn single_edits_save_optional_reasons_and_report_unsaved_noop_reasons() {
+    for reason in [None, Some(" 判断理由 ")] {
+        let f = Fixture::new();
+        f.init();
+        let item = f.accepted("Work");
+        let group = f.ok(&[
+            "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Plan",
+        ]);
+        let group = created(&group);
+        let dep = f.accepted("Prerequisite");
+        let commands = [
+            vec![
+                "write",
+                &item,
+                "--title",
+                "Revised",
+                "-m",
+                "Current definition",
+            ],
+            vec!["label", "set", &item, "bug"],
+            vec!["parent", "set", &item, "--parent", group],
+            vec!["parent", "unset", &item],
+            vec!["dep", "add", &item, "--needs", &dep],
+            vec!["dep", "rm", &item, "--needs", &dep],
+            vec!["condition", "set", &item, "--command", "exit 2"],
+            vec!["condition", "unset", &item],
+            vec!["convert", &item, "--kind", "group"],
+        ];
+        for (index, mut command) in commands.into_iter().enumerate() {
+            let before = f.record_files();
+            let invalid = [
+                "".to_owned(),
+                "  ".into(),
+                "two\nlines".into(),
+                "tab\tvalue".into(),
+                "理".repeat(501),
+            ];
+            for invalid in &invalid {
+                let mut rejected = command.clone();
+                rejected.extend(["--reason", invalid]);
+                let output = f.run(&rejected);
+                assert_eq!(output.status.code(), Some(1), "{rejected:?}");
+                assert!(output.stdout.is_empty());
+                assert!(String::from_utf8_lossy(&output.stderr).contains("reason"));
+                assert_eq!(f.record_files(), before);
+            }
+            if let Some(reason) = reason {
+                command.extend([if index % 2 == 0 { "-r" } else { "--reason" }, reason]);
+            }
+            let output = f.run(&command);
+            assert!(output.status.success(), "{command:?}: {output:?}");
+            assert!(output.stderr.is_empty());
+            let after = f.record_files();
+            assert_eq!(after.len(), before.len() + 1);
+            let records = f.records();
+            let id: EntityId = item.clone().try_into().unwrap();
+            let view = records.view().unwrap();
+            let record = records.record(view.head(&id).unwrap()).unwrap();
+            assert_eq!(record.reason.as_deref(), reason);
+            let log = f.ok(&["log", &item]);
+            let last = log.lines().last().unwrap();
+            match reason {
+                Some(reason) => assert!(last.ends_with(&format!("Reason: {reason}")), "{last}"),
+                None => assert!(!last.contains("Reason:"), "{last}"),
+            }
+            let noop = f.ok(&command);
+            assert!(noop.contains("No changes"), "{noop}");
+            assert_eq!(
+                noop.contains("Reason not saved; use axon note add to record it."),
+                reason.is_some(),
+                "{noop}"
+            );
+            assert_eq!(f.record_files(), after);
+            assert_eq!(f.ok(&["log", &item]), log);
+            let mut invalid_noop = command.clone();
+            if reason.is_some() {
+                invalid_noop.truncate(invalid_noop.len() - 2);
+            }
+            invalid_noop.extend(["-r", " "]);
+            assert!(failure(f.run(&invalid_noop)).contains("empty reason"));
+            assert_eq!(f.record_files(), after);
+        }
+    }
+}
+
+#[test]
+fn reasons_do_not_bypass_guards_or_add_inputs_to_registration_notes_and_import() {
+    let f = Fixture::new();
+    f.init();
+    let item = f.accepted("Work");
+    for command in [
+        vec!["parent", "set", &item, "--parent", &item, "-r", "why"],
+        vec!["dep", "add", &item, "--needs", &item, "-r", "why"],
+    ] {
+        let before = f.record_files();
+        assert_eq!(f.run(&command).status.code(), Some(1));
+        assert_eq!(f.record_files(), before);
+    }
+    f.ok(&["start", &item]);
+    f.ok(&["complete", &item]);
+    let before = f.record_files();
+    for command in [
+        vec!["write", &item, "--title", "Work", "-r", "why"],
+        vec!["label", "set", &item, "chore", "-r", "why"],
+        vec!["convert", &item, "--kind", "group", "-r", "why"],
+    ] {
+        assert_eq!(f.run(&command).status.code(), Some(1));
+        assert_eq!(f.record_files(), before);
+    }
+    for command in [
+        vec!["capture", "--label", "chore", "--title", "New", "-r", "why"],
+        vec![
+            "capture", "--accept", "--label", "chore", "--title", "New", "-r", "why",
+        ],
+        vec!["note", "add", &item, "-m", "Evidence", "-r", "why"],
+        vec!["import", "apply", "unused.yaml", "-r", "why"],
+    ] {
+        assert_eq!(f.run(&command).status.code(), Some(2));
+        assert_eq!(f.record_files(), before);
+    }
+}
+
+#[test]
+fn current_log_reads_stored_creation_and_import_reasons_but_excludes_notes() {
+    let f = Fixture::new();
+    f.init();
+    let Entry::Record(mut creation) = registration(&f.records(), "t-item") else {
+        unreachable!()
+    };
+    creation.reason = Some("creation rationale".into());
+    let id = creation.entity.clone();
+    f.publish(vec![Entry::Record(creation)]);
+    let records = f.records();
+    let current = records.view().unwrap().current(&id).unwrap().clone();
+    let context = || Context {
+        at: Utc::now(),
+        recorder: None,
+    };
+    let mut import = records
+        .import(
+            &id,
+            record::Imported {
+                title: "Revised".into(),
+                description: current.description,
+                label: current.label,
+                parent: current.parent,
+                needs: current.needs,
+            },
+            context(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(import.reason, None);
+    import.reason = Some("import rationale".into());
+    let note = records
+        .add_note(
+            &id,
+            "Evidence".into(),
+            Some("note rationale".into()),
+            context(),
+        )
+        .unwrap();
+    f.publish(vec![Entry::Record(import), Entry::Note(note)]);
+    let log = f.ok(&["log", id.as_ref()]);
+    assert_eq!(log.lines().count(), 2, "{log}");
+    assert!(
+        log.lines()
+            .any(|line| line.contains("Created:") && line.ends_with("Reason: creation rationale")),
+        "{log}"
+    );
+    assert!(
+        log.lines()
+            .any(|line| line.contains("Declaration applied: title")
+                && line.ends_with("Reason: import rationale")),
+        "{log}"
+    );
+    assert!(!log.contains("note rationale"));
+    assert_eq!(
+        f.records().notes().next().unwrap().1.reason.as_deref(),
+        Some("note rationale")
+    );
 }

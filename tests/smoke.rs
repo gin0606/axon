@@ -583,7 +583,7 @@ fn log_names_an_edit_record_without_field_changes_and_its_reason() {
     let mut parent = created.id().unwrap();
     f.publish(vec![created]);
     // Edit records with the parent's own values, as a storage migration may write them, and
-    // an edit that changes the title and carries a reason, which keeps its display.
+    // an edit that changes the title and carries an operation reason.
     for (reason, title) in [
         (Some("copied from the earlier format"), "t-item"),
         (None, "t-item"),
@@ -609,7 +609,10 @@ fn log_names_an_edit_record_without_field_changes_and_its_reason() {
         "{log}"
     );
     assert!(lines[2].ends_with("Edited: no field changes"), "{log}");
-    assert!(lines[3].ends_with("Edited: title"), "{log}");
+    assert!(
+        lines[3].ends_with("Edited: title  Reason: retitled"),
+        "{log}"
+    );
 }
 #[test]
 fn unsupported_corrupt_and_earlier_format_stores_are_rejected_without_changes() {

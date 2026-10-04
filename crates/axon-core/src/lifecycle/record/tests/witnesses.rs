@@ -336,13 +336,13 @@ fn notes_from_both_sides_survive_and_text_edits_conflict() {
     r1.note("i1", "from r1");
     let edit0 = r0
         .store
-        .write(&id("i1"), Some("left".into()), None, r0.tick())
+        .write(&id("i1"), Some("left".into()), None, None, r0.tick())
         .unwrap()
         .unwrap();
     insert(&mut r0.store, edit0);
     let edit1 = r1
         .store
-        .write(&id("i1"), None, Some("right".into()), r1.tick())
+        .write(&id("i1"), None, Some("right".into()), None, r1.tick())
         .unwrap()
         .unwrap();
     insert(&mut r1.store, edit1);
@@ -393,7 +393,7 @@ fn missing_parent_or_dependency_registrations_are_violations_repaired_by_detachi
     let mut r1 = Replica::new("r1");
     let convert = r0
         .store
-        .convert(&id("g2"), Kind::Issue, r0.tick())
+        .convert(&id("g2"), Kind::Issue, None, r0.tick())
         .unwrap()
         .unwrap();
     insert(&mut r0.store, convert);

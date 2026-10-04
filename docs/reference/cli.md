@@ -136,11 +136,15 @@ Groupの場合は、この共通表示の末尾へ短い集計と全子孫のツ
 
 登録titleは `--title`。タイトルは一行の値で、改行や制御文字を含む値と200文字を超える値を拒否する。本文は `-m/--description` または `-F/--file`。Noteは `-m/--message` または `-F/--file`。本文option同士は排他で、`-F -` はUTF-8のstdinを一度読む。本文・Noteをtrimして保存しない。初期の `--parent`、反復可能な `--needs`、`--command` は作成と同時に検査・保存する。作成中に条件を実行しない。通常の`axon write`はtitleと本文を一transactionで編集し、lifecycleを変えない。長い本文は登録時と同じ本文optionでファイルから渡せる。
 
-`axon accept|withdraw|start|release|complete|cancel|reconsider|reopen A` は `-r/--reason` を履歴へ保存する。理由も一行の値で、空白だけの値、改行や制御文字を含む値、500文字を超える値を拒否する。文字数はUnicodeの文字単位で数える。この検証は保存先の読取でも行う。複数行の説明や長い内容は本文かNoteに書く。Groupへの`axon complete`の実行自体を「Group全体の成果の最終確認が通った」という明示入力とする。Axonは子・依存・状態を検査し、確認作業は呼び出す人・エージェントのskillと運用で担う。必須のレビュー確認フラグや独立したレビュー済み状態は設けない。どの変更コマンドも、状態・包含・dependencyの制約を迂回しない。
+`axon accept|withdraw|start|release|complete|cancel|reconsider|reopen A`、`axon resolve ID --head RECORD_ID`、`axon write`、`axon label set`、`axon parent set|unset`、`axon dep add|rm`、`axon condition set|unset`、`axon convert` は任意の `-r/--reason` を操作と一体で履歴へ保存する。理由も一行の値で、空白だけの値、改行や制御文字を含む値、500文字を超える値を拒否する。文字数はUnicodeの文字単位で数える。この検証は保存先の読取でも行う。複数行の説明や長い内容は本文かNoteに書く。Groupへの`axon complete`の実行自体を「Group全体の成果の最終確認が通った」という明示入力とする。Axonは子・依存・状態を検査し、確認作業は呼び出す人・エージェントのskillと運用で担う。必須のレビュー確認フラグや独立したレビュー済み状態は設けない。どの変更コマンドも、状態・包含・dependencyの制約を迂回しない。
 
 Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへの`axon start`で着手済みになること、保存値を変える操作がないことを診断で示す。`axon reopen A` は `Completed` のIssue・Groupを `NotStarted` へ戻し、子や依存元のlifecycleを変えない。`Completed` の依存元が残る場合は、その依存元を示して拒否する。
 
-`axon convert A --kind issue|group` はEntityの種類を変換し、lifecycle・所属・dependency・文面・label・条件・Noteを変えない。前提は [種類の変換](lifecycle.md#種類の変換) に従い、子を持つGroupのIssueへの変換は子を示して、`InProgress` のIssueのGroupへの変換は先に`axon release`が必要であることを示して拒否する。lifecycle遷移ではないため `-r/--reason` を受け付けない。
+`axon convert A --kind issue|group` はEntityの種類を変換し、lifecycle・所属・dependency・文面・label・条件・Noteを変えない。前提は [種類の変換](lifecycle.md#種類の変換) に従い、子を持つGroupのIssueへの変換は子を示して、`InProgress` のIssueのGroupへの変換は先に`axon release`が必要であることを示して拒否する。lifecycle遷移ではないが、変換の判断理由を `-r/--reason` で添えられる。
+
+本文は現在の作業定義の正本、Note は必要な詳細・調査結果・履歴・補足、reason はその操作の判断理由を担う。reason だけに有効な制約や判断を残して本文への反映を省略しない。登録（採用済みを含む）と Note 追加には理由入力を設けず、それぞれの本文へ書く。`axon import apply` と declaration の入力・保存方法は単独変更の理由入力の対象外である。
+
+現行の `axon log` は、表示対象の記録に保存済みの reason があれば種類によらず操作と併せて表示する。CLI が reason を生成しない登録・一括反映の記録も含み、Note は含まない。保存形式は Note を含む全記録で任意の reason を許し、既存値を拒否・削除しない。これは当面の閲覧経路であり、履歴表示の再設計における表示場所、Note の扱い、一行表示、既定と詳細の分担を制約しない（[設計判断](../design/decisions.md#単独変更に操作と一体の理由を添える理由)）。
 
 ## 衝突・違反と解決
 
@@ -185,7 +189,7 @@ CLIが生成するhelp・ラベル・診断は英語。利用者のタイトル�
 
 ## mutationの結果
 
-成功確認は完全IDが先頭。Created、Note ID recorded、状態遷移の結果、実際に変わったtitle/本文/label/parent/dependency/conditionを短く示す。保存処理が返した結果を使い、lock前の読取から更新を推定しない。`axon write`・`axon label set`・関係・条件・種類の変換の同値操作はNo changesの成功で、保存状態・履歴を変えない。例外として、終了した（`Completed`・`Cancelled`）Entityへの `axon write` と `axon label set` は、指定した値が現在の値と同じでも文面とlabelが固定されていることを理由に拒否する。現在と同じ種類への `axon convert` は、変換の前提を検査せずNo changesとする。同値lifecycle遷移は拒否される。
+成功確認は完全IDが先頭。Created、Note ID recorded、状態遷移の結果、実際に変わったtitle/本文/label/parent/dependency/conditionを短く示す。保存処理が返した結果を使い、lock前の読取から更新を推定しない。`axon write`・`axon label set`・関係・条件・種類の変換の同値操作はNo changesの成功で、保存状態・履歴を変えない。例外として、終了した（`Completed`・`Cancelled`）Entityへの `axon write` と `axon label set` は、指定した値が現在の値と同じでも文面とlabelが固定されていることを理由に拒否する。現在と同じ種類への `axon convert` は、変換の前提を検査せずNo changesとする。reason は同値判定より先に検証する。同値操作では理由が指定されても保存せず、`No changes` に加えて `Reason not saved; use axon note add to record it.` と表示する。理由なしの成功出力は変わらない。同値lifecycle遷移は拒否される。
 
 成功はstdout/終了0、アプリケーションの拒否・失敗はError:を含むstderr/終了1。Clapの構文エラーは既定のerror:/Usage構造と終了2。原因、判明している対象・操作を示し、曖昧なFailedだけで済ませない。
 

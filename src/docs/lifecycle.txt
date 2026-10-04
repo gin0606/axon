@@ -18,7 +18,7 @@ Lifecycle
   Entity (release an InProgress Issue first; a Group with children stays a
   Group) and nothing else. A Group's description states its overall outcomes
   and what its final review confirms, so reread it after converting. The
-  kind is not a lifecycle transition and takes no --reason.
+  kind is not a lifecycle transition; -r/--reason can explain the conversion.
 
 A Group is never started or released. A NotStarted Group is InProgress while a direct
 child is InProgress or Completed (a NotStarted child Group passes this up from its own
@@ -174,6 +174,19 @@ accept -m/--description or -F/--file (- reads stdin). Notes use
 -m/--message or -F/--file. Short flags select inline (-m) or file (-F) input;
 inline long names identify the field (--description or --message). For option
 values beginning with a hyphen use the equals form, for example --description='--text'.
+
+Optional -r/--reason accompanies lifecycle transitions, resolve --head, write,
+label set, parent set|unset, dep add|rm, condition set|unset and convert. It is
+validated and saved with the operation, not as a separate Note. On No changes,
+no record or reason is saved; a supplied reason is reported as not saved.
+Use note add to record a reason alone. Keep the current work definition in the
+description, supporting details in Notes and the operation's decision in reason.
+A reason does not replace the description's active constraints or decisions.
+Capture (including --accept), note add and import apply have no reason input;
+registration purposes belong in the description and Note purposes in the Note.
+Current log output includes saved reasons on all displayed record kinds,
+including creation and import, and excludes Notes. These presentation choices
+may change when history is redesigned; they do not provide before/after diffs.
 
 Use axon docs declaration for YAML declaration fields and the bulk-edit workflow.
 Use axon docs declaration --example for a new-plan YAML template.
