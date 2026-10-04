@@ -10,7 +10,7 @@
 
 ## 識別子と入力
 
-Issue/Groupは共通の `<prefix>-<ランダム8文字>` namespaceを使う。乱数部分は小文字Crockford Base32で紛らわしいi/l/o/uを除く。連番やkind、優先順位の意味を持たせず、同じ保存先で衝突したら再生成する。IDは不透明な文字列として扱い、乱数部分の長さで検証しない。乱数部分が6文字の既存のIDもそのまま有効である。prefixはASCII小文字の `a-z`、数字、ハイフンだけを許し、空、先頭のハイフン、末尾のハイフンは拒否する。Entity ID全体も同じ文字種に限り、保存先の読取とdeclarationの入力で、それ以外の文字を含むIDを拒否する。この文字種に限ることで、完全IDをshellでquoteせずに渡せる。`axon init PREFIX` の明示値は変換せず検証する。省略時は管理rootのdirectory名のASCII大文字を小文字化した結果を使い、規則に合わなければ保存先を作らずに失敗し、`axon init PREFIX` での明示を求める。小文字化以外の自動補正はしない。
+Issue/Groupは共通の `<prefix>-<ランダム8文字>` namespaceを使う。乱数部分は小文字Crockford Base32で紛らわしいi/l/o/uを除く。連番やkind、優先順位の意味を持たせず、同じ保存先で衝突したら再生成する。IDの生成規則と参照時の検証を分け、保存済みIDは不透明な文字列として扱い、乱数部分の長さで検証しない。prefixはASCII小文字の `a-z`、数字、ハイフンだけを許し、空、先頭のハイフン、末尾のハイフンは拒否する。Entity ID全体も同じ文字種に限り、保存先の読取とdeclarationの入力で、それ以外の文字を含むIDを拒否する。この文字種に限ることで、完全IDをshellでquoteせずに渡せる。`axon init PREFIX` の明示値は変換せず検証する。省略時は管理rootのdirectory名のASCII大文字を小文字化した結果を使い、規則に合わなければ保存先を作らずに失敗し、`axon init PREFIX` での明示を求める。小文字化以外の自動補正はしない。
 
 全Entity入力は完全IDまたは一意なsuffixを受け付ける。入力が保存済みの完全IDと一致すれば、それが別のIDの末尾であっても、そのEntityに解決する。対象だけでなく`parent`/`needs`も同じ規則。曖昧なときは候補IDを示して拒否し、保存を変更しない。mutationではlock取得後に読んだ記録の集合で解決する。`axon dep rm` の `--needs` は、対象Entityの依存先の中の完全ID、保存済みの完全ID、対象Entityの依存先の中の一意なsuffix、通常の解決の順に解決するため、保存先に存在しない依存先（[依存先の不在の違反](storage.md#構造の違反と修復)）も外せる。依存先の中で曖昧なら拒否する。記録ID（Note IDを含む）は記録の内容のhashで、小文字16進64文字の完全なIDだけを受け付け、suffixでは解決しない（[記録](storage.md#記録)）。
 
@@ -158,7 +158,7 @@ Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへ
 
 衝突中のEntityが一つでもある保存先では、`axon resolve` と `axon note add` 以外の変更コマンドを拒否し、衝突中のEntityのIDと `axon resolve` を診断に示す。破損のある保存先では読取を含む全コマンド（`axon storage check`、および保存先を開かないコマンドを除く）を拒否し、破損したfileのpathと理由を診断に示す。改行変換が疑われるfile（[保存先の破損](storage.md#保存先の破損)）があれば、`axon storage check` と同じ案内を診断の末尾に添える。
 
-`axon init [PREFIX]` は `.axon/records/`、`.axon/header.json`、`.axon/.gitignore`、`* -text` の1行だけの `.axon/.gitattributes`（記録fileをGitの改行変換から外す。mergeやunionの属性は書かない。[保存と統合の契約](storage.md#保存先と初期化)）を作り、成功時は作成したheaderのpathを示す。Git内ではさらに、保存先がuntrackedに見えること、無視する運用（`.git/info/exclude` などに `.axon/` を書く）と追跡する運用（`git add .axon` してcommitする）の手順、Axonの状態の取り消しにrevertを使わないことを表示する。repository rootのfileとGit configを作成も編集もせず、stage・commitもしない。`.axon/` に中断した初期化の残骸（lock、`.tmp` で終わるfile、空の記録のdirectory、CRLFをLFと読んで同じ内容の `.gitignore` と `.gitattributes`。CRLFのものは `axon init` が書く内容で置き換える）以外の何か（header、記録、内容の異なる `.gitignore` か `.gitattributes`、以前の形式のfile）があれば拒否し、そのpathを示す。
+`axon init [PREFIX]` は `.axon/records/`、`.axon/header.json`、`.axon/.gitignore`、`* -text` の1行だけの `.axon/.gitattributes`（記録fileをGitの改行変換から外す。mergeやunionの属性は書かない。[保存と統合の契約](storage.md#保存先と初期化)）を作り、成功時は作成したheaderのpathを示す。Git内ではさらに、保存先がuntrackedに見えること、無視する運用（`.git/info/exclude` などに `.axon/` を書く）と追跡する運用（`git add .axon` してcommitする）の手順、Axonの状態の取り消しにrevertを使わないことを表示する。repository rootのfileとGit configを作成も編集もせず、stage・commitもしない。`.axon/` に中断した初期化の残骸（lock、`.tmp` で終わるfile、空の記録のdirectory、CRLFをLFと読んで同じ内容の `.gitignore` と `.gitattributes`。CRLFのものは `axon init` が書く内容で置き換える）以外の何か（header、記録、内容の異なる `.gitignore` か `.gitattributes`、その他のfile）があれば拒否し、そのpathを示す。
 
 ## 計画全体の取得と一括編集
 
@@ -185,7 +185,7 @@ CLIが生成するhelp・ラベル・診断は英語。利用者のタイトル�
 
 一覧0件はstdoutに行を出さず、短い案内をstderrへ出して終了0。候補不在から保存情報の不存在を推測しない。通常行へ毎回操作例を付けず、helpと`axon docs`へ使い方を分ける。
 
-引数なしの `axon`、`axon help`、`axon -h`、`axon --help`は同じ用途別root helpをstdoutへ出して終了0。leaf help、`axon docs`、`axon actor`、`--version`、`axon completion`は保存先を開かず取得できる。`axon docs`はbinary同梱の端末用説明で、ソースcheckoutやネットワークへ依存しない。`--version`はpackage versionだけを出し、実行directoryやGitから由来を推測しない。
+引数なしの `axon`、`axon help`、`axon -h`、`axon --help`は同じ用途別root helpをstdoutへ出して終了0。leaf help、`axon docs`、`axon actor`、`--version`、`axon completion`は保存先を開かず取得できる。`axon docs`はbinary同梱の端末用説明で、ソースcheckoutやネットワークへ依存しない。`axon --version`はbinaryのpackage versionだけを表示する。
 
 ## mutationの結果
 

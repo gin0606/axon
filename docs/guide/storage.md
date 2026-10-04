@@ -49,7 +49,7 @@ Git内では現在のrepositoryの中だけを探し、次の順で保存先を�
 1. 現在のworktree rootの `.axon`。
 2. main worktreeの `.axon`。現在のworktreeがlinked worktreeで、Git common directoryがmain worktree直下の `.git` directoryである場合だけ探します。bare repositoryに付けたworktreeとsubmoduleでは探しません。
 
-各段では `header.json` があればそこに決まります。Git内でheaderのない段では、まずそのworktreeのGit indexを調べ、`.axon/` の下にunmergedなpathがあれば次へ進まずに停止してunmergedを示します。そうでなければ、中断した初期化の残骸しかない `.axon` では次へ進み、headerがないのに記録や以前の形式のfileがあれば停止します。決まった保存先が破損・読取不能であれば停止し、別の保存先へは切り替えません。Git外では最寄りの保存先を祖先から探します。
+各段では `header.json` があればそこに決まります。Git内でheaderのない段では、まずそのworktreeのGit indexを調べ、`.axon/` の下にunmergedなpathがあれば次へ進まずに停止してunmergedを示します。そうでなければ、中断した初期化の残骸しかない `.axon` では次へ進み、headerがないのに記録やその他のfileがあれば停止します。決まった保存先が破損・読取不能であれば停止し、別の保存先へは切り替えません。Git外では最寄りの保存先を祖先から探します。
 
 追跡する運用では、保存先を持たないbranch（`axon init` より前に分岐したbranchなど）のlinked worktreeから操作すると、2によってmain worktreeの追跡対象の保存先に記録を書きます。変更はmain worktreeの差分として見え、記録は失われないため、この副作用は許容しています。
 

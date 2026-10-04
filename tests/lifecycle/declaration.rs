@@ -248,7 +248,7 @@ fn declaration_check_rejections_preserve_storage_and_input() {
         ),
         (
             exported.replace("axon-declaration/v2", "axon-declaration/v1"),
-            "run axon export again",
+            "unsupported schema axon-declaration/v1; expected axon-declaration/v2",
         ),
         (exported.replace("label: chore", "label: fix"), "schema:"),
         (exported.replace("label: chore", "label: null"), "schema:"),

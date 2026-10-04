@@ -294,32 +294,17 @@ fn strict_yaml_rejects_unsupported_constructs_wrong_types_and_invalid_references
 
 #[test]
 fn unsupported_declaration_schemas_name_the_expected_schema() {
-    for schema in ["other/v1", "future/v2"] {
+    for schema in ["axon-declaration/v1", "other/v1", "future/v2"] {
         let e = parse(&format!("schema: {schema}\n"))
             .unwrap_err()
             .to_string();
-        assert!(e.contains(schema) && e.contains(SCHEMA), "{schema}: {e}");
-    }
-}
-
-#[test]
-fn legacy_declaration_schemas_require_a_fresh_export_with_labels() {
-    let text = example().serialize(&empty_view()).unwrap();
-    // A v1 file, with or without labels, is not converted: its bases no longer match.
-    for v1 in [
-        text.replace("schema: axon-declaration/v2", "schema: axon-declaration/v1"),
-        text.replace("schema: axon-declaration/v2", "schema: axon-declaration/v1")
-            .replace("    label: feat\n", ""),
-    ] {
-        let e = parse(&v1).unwrap_err().to_string();
         assert!(
-            e.contains("axon-declaration/v1")
-                && e.contains("axon export")
-                && e.contains(&format!("add a label to each and declare {SCHEMA}")),
-            "{v1}: {e}"
+            e.contains(&format!("unsupported schema {schema}; expected {SCHEMA}")),
+            "{schema}: {e}"
         );
     }
 }
+
 #[test]
 fn declaration_rejects_duplicate_record_keys_without_a_self_dependency() {
     let mut d = example();
