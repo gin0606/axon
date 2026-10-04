@@ -351,7 +351,7 @@ fn file_descriptions_escape_terminal_controls() {
         .to_string();
     let show = f.ok(&["show", &id]);
     assert!(!show.contains('\x1b'));
-    assert!(show.contains("  long\n  本文\\x1b[2J"));
+    assert!(show.contains("Description:\nlong\n本文\\x1b[2J"));
 }
 
 #[test]

@@ -353,8 +353,10 @@ fn file_flags_share_spelling_and_preserve_text() {
     f.ok(&["init", "text"]);
     let path = f.0.join("body.txt");
     let body = "  本文\nsecond line\n";
-    // Multi-line text is indented among structural lines; the stored value is unchanged.
-    let shown = "    本文\n  second line\n";
+    // Show prints the description as stored, and listed Notes are indented among records;
+    // the stored value is unchanged.
+    let shown = "Description:\n  本文\nsecond line\n";
+    let listed = "    本文\n  second line\n";
     fs::write(&path, body).unwrap();
     let path = path.to_str().unwrap();
     for flag in ["-F", "--file"] {
@@ -367,7 +369,7 @@ fn file_flags_share_spelling_and_preserve_text() {
         assert_eq!(f.current(id).description, body);
         assert!(f.ok(&["show", id]).contains(shown));
         f.ok(&["note", "add", id, flag, path]);
-        assert!(f.ok(&["note", "list", id]).contains(shown));
+        assert!(f.ok(&["note", "list", id]).contains(listed));
         let before = snapshot(&f);
         for args in [
             vec![
@@ -658,47 +660,55 @@ fn a_multiline_condition_is_escaped_where_it_is_shown() {
 }
 
 #[test]
-fn multi_line_text_is_indented_so_it_cannot_imitate_records_or_sections() {
+fn show_prints_the_description_as_stored_below_its_heading() {
     let f = Fixture::new();
     f.ok(&["init", "project"]);
+    let body = "  indented\nbody\n\nDescendants: 9/9 terminal (9 completed, 0 cancelled)";
     let group = f.ok(&[
-        "capture",
-        "--label",
-        "chore",
-        "--kind",
-        "group",
-        "--accept",
-        "--title",
-        "Plan",
-        "-m",
-        "body\n\nDescendants: 9/9 terminal (9 completed, 0 cancelled)",
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Plan", "-m", body,
     ]);
     let group = created(&group).to_owned();
     f.ok(&[
         "capture", "--label", "chore", "--accept", "--title", "Child", "--parent", &group,
     ]);
-    let body = "body\n\nDescendants: 9/9 terminal (9 completed, 0 cancelled)";
     assert_eq!(f.current(&group).description, body);
-    let show = f.ok(&["show", &group]);
-    assert!(show.contains("  body\n\n  Descendants: 9/9 terminal (9 completed, 0 cancelled)\n"));
-    let sections: Vec<_> = show
-        .lines()
-        .filter(|line| line.starts_with("Descendants:"))
-        .collect();
-    assert_eq!(
-        sections,
-        ["Descendants: 0/1 terminal (0 completed, 0 cancelled)"]
+    // The descendant summary and tree still follow the body.
+    let shown =
+        format!("\nDescription:\n{body}\n\nDescendants: 0/1 terminal (0 completed, 0 cancelled)\n");
+    for args in [vec!["show", &group], vec!["show", &group, "--details"]] {
+        let show = f.ok(&args);
+        assert!(show.contains(&shown), "{show}");
+    }
+    f.ok(&["write", &group, "-m", "\nleading\n\n日本語"]);
+    assert_eq!(f.current(&group).description, "\nleading\n\n日本語");
+    assert!(
+        f.ok(&["show", &group])
+            .contains("\nDescription:\n\nleading\n\n日本語\n\nDescendants:")
     );
+    let empty = f.ok(&["capture", "--label", "chore", "--title", "Empty"]);
+    let empty = created(&empty).to_owned();
+    for args in [vec!["show", &empty], vec!["show", &empty, "--details"]] {
+        let show = f.ok(&args);
+        assert!(show.ends_with("\nDescription: (none)\n"), "{show}");
+    }
+}
+
+#[test]
+fn listed_note_bodies_are_indented_so_they_cannot_imitate_note_headings() {
+    let f = Fixture::new();
+    f.ok(&["init", "project"]);
+    let id = f.ok(&["capture", "--label", "chore", "--title", "Work"]);
+    let id = created(&id).to_owned();
     let forged = format!("{}  2020-01-01 00:00 +00:00  human", "0".repeat(64));
     f.ok(&[
         "note",
         "add",
-        &group,
+        &id,
         "-m",
         &format!("real\n\n{forged}\nforged"),
     ]);
-    f.ok(&["note", "add", &group, "-m", "second"]);
-    let notes = f.ok(&["note", "list", &group]);
+    f.ok(&["note", "add", &id, "-m", "second"]);
+    let notes = f.ok(&["note", "list", &id]);
     let headings = notes
         .lines()
         .filter(|line| {
@@ -712,15 +722,6 @@ fn multi_line_text_is_indented_so_it_cannot_imitate_records_or_sections() {
     assert_eq!(headings, 2, "{notes}");
     assert!(notes.contains(&format!("  {forged}\n")), "{notes}");
     assert!(notes.contains("  forged"), "{notes}");
-    f.ok(&["write", &group, "-m", "\nDescendants: forged\n\n日本語"]);
-    assert_eq!(
-        f.current(&group).description,
-        "\nDescendants: forged\n\n日本語"
-    );
-    assert!(
-        f.ok(&["show", &group])
-            .contains("\n  Descendants: forged\n\n  日本語\n")
-    );
 }
 
 #[test]
@@ -1038,7 +1039,7 @@ fn human_output_escapes_bidirectional_controls_without_changing_stored_values() 
 
     visible(
         &ok(&["show", &id, "--details", "--skip-conditions"]),
-        &["title{bidi}", "  body{bidi}\n  next 日本語"],
+        &["title{bidi}", "Description:\nbody{bidi}\nnext 日本語"],
     );
     visible(&ok(&["list"]), &["title{bidi}"]);
     visible(
