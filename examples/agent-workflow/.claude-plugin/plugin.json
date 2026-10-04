@@ -1,6 +1,6 @@
 {
   "name": "axon-workflow",
-  "version": "0.1.0",
+  "version": "0.1.0+plugin.5460654384ce286e",
   "description": "Axonを計画・実装・検証・commitの流れに組み込む、変更して使えるワークフローのサンプル。",
   "author": {
     "name": "gin0606"

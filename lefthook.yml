@@ -1,6 +1,8 @@
 pre-commit:
   parallel: true
   jobs:
+    - name: plugin-versions
+      run: python3 scripts/update-plugin-versions.py
     - name: fmt
       glob: "*.rs"
       run: mise exec -- cargo fmt --check
