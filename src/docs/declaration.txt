@@ -1,6 +1,7 @@
-Declarations describe the complete editable fields of a selected plan.
+YAML declarations describe the complete editable fields of selected
+Issues and Groups. Exporting a Group includes the Group and all its descendants.
 
-Get a plan: axon export ID... > plan.yaml
+Export Issues and Groups: axon export ID... > plan.yaml
 Start a new plan: axon docs declaration --example > plan.yaml
 
 The strict YAML schema is axon-declaration/v2. The root fields are schema,

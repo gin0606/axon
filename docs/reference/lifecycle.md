@@ -1,6 +1,6 @@
 # lifecycleと構造の契約
 
-この文書は、Issue・Group が持つ lifecycle の状態と遷移、Group の実効 lifecycle、再浮上条件、計画としての包含、種類の変換、dependency、候補集合、label、文面・Note・状態変更履歴の契約を定める。一覧の行と状況、候補一覧の評価順と外部コマンドの実行は [候補と外部条件](candidates.md)、識別子・引数・表示・保存結果は [CLIと表示の契約](cli.md)、計画全体の一括編集は [Declaration](declaration.md)、記録の保存と Git 統合は [保存と統合の契約](storage.md) に定める。
+この文書は、Issue・Group が持つ lifecycle の状態と遷移、Group の実効 lifecycle、再浮上条件、Groupによる包含、種類の変換、dependency、候補集合、label、文面・Note・状態変更履歴の契約を定める。一覧の行と状況、候補一覧の評価順と外部コマンドの実行は [候補と外部条件](candidates.md)、識別子・引数・表示・保存結果は [CLIと表示の契約](cli.md)、計画全体の一括編集は [Declaration](declaration.md)、記録の保存と Git 統合は [保存と統合の契約](storage.md) に定める。
 
 対応する実行可能なモデルは [`spec/lifecycle_rules.qnt`](../../spec/lifecycle_rules.qnt)、[`spec/issue_lifecycle.qnt`](../../spec/issue_lifecycle.qnt)、[`spec/group_lifecycle.qnt`](../../spec/group_lifecycle.qnt)、[`spec/lifecycle_reachability.qnt`](../../spec/lifecycle_reachability.qnt)、[`spec/candidate_evaluation.qnt`](../../spec/candidate_evaluation.qnt)、[`spec/lifecycle_information.qnt`](../../spec/lifecycle_information.qnt) にある。モデルが前提とする規則の一覧、各モデルの対象範囲・検証する性質・再現手順は [モデルの読み方](../../spec/README.md#モデルが表す規則) を参照する。
 
@@ -59,7 +59,7 @@ Group の実効値は、保存値が `NotStarted` で、直属の子のうち実
 
 Issue・Group とも所属は最大一つで、所属なしも許す。Group も最大一つの親 Group を持ち、Issue と子 Group を同じ階層に置ける。所属先は Group に限り、Issue は子を持たない。Group の自己包含と、子孫の下への移動による循環を禁止する。所属変更は既存の親子の制約を壊さない限り許可し、lifecycle を変えない。
 
-終了した Group への追加と、そこからの取り外しは不可とする。Group の最終確認は完了の時点で固定した子の集合について行うため、終了後に構成が変わると、確認した計画と現在の計画が食い違う。構成を変えるには、`Completed` の Group は `Reopen`、`Cancelled` の Group は `Reconsider` で戻してから操作する。どちらの戻しも、その Group の親が終了していれば行えない。
+終了した Group への追加と、そこからの取り外しは不可とする。Group の最終確認は完了の時点で固定した子の集合について行うため、終了後に構成が変わると、確認したGroupの構成と現在の構成が食い違う。構成を変えるには、`Completed` の Group は `Reopen`、`Cancelled` の Group は `Reconsider` で戻してから操作する。どちらの戻しも、その Group の親が終了していれば行えない。
 
 終了した Group の配下の lifecycle も固定する。終了した Group の配下にある Entity の lifecycle 操作は、`Reopen`・`Reconsider` を含めてすべて無効になる。`Completed` の Group 配下にある `Cancelled` の Issue は、Group を `Reopen` するまで `Reconsider` も取り外しもできない。理由は [終了した Group の構成と配下の状態を固定する理由](../design/decisions.md#終了した-group-の構成と配下の状態を固定する理由) に記す。
 
@@ -69,7 +69,7 @@ Issue の `Start` には、Issue 自身が `NotStarted` であることに加え
 
 Group の `Complete`・`Cancel` には直属の Issue・子 Group がすべて終了している必要があり、`Undecided` の子もその妨げになる。子の終了は `Completed`・`Cancelled` のどちらでも満たす。直属の子がない Group と、子がすべて `Cancelled` の Group も `Complete` できる。
 
-Group の `Complete` にはさらに、その計画全体の最終確認が通ったという入力を要求する。画面単位の子 Group にも、機能全体の親 Group にも、それぞれ独立した最終確認がある。Group に対する `axon complete ID` の実行自体を最終確認済みの明示入力とし、別のレビュー済み状態や必須フラグを設けない。確認手順は呼び出し側の skill・運用で扱う。空の Group でもこの確認を省略しない。子の終了だけで親を自動的に終了しない。
+Group の `Complete` にはさらに、そのGroup全体の成果の最終確認が通ったという入力を要求する。画面単位の子 Group にも、機能全体の親 Group にも、それぞれ独立した最終確認がある。Group に対する `axon complete ID` の実行自体を最終確認済みの明示入力とし、別のレビュー済み状態や必須フラグを設けない。確認手順は呼び出し側の skill・運用で扱う。空の Group でもこの確認を省略しない。子の終了だけで親を自動的に終了しない。
 
 包含と dependency から各操作が要求する前提は次のとおりとする。すべての lifecycle 操作は、これに加えて親が終了していないことを要求する。
 
@@ -122,7 +122,7 @@ Group の移動は、その Group の親だけを付け替える。配下の所�
 
 `Completed` の Entity 自身の dependency は固定する。`Reopen` で `NotStarted` へ戻せば編集できる。`Completed` の Entity を、別の Entity が前提として参照することは許す。未完了の Entity の前提は、判断に応じて追加・削除する。所属変更と変換は dependency を保持し、Group をまたぐ依存と、所属なしの Entity への依存を許す。
 
-Group から Issue への依存を許す。Issue・Group から別の Group への依存も許し、依存先の Group 自身が最終確認を経て `Completed` になるまで待つ。配下がすべて終了しただけでは、依存先の完了の前提を満たさない。依存先の計画全体の最終確認を待つことが、Group への依存の意味だからである。
+Group から Issue への依存を許す。Issue・Group から別の Group への依存も許し、依存先の Group 自身が最終確認を経て `Completed` になるまで待つ。配下がすべて終了しただけでは、依存先の完了の前提を満たさない。依存先のGroup全体の成果の最終確認を待つことが、Group への依存の意味だからである。
 
 自己依存と、包含を合わせた通常完了経路の循環を、追加時に拒否する。親・祖先と子孫の間の明示的な dependency はどちら向きも禁止される。兄弟や別の Group に属する Entity どうしでも、他の包含・依存を経由して循環する場合は拒否する。終了した Entity も構造のグラフから除外しない。拒否された操作は無効となり、状態・所属・dependency を自動調整しない。
 
@@ -162,7 +162,7 @@ label は、Entity が表す仕事の種類を固定集合の値で分類する�
 | `refactor` | 振る舞いを変えずに構造を整理する |
 | `spike` | 決めるために調べる（要検討の事項、仕様・計画・方針の検討） |
 
-Group の label は、その計画の主な種類を表す。配下の label から導出せず、配下と一致することも要求しない。
+Group の label は、そのGroup全体の仕事の主な種類を表す。配下の label から導出せず、配下と一致することも要求しない。
 
 label は登録時に必ず与え、後から別の値へ変更できる。解除はない。編集できる状態は title・description と同じで、`Undecided`・`NotStarted`・`InProgress` では状態を変えずに変更でき、終了後は固定する（[情報の役割と編集範囲](#情報の役割と編集範囲)）。変更は記録として残る。
 

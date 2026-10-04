@@ -63,4 +63,8 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 7. skillのdescriptionは冒頭でAxon対象と分かるようにし、Axonの操作を指す場合は上記のコマンド表記にする。
 8. 記録の種類名を種類として指すとき（`created`・`transition`・`label`・`import`・`resolve`・`note` など）は、コマンド名と重なるため常にcode表記にする。6のfield名・記録の名詞としての用法（parent、condition、label）はそのまま対象外とする。
 
+declarationはYAMLの一括宣言を指す。タイトルはtitle、本文はdescriptionを指し、両方を指すときは「タイトルと本文」と書く。文面は一般語として使えるが、項目を厳密に指定するときは項目名を列挙する。
+
+一般の作業計画には「計画」やplanを使える。Groupの構成・範囲を指すときは「Groupと全子孫」など対象を明示し、計画の作成とGroup全体の成果の最終確認を区別する。「採用」も一般語として使えるが、方針とEntityの判断を併せて述べるときは「方針の決定」「Issueの採用」のように対象を示す。方針への賛同だけでEntityの採用や実装の権限を得たと解釈しない。
+
 確認時は、`axon --help`の全subcommand、`axon import`・`axon storage`・`axon note`の下位subcommand、状態5語、遷移8語を対象に、fenced code・inline code span・frontmatterのname行を除いた散文をcase-sensitiveかつ単語境界`[A-Za-z-]`で検索する。残存箇所を全て分類し、Axonの操作・遷移・状態を裸で指す箇所がないことを確認する。対象語で始まるcode spanも列挙し、コマンド引用が`axon`から始まることを確認する。検索は発見の補助であり、意味の判定や文脈の確認を置き換えない。

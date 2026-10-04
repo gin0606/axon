@@ -11,6 +11,6 @@ Groupは`Start`・`Release`を持たない。Groupの実効値は配下から導
 
 `axon complete ID` は外部workflowの成果・検証が完了したという判断を受けて実行する。Groupでは目的・完了条件と成果の統合、全子孫の終了、必要な検証を独立に確認する。Groupの`axon complete`は実効値が`InProgress`でも行え、直属の子が全員終了し、全祖先が採用済みで、自身の依存先が`Completed`であることを要する。直属の子がないGroupも同じ最終確認を経て完了する。`axon show ID --skip-conditions`で子を辿り、必要な本文・Note・logを読む。全子孫のNote一括取得は必須にしない。Groupの`axon complete`自体を最終確認済みの入力とし、別の確認フラグや状態を作らない。子の終了から親の`axon complete`へ自動で広げない。
 
-`Completed`から`NotStarted`へ戻す`axon reopen`はその判断を要し、このcapabilityでは扱わず`axon-kit:triage`が適用する。
+`Completed`から`NotStarted`へ戻す`axon reopen`はその判断を要し、このcapabilityでは扱わず`axon-kit:update`が適用する。
 
 `axon start`・`axon release`・`axon complete`は祖先Groupの実効lifecycleと状況を変えうる。前後に直接dependent、祖先・子孫と`axon tasks`/`axon proposals`への影響を確認する。追加Noteは別capabilityとして保存確認してから進める。最終lifecycle、保存結果と波及を返す。

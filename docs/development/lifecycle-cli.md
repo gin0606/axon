@@ -21,7 +21,7 @@ cd "$FIXTURE_DIR"
 "$AXON_BIN" complete GROUP_ID
 ```
 
-`GROUP_ID`・`ISSUE_ID` は作成時に返る完全なIDまたは一意なsuffixへ置き換える。Group の `axon complete` は計画全体の最終確認済みという明示入力であり、子の完了だけで親を自動完了しない。
+`GROUP_ID`・`ISSUE_ID` は作成時に返る完全なIDまたは一意なsuffixへ置き換える。Group の `axon complete` はGroup全体の成果の最終確認済みという明示入力であり、子の完了だけで親を自動完了しない。
 
 ## 公開操作
 

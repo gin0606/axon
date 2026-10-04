@@ -25,11 +25,11 @@
 
 登録は `axon capture` だけです。`axon capture --label spike --title '懸念' -m '内容'` は未判断のIssue、`axon capture --accept --label feat --title '仕事' -m '目的と完了条件'` は未着手の採用済みIssueを登録します。`--label` は必須です（[labelで仕事の種類を示す](#labelで仕事の種類を示す)）。`--kind group` を足すとGroupになり、`--kind` と `--accept` は自由に組み合わせられます。作成時の `--parent G` と繰り返せる `--needs B` で関係を付けられます。
 
-未判断を採用するには `axon accept ID`、未着手の採用を撤回するには `axon withdraw ID`。Issueの作業は `axon start ID`、中断は `axon release ID -r '理由'`、完了は `axon complete ID`、取りやめは `axon cancel ID -r '理由'`、取りやめの再検討は `axon reconsider ID`、完了の取消は `axon reopen ID -r '理由'`。`axon reopen` は完了したEntityを未着手へ戻します。完了済みの依存元がある場合は拒否されるため、先に依存元を`axon reopen`してください。IssueとGroupの種類は `axon convert ID --kind group` / `axon convert ID --kind issue` で変換します。Groupの本文は計画全体の成果と最終確認の対象を表すので、Issueの本文をそのままGroupにしたときは本文を読み直し、必要なら `axon write` で整えてください。変換はlifecycle遷移ではないため `-r/--reason` を受け付けません。結果は `axon note add ID -m '結果'` へ残し、本文変更は `axon write ID --title '題名' -m '本文'` で行います。
+未判断を採用するには `axon accept ID`、未着手の採用を撤回するには `axon withdraw ID`。Issueの作業は `axon start ID`、中断は `axon release ID -r '理由'`、完了は `axon complete ID`、取りやめは `axon cancel ID -r '理由'`、取りやめの再検討は `axon reconsider ID`、完了の取消は `axon reopen ID -r '理由'`。`axon reopen` は完了したEntityを未着手へ戻します。完了済みの依存元がある場合は拒否されるため、先に依存元を`axon reopen`してください。IssueとGroupの種類は `axon convert ID --kind group` / `axon convert ID --kind issue` で変換します。Groupの本文はGroup全体の成果と最終確認の対象を表すので、Issueの本文をそのままGroupにしたときは本文を読み直し、必要なら `axon write` で整えてください。変換はlifecycle遷移ではないため `-r/--reason` を受け付けません。結果は `axon note add ID -m '結果'` へ残し、本文変更は `axon write ID --title '題名' -m '本文'` で行います。
 
 ## labelで仕事の種類を示す
 
-IssueとGroupは、仕事の種類を表すlabelを必ず一つ持ちます。値は次の7つだけです。`axon capture --label`・`axon label set`・一覧の `--label` では、省略や集合外の値は構文エラー（終了2）になり保存を変えません。declarationでは `label` の欠落や集合外の値がschemaの拒否になります。Groupのlabelは計画の主な種類を表し、配下のlabelとは独立です。
+IssueとGroupは、仕事の種類を表すlabelを必ず一つ持ちます。値は次の7つだけです。`axon capture --label`・`axon label set`・一覧の `--label` では、省略や集合外の値は構文エラー（終了2）になり保存を変えません。declarationでは `label` の欠落や集合外の値がschemaの拒否になります。GroupのlabelはGroup全体の仕事の主な種類を表し、配下のlabelとは独立です。
 
 | label | 意味 |
 | --- | --- |
@@ -47,7 +47,7 @@ labelは `axon label set ID VALUE` で変更します。同じ値の指定は `N
 
 `axon parent set A --parent G` / `axon parent unset A` で所属を変更し、`axon dep add A --needs B` / `axon dep rm A --needs B` で依存を変更します。祖先や依存先の状態、循環、終了した構成の制約はCLIが検査します。Groupには`axon start`・`axon release`を使わず、配下のIssueに着手します。Groupに置いた依存は、配下のIssueの`Start`の前提になります。
 
-Groupの完了前には目的・完了条件、全子孫の終了、成果の統合と必要な検証を確認します。`axon show`の全子孫ツリーを確認し、必要な本文・Note・logを読んで不足を確認します。全子孫Noteの一括取得は必須ではありません。子の終了だけで親を自動完了せず、Groupに対する `axon complete` 自体を計画全体の最終確認済みという入力にします。
+Groupの完了前には目的・完了条件、全子孫の終了、成果の統合と必要な検証を確認します。`axon show`の全子孫ツリーを確認し、必要な本文・Note・logを読んで不足を確認します。全子孫Noteの一括取得は必須ではありません。子の終了だけで親を自動完了せず、Groupに対する `axon complete` 自体をGroup全体の成果の最終確認済みという入力にします。
 
 ## 計画をまとめて登録・編集する
 
