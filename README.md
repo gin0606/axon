@@ -8,15 +8,20 @@ Data lives in a local `.axon/` directory. You can keep it private or track it in
 
 ## Install
 
-Requires Rust 1.89 or later. macOS is supported; Linux and WSL2 are unverified, best-effort environments. Native Windows is not supported.
+On macOS 15 (Sequoia) or later, with Apple Silicon or Intel and [Homebrew](https://brew.sh):
 
 ```sh
-git clone https://github.com/gin0606/axon.git
-cd axon
-cargo install --locked --path .
+brew install gin0606/tap/axon
 ```
 
-Ensure Cargo's binary directory (usually `~/.cargo/bin`) is on your `PATH`.
+To update:
+
+```sh
+brew update
+brew upgrade gin0606/tap/axon
+```
+
+Rust is not required. For development or building from source (Rust 1.89 or later), see [Getting started](docs/guide/getting-started.md#開発者向けのソースビルド). Linux and WSL2 remain unverified, best-effort environments; native Windows is not supported.
 
 ## Quick start
 

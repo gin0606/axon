@@ -8,15 +8,20 @@ Issue と Group で個人の仕事や計画を管理するローカル CLI で�
 
 ## インストール
 
-Rust 1.89 以上が必要です。macOS をサポート対象とし、Linux と WSL2 は未検証のベストエフォート、ネイティブ Windows は非対応です。
+macOS 15（Sequoia）以上の Apple Silicon / Intel と [Homebrew](https://brew.sh) が必要です。
 
 ```sh
-git clone https://github.com/gin0606/axon.git
-cd axon
-cargo install --locked --path .
+brew install gin0606/tap/axon
 ```
 
-Cargo の実行ファイルの保存先（通常は `~/.cargo/bin`）を `PATH` に追加してください。
+更新するときは次を実行します。
+
+```sh
+brew update
+brew upgrade gin0606/tap/axon
+```
+
+Rust の導入は不要です。開発やソースからのビルド（Rust 1.89 以上）は [導入ガイド](docs/guide/getting-started.md#開発者向けのソースビルド) を参照してください。Linux と WSL2 は未検証のベストエフォート、ネイティブ Windows は非対応です。
 
 ## 使い始める
 

@@ -21,6 +21,8 @@ jobs:
         run: python3 scripts/update-plugin-versions.py --check
       - name: Test plugin version generation
         run: python3 scripts/test-plugin-versions.py
+      - name: Test release guards
+        run: python3 scripts/test-release.py
       - name: Install pinned Rust toolchain
         run: rustup toolchain install
       - name: Restore Cargo cache
