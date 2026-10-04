@@ -26,11 +26,7 @@ Rust fileがstagedされているcommitでは、Lefthookがrustfmt、全target�
 cargo test --workspace --lib --bin axon --test smoke
 ```
 
-`--lib` は共通コア・記録の集合の導出と衝突・codec のテストを実行する。`--bin axon` は端末表示と条件プロセスの起動・trace flush失敗、`--test smoke` は binary の登録から Group 完了、Note・log、並行操作、未対応 format と破損の拒否、保存先探索・`axon init`、入出力失敗を独立 fixture で検証する。
-
-`cargo test` はworkspaceの記録者crate単体テストも実行する。保存・統合は `tests/lifecycle/file.rs`、保存先の初期化と探索は `tests/lifecycle/location.rs` をsmokeから実行し、実worktreeでのGit操作、index、並行writer、破損の報告を検証する。
-
-オプションなしの`cargo test`はsmokeを含む全test targetの標準入口であり、上記を含まない契約はfull verificationで検査する。Lefthookの各jobは失敗時にcommitを拒否し、staged Rust fileがない場合は既存の`*.rs` globによってRust検証を省略する。
+対象ごとの責務と fixture の入口は [各層の検証入口](architecture.md#各層の検証入口) を参照する。この gate は全 test target を対象にしないため、full verification を代替しない。Lefthook は各 job の失敗時に commit を拒否し、staged Rust file がなければ Rust 検証を省略する。設定は [lefthook.yml](../../lefthook.yml) にある。
 
 リリース前には通常 toolchain の全検証に加え、MSRVで次を実行する。
 
@@ -67,18 +63,24 @@ cargo llvm-cov --locked --all-targets --all-features --summary-only
 
 各モデルはそれぞれの検証範囲を持ち、変更に関係のある検査を選んで実行します。モデルの新設や検証範囲の拡張は一律に必須とせず、設計上の不確実性に応じて判断します。検査の実行条件とその結果は [モデル](../../spec/README.md) に置き、backend・sample数・stepsを変えた検査はその実行条件も結果とともに記録します。seedは固定せず、実行ごとに異なる経路を探索させます。同じseedを使い続けても、モデルが変わらない限り同じ経路をなぞるだけで新しい情報は得られません。`quint run` は bounded random simulation であり、反例が見つからなかったことは全状態についての証明ではありません。検査の成功はexit statusだけではなく、列挙した全invariantに反例がなく、列挙した全witnessがいずれかの探索で1 trace以上観測されたことを確認します。通常探索で観測率の低いwitnessは `lifecycle_reachability` の入口、`candidate_evaluation` の補助入口、`record_integration_paths` の入口が担保するため、それぞれ通常探索と合わせて1つの検査として扱います。反例が出た場合は、quintが出力する再現用のseedを結果に添えます。
 
-`tests/lifecycle/workflow.rs` は独立fixtureで登録、候補選択、待ち理由、Note・log、listの登録順、拒否時の記録不変、Group最終確認を一巡します。並行着手とNoteの保存は `tests/lifecycle/file.rs` の `concurrent_cli_starts_publish_exactly_one_transition`・`concurrent_cli_notes_preserve_every_body`、並行登録は `tests/smoke.rs` の `concurrent_captures_preserve_every_entity` が検査します。履歴の枝を辿る順序はコアの `history_lists_each_concurrent_branch_together_before_the_resolution`・`history_returns_to_the_nearest_fork_when_a_branch_ends`・`history_finishes_a_nested_fork_before_the_next_branch` が検査し、CLIの `log_marks_each_switch_between_concurrent_leaf_records` は固定した兄弟枝の入力で境界行の位置・個数を検査します。`tests/lifecycle/file.rs` は実Git worktreeで分岐し、merge・rebase・cherry-pick・revert・squashの後の `axon storage check` の報告（衝突・違反・gap、無ければ報告なし）、`axon resolve` と通常操作（終了したGroupへ流入した子の違反の `axon reopen` など）による修復、通常操作への復帰まで検証します。`core.autocrlf=true` のcloneで `.axon/.gitattributes` が記録fileを改行変換から守ること、この属性のない保存先が破損として止まり改行変換の可能性とガイドへの案内を示すこと、ガイドの手順でLFに戻ることも同じfileで検証します。`tests/lifecycle/location.rs` は `axon init` の出力と作るfile、repository rootの `.gitignore`・`.gitattributes`・Git configを作成も編集もしないこと、表示された無視する運用の手順に従うと保存先がGitに無視されること、`git add .axon` で記録・header・`.axon/.gitignore`・`.axon/.gitattributes` だけが追跡されlockと一時fileが追跡されないこと、初期化直後のuntrackedな保存先がGitのcheckout・mergeの上書きから保護され、無視した後は警告なしに置き換わること、実linked worktreeからの保存先の共有、worktreeをまたぐ並行`axon start`、linked worktreeでの`axon init`の拒否、bare repositoryに付けたworktreeとsubmoduleで探索が2段目へ落ちないこと、探索の確定と停止、`axon storage check ROOT` が探索と同じくGit indexのunmergedと探索が拒否するGitの境界を報告すること、headerが作業treeにない保存先でも `axon storage check` と通常操作がheaderの欠落を併記せずにunmergedを報告し、そのindexを持つworktree（linked worktreeからmain worktreeの保存先を使う場合はmain worktree）と各pathをworktreeの先頭からの相対pathで一行ずつ示すこと、symlinkの拒否を検証します。いずれも `tests/smoke.rs` から読み込みます。テストはこのcheckoutのbinaryを絶対パスで実行し、Git環境を隔離します。実データやPATH上のbinaryを切り替えません。
+Rust の結合テストは独立 fixture と実 Git worktree を使い、公開 CLI、保存・統合、探索と初期化を検証する。テスト対象はこの checkout の binary を絶対パスで指定し、Git 環境を隔離する。実管理データや PATH 上の binary は切り替えない。対象別の入口は [各層の検証入口](architecture.md#各層の検証入口) を参照する。
 
 ### Declaration の独立fixture
 
-[一括declaration](lifecycle-declaration.md) の形式と適用契約はRustで検証します。`crates/axon-core/src/declaration.rs` と `crates/axon-core/src/declaration/import.rs` の単体テストはstrict YAML、canonical往復、fingerprint、差分と共通コアの制約を扱います。`tests/lifecycle/declaration.rs` は `smoke` に含まれ、独立fixtureで`axon export`、雛形、`axon import prepare` → `axon import check` → `axon import apply` → 再度`axon import check`、新規登録と既存subtree編集、競合、保存先・入力の非変更を検査します。
+[一括 declaration](../reference/declaration.md) は通常操作の意味を変えないため、形式や I/O の検証のためだけに Quint の状態や action を追加しない。Rust では次の境界を検証する。
+
+| 対象 | 検証する性質 | 入口 |
+| --- | --- | --- |
+| コア | strict YAML、canonical 往復、競合判定、通常操作の制約、入力順によらない適用結果 | [declaration](../../crates/axon-core/src/declaration.rs) と [適用処理](../../crates/axon-core/src/declaration/import.rs) |
+| 保存 adapter | 保存と書戻しの失敗を区別し、公開途中の process 喪失後も同じ file の再試行で収束すること | [declaration_file](../../src/declaration_file.rs) と [関係変更のテスト](../../src/declaration_file/relationship_tests.rs) |
+| 公開 CLI | 取得から一括編集・再試行までの接続、拒否時の保存先と入力の保持 | [独立 fixture](../../tests/lifecycle/declaration.rs) |
 
 ```sh
 cargo test --locked --workspace --lib declaration
 cargo test --locked --test smoke declaration
 ```
 
-`src/declaration_file.rs` の単体テストは、保存成功後のfile書戻し失敗と再度`axon import apply`、入力bytesの変化、保存結果の診断などI/O境界を検査します。 process fixtureは同じlib test binaryを子processにし、記録fileのrename前、複数のEntityの記録のrenameの途中、保存後の書戻し前・書戻し後で強制終了します。barrier待ちは最大10秒、到達後すぐにkillして終了を回収し、記録の集合・入力bytesと同じfileの再度`axon import apply`への収束を検査します。`src/declaration_file/relationship_tests.rs` の行列は`Cancelled` Groupへの所属拒否、`Cancelled` Entityの依存差替え、新規Groupへの移動、親子反転、進行中subtreeの移動を検査します。GroupとIssueのrecordをそれぞれ全順列に並べ替えて共通コアの適用結果を比較し、`axon import prepare`でcanonical化した各入力を適用して結果の一致を確認します。これらは`--lib`としてfast gateにも含まれます。対象の検証後も、必要なfull verificationは上記の共通入口で行います。実データやPATH上のbinaryは変更しません。この機能は通常操作の意味を変えないため、検証のためだけにQuintの状態やactionを追加しません。
+対象の検証後も、必要な full verification は共通入口で行う。
 
 ## 設計変更の進め方
 

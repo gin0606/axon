@@ -1,28 +1,21 @@
-# Declaration と canonicalな`axon export`
+# Declaration と保存の境界
 
-`crates/axon-core/src/declaration.rs` は [計画全体の取得と一括編集](../reference/declaration.md) の declaration を扱う純粋な module です。共通コアが記録の集合から導出した現在値を入力として、Issue 単体・Group 全子孫・複数 selector の和集合と外部参照を計算します。SQL、filesystem、外部コマンドは呼びません。保存先の探索、記録の集合の読取り、stdout への出力は CLI と adapter の責務です。
+形式・競合検知・再試行の契約は [計画全体の取得と一括編集](../reference/declaration.md) に定める。実装は、記録の集合を扱うコアと、入力 file・保存先を扱う adapter に分ける。
 
-`parse` は strict YAML と file-local の型・field・key・参照構造・重複を検査します。granit-parser の token 検査で anchor・alias・tag を拒否し、serde-saphyr で重複 key・merge key・unknown field・型の不一致を拒否します。nullable field も省略できず、null を空 list に変換しません。`label` は共通コアの `Label` の綴りの表で照合し、欠落・null・集合外の値を schema の拒否とします。対応しない schema は、入力された値と対応する値を示して拒否し、変換しません。保存先での ID 解決、存在・kind・競合・関係の制約検証は、操作の開始時に読んだ記録の集合と照合する操作側が担います。
+## コアの責務
 
-`Declaration::serialize` は既存 record の作成日時を、現在値を導出したのと同じ記録の集合から読み、canonical 順序と scalar 表記で出力します。`fingerprint` は label を含む見える値だけを契約の token encoding で BLAKE3 に渡します。再浮上条件・Note・履歴は declaration に取り込みません。`example` は保存先に依存しない新規 Group と子 Issue 二件の雛形で、各 record は `label: feat` を持ちます。
+[declaration](../../crates/axon-core/src/declaration.rs) は YAML の解析・出力、編集集合と外部参照の選択、fingerprint を担う。file 内で検査できる形式・参照構造と、保存された記録の集合との照合を分け、filesystem や外部コマンドを呼ばない。
 
-declaration のために Quint の状態や action を追加しません。`axon import apply` は共通コアの通常操作の列であり、lifecycle・包含・dependency の意味を変えないためです。契約は Rust の独立 fixture で検証し、少なくとも次を対象にします。
+[適用候補の構築](../../crates/axon-core/src/declaration/import.rs) は、競合と Entity ごとの適用済み判定を行い、共通コアの通常操作を使って候補を検査する。lifecycle・包含・dependency の制約を declaration 専用に複製しない。有効な最終状態を中間状態の循環や前提不足で拒否しないよう、関係の解除を追加より先に扱う。入力の並びで適用結果を変えない。
 
-- canonical example の parse と同値な serialize、strict parser の各拒否（label の欠落・集合外、未対応 schema を含む）、CR・制御文字・YAML の型に読める文字列を含む文面の完全な往復
-- `axon export` の selector（Group の全子孫、Issue 単体、和集合、重複除去）と `references` の計算
-- `prepare` の ID 割り当て、`key` 保持、`base` null 保持、再実行の同一性
-- `check` の検証順序、競合の列挙、label の前後を含む差分の表示、file と保存先の不変
-- label だけの変更が fingerprint を変え、`apply` で一件の declaration の適用の記録になること、新規 Entity が宣言した label で作られること
-- `apply` の原子性（共通コアの拒否で保存先が変わらないこと）、`base` と `references` の rewrite、`key` の保持
-- 終了 Entity の固定項目、終了 Group の構成、循環、Issue 親、自己依存の拒否
-- 結果不明・file 更新失敗後の再 `apply` が最終値一致で no-op になること、部分一致で競合になること
-- 再浮上条件の保持と未実行、Note の不変
-- `axon docs declaration` と `--example` が保存先を開かないこと
+候補の検査は保存を伴わない。保存する記録は Entity ごとの最終値を持ち、検査で用いた通常操作の列をそのまま履歴にしない。
 
-単体テストは [契約文書](../reference/declaration.md) の canonical example、文字列の完全な往復、拒否入力、並び順、fingerprint の境界を検査します。`tests/lifecycle/declaration.rs` は独立 fixture で subtree・Issue・和集合、外部参照、保存先非変更と条件未実行を確認し、壊れた管理 root でも `axon docs` と雛形が取得できることを検査します。
+## adapter の責務
 
-`crates/axon-core/src/declaration/import.rs` は保存された記録の集合から導出した現在値とのidentity・base照合、適用済み判定、外部参照の再生成、共通コアの通常操作による候補の構築を共有する。適用済み判定はEntityごとで、違反のある保存先を許す「途中で止まった反映の再試行」は、編集集合のうち変更を伴うEntity（新規、または`base`と最終値が異なるもの）がすでに最終値を持つことで判定し、全Entityが適用済みなら候補を作らず通す。`prepare`は`base: null`のrecordの割り当て済みIDのEntityが最終値を持てばIDを保持し、持たなければ`check`・`apply`と同じ`new id already exists`の競合として拒否する。診断は対象IDと、別fileへの`axon export`での取り直し・編集の移行、意図した新規作成には`id: null`を使う対処を示す。未使用の割り当て済みIDは保持し、`id: null`とEntityの記録がなくNoteだけが残る予約済みIDには新しいIDを割り当てる。親解除・dependency削除、新規作成（宣言したlabelで作成）、文面変更、label変更、親設定、dependency追加の順で差分を検査する。`Checked` の候補は保存前のものであり、保存先を変更しない。`src/declaration_file.rs` は別のI/O境界として記録fileのpublish手順を再利用し、temporary書込・sync、入力bytes再照合、rename、directory syncを行う。
+[declaration_file](../../src/declaration_file.rs) は、保存先の lock を取った後に入力 file と記録の集合を読み、コアで再検証してから記録を保存する。事前の `axon import check` の成功だけで書き込まない。
 
-`src/declaration_file/relationship_tests.rs` の関係変更行列は、`Cancelled` Groupへの所属拒否、`Cancelled` Entityのdependency差替え、新規Groupへの既存Entityの移動、親子Groupの反転、着手中のIssueを持つGroupの採用済みGroup間の移動を検査する。recordの正順・逆順・巡回順で共通コアの適用結果を比較し、`axon import prepare`でcanonical化して適用した結果との一致、拒否時の保存先と入力の保持を確認する。
+記録の保存と declaration の書戻しは別の保存境界である。書戻しには、この反映で保存した記録の集合を使い、lock 解放後に他の writer が追加した変更を base に取り込まない。入力 bytes の再照合と原子的な置換には、file 保存の共通処理を使う。
 
-`src/declaration_file.rs` のprocess fixtureはlib test binaryを子processとして起動し、本番と共通の適用経路を実行する。記録fileのtemporary作成後rename前、保存後・declaration書戻し前、書戻し後でbarrierに到達した子を強制終了する。再openした保存先の記録の集合と入力bytes、同じfileの再度`axon import apply`による通常適用またはno-opへの収束を検査する。停止点はprivateな適用経路からcrate内の保存adapterへ渡し、公開APIと通常操作の意味は変えない。
+複数の記録の公開途中で止まった場合と、保存成功後に書戻しが失敗した場合を区別する。再試行では保存済みの Entity を重複作成せず、残りの反映と書戻しを完了できるようにする。詳細は [書込の保証](lifecycle-file.md#書込の保証) と [再試行](../reference/declaration.md#再試行) を参照する。
+
+形式と I/O 境界の検証は [Declaration の独立fixture](verification.md#declaration-の独立fixture) にまとめる。

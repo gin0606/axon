@@ -1,10 +1,10 @@
 # 実装の層構造
 
-振る舞いの契約は [docs/reference](../reference/lifecycle.md) の各文書、状態と遷移のモデルは [spec](../../spec/README.md) にある。この文書はコードの配置、依存方向、検証の入口を示す。操作や保存の詳細契約は末尾の参照先に置く。
+振る舞いの契約は [docs/reference](../reference/lifecycle.md) の各文書、状態と遷移のモデルは [spec](../../spec/README.md) にある。この文書はコードの配置、依存方向、検証の入口を示す。実装時の注意点と保存形式は末尾の参照先に置く。
 
 ## crate と module の地図
 
-Cargo workspace は root の `axon`、`crates/axon-core`、`crates/axon-recorder` を持つ。いずれも `publish = false` で、通常の Cargo コマンドは workspace の既定メンバーを対象にする。
+Cargo workspace は root の `axon`、`crates/axon-core`、`crates/axon-recorder` を持つ。workspace の設定は [Cargo.toml](../../Cargo.toml) にある。
 
 ```text
 axon binary: src/main.rs → src/cli/
@@ -65,10 +65,10 @@ cargo tree -p axon-core --depth 1
 
 層の整理でも公開コマンド・引数・出力 bytes・終了コード、lifecycle の意味論、canonical bytes は維持する。全体検証とモデルを再検証する条件は [検証方針](verification.md) に従う。
 
-## 詳細契約の参照先
+## 実装時の参照先
 
-- [共通コア](lifecycle-core.md): 通常操作、記録の集合と導出、衝突と解決、codec の意味と制約。
-- [Declaration](lifecycle-declaration.md): YAML と一括適用の契約、コアとファイル書戻しの境界。
-- [CLIと保存の接続](lifecycle-cli.md): 公開操作、mutation と出力の境界、内部 Git 呼出し。
-- [file保存とGit統合](lifecycle-file.md): 初期化と探索、記録 file と codec、writer、worktree、`axon storage check` と `axon resolve`。
+- [共通コア](lifecycle-core.md): 操作・記録間の検査と codec の責務。
+- [Declaration](lifecycle-declaration.md): 適用候補の検査、保存と file 書戻しの境界。
+- [CLIと保存の接続](lifecycle-cli.md): 独立した試用、保存と出力の境界、内部 Git 呼出し。
+- [file保存とGit統合](lifecycle-file.md): 保存形式、公開の順序と失敗境界、統合の検査手順。
 - [候補と外部条件](../reference/candidates.md)、[記録者連携](lifecycle-recorder.md)、[CLI入出力契約](../reference/cli.md): 外部 process、任意 metadata、表示と入出力の詳細。
