@@ -558,39 +558,43 @@ fn timeout_units_validate_before_storage() {
 }
 
 #[test]
-fn deprecated_capture_arguments_are_rejected_before_storage() {
+fn invalid_capture_arguments_are_rejected_before_storage() {
     let f = Fixture::new();
     fs::write(f.0.join(".git"), "broken marker").unwrap();
-    for args in [
-        vec![
-            "capture",
-            "--label",
-            "chore",
-            "--accept",
-            "old positional title",
-        ],
-        vec![
-            "capture",
-            "--label",
-            "chore",
-            "--title",
-            "Title",
-            "--message",
-            "old body",
-        ],
-        vec![
-            "capture",
-            "--label",
-            "chore",
-            "--accept",
-            "--title",
-            "Title",
-            "--description-file",
-            "old.md",
-        ],
+    for (args, diagnostic) in [
+        (vec!["capture", "--label", "chore"], "--title <TITLE>"),
+        (
+            vec![
+                "capture",
+                "--label",
+                "chore",
+                "--title",
+                "Title",
+                "--unknown",
+            ],
+            "unexpected argument '--unknown'",
+        ),
+        (
+            vec![
+                "capture",
+                "--label",
+                "chore",
+                "--title",
+                "Title",
+                "--description",
+                "Body",
+                "--file",
+                "body.md",
+            ],
+            "cannot be used with",
+        ),
     ] {
-        assert_eq!(f.run(&args).status.code(), Some(2));
+        let out = f.run(&args);
+        assert_eq!(out.status.code(), Some(2));
+        let error = failure(out);
+        assert!(error.contains(diagnostic), "{args:?}: {error}");
     }
+    assert!(!f.0.join(".axon").exists());
 }
 
 #[test]
