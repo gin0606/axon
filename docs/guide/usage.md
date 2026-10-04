@@ -76,7 +76,7 @@ axon import check new-plan.yaml
 
 ### 登録後の計画を修正する
 
-`GROUP_ID` を対象のIDへ置き換え、未使用のfileへ取得します。既存の編集fileへリダイレクトして上書きしないでください。labelを導入する前の `axon-declaration/v1` のfileは拒否されます。v1の `base` はv2のfingerprintと一致しないため、既存Entityのrecordには手で `label` を足さず `base` も書き換えず、未使用のfileへ `axon export` で取り直して編集意図を移します。保存先にまだないrecordには `label` を足します。そうしたrecordだけのfileはschema行を `axon-declaration/v2` にします。取り直したfileがあれば、そこへ移します。`base: null` でも `axon import prepare` 済みで保存済みのrecordは取り直す側です。その見分け方と参照の書き換えは [declarationの契約](../reference/declaration.md#canonical-形式) にあります。
+`GROUP_ID` を対象のIDへ置き換え、未使用のfileへ取得します。既存の編集fileへリダイレクトして上書きしないでください。
 
 ```sh
 axon export GROUP_ID > plan-edit.yaml
@@ -104,6 +104,6 @@ Groupは自身と終了済みを含む全子孫、Issueは単体を取得しま�
 
 `axon condition set ID --command 'test -f ready.txt'` は条件を保存し、`axon condition unset ID` は解除します。保存時には実行しません。`axon proposals|tasks` と既定の `axon show` が必要な条件を `/bin/sh -c` で評価し、終了0は成立、1は未成立、その他は一覧または表示の失敗です。`axon show ID --skip-conditions` は評価しません。`--condition-timeout` と `--trace-conditions` の契約は [外部条件](../reference/candidates.md) を参照してください。
 
-IDはprefix＋ランダム8文字で、完全IDまたは一意なsuffixを指定できます。乱数部分が6文字の既存のIDもそのまま使えます。CLI生成文は英語、TTYでは意味に応じて装飾します。非TTY、非空の`NO_COLOR`、`TERM=dumb`、`--no-color`では装飾しません。例えば`axon --no-color tasks`または`axon tasks --no-color`で、その呼び出しのhelpと診断を含めて装飾を無効化できます。一覧の絞り込み・検索、Note個別参照と保存結果は [CLIと表示の契約](../reference/cli.md) を参照してください。
+IDはprefix＋ランダム8文字で、完全IDまたは一意なsuffixを指定できます。CLI生成文は英語、TTYでは意味に応じて装飾します。非TTY、非空の`NO_COLOR`、`TERM=dumb`、`--no-color`では装飾しません。例えば`axon --no-color tasks`または`axon tasks --no-color`で、その呼び出しのhelpと診断を含めて装飾を無効化できます。一覧の絞り込み・検索、Note個別参照と保存結果は [CLIと表示の契約](../reference/cli.md) を参照してください。
 
 `axon list|tasks|proposals`の `--label` は現在のlabelで絞り込み、`--kind`・`--search` など他の絞り込みとANDで組み合わせます。`--search` は現在のtitle・descriptionだけを検索し、Noteだけの一致は返しません。Noteに残る情報は `axon note search` で読みます。終了Entityを含む全Noteから、完全ID・日時と最初の一致の前後24文字を1 Noteにつき1行で表示します。`Excerpt:` と `…` は抜粋・省略を示し、改行や制御文字は可視化します。原文は `axon note show ID NOTE_ID` で取得できます。検索は大小文字を区別するliteral部分一致で、空白の除去やUnicode正規化はしません。

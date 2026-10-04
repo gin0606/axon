@@ -9,8 +9,6 @@ mod import;
 pub use import::Checked;
 
 pub const SCHEMA: &str = "axon-declaration/v2";
-/// The schema before labels; its records lack `label` and its bases do not match v2.
-const EARLIER_SCHEMA: &str = "axon-declaration/v1";
 #[derive(Debug, thiserror::Error)]
 #[error("Declaration: {0}")]
 pub struct Error(pub String);
@@ -160,13 +158,6 @@ pub fn parse(input: &str) -> Result<Declaration> {
     }
     let probe: SchemaProbe = serde_saphyr::from_str_with_options(input, options.clone())
         .map_err(|e| invalid(format!("schema: {e}")))?;
-    if probe.schema == EARLIER_SCHEMA {
-        return Err(invalid(format!(
-            "schema: {EARLIER_SCHEMA} is not supported; records now require a label and \
-             fingerprints changed, so run axon export again to get {SCHEMA} (for records not \
-             yet in storage, add a label to each and declare {SCHEMA})"
-        )));
-    }
     if probe.schema != SCHEMA {
         return Err(invalid(format!(
             "schema: unsupported schema {}; expected {SCHEMA}",

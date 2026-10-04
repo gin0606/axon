@@ -60,11 +60,11 @@ gap は記録が消せないため解決記録では埋まらない。欠けた�
 
 `.axon/` 直下の header・`.gitignore`・`.gitattributes`・lock 以外の file は読まず、報告もしない。header file の欠落、読めない header、未知の format は破損と同じく操作を止める。未知の format は変換しない。
 
-現在の header の format は `axon-records/v2` である（[format を上げて変換で移す理由](../design/decisions.md#format-を上げて変換で移す理由)）。
+現在の header の format は `axon-records/v2` である（[保存形式ごとに検証規則を固定する理由](../design/decisions.md#保存形式ごとに検証規則を固定する理由)）。
 
 ## 保存先と初期化
 
-`axon init [PREFIX]` は保存先を新規作成する専用の操作とする。配置や形式を選ぶ option は持たない。`.axon/` が存在しないか、中にあるのが lock file、`.tmp` で終わる file、空の記録の directory、`axon init` が書くのと同じ内容の `.axon/.gitignore` と `.axon/.gitattributes` だけの場合（中断した初期化の残骸）だけ作る。この 2 file の内容は CRLF を LF と読んで比べ、Git の改行変換による行末の違いは同じ内容とみなす。残骸の 2 file に CRLF があれば `axon init` が書く内容で置き換え、追跡する運用で CRLF のまま stage されないようにする。header file、記録、内容の異なる `.axon/.gitignore` か `.axon/.gitattributes`、その他の file（以前の形式の保存先を含む）が一つでもあれば、内容が有効でも拒否してその path を示し、修復・暗黙の変換を行わない。
+`axon init [PREFIX]` は保存先を新規作成する専用の操作とする。配置や形式を選ぶ option は持たない。`.axon/` が存在しないか、中にあるのが lock file、`.tmp` で終わる file、空の記録の directory、`axon init` が書くのと同じ内容の `.axon/.gitignore` と `.axon/.gitattributes` だけの場合（中断した初期化の残骸）だけ作る。この 2 file の内容は CRLF を LF と読んで比べ、Git の改行変換による行末の違いは同じ内容とみなす。残骸の 2 file に CRLF があれば `axon init` が書く内容で置き換え、追跡する運用で CRLF のまま stage されないようにする。header file、記録、内容の異なる `.axon/.gitignore` か `.axon/.gitattributes`、その他の fileが一つでもあれば、内容が有効でも拒否してその path を示し、修復・暗黙の変換を行わない。
 
 prefix は Entity ID の先頭に使い、ASCII の小文字英数字とハイフンだけを許す。空文字と、先頭・末尾のハイフンは受け付けない。明示した値は変換せずに検証する。省略した場合は管理 root の directory 名の ASCII 大文字を小文字にした結果を使い、それがこの規則に合わなければ保存先を作らずに失敗し、明示指定を求める。
 
@@ -107,7 +107,7 @@ Git 内では現在の repository を探索境界とし、次の順で保存先�
 1. 現在の worktree root の `.axon`。
 2. main worktree の `.axon`。現在の worktree が linked worktree で、Git common directory が main worktree 直下の `.git` directory である場合だけ探す。bare repository に付けた worktree と submodule では探さない。
 
-各段では、header file があればその保存先に確定する。header がなく、記録やその他の file（以前の形式の保存先を含む）があれば、破損または未知の format として停止する。中断した初期化の残骸（lock、`.tmp` で終わる file、空の記録の directory、`axon init` が書くのと同じ内容の `.gitignore` と `.gitattributes`。内容は CRLF を LF と読んで比べる）しかない `.axon` では確定せず次へ進む。どの段でも確定しなければ未初期化とする。確定した保存先が破損・読取不能であれば停止し、別の保存先へ fallback しない。
+各段では、header file があればその保存先に確定する。header がなく、記録やその他の fileがあれば、破損または未知の format として停止する。中断した初期化の残骸（lock、`.tmp` で終わる file、空の記録の directory、`axon init` が書くのと同じ内容の `.gitignore` と `.gitattributes`。内容は CRLF を LF と読んで比べる）しかない `.axon` では確定せず次へ進む。どの段でも確定しなければ未初期化とする。確定した保存先が破損・読取不能であれば停止し、別の保存先へ fallback しない。
 
 追跡する運用で、保存先を持たない branch（`axon init` より前に分岐した branch など）の linked worktree から操作すると、2 によって main worktree の追跡対象の保存先に記録を書く。変更は main worktree の差分として見え、記録は失われないため、この副作用は許容する。main worktree で保存先を持たない branch を checkout した場合は未初期化になる。既存の store を使うには保存先を Git で取り込む。そこで `axon init` を実行すると別の store の新規作成になり、後で一つの保存先に統合できない（header が衝突し、記録は別の store のものになる）。
 
