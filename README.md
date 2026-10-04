@@ -1,25 +1,52 @@
 # axon
 
-IssueとGroupで個人の仕事や計画を管理するローカルCLIです。未判断、未着手、着手中、完了、取りやめのlifecycleを使い、包含・依存、再浮上条件、Noteと状態変更履歴を扱います。各Entityは仕事の種類を表す固定集合のlabelを必ず一つ持ちます（[値と意味](docs/guide/usage.md#labelで仕事の種類を示す)）。登録時に `axon capture --label` で付け、一覧の行で読み、`--label` で絞り込めます。
+[日本語](README.ja.md)
 
-[使い始める](docs/guide/getting-started.md) で、ソースからのビルドと、独立した保存先での試用手順を確認できます。[日常の操作](docs/guide/usage.md)、[文書一覧](docs/README.md)、[モデル](spec/README.md) も参照してください。
+A local CLI for managing personal tasks and plans as Issues and Groups. Capture ideas before deciding what to do, organize work with nested Groups and dependencies, and keep notes and a history of changes.
 
-## インストール
+Data lives in a local `.axon/` directory. You can keep it private or track it in Git alongside your project. Shell conditions let you bring work back into view when it becomes relevant.
 
-Rust 1.89以上で `cargo build --locked --bin axon` を実行し、生成されたbinaryの絶対パスを指定します。詳しい試用手順は [導入ガイド](docs/guide/getting-started.md) にあります。
+## Install
 
-## Agent向けskill
+Requires Rust 1.89 or later. macOS is supported; Linux and WSL2 are unverified, best-effort environments. Native Windows is not supported.
 
-[axon-kit](plugins/axon-kit/skills) は、Axonの情報モデル・操作契約と基本スキルを提供します。[axon](plugins/axon/skills) は、その上に構築した、Axonの開発者が想定する使い方をまとめた人とエージェントの協業ワークフローです。対応するCLIとpluginを導入すれば、他のrepositoryでも利用できます。skillの参照資料はplugin内に同梱しています。
+```sh
+git clone https://github.com/gin0606/axon.git
+cd axon
+cargo install --locked --path .
+```
 
-`axon` はそのまま利用できるほか、スキルをコピーして変更したり、`axon` や `axon-kit` を組み合わせて個人・プロジェクト用のスキルを作成したりできます。`axon` の協業方針はAxon本体の仕様ではなく、利用者が変更・置き換えできるものです。
+Ensure Cargo's binary directory (usually `~/.cargo/bin`) is on your `PATH`.
 
-独自スキルでも `axon-kit` の操作契約を守ります。`axon` のスキルを呼び出す場合は、その協業方針に従います。方針を変えたい部分は独自スキルとして実装し、`axon-kit` を使います。
+## Quick start
 
-[ワークフローのサンプル](examples/agent-workflow/README.md) は、`axon`と`axon-kit`を使って計画の登録からIssue・Groupの実装・検証・commitまで進める`axon-workflow` pluginです。そのまま導入して試したり、自分の運用に合わせて変更したりできます。
+In the directory where you want to manage work:
 
-`axon export ID...` で計画を canonical YAML として取得できます。新規計画の雛形は `axon docs declaration --example`、field と編集手順は `axon docs declaration` を参照してください。
+```sh
+axon init work
+axon capture --label docs --title 'Write a user guide' -m 'Explain installation and basic usage.'
+axon proposals
+```
 
-## 開発
+See [Getting started](docs/guide/getting-started.md) for the full workflow and Git setup.
 
-[層構造の地図](docs/development/architecture.md)、[共通コア](docs/development/lifecycle-core.md)、[Declaration](docs/development/lifecycle-declaration.md)、[CLIと保存の接続](docs/development/lifecycle-cli.md)、[file保存とGit統合](docs/development/lifecycle-file.md)、[候補と外部条件](docs/reference/candidates.md)、[記録者連携](docs/development/lifecycle-recorder.md)、[検証方針](docs/development/verification.md)、[設計判断](docs/design/decisions.md) を参照してください。
+## Agent skills
+
+Plugins for Claude Code and Codex are included:
+
+- [axon](plugins/axon/skills): ready-to-use workflows for collaboration between you and an agent.
+- [axon-kit](plugins/axon-kit/skills): core operations and contracts for building your own workflows.
+
+The [example workflow](examples/agent-workflow/README.md) includes plugin installation instructions and skills for planning, implementation, verification, and commits. You can use it as-is or adapt it to your workflow.
+
+## Documentation
+
+Run `axon --help` for commands and `axon docs` for the lifecycle and daily workflow. Detailed guides are currently in Japanese:
+
+- [Getting started](docs/guide/getting-started.md)
+- [Daily usage](docs/guide/usage.md)
+- [All documentation, including development](docs/README.md)
+
+## License
+
+[MIT](LICENSE)
