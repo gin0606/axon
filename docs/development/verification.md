@@ -38,6 +38,19 @@ cargo test --workspace --lib --bin axon --test smoke
 cargo +1.89.0 check --locked --all-targets --all-features
 ```
 
+### Plugin version
+
+Python 3 を使い、Lefthook は各 commit で `python3 scripts/update-plugin-versions.py` を実行する。対象は `plugins/` 配下の各 plugin と `examples/agent-workflow`。stage 済みのファイルの内容・パス・Git mode からハッシュを生成し、Claude と Codex の manifest に同じ `<base>+plugin.<hash>` を設定する。base は manifest の `version` の `+` より前の値を使い、変更するときは両方を揃えて stage する。ハッシュ計算からは両 manifest の `version` を除外する。
+
+生成が必要な場合は manifest を更新して commit を止める。表示された manifest を stage して再実行する。index は変更せず、manifest に未 stage の編集があれば上書きせずに止まる。plugin 外の変更や未追跡ファイルは version に影響しない。
+
+CI は書き換えなしの検査と独立した Git fixture による生成処理の検証を行う。ローカルでも次のコマンドで確認できる。`--check` は stage 済みの内容を検査する。
+
+```sh
+python3 scripts/update-plugin-versions.py --check
+python3 scripts/test-plugin-versions.py
+```
+
 ## Rust coverage
 
 `mise.toml` で固定した `cargo-llvm-cov` を使い、全target・全featureを次の一つのcommandで計測する。数値thresholdは設けず、未到達箇所を次の改善判断へ使う。
