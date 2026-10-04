@@ -103,7 +103,7 @@ Groupの場合は、この共通表示の末尾へ短い集計と全子孫のツ
 
 同じNote内の複数一致も1 Note＝1行とし、所属Entityの完全ID、完全なNote ID、既存のlocal日時と数値UTC offset、`Excerpt:` 付き抜粋を示す。Entityは`axon list`と同じ作成日時昇順・同時刻ID順、Entity内は`axon note list`と同じ日時順・同時刻は記録ID順で並べる。見出し・空行・分岐説明行は加えない。
 
-抜粋は最初の一致と前後24文字で、検索語そのものを省略せず、日本語を壊さない文字単位で切り出す。原文を省略した側に `…` を示す。原文で一致位置と範囲を決めた後、改行を可視の `\n`、元のバックスラッシュを `\\` にし、他の端末制御文字も可視化する。保存本文は変えない。長い検索語でも一行の固定上限で切り捨てない。行単位での絞り込み向けで、固定列・区切りや機械向け出力形式は保証しない。
+抜粋は最初の一致と前後24文字で、検索語そのものを省略せず、日本語を壊さない文字単位で切り出す。原文を省略した側に `…` を示す。原文で一致位置と範囲を決めた後、改行を可視の `\n`、元のバックスラッシュを `\\` にし、行区切り・段落区切り（U+2028・U+2029）を `\u{2028}`・`\u{2029}` にし、他の制御文字は[表示とstream](#表示とstream)の規則で可視化する。保存本文は変えない。長い検索語でも一行の固定上限で切り捨てない。行単位での絞り込み向けで、固定列・区切りや機械向け出力形式は保証しない。
 
 `axon list|tasks|proposals`の `--search` は現在のtitle・本文だけに一致し、Noteだけの一致ではEntityを返さない。現在の主題は `axon list --search`、Noteに残る情報は `axon note search`、原文は `axon note show ID NOTE_ID` で読む。`axon note list ID` のEntity IDは必須。
 
@@ -175,7 +175,7 @@ Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへ
 
 ## 表示とstream
 
-CLIが生成するhelp・ラベル・診断は英語。利用者のタイトル・本文・Note・理由は原文を保持する。human時刻はlocal時刻と数値UTC offset。C0/C1/ESC、tab、CRは可視escapeし、本文のUnicodeと改行は保持する。
+CLIが生成するhelp・ラベル・診断は英語。利用者のタイトル・本文・Note・理由は原文を保持する。human時刻はlocal時刻と数値UTC offset。C0/C1/ESC、tab、CRは可視escapeし、表示順を入れ替える双方向制御文字（U+061C、U+200E–U+200F、U+202A–U+202E、U+2066–U+2069）は `\u{202e}` のような小文字の `\u{...}` で表示する。この規則はタイトル・本文・Note・理由・記録者・path・条件のコマンドと出力・診断に、TTYかどうかを問わず同じ文字表現で適用し、保存値・`axon export`・declarationの値は変えない。本文のその他のUnicodeと改行は保持する。
 
 装飾は対象streamがTTYで、非空の`NO_COLOR`、`TERM=dumb`、`--no-color`のいずれも指定されていない場合だけ。stdoutとstderrは個別にTTYを判定し、空の`NO_COLOR`は装飾を無効化しない。`--no-color`はsubcommandの前後で使えるglobal optionで、helpと診断を含む全ての人向け出力に作用する。同じ内容からANSIを除けば非TTYとテキスト・順序・空白が一致する。ただし一覧と子孫ツリーの列揃えと折り返しは[行の形式](#一覧)に従い、端末でだけ空白と改行を加える。IDと着手はcyan＋bold、見出しはbold、成功/Readyはgreen、待ちはyellow、未判断はyellow＋bold、kind・terminal・no-op・補助情報はdim、エラーはred＋bold。ユーザー本文・タイトルは着色せず、色だけを意味の手掛かりにしない。`axon export`・`axon completion`・`axon docs declaration --example`は常に装飾なし。
 

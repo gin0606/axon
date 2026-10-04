@@ -968,6 +968,165 @@ fn strip_sgr(value: &str) -> String {
 
 #[cfg(unix)]
 #[test]
+fn human_output_escapes_bidirectional_controls_without_changing_stored_values() {
+    const BIDI: [char; 12] = [
+        '\u{061c}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}',
+        '\u{202e}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}',
+    ];
+    let raw: String = BIDI.iter().collect();
+    let escaped: String = BIDI.iter().flat_map(|c| c.escape_unicode()).collect();
+    let f = Fixture::new();
+    let root = f.0.join(format!("repo{raw}"));
+    fs::create_dir(&root).unwrap();
+    let run = |args: &[&str]| {
+        let mut cmd = command(&root);
+        cmd.args(args)
+            .env("AXON_ACTOR", format!("actor{raw}"))
+            .env("AXON_SESSION_ID", format!("session{raw}"));
+        cmd
+    };
+    let ok = |args: &[&str]| success(run(args).output().unwrap());
+    let stored = || {
+        record_files(&root)
+            .into_iter()
+            .map(|path| fs::read(root.join(".axon/records").join(path)).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let visible = |text: &str, fragments: &[&str]| {
+        assert!(!text.contains(BIDI), "{text:?}");
+        for fragment in fragments {
+            let expected = fragment.replace("{bidi}", &escaped);
+            assert!(text.contains(&expected), "{expected:?} in {text:?}");
+        }
+    };
+
+    visible(&ok(&["init", "repo"]), &["repo{bidi}"]);
+    let id = created(&ok(&[
+        "capture",
+        "--label",
+        "bug",
+        "--accept",
+        "--title",
+        &format!("title{raw}"),
+        "-m",
+        &format!("body{raw}\nnext 日本語"),
+    ]))
+    .to_owned();
+    let note = ok(&["note", "add", &id, "-m", &format!("note{raw}")]);
+    let note = note.split_whitespace().nth(2).unwrap().to_owned();
+    ok(&["start", &id, "-r", &format!("reason{raw}")]);
+    let condition = |code: u8| format!("printf 'out{raw}'; printf 'err{raw}' >&2; exit {code}");
+    let waiting = created(&ok(&[
+        "capture",
+        "--label",
+        "chore",
+        "--accept",
+        "--title",
+        "waiting",
+        "--command",
+        &condition(23),
+    ]))
+    .to_owned();
+    let before = stored();
+    visible(
+        &failure(run(&["tasks"]).output().unwrap()),
+        &["out{bidi}", "err{bidi}", "repo{bidi}", "printf 'out{bidi}'"],
+    );
+    assert_eq!(stored(), before);
+    ok(&["condition", "set", &waiting, "--command", &condition(1)]);
+    let before = stored();
+
+    visible(
+        &ok(&["show", &id, "--details", "--skip-conditions"]),
+        &["title{bidi}", "  body{bidi}\n  next 日本語"],
+    );
+    visible(&ok(&["list"]), &["title{bidi}"]);
+    visible(
+        &ok(&["log", &id, "--recorder-details"]),
+        &["actor{bidi}", "reason{bidi}", "session{bidi}"],
+    );
+    visible(
+        &ok(&["note", "list", &id, "--recorder-details"]),
+        &["note{bidi}", "actor{bidi}", "session{bidi}"],
+    );
+    visible(&ok(&["note", "show", &id, &note]), &["note{bidi}"]);
+    let traced = run(&["tasks", "--trace-conditions"]).output().unwrap();
+    assert!(traced.status.success(), "{traced:?}");
+    visible(
+        &String::from_utf8(traced.stderr).unwrap(),
+        &["out{bidi}", "err{bidi}", "repo{bidi}"],
+    );
+    for args in [
+        vec!["show", id.as_str(), "--details", "--skip-conditions"],
+        vec!["log", id.as_str(), "--recorder-details"],
+    ] {
+        let mut cmd = color_command(&f, &args);
+        cmd.current_dir(&root);
+        let colored = terminal_process(cmd, false, 200);
+        assert!(colored.status.success(), "{colored:?}");
+        let colored = String::from_utf8(colored.stdout).unwrap();
+        assert!(colored.contains('\x1b'), "{colored}");
+        assert_eq!(strip_sgr(&colored).replace("\r\n", "\n"), ok(&args));
+    }
+    // Diagnostics, including argument parsing errors that quote the rejected argument.
+    let unknown = format!("zz{raw}");
+    let label = format!("x{raw}");
+    let subcommand = format!("sub\x1b]0;t\x07\t{raw}");
+    let option = format!("--x\x1b]0;t\x07{raw}");
+    for (args, code, fragment) in [
+        (vec!["show", unknown.as_str()], 1, "zz{bidi}"),
+        (
+            vec!["capture", "--label", label.as_str(), "--title", "t"],
+            2,
+            "x{bidi}",
+        ),
+        (vec![subcommand.as_str()], 2, "sub\\x1b]0;t\\x07\\t{bidi}"),
+        // Clap would repeat an unexpected option in its styled tip.
+        (
+            vec!["show", option.as_str()],
+            2,
+            "unexpected argument '--x\\x1b]0;t\\x07{bidi}'",
+        ),
+        // A value matching clap's own decoration leaves that decoration alone.
+        (vec!["\x1b"], 2, "unrecognized subcommand '\\x1b'"),
+    ] {
+        let plain = run(&args).output().unwrap();
+        assert_eq!(plain.status.code(), Some(code), "{plain:?}");
+        let plain = String::from_utf8(plain.stderr).unwrap();
+        visible(&plain, &[fragment]);
+        let mut cmd = color_command(&f, &args);
+        cmd.current_dir(&root);
+        let colored = terminal_process(cmd, true, 200);
+        assert_eq!(colored.status.code(), Some(code), "{colored:?}");
+        let colored = String::from_utf8(colored.stderr).unwrap();
+        assert!(colored.contains('\x1b'), "{colored}");
+        assert_eq!(strip_sgr(&colored).replace("\r\n", "\n"), plain);
+    }
+    assert_eq!(stored(), before);
+
+    let exported = ok(&["export", &id]);
+    assert!(exported.contains(&format!("title{raw}")), "{exported}");
+    let path = root.join("plan.yaml");
+    fs::write(&path, &exported).unwrap();
+    assert!(ok(&["import", "check", path.to_str().unwrap()]).contains("No changes"));
+    ok(&["import", "apply", path.to_str().unwrap()]);
+    assert_eq!(stored(), before);
+    let view = Location::discover(&root, false)
+        .unwrap()
+        .open()
+        .unwrap()
+        .read()
+        .unwrap()
+        .1
+        .view()
+        .unwrap();
+    let current = view.current(&eid(&id)).unwrap();
+    assert_eq!(current.title, format!("title{raw}"));
+    assert_eq!(current.description, format!("body{raw}\nnext 日本語"));
+}
+
+#[cfg(unix)]
+#[test]
 fn color_controls_apply_to_help_output_and_diagnostics_per_stream() {
     let f = Fixture::new();
     f.init();
