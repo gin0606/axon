@@ -391,9 +391,21 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
             out.push_str(&row(other));
         }
     }
-    out.push('\n');
-    out.push_str(&display::block(value.description));
-    out.push('\n');
+    // The body starts on the line after its heading at column zero, so a terminal that wraps a
+    // long line continues it where the body starts.
+    out.push_str(&format!(
+        "\n{}{}\n",
+        display::heading("Description:"),
+        if value.description.is_empty() {
+            " (none)"
+        } else {
+            ""
+        }
+    ));
+    if !value.description.is_empty() {
+        out.push_str(&display::human_text(value.description));
+        out.push('\n');
+    }
     if let Some(descendants) = &value.descendants {
         let total = descendants.entries.len();
         let completed = descendants.completed;
