@@ -5,7 +5,7 @@ description: Axonの既存IssueまたはGroupへ確定した補足情報をimmut
 
 # 補足を追記する
 
-`axon-kit:conventions` を使い、共通契約で選択したbinary・対象rootを維持する。 本文変更・状態変更reasonと混同せず、調査結果、検証、訂正、申し送りをNoteへ残す。
+`axon-kit:conventions` を使い、共通契約で選択したbinary・対象rootを維持する。 呼び出し側がNoteへ残すと決めた補足を保存し、本文編集や変更操作のreasonと区別する。保存済みreasonの補足・訂正では、元の操作を特定する情報と補足・訂正内容を追記し、元の記録は変更しない。
 
 最初の追記前に正確な本文bytesとdigest、`axon note list ID` のNote ID集合を保存する。`axon note add ID -m ...` または `-F snapshot` を一度だけ実行し、返されたIDを記録する。`axon note show ID NOTE_ID --recorder-details` でID、本文、日時、取得できた記録者を照合する。actor/sessionは自動取得の任意情報で、追記の前提にしない。
 

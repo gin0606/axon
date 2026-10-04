@@ -5,7 +5,7 @@ description: Axonの対象と変更内容が確定したEntityに、状態・種
 
 # 既存Entityを更新する
 
-`axon-kit:conventions` を使い、共通契約で選択したbinary・対象rootを維持する。 `axon show ID --details --skip-conditions`と関連するlog・Note、関係先を読む。与えられた判断に対応する `axon accept|withdraw|cancel|reconsider|reopen`、本文の `axon write`、labelの `axon label set A VALUE`、包含の `axon parent set A --parent G / axon parent unset A`、依存の `axon dep add|rm A --needs B`、条件の `axon condition set A --command ... / axon condition unset A`、種類の `axon convert A --kind issue|group`（前提は [作成と照合](../conventions/references/creation.md)）を使う。
+`axon-kit:conventions` を使い、共通契約で選択したbinary・対象rootを維持する。渡されたreasonの付与と保存確認は [保存操作](../conventions/references/mutations.md) に従う。 `axon show ID --details --skip-conditions`と関連するlog・Note、関係先を読む。与えられた判断に対応する `axon accept|withdraw|cancel|reconsider|reopen`、本文の `axon write`、labelの `axon label set A VALUE`、包含の `axon parent set A --parent G / axon parent unset A`、依存の `axon dep add|rm A --needs B`、条件の `axon condition set A --command ... / axon condition unset A`、種類の `axon convert A --kind issue|group`（前提は [作成と照合](../conventions/references/creation.md)）を使う。
 
 未終了の本文は`axon write`、labelは`axon label set`で直接編集し、terminal後の訂正はNoteで行うため、本文やlabelの変更のためだけにlifecycleを往復させない。`axon condition`はシェル文字列を保存し、実行環境・副作用は呼び出し側の意図と照合する。条件を評価する`axon proposals`/`axon tasks`と既定の`axon show`を使う場合だけ実行契約をhelpで確認する。
 
