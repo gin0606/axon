@@ -148,7 +148,33 @@ pub(crate) fn main() -> std::process::ExitCode {
             Ok(cli) => cli,
             Err(error) => {
                 let color = display::cli_color(error.use_stderr());
-                error.with_cmd(&Cli::command().color(color)).exit();
+                let mut error = error.with_cmd(&Cli::command().color(color));
+                // Clap quotes the rejected arguments in its message. Escape them as one-line
+                // values before it renders, so Axon's own decoration stays intact.
+                let escaped: Vec<_> = error
+                    .context()
+                    .filter_map(|(kind, value)| {
+                        let escaped = match value {
+                            ContextValue::String(value) => {
+                                ContextValue::String(display::line(value))
+                            }
+                            ContextValue::Strings(values) => {
+                                ContextValue::Strings(values.iter().map(display::line).collect())
+                            }
+                            _ => return None,
+                        };
+                        (escaped != *value).then_some((kind, escaped))
+                    })
+                    .collect();
+                // Its tips repeat the argument inside text that already carries decoration, so
+                // they are left out rather than shown unescaped.
+                if !escaped.is_empty() {
+                    error.remove(ContextKind::Suggested);
+                }
+                for (kind, value) in escaped {
+                    error.insert(kind, value);
+                }
+                error.exit();
             }
         };
         debug_assert_eq!(cli.no_color, no_color);

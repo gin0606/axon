@@ -1,7 +1,8 @@
 use chrono::{DateTime, FixedOffset, Local, Utc};
 use std::fmt::Write;
 
-/// Render untrusted text without allowing terminal control sequences to execute.
+/// Render untrusted text without allowing terminal control sequences to execute, or
+/// bidirectional controls to reorder the characters a terminal shows.
 pub fn human_text(value: impl std::fmt::Display) -> String {
     let value = value.to_string();
     let mut rendered = String::with_capacity(value.len());
@@ -13,10 +14,20 @@ pub fn human_text(value: impl std::fmt::Display) -> String {
             '\u{00}'..='\u{1f}' | '\u{7f}'..='\u{9f}' => {
                 write!(rendered, "\\x{:02x}", character as u32).unwrap();
             }
+            character if bidi_control(character) => {
+                rendered.extend(character.escape_unicode());
+            }
             _ => rendered.push(character),
         }
     }
     rendered
+}
+
+fn bidi_control(character: char) -> bool {
+    matches!(
+        character,
+        '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+    )
 }
 
 pub fn timestamp(timestamp: &DateTime<Utc>) -> String {
@@ -220,10 +231,31 @@ mod tests {
         assert!(wrap("", 4).is_empty());
     }
 
+    #[test]
+    fn human_text_escapes_bidirectional_controls_like_search_excerpts() {
+        assert_eq!(
+            human_text(
+                "a\u{061c}\u{200e}\u{200f}\u{202a}\u{202b}\u{202c}\u{202d}\u{202e}\u{2066}\u{2067}\u{2068}\u{2069}b"
+            ),
+            "a\\u{61c}\\u{200e}\\u{200f}\\u{202a}\\u{202b}\\u{202c}\\u{202d}\\u{202e}\\u{2066}\\u{2067}\\u{2068}\\u{2069}b"
+        );
+        // Neighbouring format characters that do not reorder text stay as they are.
+        assert_eq!(
+            human_text("\u{200d}\u{2028}\u{2029}\u{2065}\u{206a}"),
+            "\u{200d}\u{2028}\u{2029}\u{2065}\u{206a}"
+        );
+    }
+
     proptest! {
         #[test]
         fn generated_text_escapes_controls_without_losing_other_characters(
-            characters in prop::collection::vec(any::<char>(), 0..80)
+            characters in prop::collection::vec(
+                prop_oneof![
+                    any::<char>(),
+                    prop::sample::select(vec!['\u{061c}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202e}', '\u{2066}', '\u{2069}']),
+                ],
+                0..80,
+            )
         ) {
             let input = format!("normal 日本語\n\t\r\0\u{1b}\u{7f}\u{85}\u{9f}{}", characters.iter().collect::<String>());
             let prefix = "normal 日本語\n\\t\\r\\x00\\x1b\\x7f\\x85\\x9f";
@@ -232,6 +264,9 @@ mod tests {
                 '\t' => "\\t".to_string(),
                 '\r' => "\\r".to_string(),
                 '\0'..='\u{1f}' | '\u{7f}'..='\u{9f}' => format!("\\x{:02x}", *c as u32),
+                '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => {
+                    c.escape_unicode().to_string()
+                }
                 _ => c.to_string(),
             }).collect();
             let expected = format!("{prefix}{expected}");
