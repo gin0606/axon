@@ -2,9 +2,37 @@
 
 [English](README.md)
 
-Issue と Group で個人の仕事や計画を管理するローカル CLI です。アイデアを未判断のまま記録し、Group の階層や依存関係で仕事を整理して、Note と変更履歴を残せます。
+Issue と Group で個人の仕事や計画を管理するローカル CLI です。アイデアを未判断（`Undecided`）のまま記録し、Group の階層や依存関係で仕事を整理して、Note と変更履歴を残せます。
 
-データはローカルの `.axon/` に保存します。個人用に保持することも、プロジェクトと一緒に Git で管理することもできます。シェルコマンドによる再浮上条件で、必要になった仕事を再び候補に表示できます。
+データはローカルの `.axon/` に保存します。個人用に保持することも、プロジェクトと一緒に Git で管理することもできます。
+
+## Issue のライフサイクル
+
+思いついた仕事は、実施するか決める前に記録できます。`Accept` した Issue は、`NotStarted` から `InProgress`、`Completed` へ進みます。
+
+```mermaid
+flowchart LR
+    U["未判断<br/>Undecided"] -->|採用| N["未着手<br/>NotStarted"]
+    N -->|着手| I["着手中<br/>InProgress"]
+    I -->|完了| D["完了<br/>Completed"]
+    N -->|採用撤回| U
+    I -->|中断| N
+    D -->|再開| N
+```
+
+`Undecided`・`NotStarted`・`InProgress` の Issue は、`Cancel` によって `Cancelled` にできます。`Reconsider` すると `Undecided` に戻ります。全ての状態と遷移は [ライフサイクルの詳細](docs/reference/lifecycle.md#遷移) を参照してください。
+
+## 必要になったら再浮上
+
+「この日になったら」「ファイルができたら」「外部サービスの状態が変わったら」。シェルコマンドで判定できることなら、何でも再浮上条件にできます。既存の CLI や自作スクリプトを使い、複数の条件を組み合わせることもできます。
+
+条件は候補一覧を取得するときなどに評価され、成立した仕事が再び候補に現れます。たとえば、`ready.txt` が存在することを条件にするには、`ID` を対象の Issue の ID に置き換えて実行します。
+
+```sh
+axon condition set ID --command 'test -f ready.txt'
+```
+
+コマンドの終了コードが `0` なら成立、`1` なら未成立、それ以外は判定エラーです。「後で考える」Issue は、`Undecided` のまま条件を付けて残せます。詳しくは [再浮上条件](docs/reference/candidates.md#条件の種類) を参照してください。
 
 ## インストール
 
