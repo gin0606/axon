@@ -1,9 +1,16 @@
-//! The main window: project switching and creation on the left, the selected project on the
-//! right. Disk access runs on the background executor; each result is applied only while the
-//! request that produced it is still the current one.
+//! The main window: project switching, creation and the filters on the left, the shared list of
+//! the selected project in the middle, and the detail of the selected Entity (or the draft
+//! workbench) on the right. Disk access runs on the background executor; each result is applied
+//! only while the request that produced it is still the current one.
+
+mod explorer;
+pub mod text;
+
+pub use explorer::{LIST_CONTEXT, entity_element};
 
 use crate::{
     Workbench,
+    board::{Board, Explorer},
     project::{
         AppData, CreateError, NameError, Project, ProjectId, Registry, Requests, Status, Step,
         registry::NAME_LIMIT,
@@ -16,13 +23,16 @@ use gpui_kit::component::{
     menu::{DropdownMenu, PopupMenuItem},
 };
 use gpui_kit::{
-    AnyElement, AppContext, Context, Entity, IntoElement, Render, SharedString, Window, div,
-    prelude::*, px,
+    AnyElement, AppContext, Context, Entity, FocusHandle, IntoElement, Render, ScrollHandle,
+    SharedString, Window, div, prelude::*, px,
 };
 use std::collections::HashMap;
 
 /// The width of the project column.
 pub const SIDEBAR_WIDTH: f32 = 200.;
+/// The narrowest the list and the detail pane get.
+pub const LIST_MIN_WIDTH: f32 = 300.;
+pub const DETAIL_MIN_WIDTH: f32 = 360.;
 /// The tallest the status of the selected project grows before it scrolls.
 pub const STATUS_MAX_HEIGHT: f32 = 120.;
 
@@ -75,6 +85,10 @@ pub struct AxonApp {
     /// Why the last attempt to finish each incomplete project failed, kept across switching.
     incomplete_errors: HashMap<ProjectId, String>,
     workbench: Entity<Workbench>,
+    explorer: Explorer,
+    search: Entity<InputState>,
+    list_focus: FocusHandle,
+    list_scroll: ScrollHandle,
 }
 
 impl AxonApp {
@@ -85,6 +99,18 @@ impl AxonApp {
                 this.submit(window, cx);
             }
         })
+        .detach();
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("タイトル・本文を検索"));
+        cx.subscribe_in(
+            &search,
+            window,
+            |this, search, event: &InputEvent, _, cx| {
+                if let InputEvent::Change = event {
+                    let query = search.read(cx).value().to_string();
+                    this.update_filter(|filter| filter.query = query, cx);
+                }
+            },
+        )
         .detach();
         let workbench = cx.new(|cx| Workbench::new(window, cx));
         let mut this = Self {
@@ -102,6 +128,11 @@ impl AxonApp {
             switches: 0,
             incomplete_errors: HashMap::new(),
             workbench,
+            explorer: Explorer::default(),
+            search,
+            // A tab stop, so the arrow keys are reachable from the keyboard alone.
+            list_focus: cx.focus_handle().tab_stop(true),
+            list_scroll: ScrollHandle::new(),
         };
         this.reload_registry(cx);
         this
@@ -139,6 +170,12 @@ impl AxonApp {
     }
     pub fn workbench(&self) -> &Entity<Workbench> {
         &self.workbench
+    }
+    pub fn explorer(&self) -> &Explorer {
+        &self.explorer
+    }
+    pub fn search_input(&self) -> &Entity<InputState> {
+        &self.search
     }
 
     /// Reads the registry again, keeping the selection when it still exists.
@@ -207,27 +244,48 @@ impl AxonApp {
     fn show_selected(&mut self, cx: &mut Context<Self>) {
         self.store_loads.cancel();
         let project = self.selected().cloned();
+        let project_id = project.as_ref().map(|project| &project.id);
+        if self.explorer.project() != project_id {
+            self.list_scroll.set_offset(Default::default());
+        }
+        self.explorer.unload(project_id);
         self.store = match project {
             None => StoreState::None,
-            Some(project) if project.status == Status::Creating => StoreState::Incomplete {
-                error: self.incomplete_errors.get(&project.id).cloned(),
-            },
+            Some(project) if project.status == Status::Creating => {
+                // No read follows, so nothing selected could be shown.
+                self.explorer.deselect();
+                StoreState::Incomplete {
+                    error: self.incomplete_errors.get(&project.id).cloned(),
+                }
+            }
             Some(project) => {
                 let ticket = self.store_loads.begin(project.id.clone());
                 let connection = self.data.connect(&project);
                 cx.spawn(async move |this, cx| {
+                    // The rows are derived off the UI thread too; the window only filters them.
                     let result = cx
                         .background_spawn(async move {
-                            connection.read(|_, _, view| Summary {
-                                entities: view.known().count(),
-                            })
+                            connection
+                                .load()
+                                .map(|(_, records, view)| Board::new(records, view))
                         })
                         .await;
                     this.update(cx, |this, cx| {
                         if this.store_loads.finish(&ticket) {
                             this.store = match result {
-                                Ok(summary) => StoreState::Loaded(summary),
-                                Err(error) => StoreState::Failed(error.to_string()),
+                                Ok(board) => {
+                                    let summary = Summary {
+                                        entities: board.len(),
+                                    };
+                                    this.explorer.load(ticket.key(), board);
+                                    StoreState::Loaded(summary)
+                                }
+                                Err(error) => {
+                                    // Nothing of the project is shown, so neither is a selection
+                                    // that a later read would bring back unasked.
+                                    this.explorer.deselect();
+                                    StoreState::Failed(error.to_string())
+                                }
                             };
                             cx.notify();
                         }
@@ -511,6 +569,7 @@ impl AxonApp {
             .w(px(SIDEBAR_WIDTH))
             .flex_none()
             .h_full()
+            .overflow_y_scroll()
             .flex()
             .flex_col()
             .gap_2()
@@ -606,10 +665,15 @@ impl AxonApp {
                     .child(notice.clone()),
             );
         }
+        if loaded {
+            sidebar = sidebar.child(self.render_filters(cx));
+        }
         sidebar.into_any_element()
     }
 
-    fn render_status(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// What the selected project's store looks like, and the action that state offers (kept
+    /// apart so a long message never scrolls it out of reach).
+    fn render_status(&self, cx: &mut Context<Self>) -> (AnyElement, Option<AnyElement>) {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let danger = theme.danger;
@@ -619,21 +683,28 @@ impl AxonApp {
                 .outline()
                 .label("再読み込み")
                 .on_click(cx.listener(|this, _, _, cx| this.reload(cx)))
+                .into_any_element()
         };
         let status = div().flex().flex_col().gap_2();
-        match (&self.registry, self.selected(), &self.store) {
-            (RegistryState::Loading, _, _) => {
-                status.child(message("プロジェクトの一覧を読み込み中…".into()))
-            }
-            (RegistryState::Failed(error), _, _) => status
-                .child(message(
-                    "プロジェクトの一覧を読み込めませんでした。空の一覧として扱わず、書き換えもしません。".into(),
-                ))
-                .child(div().text_sm().text_color(danger).child(error.clone()))
-                .child(reload()),
-            (RegistryState::Loaded(_), None, _) => status.child(message(
-                "プロジェクトがありません。左の「＋ プロジェクトを作成」から作成してください。".into(),
-            )),
+        let (status, action) = match (&self.registry, self.selected(), &self.store) {
+            (RegistryState::Loading, _, _) => (
+                status.child(message("プロジェクトの一覧を読み込み中…".into())),
+                None,
+            ),
+            (RegistryState::Failed(error), _, _) => (
+                status
+                    .child(message(
+                        "プロジェクトの一覧を読み込めませんでした。空の一覧として扱わず、書き換えもしません。".into(),
+                    ))
+                    .child(div().text_sm().text_color(danger).child(error.clone())),
+                Some(reload()),
+            ),
+            (RegistryState::Loaded(_), None, _) => (
+                status.child(message(
+                    "プロジェクトがありません。左の「＋ プロジェクトを作成」から作成してください。".into(),
+                )),
+                None,
+            ),
             (_, Some(_), StoreState::Incomplete { error }) => {
                 let mut status = status.child(message(
                     "このプロジェクトの作成は完了していません。再試行すると、既存のデータを置き換えずに作成を続けます。".into(),
@@ -641,58 +712,117 @@ impl AxonApp {
                 if let Some(error) = error {
                     status = status.child(div().text_sm().text_color(danger).child(error.clone()));
                 }
-                status.child(
-                    Button::new("retry-creation")
-                        .primary()
-                        .label("作成を再試行")
-                        .loading(self.busy)
-                        .disabled(self.busy)
-                        .on_click(cx.listener(|this, _, _, cx| this.retry_creation(cx))),
+                (
+                    status,
+                    Some(
+                        Button::new("retry-creation")
+                            .primary()
+                            .label("作成を再試行")
+                            .loading(self.busy)
+                            .disabled(self.busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.retry_creation(cx)))
+                            .into_any_element(),
+                    ),
                 )
             }
             (_, Some(_), StoreState::Loading | StoreState::None) => {
-                status.child(message("読み込み中…".into()))
+                (status.child(message("読み込み中…".into())), None)
             }
-            (_, Some(_), StoreState::Loaded(summary)) => status.child(message(
-                if summary.entities == 0 {
-                    "Issue・Group はまだありません。".into()
-                } else {
-                    format!("{} 件の Issue・Group があります。", summary.entities).into()
-                },
-            )),
-            (_, Some(_), StoreState::Failed(error)) => status
-                .child(message(
-                    "このプロジェクトの保存先を読み込めませんでした。空のプロジェクトとしては扱いません。他のプロジェクトには左のメニューから切り替えられます。".into(),
-                ))
-                .child(div().text_sm().text_color(danger).child(error.clone()))
-                .child(reload()),
-        }
-        .child(
-            div()
-                .text_xs()
-                .text_color(muted)
-                .child(match self.selected() {
-                    Some(project) => format!(
-                        "保存先: {}",
-                        self.data.project_root(&project.id).display()
-                    ),
-                    None => format!("データの保存場所: {}", self.data.dir().display()),
-                }),
-        )
-        .into_any_element()
+            (_, Some(_), StoreState::Loaded(summary)) => (
+                status.child(message(
+                    if summary.entities == 0 {
+                        "Issue・Group はまだありません。".into()
+                    } else {
+                        format!("{} 件の Issue・Group があります。", summary.entities).into()
+                    },
+                )),
+                None,
+            ),
+            (_, Some(_), StoreState::Failed(error)) => (
+                status
+                    .child(message(
+                        "このプロジェクトの保存先を読み込めませんでした。空のプロジェクトとしては扱いません。他のプロジェクトには左のメニューから切り替えられます。".into(),
+                    ))
+                    .child(div().text_sm().text_color(danger).child(error.clone())),
+                Some(reload()),
+            ),
+        };
+        let status = status
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(match self.selected() {
+                        Some(project) => {
+                            format!("保存先: {}", self.data.project_root(&project.id).display())
+                        }
+                        None => format!("データの保存場所: {}", self.data.dir().display()),
+                    }),
+            )
+            .into_any_element();
+        (status, action)
     }
 }
 
 impl Render for AxonApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let (background, foreground) = (theme.background, theme.foreground);
+        let (background, foreground, border, muted, danger) = (
+            theme.background,
+            theme.foreground,
+            theme.border,
+            theme.muted_foreground,
+            theme.danger,
+        );
         let title = self
             .selected()
             .map(|project| project.name.clone())
             .unwrap_or_else(|| "Axon".into());
         let sidebar = self.render_sidebar(cx);
-        let status = self.render_status(cx);
+        let (status, action) = self.render_status(cx);
+        let list = self.render_list(cx);
+        let detail: AnyElement =
+            match self.explorer.detail() {
+                Some(Ok(detail)) => self.render_detail(detail, cx),
+                Some(Err(error)) => div()
+                    .id("detail-error")
+                    .p_4()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_color(danger)
+                            .child(format!("詳細を表示できません: {error}")),
+                    )
+                    .child(
+                        Button::new("close-detail")
+                            .ghost()
+                            .compact()
+                            .label("閉じる")
+                            .on_click(cx.listener(|this, _, _, cx| this.close_entity(cx))),
+                    )
+                    .into_any_element(),
+                None if self.explorer.selected().is_some()
+                    && matches!(self.store, StoreState::Loading) =>
+                {
+                    div()
+                        .id("detail-loading")
+                        .p_4()
+                        .text_color(muted)
+                        .child("読み込み中…")
+                        .into_any_element()
+                }
+                None => div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(div().px_4().pt_4().text_xs().text_color(muted).child(
+                        "下書き（まだ保存しません）。一覧から選ぶと、ここに詳細を表示します。",
+                    ))
+                    .child(div().flex_1().min_h_0().child(self.workbench.clone()))
+                    .into_any_element(),
+            };
         div()
             .id("axon-app")
             .size_full()
@@ -705,36 +835,41 @@ impl Render for AxonApp {
                 div()
                     .id("project-pane")
                     .flex_1()
-                    .min_w_0()
+                    .min_w(px(LIST_MIN_WIDTH))
                     .h_full()
                     .flex()
                     .flex_col()
+                    .gap_2()
+                    .p_4()
                     .child(
                         div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .px_4()
-                            .pt_4()
-                            .child(
-                                div()
-                                    .id("project-title")
-                                    .text_xl()
-                                    .min_w_0()
-                                    .truncate()
-                                    .child(title),
-                            )
-                            // Long errors scroll here instead of pushing the work area out of
-                            // a small window.
-                            .child(
-                                div()
-                                    .id("project-status-area")
-                                    .max_h(px(STATUS_MAX_HEIGHT))
-                                    .overflow_y_scroll()
-                                    .child(status),
-                            ),
+                            .id("project-title")
+                            .text_xl()
+                            .min_w_0()
+                            .truncate()
+                            .child(title),
                     )
-                    .child(div().flex_1().min_h_0().child(self.workbench.clone())),
+                    // Long errors scroll here instead of pushing the list out of a small window.
+                    .child(
+                        div()
+                            .id("project-status-area")
+                            .flex_none()
+                            .max_h(px(STATUS_MAX_HEIGHT))
+                            .overflow_y_scroll()
+                            .child(status),
+                    )
+                    .children(action)
+                    .children(list),
+            )
+            .child(
+                div()
+                    .id("detail-pane")
+                    .flex_1()
+                    .min_w(px(DETAIL_MIN_WIDTH))
+                    .h_full()
+                    .border_l_1()
+                    .border_color(border)
+                    .child(detail),
             )
     }
 }

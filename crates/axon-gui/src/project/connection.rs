@@ -92,8 +92,13 @@ impl ProjectConnection {
         &self,
         derive: impl FnOnce(&Header, &record::Store, &record::View) -> T,
     ) -> axon::Result<T> {
-        let (header, records, view) = self.open()?.read()?;
+        let (header, records, view) = self.load()?;
         Ok(derive(&header, &records, &view))
+    }
+
+    /// Reads the intact store and keeps it, for a caller that derives from it later.
+    pub fn load(&self) -> axon::Result<(Header, record::Store, record::View)> {
+        self.open()?.read()
     }
 
     /// Runs `change` under the store's write lock against its current records and publishes

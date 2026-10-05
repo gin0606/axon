@@ -2,9 +2,11 @@
 //!
 //! The GUI depends on the `axon` library (storage adapters and the re-exported core) and
 //! converts core values into display text and GPUI elements here. Nothing from GPUI flows back
-//! into the core crates. [`project`] holds the projects without GPUI; [`app`] is the window.
+//! into the core crates. [`project`] holds the projects and [`board`] the records of one as
+//! values, both without GPUI; [`app`] is the window.
 
 pub mod app;
+pub mod board;
 pub mod project;
 
 pub use app::AxonApp;
@@ -23,13 +25,23 @@ use gpui_kit::{
 };
 use project::{AppData, InstanceError, InstanceLock, data::LocateError};
 
-actions!(axon_gui, [Quit, FocusNextField, FocusPreviousField]);
+actions!(
+    axon_gui,
+    [
+        Quit,
+        FocusNextField,
+        FocusPreviousField,
+        SelectNextEntity,
+        SelectPreviousEntity
+    ]
+);
 
 /// Key context wrapping the body editor, so Tab leaves the body instead of indenting it.
 const BODY_CONTEXT: &str = "AxonBody";
 
-/// Smallest window that still shows the project column and every control of the workbench.
-pub const MIN_WINDOW_SIZE: (f32, f32) = (640., 400.);
+/// Smallest window that still shows the project column, the list and the detail pane (or the
+/// workbench in its place) side by side.
+pub const MIN_WINDOW_SIZE: (f32, f32) = (880., 520.);
 
 /// Registers the components, key bindings and application menus. Call once before opening
 /// windows.
@@ -47,6 +59,8 @@ pub fn init(cx: &mut App) {
             FocusPreviousField,
             Some(&format!("{BODY_CONTEXT} > Input")),
         ),
+        KeyBinding::new("down", SelectNextEntity, Some(app::LIST_CONTEXT)),
+        KeyBinding::new("up", SelectPreviousEntity, Some(app::LIST_CONTEXT)),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.set_menus(menus());
@@ -71,7 +85,7 @@ pub fn menus() -> Vec<Menu> {
 
 /// Options of the main window: centered, titled, and never smaller than [`MIN_WINDOW_SIZE`].
 pub fn main_window_options(cx: &App) -> WindowOptions {
-    let bounds = Bounds::centered(None, size(px(920.), px(600.)), cx);
+    let bounds = Bounds::centered(None, size(px(1120.), px(700.)), cx);
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(size(px(MIN_WINDOW_SIZE.0), px(MIN_WINDOW_SIZE.1))),
