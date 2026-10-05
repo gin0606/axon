@@ -1,7 +1,7 @@
 //! What the window explores of the selected project: the board last read, the filter, the
 //! layout, the rows they give and the Entity open in the detail pane.
 
-use super::{Board, EntityDetail, Filter, Layout, Listing, listing};
+use super::{Board, EntityDetail, Filter, Layout, Listing, State, listing};
 use crate::project::ProjectId;
 use axon::lifecycle::EntityId;
 
@@ -11,6 +11,9 @@ pub struct Explorer {
     project: Option<ProjectId>,
     board: Option<Board>,
     filter: Filter,
+    /// The filter offers the Conflicted state: the last board read for the project holds a
+    /// conflicted Entity.
+    offers_conflicted: bool,
     layout: Layout,
     listing: Listing,
     selected: Option<EntityId>,
@@ -30,6 +33,14 @@ impl Explorer {
     }
     pub fn layout(&self) -> Layout {
         self.layout
+    }
+    /// The states the filter offers as choices. Conflicted is offered only while the last
+    /// board read for the project holds a conflicted Entity; while it is not, the filter keeps
+    /// it chosen, so a conflict that appears later is never hidden by an earlier choice.
+    pub fn offered_states(&self) -> impl Iterator<Item = State> + '_ {
+        State::ALL
+            .into_iter()
+            .filter(|state| *state != State::Conflicted || self.offers_conflicted)
     }
     pub fn listing(&self) -> &Listing {
         &self.listing
@@ -56,6 +67,8 @@ impl Explorer {
         if self.project.as_ref() != project {
             self.selected = None;
             self.project = project.cloned();
+            // Whether the other project had conflicts says nothing of this one.
+            self.offer_conflicted(false);
         }
         self.board = None;
         self.listing = Listing::default();
@@ -74,12 +87,14 @@ impl Explorer {
         {
             self.selected = None;
         }
+        self.offer_conflicted(board.has_conflicts());
         self.board = Some(board);
         self.refresh();
     }
 
     pub fn update_filter(&mut self, change: impl FnOnce(&mut Filter)) {
         change(&mut self.filter);
+        self.choose_unoffered_states();
         self.refresh_listing();
     }
     pub fn set_layout(&mut self, layout: Layout) {
@@ -118,6 +133,17 @@ impl Explorer {
         };
         let id = rows[next].id.clone();
         self.select(id);
+    }
+
+    fn offer_conflicted(&mut self, offered: bool) {
+        self.offers_conflicted = offered;
+        self.choose_unoffered_states();
+    }
+    /// Chooses every state the filter does not offer, so no hidden choice leaves anything out.
+    fn choose_unoffered_states(&mut self) {
+        if !self.offers_conflicted {
+            self.filter.states.insert(State::Conflicted);
+        }
     }
 
     fn refresh(&mut self) {

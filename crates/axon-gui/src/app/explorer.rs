@@ -107,7 +107,7 @@ impl AxonApp {
             .flex_col()
             .gap_1()
             .child(heading("状態"));
-        for state in State::ALL {
+        for state in self.explorer.offered_states() {
             filters = filters.child(
                 Checkbox::new(named(format!("state-{state:?}")))
                     .label(text::state(state))

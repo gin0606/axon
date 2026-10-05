@@ -141,6 +141,10 @@ impl Board {
     pub fn len(&self) -> usize {
         self.items.len()
     }
+    /// Whether any Entity has several heads.
+    pub fn has_conflicts(&self) -> bool {
+        !self.view.conflicted().is_empty()
+    }
     /// Whether the Entity matches `filter`; an Entity the store does not hold matches nothing.
     pub fn matches(&self, filter: &Filter, id: &EntityId) -> bool {
         let read = self.read();

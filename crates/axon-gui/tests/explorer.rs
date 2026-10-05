@@ -3,7 +3,7 @@
 
 use axon::lifecycle::{
     Context, EntityId, Kind, Label, Lifecycle, Operation,
-    record::{Current, Entry, new_entity_id},
+    record::{Current, Entry, RecordId, new_entity_id},
 };
 use axon_gui::{
     AxonApp, MIN_WINDOW_SIZE,
@@ -89,6 +89,23 @@ impl Seed {
                     .unwrap(),
             )
         });
+    }
+
+    /// Makes `id` conflicted: a Start and a Cancel both recorded on the same head, as two
+    /// branches merged by Git would leave them. Returns the head of the Start branch.
+    fn fork(&self, id: &EntityId) -> RecordId {
+        let (_, stale, _) = self.0.load().unwrap();
+        let started = self.write(|records, _| {
+            Entry::Record(records.perform(id, Operation::Start, None, now()).unwrap())
+        });
+        self.write(|_, _| {
+            Entry::Record(stale.perform(id, Operation::Cancel, None, now()).unwrap())
+        });
+        started.id().unwrap()
+    }
+
+    fn resolve(&self, id: &EntityId, chosen: &RecordId) {
+        self.write(|records, _| Entry::Record(records.resolve(id, chosen, None, now()).unwrap()));
     }
 
     fn note(&self, id: &EntityId, body: &str) {
@@ -276,13 +293,9 @@ fn the_list_filters_and_switches_between_tree_and_flat(cx: &mut TestAppContext) 
     assert_eq!(titles(&rows(&app, cx)).last(), Some(&"前回の振り返り"));
     assert_eq!(counts(&app, cx), (4, 0));
 
-    // Only the InProgress state: the Group by its effective value, and its started child.
-    for state in [
-        "state-Undecided",
-        "state-NotStarted",
-        "state-Completed",
-        "state-Conflicted",
-    ] {
+    // Only the InProgress state (Conflicted, not offered without a conflict, matches nothing):
+    // the Group by its effective value, and its started child.
+    for state in ["state-Undecided", "state-NotStarted", "state-Completed"] {
         click(handle, state, cx);
     }
     assert_eq!(titles(&rows(&app, cx)), ["読書会の準備", "会場を決める"]);
@@ -325,12 +338,8 @@ fn clearing_every_state_matches_nothing(cx: &mut TestAppContext) {
     let (_, seed) = Seed::new(&data, "読書会");
     plan(&seed);
     let (handle, app) = open(&data, cx);
-    for state in [
-        "state-Undecided",
-        "state-NotStarted",
-        "state-InProgress",
-        "state-Conflicted",
-    ] {
+    // Every offered state; Conflicted is not offered without a conflict.
+    for state in ["state-Undecided", "state-NotStarted", "state-InProgress"] {
         click(handle, state, cx);
     }
     assert!(rows(&app, cx).is_empty());
@@ -420,6 +429,116 @@ fn the_arrow_keys_move_through_the_list(cx: &mut TestAppContext) {
     assert_eq!(detail_title(&app, cx).as_deref(), Some("案内を送る"));
     press(handle, "up", cx);
     assert_eq!(detail_title(&app, cx).as_deref(), Some("会場を決める"));
+}
+
+fn offers_conflicted(handle: Window, cx: &mut TestAppContext) -> bool {
+    let mut offered = false;
+    with_window(handle, cx, |window, _| {
+        offered = window.try_find("state-Conflicted").is_some();
+    });
+    offered
+}
+
+fn chosen_states(app: &Entity<AxonApp>, cx: &mut TestAppContext) -> BTreeSet<State> {
+    cx.read(|cx| app.read(cx).explorer().filter().states.clone())
+}
+
+fn reload(app: &Entity<AxonApp>, cx: &mut TestAppContext) {
+    cx.update(|cx| app.update(cx, |app, cx| app.reload_selected(cx)));
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn the_conflicted_state_is_offered_only_while_a_conflict_exists(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (first, seed) = Seed::new(&data, "読書会");
+    let venue = seed.create(
+        Kind::Issue,
+        Lifecycle::NotStarted,
+        "会場を決める",
+        Label::Chore,
+        None,
+    );
+    let (second, other) = Seed::new(&data, "家計簿");
+    other.create(
+        Kind::Issue,
+        Lifecycle::NotStarted,
+        "家計簿をつける",
+        Label::Chore,
+        None,
+    );
+    let (handle, app) = open(&data, cx);
+    cx.update(|cx| app.update(cx, |app, cx| app.select(first.clone(), cx)));
+    cx.run_until_parked();
+    assert!(!offers_conflicted(handle, cx));
+    assert!(chosen_states(&app, cx).contains(&State::Conflicted));
+
+    // A conflict shows the choice, chosen, and lists the Entity.
+    let started = seed.fork(&venue);
+    reload(&app, cx);
+    assert!(offers_conflicted(handle, cx));
+    assert!(chosen_states(&app, cx).contains(&State::Conflicted));
+    assert_eq!(titles(&rows(&app, cx)), ["会場を決める"]);
+
+    // Cleared, then resolved: the hidden choice is chosen again, so a conflict that appears
+    // later is listed.
+    click(handle, "state-Conflicted", cx);
+    assert!(rows(&app, cx).is_empty());
+    // Reading the same project again keeps the choice offered and cleared throughout.
+    cx.update(|cx| app.update(cx, |app, cx| app.reload_selected(cx)));
+    cx.read(|cx| assert_eq!(app.read(cx).store(), &StoreState::Loading));
+    // Checked before the window, whose frame lets the read finish.
+    assert!(!chosen_states(&app, cx).contains(&State::Conflicted));
+    assert!(offers_conflicted(handle, cx));
+    cx.run_until_parked();
+    assert!(offers_conflicted(handle, cx));
+    assert!(!chosen_states(&app, cx).contains(&State::Conflicted));
+    assert!(rows(&app, cx).is_empty());
+    seed.resolve(&venue, &started);
+    reload(&app, cx);
+    assert!(!offers_conflicted(handle, cx));
+    assert!(chosen_states(&app, cx).contains(&State::Conflicted));
+    let invite = seed.create(
+        Kind::Issue,
+        Lifecycle::NotStarted,
+        "案内を送る",
+        Label::Docs,
+        None,
+    );
+    seed.fork(&invite);
+    reload(&app, cx);
+    assert!(offers_conflicted(handle, cx));
+    assert_eq!(titles(&rows(&app, cx)), ["会場を決める", "案内を送る"]);
+
+    // A reset follows the same rule.
+    click(handle, "state-Conflicted", cx);
+    click(handle, "reset-filter", cx);
+    assert!(offers_conflicted(handle, cx));
+    assert!(chosen_states(&app, cx).contains(&State::Conflicted));
+
+    // A switch carries no project's conflicts over to another, nor a choice hidden there.
+    click(handle, "state-Conflicted", cx);
+    cx.update(|cx| app.update(cx, |app, cx| app.select(second.clone(), cx)));
+    assert!(
+        !offers_conflicted(handle, cx),
+        "nothing is known yet of the project"
+    );
+    cx.run_until_parked();
+    assert!(!offers_conflicted(handle, cx));
+    assert!(chosen_states(&app, cx).contains(&State::Conflicted));
+    cx.update(|cx| app.update(cx, |app, cx| app.select(first.clone(), cx)));
+    cx.run_until_parked();
+    assert!(offers_conflicted(handle, cx));
+    assert!(chosen_states(&app, cx).contains(&State::Conflicted));
+
+    // A failed read of the same project keeps the choice as the last read left it.
+    click(handle, "state-Conflicted", cx);
+    let root = cx.read(|cx| app.read(cx).data().project_root(&first));
+    fs::remove_dir_all(root.join(".axon/records")).unwrap();
+    reload(&app, cx);
+    cx.read(|cx| assert!(matches!(app.read(cx).store(), StoreState::Failed(_))));
+    assert!(offers_conflicted(handle, cx));
+    assert!(!chosen_states(&app, cx).contains(&State::Conflicted));
 }
 
 #[gpui_kit::test]
