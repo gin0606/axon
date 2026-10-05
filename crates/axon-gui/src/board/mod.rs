@@ -1,19 +1,21 @@
 //! The records of one project as values the window lists, filters and inspects.
 //!
 //! A [`Board`] owns one read of a store. [`filter`] decides which Entities match,
-//! [`listing`] lays them out as a tree or a flat list, and [`detail`] gathers what the detail
-//! pane shows of one Entity. Everything here is a pure derivation from the records: no GPUI,
+//! [`listing`] lays them out as a tree or a flat list, [`detail`] gathers what the detail
+//! pane shows of one Entity, and [`organize`] names the structural changes the core makes. Everything here is a pure derivation from the records: no GPUI,
 //! no disk access, and no condition command is ever run.
 
 pub mod detail;
 pub mod explorer;
 pub mod filter;
 pub mod listing;
+pub mod organize;
 
-pub use detail::{Change, EntityDetail, HistoryEntry, Link, NoteEntry, Wait, WaitKind};
+pub use detail::{Change, EntityDetail, HistoryEntry, Link, NoteEntry, Structure, Wait, WaitKind};
 pub use explorer::Explorer;
 pub use filter::Filter;
 pub use listing::{Layout, ListRow, Listing};
+pub use organize::{Purpose, Rearrangement, Rejection};
 
 use axon::lifecycle::{EntityId, Kind, Label, Lifecycle, record};
 use axon::read;

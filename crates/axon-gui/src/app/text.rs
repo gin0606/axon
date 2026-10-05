@@ -1,8 +1,10 @@
 //! Display text for the core's values. The spelling of labels stays the one records and the
 //! CLI use; states, situations and record kinds are shown in Japanese.
 
-use crate::board::{Change, State, WaitKind};
-use axon::lifecycle::{Kind, Lifecycle, Operation, record::RecordKind, record::ViolationKind};
+use crate::board::{Change, Rejection, State, WaitKind};
+use axon::lifecycle::{
+    Kind, Lifecycle, Operation, Refusal, record::RecordKind, record::ViolationKind,
+};
 use axon::read::{PrerequisiteOperation, Status};
 use chrono::{DateTime, Local, Utc};
 
@@ -146,4 +148,32 @@ pub fn time(at: DateTime<Utc>) -> String {
     at.with_timezone(&Local)
         .format("%Y-%m-%d %H:%M")
         .to_string()
+}
+
+/// Why the core refused a structural change. The Entities it names are shown beside it.
+pub fn rejection(rejection: &Rejection) -> String {
+    let refusal = match rejection {
+        Rejection::Refused(refusal) => refusal,
+        Rejection::Other(message) => return format!("変更できません。（{message}）"),
+    };
+    match refusal {
+        Refusal::Conflicted(_) => "衝突している Issue・Group があるため、解決するまで構造を変更できません。解決は CLI の axon resolve で行います。",
+        Refusal::EntityConflicted(_) => "衝突しているため変更できません。CLI の axon resolve で解決してから変更してください。",
+        Refusal::Missing(_) => "次の Issue・Group が記録にないため変更できません。「再読み込み」で記録を読み直してください。",
+        Refusal::ParentClosed(_) => "所属している Group が完了または取りやめのため、その中からは外せず、移動もできません。Group を再開か再検討すると変更できます。",
+        Refusal::DestinationNotOpenGroup(_) => "移動先は、このプロジェクトの記録にあり、完了も取りやめもしていない Group である必要があります。",
+        Refusal::SelfContainment => "Group を自身の中に入れることはできません。",
+        Refusal::ContainmentCycle { .. } => "移動先がこの仕事の内側にあるため、包含が循環します。",
+        Refusal::StartedWorkNeedsAdoptedDestination { .. } => "着手中・完了の仕事は、移動先とその祖先がすべて採用済み（未着手）の Group の下にだけ移動できます。次の Group が採用済みではありません。",
+        Refusal::NewViolations(_) => "この変更は次の構造の違反を生じるため、行えません。",
+        Refusal::CompletionCycle { .. } => "この変更は、包含と依存を合わせた完了の前提を循環させます。",
+        Refusal::SelfDependency => "自身に依存することはできません。",
+        Refusal::DependencyOnAncestor { .. } => "この仕事を含む Group には依存できません。",
+        Refusal::DependencyOnDescendant { .. } => "この仕事の内側にある仕事には依存できません。",
+        Refusal::CompletedDependenciesFixed => "完了した仕事の依存先は変更できません。再開すると変更できます。",
+        Refusal::ConvertInProgress => "着手中の Issue は変換できません。作業を解放してから変換してください。",
+        Refusal::ConvertTerminal => "完了・取りやめの仕事は変換できません。再開か再検討をしてから変換してください。",
+        Refusal::GroupWithChildren(_) => "子を持つ Group は Issue に変換できません。子を外すか移動してから変換してください。",
+    }
+    .into()
 }

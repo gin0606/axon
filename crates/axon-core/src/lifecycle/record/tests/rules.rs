@@ -682,3 +682,168 @@ fn accept_looks_at_every_descendant_for_started_work() {
     r.op("plan", Accept);
     assert_eq!(effective(&r, "plan"), Lifecycle::NotStarted);
 }
+
+/// The refusal a rejected move, dependency or conversion carries, with the Entities it names.
+fn refusal(result: Result<impl std::fmt::Debug>) -> Refusal {
+    match result {
+        Ok(value) => panic!("expected rejection, got {value:?}"),
+        Err(error) => error.refusal().expect("a structural refusal").clone(),
+    }
+}
+
+#[test]
+fn structural_refusals_name_the_entities_involved() {
+    // The base: Group g0 containing Issue i1, Group g2 and Issue i3.
+    let mut r = Replica::new("r0");
+    r.create("g4", Kind::Group, Lifecycle::NotStarted, Some("g0"));
+    assert_eq!(
+        refusal(r.try_move("g0", Some("g0"))),
+        Refusal::SelfContainment
+    );
+    let cycle = refusal(r.try_move("g0", Some("g4")));
+    assert_eq!(
+        cycle,
+        Refusal::ContainmentCycle {
+            destination: id("g4")
+        }
+    );
+    assert_eq!(cycle.related(), [&id("g4")]);
+    assert_eq!(
+        refusal(r.try_move("i1", Some("i3"))),
+        Refusal::DestinationNotOpenGroup(id("i3"))
+    );
+    assert_eq!(
+        refusal(r.try_move("i1", Some("missing"))),
+        Refusal::DestinationNotOpenGroup(id("missing"))
+    );
+    assert_eq!(refusal(r.try_add_dep("i1", "i1")), Refusal::SelfDependency);
+    assert_eq!(
+        refusal(r.try_add_dep("i1", "g0")),
+        Refusal::DependencyOnAncestor {
+            entity: id("i1"),
+            target: id("g0")
+        }
+    );
+    assert_eq!(
+        refusal(r.try_add_dep("g0", "i1")),
+        Refusal::DependencyOnDescendant {
+            entity: id("g0"),
+            target: id("i1")
+        }
+    );
+    assert_eq!(
+        refusal(r.try_add_dep("i1", "missing")),
+        Refusal::Missing(id("missing"))
+    );
+    // A cycle through containment and dependencies: g0 completes after i1, which waits for
+    // i3, which would wait for g0.
+    r.add_dep("i1", "i3");
+    let Refusal::NewViolations(added) = refusal(r.try_add_dep("i3", "g0")) else {
+        panic!("a completion cycle is a new violation");
+    };
+    assert!(
+        added
+            .iter()
+            .any(|(entity, kind)| entity == &id("i3") && *kind == ViolationKind::CompletionCycle),
+        "{added:?}"
+    );
+    assert_eq!(
+        refusal(r.store.convert(&id("g0"), Kind::Issue, None, r.tick())),
+        Refusal::GroupWithChildren(vec![id("i1"), id("g4")])
+    );
+    r.op("i3", Start);
+    assert_eq!(
+        refusal(r.store.convert(&id("i3"), Kind::Group, None, r.tick())),
+        Refusal::ConvertInProgress
+    );
+    r.op("i3", Complete);
+    assert_eq!(
+        refusal(r.store.convert(&id("i3"), Kind::Group, None, r.tick())),
+        Refusal::ConvertTerminal
+    );
+    assert_eq!(
+        refusal(r.try_add_dep("i3", "i1")),
+        Refusal::CompletedDependenciesFixed
+    );
+    // Started work moves only under an adopted line, and the refusal names what is not.
+    let mut started = Replica::new("r1");
+    started.create("u", Kind::Group, Lifecycle::Undecided, None);
+    started.create("d", Kind::Group, Lifecycle::NotStarted, Some("u"));
+    started.op("i3", Start);
+    let refused = refusal(started.try_move("i3", Some("d")));
+    assert_eq!(
+        refused,
+        Refusal::StartedWorkNeedsAdoptedDestination {
+            destination: id("d"),
+            unadopted: vec![id("u")]
+        }
+    );
+    assert_eq!(refused.related(), [&id("u")]);
+    // Under a finished Group nothing moves in or out.
+    r.create("i5", Kind::Issue, Lifecycle::NotStarted, Some("g2"));
+    r.op("i5", Cancel);
+    r.op("g2", Cancel);
+    assert_eq!(
+        refusal(r.try_move("i5", None)),
+        Refusal::ParentClosed(id("g2"))
+    );
+    assert_eq!(
+        refusal(r.try_move("i1", Some("g2"))),
+        Refusal::DestinationNotOpenGroup(id("g2"))
+    );
+}
+
+#[test]
+fn refusals_keep_the_cli_diagnostics() {
+    let mut r = Replica::new("r0");
+    r.create("g4", Kind::Group, Lifecycle::NotStarted, Some("g0"));
+    let message = |result: Result<Option<Record>>| match result {
+        Ok(value) => panic!("expected rejection, got {value:?}"),
+        Err(error) => error.message().to_owned(),
+    };
+    assert_eq!(
+        message(r.try_add_dep("i1", "g0")),
+        "g0 is an ancestor of i1"
+    );
+    assert_eq!(
+        message(r.try_add_dep("g0", "i1")),
+        "i1 is a descendant of g0"
+    );
+    assert_eq!(
+        message(r.try_add_dep("i1", "i1")),
+        "an Entity does not depend on itself"
+    );
+    assert_eq!(
+        message(r.try_move("g0", Some("g0"))),
+        "a Group does not contain itself"
+    );
+    assert_eq!(message(r.try_move("g0", Some("g4"))), "containment cycle");
+    assert_eq!(
+        message(r.try_move("i1", Some("i3"))),
+        "parent must be an unfinished Group"
+    );
+    assert_eq!(
+        message(r.store.convert(&id("g0"), Kind::Issue, None, r.tick())),
+        "a Group with children is not converted to an Issue: i1, g4"
+    );
+    r.op("i3", Start);
+    assert_eq!(
+        message(r.store.convert(&id("i3"), Kind::Group, None, r.tick())),
+        "release the InProgress Issue before converting it"
+    );
+    r.create("u", Kind::Group, Lifecycle::Undecided, None);
+    assert_eq!(
+        message(r.try_move("i3", Some("u"))),
+        "InProgress or Completed work moves only under a Group that is adopted (NotStarted) along with all of its ancestors"
+    );
+    r.add_dep("i1", "i3");
+    assert_eq!(
+        message(r.try_add_dep("i3", "g0")),
+        "the change would add a structural violation: g0 (completion cycle), i1 (completion cycle), i3 (completion cycle)"
+    );
+    r.op("i3", Complete);
+    assert_eq!(
+        message(r.try_add_dep("i3", "g2")),
+        "Completed dependencies are fixed"
+    );
+}

@@ -1,5 +1,6 @@
 //! What the detail pane shows of one Entity, owned so it outlives the read it came from.
 
+use super::organize::{Rearrangement, Rejection};
 use super::{Board, State};
 use axon::lifecycle::{
     EntityId, Kind, Label, Lifecycle,
@@ -132,6 +133,21 @@ pub struct EntityDetail {
     pub heads: usize,
     pub notes: Vec<NoteEntry>,
     pub history: Vec<HistoryEntry>,
+    pub structure: Structure,
+}
+
+/// Whether the core accepts, on this read, each structural change the detail offers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Structure {
+    /// Taking the Entity out of its Group; none without a parent.
+    pub detach: Option<Result<(), Rejection>>,
+    /// Converting to `convert.0`, the other kind.
+    pub convert: (Kind, Result<(), Rejection>),
+    /// Removing each of `dependencies`, in their order.
+    pub removals: Vec<Result<(), Rejection>>,
+    /// The Entity or another one is conflicted, so the core refuses every structural change
+    /// until it is resolved.
+    pub conflicted: bool,
 }
 
 pub(super) fn of(board: &Board, id: &EntityId) -> axon::lifecycle::Result<EntityDetail> {
@@ -230,6 +246,38 @@ pub(super) fn of(board: &Board, id: &EntityId) -> axon::lifecycle::Result<Entity
         })
         .collect();
 
+    let other = match detail.row.kind {
+        Kind::Issue => Kind::Group,
+        Kind::Group => Kind::Issue,
+    };
+    let check = |change: Rearrangement| change.check(board);
+    let structure = Structure {
+        conflicted: !view.derived().conflicted().is_empty(),
+        detach: presented.parent.as_ref().map(|_| {
+            check(Rearrangement::Move {
+                entity: id.clone(),
+                parent: None,
+            })
+        }),
+        convert: (
+            other,
+            check(Rearrangement::Convert {
+                entity: id.clone(),
+                kind: other,
+            }),
+        ),
+        removals: detail
+            .dependencies
+            .iter()
+            .map(|dependency| {
+                check(Rearrangement::RemoveDependency {
+                    entity: id.clone(),
+                    target: dependency.id.clone(),
+                })
+            })
+            .collect(),
+    };
+
     Ok(EntityDetail {
         kind: detail.row.kind,
         label: detail.row.label,
@@ -266,6 +314,7 @@ pub(super) fn of(board: &Board, id: &EntityId) -> axon::lifecycle::Result<Entity
         heads: detail.heads.len(),
         notes,
         history,
+        structure,
         id,
     })
 }

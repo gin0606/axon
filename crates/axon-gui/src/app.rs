@@ -4,13 +4,16 @@
 //! only while the request that produced it is still the current one.
 
 mod explorer;
+mod organize;
 pub mod text;
 
+use explorer::named;
 pub use explorer::{LIST_CONTEXT, entity_element};
+pub use organize::{Found, Outcome, OutcomeKind, PICKER_LIMIT, Picker};
 
 use crate::{
     Workbench,
-    board::{Board, Explorer},
+    board::{Board, Explorer, Rearrangement},
     project::{
         AppData, CreateError, NameError, Project, ProjectId, Registry, Requests, Status, Step,
         registry::NAME_LIMIT,
@@ -23,8 +26,8 @@ use gpui_kit::component::{
     menu::{DropdownMenu, PopupMenuItem},
 };
 use gpui_kit::{
-    AnyElement, AppContext, Context, Entity, FocusHandle, IntoElement, Render, ScrollHandle,
-    SharedString, Window, div, prelude::*, px,
+    AnyElement, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, Render,
+    ScrollHandle, SharedString, Window, div, prelude::*, px,
 };
 use std::collections::HashMap;
 
@@ -89,6 +92,19 @@ pub struct AxonApp {
     search: Entity<InputState>,
     list_focus: FocusHandle,
     list_scroll: ScrollHandle,
+    /// The picker choosing a Group or a dependency for the Entity in the detail pane.
+    picker: Option<Picker>,
+    picker_query: Entity<InputState>,
+    /// The structural change being written, for the project and Entity it was made for. One
+    /// runs at a time, so a repeated click or key does not make a second.
+    writes: Requests<(ProjectId, Rearrangement)>,
+    /// What became of the last structural change of each Entity, per project, that the screen
+    /// does not otherwise show; kept until it has been seen.
+    outcomes: HashMap<ProjectId, Vec<Outcome>>,
+    /// Scroll the list to the selection once the next read is shown.
+    reveal_on_load: bool,
+    /// Give the list the focus at the next render, after the picker holding it closed.
+    focus_list: bool,
 }
 
 impl AxonApp {
@@ -112,6 +128,14 @@ impl AxonApp {
             },
         )
         .detach();
+        let picker_query =
+            cx.new(|cx| InputState::new(window, cx).placeholder("タイトル・ID で探す"));
+        cx.subscribe(&picker_query, |_, _, event: &InputEvent, cx| {
+            if let InputEvent::Change = event {
+                cx.notify();
+            }
+        })
+        .detach();
         let workbench = cx.new(|cx| Workbench::new(window, cx));
         let mut this = Self {
             data,
@@ -133,6 +157,12 @@ impl AxonApp {
             // A tab stop, so the arrow keys are reachable from the keyboard alone.
             list_focus: cx.focus_handle().tab_stop(true),
             list_scroll: ScrollHandle::new(),
+            picker: None,
+            picker_query,
+            writes: Requests::default(),
+            outcomes: HashMap::new(),
+            reveal_on_load: false,
+            focus_list: false,
         };
         this.reload_registry(cx);
         this
@@ -247,6 +277,14 @@ impl AxonApp {
         let project_id = project.as_ref().map(|project| &project.id);
         if self.explorer.project() != project_id {
             self.list_scroll.set_offset(Default::default());
+            if self.picker.take().is_some() {
+                self.focus_list = true;
+            }
+            self.reveal_on_load = false;
+            // Leaving the project closes the detail, where its outcome was seen.
+            let open = self.explorer.selected().cloned();
+            self.explorer.deselect();
+            self.drop_outcome(open);
         }
         self.explorer.unload(project_id);
         self.store = match project {
@@ -278,12 +316,16 @@ impl AxonApp {
                                         entities: board.len(),
                                     };
                                     this.explorer.load(ticket.key(), board);
+                                    this.loaded();
                                     StoreState::Loaded(summary)
                                 }
                                 Err(error) => {
                                     // Nothing of the project is shown, so neither is a selection
                                     // that a later read would bring back unasked.
+                                    let open = this.explorer.selected().cloned();
                                     this.explorer.deselect();
+                                    this.drop_outcome(open);
+                                    this.reveal_on_load = false;
                                     StoreState::Failed(error.to_string())
                                 }
                             };
@@ -547,7 +589,7 @@ impl AxonApp {
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         match self.registry {
             RegistryState::Failed(_) => self.reload_registry(cx),
-            _ => self.reload_selected(cx),
+            _ => self.refresh(cx),
         }
     }
 
@@ -765,7 +807,15 @@ impl AxonApp {
 }
 
 impl Render for AxonApp {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Only while the closed picker's search still has the focus (or nothing has), not over
+        // a field chosen since.
+        if std::mem::take(&mut self.focus_list) {
+            let query = self.picker_query.read(cx).focus_handle(cx);
+            if window.focused(cx).is_none_or(|focused| focused == query) {
+                window.focus(&self.list_focus, cx);
+            }
+        }
         let theme = cx.theme();
         let (background, foreground, border, muted, danger) = (
             theme.background,
@@ -859,6 +909,7 @@ impl Render for AxonApp {
                             .child(status),
                     )
                     .children(action)
+                    .children(self.render_other_outcomes(cx))
                     .children(list),
             )
             .child(

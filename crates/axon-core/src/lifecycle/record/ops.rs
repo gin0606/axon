@@ -4,18 +4,14 @@ use super::model::{Current, Entry, Note, Record, RecordId, RecordKind};
 use super::store::Store;
 use super::view::View;
 use super::{Context, EntityId, Kind, Label, Lifecycle, Nonce, Operation, Result};
-use crate::lifecycle::{invalid, validate_reason};
+use crate::lifecycle::{Refusal, invalid, validate_reason};
 use std::collections::BTreeSet;
 
 impl Store {
     fn settled_view(&self) -> Result<View> {
         let view = self.view()?;
         if !view.conflicted().is_empty() {
-            let ids: Vec<_> = view.conflicted().iter().map(ToString::to_string).collect();
-            return Err(invalid(format!(
-                "conflicted Entities block every operation except resolve and note add; list their heads with axon resolve: {}",
-                ids.join(", ")
-            )));
+            return Err(Refusal::Conflicted(view.conflicted().iter().cloned().collect()).into());
         }
         Ok(view)
     }
@@ -150,21 +146,13 @@ impl Store {
         }
         match current.lifecycle {
             Lifecycle::Undecided | Lifecycle::NotStarted => {}
-            Lifecycle::InProgress => {
-                return Err(invalid("release the InProgress Issue before converting it"));
-            }
+            Lifecycle::InProgress => return Err(Refusal::ConvertInProgress.into()),
             Lifecycle::Completed | Lifecycle::Cancelled => {
-                return Err(invalid(
-                    "a Completed or Cancelled Entity is not converted; reopen or reconsider it first",
-                ));
+                return Err(Refusal::ConvertTerminal.into());
             }
         }
         if kind == Kind::Issue && !view.children(id).is_empty() {
-            let children: Vec<_> = view.children(id).iter().map(ToString::to_string).collect();
-            return Err(invalid(format!(
-                "a Group with children is not converted to an Issue: {}",
-                children.join(", ")
-            )));
+            return Err(Refusal::GroupWithChildren(view.children(id).to_vec()).into());
         }
         let after = Current {
             kind,
@@ -348,9 +336,11 @@ fn without_new_violations_or_cycle(store: &Store, view: &View, record: Record) -
     if !view.violations().is_empty()
         && let Some((dependent, predecessor)) = after.relation_on_cycle(view, &record.entity)
     {
-        return Err(invalid(format!(
-            "the change would put {dependent} waiting on {predecessor} on a completion cycle"
-        )));
+        return Err(Refusal::CompletionCycle {
+            dependent,
+            predecessor,
+        }
+        .into());
     }
     Ok(record)
 }
@@ -363,13 +353,10 @@ fn reject_new_violations(view: &View, after: &View) -> Result<()> {
     let added: Vec<_> = after
         .violations()
         .difference(view.violations())
-        .map(|v| format!("{} ({})", v.entity, v.kind.label()))
+        .map(|v| (v.entity.clone(), v.kind))
         .collect();
     if !added.is_empty() {
-        return Err(invalid(format!(
-            "the change would add a structural violation: {}",
-            added.join(", ")
-        )));
+        return Err(Refusal::NewViolations(added).into());
     }
     Ok(())
 }
@@ -380,7 +367,7 @@ fn require_open_group(view: &View, parent: Option<&EntityId>) -> Result<()> {
             .current(parent)
             .is_some_and(|p| p.kind == Kind::Group && !p.is_terminal());
         if !open {
-            return Err(invalid("parent must be an unfinished Group"));
+            return Err(Refusal::DestinationNotOpenGroup(parent.clone()).into());
         }
     }
     Ok(())
@@ -388,14 +375,22 @@ fn require_open_group(view: &View, parent: Option<&EntityId>) -> Result<()> {
 
 fn require_dependency_target(view: &View, id: &EntityId, target: &EntityId) -> Result<()> {
     if id == target {
-        return Err(invalid("an Entity does not depend on itself"));
+        return Err(Refusal::SelfDependency.into());
     }
     view.require_settled(target)?;
     if view.ancestors(id).contains(target) {
-        return Err(invalid(format!("{target} is an ancestor of {id}")));
+        return Err(Refusal::DependencyOnAncestor {
+            entity: id.clone(),
+            target: target.clone(),
+        }
+        .into());
     }
     if view.ancestors(target).contains(id) {
-        return Err(invalid(format!("{target} is a descendant of {id}")));
+        return Err(Refusal::DependencyOnDescendant {
+            entity: id.clone(),
+            target: target.clone(),
+        }
+        .into());
     }
     Ok(())
 }
@@ -426,11 +421,15 @@ fn create_in(
         .collect();
     for target in &current.needs {
         if target == &id {
-            return Err(invalid("an Entity does not depend on itself"));
+            return Err(Refusal::SelfDependency.into());
         }
         view.require_settled(target)?;
         if line.contains(target) {
-            return Err(invalid(format!("{target} is an ancestor of {id}")));
+            return Err(Refusal::DependencyOnAncestor {
+                entity: id.clone(),
+                target: target.clone(),
+            }
+            .into());
         }
     }
     let record = Record {
@@ -553,15 +552,19 @@ fn set_parent_in(
         return Ok(None);
     }
     if !view.parent_open(id) && !view.in_violation(id) {
-        return Err(invalid("parent must be an unfinished Group"));
+        let parent = current.parent.clone().expect("only a parent can be closed");
+        return Err(Refusal::ParentClosed(parent).into());
     }
     if let Some(destination) = &parent {
         if destination == id {
-            return Err(invalid("a Group does not contain itself"));
+            return Err(Refusal::SelfContainment.into());
         }
         require_open_group(view, Some(destination))?;
         if view.ancestors(destination).contains(id) {
-            return Err(invalid("containment cycle"));
+            return Err(Refusal::ContainmentCycle {
+                destination: destination.clone(),
+            }
+            .into());
         }
         if matches!(
             view.effective_lifecycle(id),
@@ -569,9 +572,22 @@ fn set_parent_in(
         ) && (view.current(destination).expect("open Group").lifecycle != Lifecycle::NotStarted
             || !view.ancestors_adopted(destination))
         {
-            return Err(invalid(
-                "InProgress or Completed work moves only under a Group that is adopted (NotStarted) along with all of its ancestors",
-            ));
+            // The destination and its ancestors that are not adopted, a missing one included.
+            let mut unadopted = Vec::new();
+            let mut seen = BTreeSet::new();
+            let mut next = Some(destination);
+            while let Some(group) = next.filter(|group| seen.insert(*group)) {
+                let current = view.current(group);
+                if current.is_none_or(|g| g.lifecycle != Lifecycle::NotStarted) {
+                    unadopted.push(group.clone());
+                }
+                next = current.and_then(|g| g.parent.as_ref());
+            }
+            return Err(Refusal::StartedWorkNeedsAdoptedDestination {
+                destination: destination.clone(),
+                unadopted,
+            }
+            .into());
         }
     }
     let after = Current {
@@ -595,7 +611,7 @@ fn add_dependency_in(
         return Ok(None);
     }
     if current.lifecycle == Lifecycle::Completed {
-        return Err(invalid("Completed dependencies are fixed"));
+        return Err(Refusal::CompletedDependenciesFixed.into());
     }
     require_dependency_target(view, id, target)?;
     let mut after = current.clone();
@@ -616,7 +632,7 @@ fn remove_dependency_in(
         return Ok(None);
     }
     if current.lifecycle == Lifecycle::Completed && !view.in_violation(id) {
-        return Err(invalid("Completed dependencies are fixed"));
+        return Err(Refusal::CompletedDependenciesFixed.into());
     }
     let mut after = current.clone();
     after.needs.remove(target);

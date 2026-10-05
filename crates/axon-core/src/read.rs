@@ -702,7 +702,7 @@ fn detail_from<'a, E: From<Error>>(
     known: impl Fn(&EntityId) -> std::result::Result<bool, E>,
 ) -> std::result::Result<Detail<'a>, E> {
     if !view.is_known(id) {
-        return Err(Error(format!("missing Entity {id}")).into());
+        return Err(Error::from(crate::lifecycle::Refusal::Missing(id.clone())).into());
     }
     // A shared reference, so every row can use the same decisions.
     let known = &known;
@@ -979,7 +979,7 @@ pub struct NoteMatch<'a> {
 /// ID), Notes by time then ID within an Entity.
 pub fn search_notes<'a>(view: &View<'a>, query: &str) -> Result<Vec<NoteMatch<'a>>> {
     if query.is_empty() {
-        return Err(Error("Note search query must not be empty".into()));
+        return Err(Error::new("Note search query must not be empty"));
     }
     let mut grouped = BTreeMap::<&EntityId, Vec<_>>::new();
     for (id, note) in view.store().all_notes() {
@@ -1411,7 +1411,7 @@ mod tests {
                 move |e| !filter || view.current(e).unwrap().kind == Kind::Group,
                 |entity, command| {
                     if command == "exit 2" {
-                        Err(Error(format!("{entity} failed")))
+                        Err(Error::new(format!("{entity} failed")))
                     } else {
                         Ok(true)
                     }
@@ -1632,7 +1632,7 @@ mod tests {
             let derived = f.derived();
             let view = View::new(&f.store, &derived);
             let error = detail_with::<Error>(&view, &id("vacant"), |entity, _| {
-                Err(Error(format!("{entity} failed")))
+                Err(Error::new(format!("{entity} failed")))
             })
             .unwrap_err();
             assert!(error.to_string().contains("vacant failed"), "{error}");
@@ -1757,7 +1757,7 @@ mod tests {
         let derived = f.derived();
         let view = View::new(&f.store, &derived);
         let error = detail_with::<Error>(&view, &id("plan"), |entity, _| {
-            Err(Error(format!("{entity} failed")))
+            Err(Error::new(format!("{entity} failed")))
         })
         .unwrap_err();
         assert!(error.to_string().contains("outer failed"), "{error}");
@@ -2070,7 +2070,7 @@ mod tests {
                     |entity, _| {
                         let index = ["root", "first", "second"].iter().position(|name| entity == &id(name)).unwrap();
                         calls.push(entity.to_string());
-                        if index == failing { Err(Error("condition failed".into())) } else { Ok(values[index]) }
+                        if index == failing { Err(Error::new("condition failed")) } else { Ok(values[index]) }
                     }, None);
                 let fails = failing == 0 || (root_ok && failing < 3);
                 prop_assert_eq!(rows.is_err(), fails);

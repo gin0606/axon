@@ -1,6 +1,6 @@
 use super::fixture::Fixture;
 use super::*;
-use axon::lifecycle::{Kind, Label, Lifecycle, Operation, record::Entry};
+use axon::lifecycle::{Kind, Label, Lifecycle, Operation, Refusal, record::Entry};
 use axon::read::{PrerequisiteOperation, Status};
 
 fn ids(listing: &Listing) -> Vec<(EntityId, usize, bool)> {
@@ -438,4 +438,224 @@ fn a_conflicted_child_is_listed_under_its_group() {
     let board = f.board();
     let detail = board.detail(&group).unwrap();
     assert_eq!(detail.children, [board.link(&child)]);
+}
+
+#[test]
+fn rearrangements_are_checked_and_made_by_the_core() {
+    let mut f = Fixture::new();
+    let outer = f.group("外", None);
+    let inner = f.group("内", Some(&outer));
+    let leaf = f.issue("葉", Some(&inner));
+    let other = f.group("別", None);
+    let board = f.board();
+
+    let into_child = Rearrangement::Move {
+        entity: outer.clone(),
+        parent: Some(inner.clone()),
+    };
+    assert_eq!(
+        into_child.check(&board),
+        Err(Rejection::Refused(Refusal::ContainmentCycle {
+            destination: inner.clone()
+        }))
+    );
+    let on_ancestor = Rearrangement::AddDependency {
+        entity: leaf.clone(),
+        target: outer.clone(),
+    };
+    assert_eq!(
+        on_ancestor.check(&board),
+        Err(Rejection::Refused(Refusal::DependencyOnAncestor {
+            entity: leaf.clone(),
+            target: outer.clone()
+        }))
+    );
+
+    // A move takes the subtree along and is what a later read shows.
+    let mv = Rearrangement::Move {
+        entity: inner.clone(),
+        parent: Some(other.clone()),
+    };
+    assert_eq!(mv.check(&board), Ok(()));
+    assert_eq!(mv.is_shown_by(&board), Some(false));
+    let context = axon::lifecycle::Context {
+        at: chrono::DateTime::from_timestamp(1_900_000_000, 0).unwrap(),
+        recorder: None,
+    };
+    let record = mv.record(board.records(), context).unwrap().unwrap();
+    f.insert_entry(Entry::Record(record));
+    let board = f.board();
+    assert_eq!(mv.is_shown_by(&board), Some(true));
+    assert_eq!(board.item(&leaf).unwrap().parent, Some(inner.clone()));
+    assert_eq!(
+        ids(&listing::listing(&board, &Filter::default(), Layout::Tree))
+            .into_iter()
+            .map(|(id, depth, _)| (id, depth))
+            .collect::<Vec<_>>(),
+        [(outer, 0), (other, 0), (inner, 1), (leaf, 2)]
+    );
+}
+
+#[test]
+fn the_detail_says_which_structural_changes_the_core_accepts() {
+    let mut f = Fixture::new();
+    let group = f.group("会", None);
+    let first = f.issue("一", Some(&group));
+    let second = f.issue("二", Some(&group));
+    f.needs(&second, &first);
+    let finished = f.group("済", None);
+    let inside = f.issue("中", Some(&finished));
+    f.perform(&inside, Operation::Cancel);
+    f.perform(&finished, Operation::Cancel);
+    let board = f.board();
+
+    let detail = board.detail(&group).unwrap();
+    assert_eq!(detail.structure.detach, None, "nothing to take it out of");
+    assert_eq!(
+        detail.structure.convert,
+        (
+            Kind::Issue,
+            Err(Rejection::Refused(Refusal::GroupWithChildren(vec![
+                first.clone(),
+                second.clone()
+            ])))
+        )
+    );
+
+    let detail = board.detail(&second).unwrap();
+    assert_eq!(detail.structure.detach, Some(Ok(())));
+    assert_eq!(detail.structure.convert, (Kind::Group, Ok(())));
+    assert_eq!(detail.structure.removals, [Ok(())]);
+
+    // Nothing leaves a finished Group.
+    let detail = board.detail(&inside).unwrap();
+    assert_eq!(
+        detail.structure.detach,
+        Some(Err(Rejection::Refused(Refusal::ParentClosed(
+            finished.clone()
+        ))))
+    );
+    assert_eq!(
+        detail.structure.convert.1,
+        Err(Rejection::Refused(Refusal::ConvertTerminal))
+    );
+}
+
+#[test]
+fn pickers_offer_the_project_s_own_entities_by_purpose() {
+    let mut f = Fixture::new();
+    let group = f.group("読書会", None);
+    let issue = f.issue("会場を決める", Some(&group));
+    let other = f.group("家計簿", None);
+    let lone = f.issue("案内を送る", None);
+    f.needs(&lone, &issue);
+    let board = f.board();
+    let ids = |(links, total): (Vec<Link>, usize)| {
+        assert_eq!(links.len(), total);
+        links.into_iter().map(|l| l.id).collect::<Vec<_>>()
+    };
+
+    // Groups for a parent, without the Entity itself or the Group it is in already.
+    assert_eq!(
+        ids(organize::candidates(
+            &board,
+            &issue,
+            Purpose::Parent,
+            "",
+            10
+        )),
+        std::slice::from_ref(&other)
+    );
+    assert_eq!(
+        ids(organize::candidates(
+            &board,
+            &group,
+            Purpose::Parent,
+            "",
+            10
+        )),
+        std::slice::from_ref(&other)
+    );
+    // Any Entity for a dependency, without those it has.
+    assert_eq!(
+        ids(organize::candidates(
+            &board,
+            &lone,
+            Purpose::Dependency,
+            "",
+            10
+        )),
+        [group.clone(), other.clone()]
+    );
+    // The search narrows by title or ID.
+    assert_eq!(
+        ids(organize::candidates(
+            &board,
+            &lone,
+            Purpose::Dependency,
+            "家計",
+            10
+        )),
+        std::slice::from_ref(&other)
+    );
+    assert_eq!(
+        ids(organize::candidates(
+            &board,
+            &lone,
+            Purpose::Dependency,
+            group.as_ref(),
+            10
+        )),
+        std::slice::from_ref(&group)
+    );
+}
+
+#[test]
+fn pickers_list_the_first_candidates_and_count_the_rest() {
+    let mut f = Fixture::new();
+    let issue = f.issue("仕事", None);
+    let groups: Vec<_> = (0..5).map(|ix| f.group(&format!("g{ix}"), None)).collect();
+    let board = f.board();
+    let (shown, total) = organize::candidates(&board, &issue, Purpose::Parent, "", 2);
+    assert_eq!(total, 5);
+    assert_eq!(
+        shown.into_iter().map(|l| l.id).collect::<Vec<_>>(),
+        groups[..2]
+    );
+}
+
+#[test]
+fn a_read_tells_whether_each_kind_of_change_was_made() {
+    let mut f = Fixture::new();
+    let first = f.issue("一", None);
+    let second = f.issue("二", None);
+    let context = || axon::lifecycle::Context {
+        at: chrono::DateTime::from_timestamp(1_900_000_000, 0).unwrap(),
+        recorder: None,
+    };
+    for change in [
+        Rearrangement::AddDependency {
+            entity: second.clone(),
+            target: first.clone(),
+        },
+        Rearrangement::RemoveDependency {
+            entity: second.clone(),
+            target: first.clone(),
+        },
+        Rearrangement::Convert {
+            entity: second.clone(),
+            kind: Kind::Group,
+        },
+    ] {
+        let board = f.board();
+        assert_eq!(change.is_shown_by(&board), Some(false), "{change:?}");
+        let record = change.record(board.records(), context()).unwrap().unwrap();
+        f.insert_entry(Entry::Record(record));
+        assert_eq!(change.is_shown_by(&f.board()), Some(true), "{change:?}");
+    }
+    let missing = Rearrangement::Convert {
+        entity: EntityId::try_from("axon-gone".to_string()).unwrap(),
+        kind: Kind::Group,
+    };
+    assert_eq!(missing.is_shown_by(&f.board()), None);
 }

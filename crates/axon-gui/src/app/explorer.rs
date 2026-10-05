@@ -26,7 +26,7 @@ pub fn entity_element(id: &EntityId) -> ElementId {
     ElementId::Name(format!("entity-{id}").into())
 }
 
-fn named(name: String) -> ElementId {
+pub(super) fn named(name: String) -> ElementId {
     ElementId::Name(name.into())
 }
 
@@ -49,13 +49,16 @@ impl AxonApp {
 
     /// Opens a known Entity in the detail pane.
     pub fn open_entity(&mut self, id: EntityId, cx: &mut Context<Self>) {
+        let previous = self.explorer.selected().cloned();
         self.explorer.select(id);
+        self.drop_picker();
+        self.drop_outcome(previous);
         self.reveal_selected();
         cx.notify();
     }
 
     /// Scrolls the list to the selected row, when the list shows it.
-    fn reveal_selected(&self) {
+    pub(super) fn reveal_selected(&self) {
         let listing = self.explorer.listing();
         if let Some(ix) = self
             .explorer
@@ -68,14 +71,22 @@ impl AxonApp {
 
     /// Moves the selection through the list and keeps the selected row in view.
     fn step(&mut self, step: isize, cx: &mut Context<Self>) {
+        let previous = self.explorer.selected().cloned();
         self.explorer.step(step);
+        self.drop_picker();
+        self.drop_outcome(previous);
         self.reveal_selected();
         cx.notify();
     }
 
     /// Closes the detail pane, showing the draft workbench there again.
     pub fn close_entity(&mut self, cx: &mut Context<Self>) {
+        let previous = self.explorer.selected().cloned();
         self.explorer.deselect();
+        self.drop_outcome(previous);
+        if self.picker.take().is_some() {
+            self.focus_list = true;
+        }
         cx.notify();
     }
 
@@ -187,7 +198,7 @@ impl AxonApp {
                             .outline()
                             .compact()
                             .label("再読み込み")
-                            .on_click(cx.listener(|this, _, _, cx| this.reload_selected(cx))),
+                            .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                     ),
             )
             .child(
@@ -326,7 +337,7 @@ impl AxonApp {
     }
 
     /// A clickable reference to another Entity, or its ID when the store does not hold it.
-    fn render_link(&self, link: &Link, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_link(&self, link: &Link, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         match &link.known {
             Some(known) => {
@@ -546,6 +557,8 @@ impl AxonApp {
             pane = pane.child(waits);
         }
 
+        pane = pane.child(self.render_structure(detail, cx));
+
         pane = pane.child(
             div()
                 .id("detail-description")
@@ -599,7 +612,7 @@ impl AxonApp {
             pane = pane.child(children);
         }
         pane = pane
-            .children(self.render_links("detail-dependencies", "依存先", &detail.dependencies, cx))
+            .child(self.render_dependencies(detail, cx))
             .children(self.render_links(
                 "detail-dependents",
                 "この仕事に依存している",

@@ -1,24 +1,13 @@
 use axon::{
     Result,
     file::Store,
-    lifecycle::{Context, EntityId, Recorder, record},
+    lifecycle::{Context, EntityId, record},
     location::Location,
     read,
 };
-use chrono::Utc;
 
 pub(super) fn context() -> Context {
-    Context {
-        at: Utc::now(),
-        recorder: axon_recorder::detect().map(|recorder| Recorder {
-            actor: recorder.actor,
-            data: recorder
-                .data
-                .into_iter()
-                .map(|(key, value)| (key, value.into()))
-                .collect(),
-        }),
-    }
+    axon::context_now()
 }
 /// Resolves a complete ID or a unique suffix among the Entities of the view, including one
 /// that has only Notes: its Notes are readable, and the operations that need a record

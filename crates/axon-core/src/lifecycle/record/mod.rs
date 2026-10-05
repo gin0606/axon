@@ -24,7 +24,7 @@ pub use store::Store;
 pub use view::{Settled, View, Violation, ViolationKind};
 
 pub use super::{
-    Context, EntityId, Error, Kind, Label, Lifecycle, Operation, Recorder, Result, StoreId,
+    Context, EntityId, Error, Kind, Label, Lifecycle, Operation, Recorder, Refusal, Result, StoreId,
 };
 
 impl Entry {

@@ -1,7 +1,7 @@
 use super::model::{Current, Entry, Record, RecordId, RecordKind};
 use super::store::Store;
 use super::{EntityId, Kind, Lifecycle, Operation, Result};
-use crate::lifecycle::invalid;
+use crate::lifecycle::{Refusal, invalid};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -633,12 +633,10 @@ impl View {
 
     pub(super) fn require_settled(&self, id: &EntityId) -> Result<&Current> {
         if self.conflicted.contains(id) {
-            return Err(invalid(format!(
-                "Entity {id} is conflicted; resolve it first"
-            )));
+            return Err(Refusal::EntityConflicted(id.clone()).into());
         }
         self.current(id)
-            .ok_or_else(|| invalid(format!("missing Entity {id}")))
+            .ok_or_else(|| Refusal::Missing(id.clone()).into())
     }
 
     /// Checks the prerequisites of one lifecycle operation on a settled Entity without

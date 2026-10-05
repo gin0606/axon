@@ -1,6 +1,7 @@
 //! Reading and writing one project's store, and telling the results of earlier requests apart
 //! from the current one.
 
+use super::data::{Fault, FaultPoint};
 use super::registry::ProjectId;
 use axon::{
     Error,
@@ -17,6 +18,7 @@ use std::path::{Path, PathBuf};
 pub struct ProjectConnection {
     project: ProjectId,
     root: PathBuf,
+    fault: Fault,
 }
 
 /// The result of a write, as the store reports it.
@@ -43,7 +45,15 @@ impl<T> From<axon::Result<T>> for WriteOutcome<T> {
 
 impl ProjectConnection {
     pub fn new(project: ProjectId, root: PathBuf) -> Self {
-        Self { project, root }
+        Self {
+            project,
+            root,
+            fault: Fault::default(),
+        }
+    }
+    pub(crate) fn with_fault(mut self, fault: Fault) -> Self {
+        self.fault = fault;
+        self
     }
     pub fn project(&self) -> &ProjectId {
         &self.project
@@ -107,8 +117,31 @@ impl ProjectConnection {
         &self,
         change: impl FnOnce(&Header, &record::Store, &record::View) -> axon::Result<(Vec<Entry>, T)>,
     ) -> WriteOutcome<T> {
-        self.open()
-            .and_then(|mut store| store.update(change))
+        let unknown = |error: std::io::Error| Error::PublicationUnknown(error.to_string());
+        let fault = &self.fault;
+        let (mut injected, mut writes) = (None, false);
+        let result = self.open().and_then(|mut store| {
+            store.update(|header, records, view| {
+                let (entries, value) = change(header, records, view)?;
+                writes = !entries.is_empty();
+                if writes && let Err(error) = fault.inject(FaultPoint::BeforePublish) {
+                    injected = Some(error);
+                    return Err(Error::Invalid("injected".into()));
+                }
+                Ok((entries, value))
+            })
+        });
+        if let Some(error) = injected {
+            return WriteOutcome::PublicationUnknown(unknown(error));
+        }
+        result
+            .and_then(|value| match writes {
+                true => fault
+                    .inject(FaultPoint::AfterPublish)
+                    .map_err(unknown)
+                    .map(|()| value),
+                false => Ok(value),
+            })
             .into()
     }
 }
