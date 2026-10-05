@@ -6,15 +6,17 @@
 mod explorer;
 mod organize;
 mod progress;
+mod record;
 pub mod text;
 
 use explorer::named;
 pub use explorer::{LIST_CONTEXT, entity_element};
 pub use organize::{Found, Outcome, OutcomeKind, PICKER_LIMIT, Picker};
 pub use progress::STATE_MENU_WIDTH;
+pub use record::{EDITOR_HEIGHT, EditDraft};
 
 use crate::{
-    Workbench,
+    FocusNextField, FocusPreviousField, MainWindow, Workbench,
     board::{Board, Change, Explorer},
     project::{
         AppData, CreateError, NameError, Project, ProjectId, Registry, Requests, Status, Step,
@@ -111,6 +113,8 @@ pub struct AxonApp {
     reveal_on_load: bool,
     /// Give the list the focus at the next render, after the picker holding it closed.
     focus_list: bool,
+    /// What was typed and not saved yet, and the choices of the next creation.
+    drafts: record::Drafts,
 }
 
 impl AxonApp {
@@ -183,7 +187,32 @@ impl AxonApp {
             held: None,
             reveal_on_load: false,
             focus_list: false,
+            drafts: Default::default(),
         };
+        // Closing the window or quitting with something unsaved asks first.
+        cx.set_global(MainWindow {
+            window: window.window_handle(),
+            app: cx.entity().downgrade(),
+        });
+        let workbench_title = this.workbench.read(cx).title().clone();
+        let workbench_body = this.workbench.read(cx).body().clone();
+        cx.subscribe(&workbench_title, |this, _, event: &InputEvent, cx| {
+            if let InputEvent::Change = event {
+                this.forget_create_outcome(cx);
+            }
+        })
+        .detach();
+        cx.subscribe(&workbench_body, |this, _, event: &InputEvent, cx| {
+            if let InputEvent::Change = event {
+                this.forget_create_outcome(cx);
+            }
+        })
+        .detach();
+        let app = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            app.update(cx, |this, cx| this.should_close(window, cx))
+                .unwrap_or(true)
+        });
         this.reload_registry(cx);
         this
     }
@@ -299,6 +328,8 @@ impl AxonApp {
         let project = self.selected().cloned();
         let project_id = project.as_ref().map(|project| &project.id);
         if self.explorer.project() != project_id {
+            // An Entity to open after a creation belongs to the project left.
+            self.drafts.open_on_load = None;
             self.list_scroll.set_offset(Default::default());
             if self.picker.take().is_some() {
                 self.focus_list = true;
@@ -326,9 +357,9 @@ impl AxonApp {
                     // The rows are derived off the UI thread too; the window only filters them.
                     let result = cx
                         .background_spawn(async move {
-                            connection
-                                .load()
-                                .map(|(_, records, view)| Board::new(records, view))
+                            connection.load().map(|(header, records, view)| {
+                                Board::new(&header.prefix, records, view)
+                            })
                         })
                         .await;
                     this.update(cx, |this, cx| {
@@ -340,7 +371,7 @@ impl AxonApp {
                                         entities: board.len(),
                                     };
                                     this.explorer.load(ticket.key(), board);
-                                    this.loaded();
+                                    this.loaded(cx);
                                     StoreState::Loaded(summary)
                                 }
                                 Err(error) => {
@@ -832,6 +863,7 @@ impl AxonApp {
 
 impl Render for AxonApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.clear_saved_workbench(window, cx);
         // Only while the closed picker's search still has the focus (or nothing has), not over
         // a field chosen since.
         if std::mem::take(&mut self.focus_list) {
@@ -855,59 +887,52 @@ impl Render for AxonApp {
         let sidebar = self.render_sidebar(cx);
         let (status, action) = self.render_status(cx);
         let list = self.render_list(cx);
-        let detail: AnyElement =
-            match self.explorer.detail() {
-                Some(Ok(detail)) => self.render_detail(detail, cx),
-                Some(Err(error)) => div()
-                    .id("detail-error")
-                    .p_4()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_color(danger)
-                            .child(format!("詳細を表示できません: {error}")),
-                    )
-                    .child(
-                        Button::new("close-detail")
-                            .ghost()
-                            .compact()
-                            .label("閉じる")
-                            .on_click(cx.listener(|this, _, _, cx| this.close_entity(cx))),
-                    )
-                    .into_any_element(),
-                None if let Some(held) = self.held.as_ref().filter(|held| {
-                    self.explorer.selected() == Some(&held.id)
-                        && matches!(self.store, StoreState::Loading)
-                }) =>
-                {
-                    self.render_detail(held, cx)
-                }
-                None if self.explorer.selected().is_some()
-                    && matches!(self.store, StoreState::Loading) =>
-                {
+        let detail: AnyElement = match self.explorer.detail() {
+            Some(Ok(detail)) => self.render_detail(detail, cx),
+            Some(Err(error)) => div()
+                .id("detail-error")
+                .p_4()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
                     div()
-                        .id("detail-loading")
-                        .p_4()
-                        .text_color(muted)
-                        .child("読み込み中…")
-                        .into_any_element()
-                }
-                None => div()
-                    .size_full()
-                    .flex()
-                    .flex_col()
-                    .child(div().px_4().pt_4().text_xs().text_color(muted).child(
-                        "下書き（まだ保存しません）。一覧から選ぶと、ここに詳細を表示します。",
-                    ))
-                    .child(div().flex_1().min_h_0().child(self.workbench.clone()))
-                    .into_any_element(),
-            };
+                        .text_color(danger)
+                        .child(format!("詳細を表示できません: {error}")),
+                )
+                .child(
+                    Button::new("close-detail")
+                        .ghost()
+                        .compact()
+                        .label("閉じる")
+                        .on_click(cx.listener(|this, _, _, cx| this.close_entity(cx))),
+                )
+                .into_any_element(),
+            None if let Some(held) = self.held.as_ref().filter(|held| {
+                self.explorer.selected() == Some(&held.id)
+                    && matches!(self.store, StoreState::Loading)
+            }) =>
+            {
+                self.render_detail(held, cx)
+            }
+            None if self.explorer.selected().is_some()
+                && matches!(self.store, StoreState::Loading) =>
+            {
+                div()
+                    .id("detail-loading")
+                    .p_4()
+                    .text_color(muted)
+                    .child("読み込み中…")
+                    .into_any_element()
+            }
+            None => self.render_create(cx),
+        };
         div()
             .id("axon-app")
             .capture_any_mouse_down(cx.listener(|this, event, _, _| this.note_press(event)))
             .capture_key_up(cx.listener(|this, event, _, _| this.note_key_up(event)))
+            .on_action(|_: &FocusNextField, window, cx| window.focus_next(cx))
+            .on_action(|_: &FocusPreviousField, window, cx| window.focus_prev(cx))
             .size_full()
             .flex()
             .flex_row()

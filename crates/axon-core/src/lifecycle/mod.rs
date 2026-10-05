@@ -15,7 +15,7 @@ pub use record::{
     RecordId, RecordKind, Settled, Store, View, Violation, ViolationKind, decode, decode_header,
     encode, encode_header, new_entity_id,
 };
-pub use refusal::Refusal;
+pub use refusal::{Line, LineProblem, Refusal};
 
 /// A rejected input or operation. The message is the diagnostic; a refusal that names the
 /// Entities involved also carries the [`Refusal`] the message describes.

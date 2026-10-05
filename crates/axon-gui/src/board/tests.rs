@@ -482,8 +482,8 @@ fn rearrangements_are_checked_and_made_by_the_core() {
         at: chrono::DateTime::from_timestamp(1_900_000_000, 0).unwrap(),
         recorder: None,
     };
-    let record = mv.record(board.records(), context).unwrap().unwrap();
-    f.insert_entry(Entry::Record(record));
+    let entry = mv.entry(board.records(), context).unwrap().unwrap();
+    f.insert_entry(entry);
     let board = f.board();
     assert_eq!(mv.is_shown_by(&board), Some(true));
     assert_eq!(board.item(&leaf).unwrap().parent, Some(inner.clone()));
@@ -654,8 +654,8 @@ fn a_read_tells_whether_each_kind_of_change_was_made() {
     ] {
         let board = f.board();
         assert_eq!(change.is_shown_by(&board), Some(false), "{change:?}");
-        let record = change.record(board.records(), context()).unwrap().unwrap();
-        f.insert_entry(Entry::Record(record));
+        let entry = change.entry(board.records(), context()).unwrap().unwrap();
+        f.insert_entry(entry);
         assert_eq!(change.is_shown_by(&f.board()), Some(true), "{change:?}");
     }
     let missing = Change::Convert {
@@ -808,4 +808,293 @@ fn a_filter_says_which_facets_leave_an_entity_out() {
             .exclusions(&Filter::default(), &f.issue("x", None))
             .is_empty()
     );
+}
+
+fn later() -> axon::lifecycle::Context {
+    axon::lifecycle::Context {
+        at: chrono::DateTime::from_timestamp(1_900_000_000, 0).unwrap(),
+        recorder: None,
+    }
+}
+
+fn new_entity(title: &str, parent: Option<&EntityId>) -> NewEntity {
+    NewEntity {
+        kind: Kind::Issue,
+        lifecycle: Lifecycle::Undecided,
+        title: title.into(),
+        description: "本文".into(),
+        label: Label::Feat,
+        parent: parent.cloned(),
+    }
+}
+
+fn refused(result: Result<(), Rejection>) -> Refusal {
+    match result {
+        Err(Rejection::Refused(refusal)) => refusal,
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_creation_is_checked_by_the_core_and_shown_once_the_entity_is_read() {
+    use axon::lifecycle::{Line, LineProblem};
+    let mut f = Fixture::new();
+    let group = f.group("計画", None);
+    let closed = f.group("終わった計画", None);
+    f.perform(&closed, Operation::Cancel);
+    let board = f.board();
+    let id = board
+        .fresh_id(|prefix| EntityId::try_from(format!("{prefix}-new")))
+        .unwrap();
+    let create = |value| Change::Create {
+        entity: id.clone(),
+        value,
+    };
+
+    assert_eq!(
+        refused(create(new_entity(" ", None)).check(&board)),
+        Refusal::InvalidLine {
+            field: Line::Title,
+            problem: LineProblem::Empty
+        }
+    );
+    assert_eq!(
+        refused(create(new_entity("会場\nを決める", None)).check(&board)),
+        Refusal::InvalidLine {
+            field: Line::Title,
+            problem: LineProblem::ControlCharacter
+        }
+    );
+    assert_eq!(
+        refused(create(new_entity("x", Some(&closed))).check(&board)),
+        Refusal::DestinationNotOpenGroup(closed.clone())
+    );
+    assert_eq!(board.check_create_inside(&group), Ok(()));
+    assert_eq!(
+        refused(board.check_create_inside(&closed)),
+        Refusal::DestinationNotOpenGroup(closed.clone())
+    );
+    let detail = board.detail(&group).unwrap();
+    assert_eq!(detail.create_inside, Some(Ok(())));
+    assert!(
+        board
+            .detail(&closed)
+            .unwrap()
+            .create_inside
+            .unwrap()
+            .is_err()
+    );
+
+    let change = create(NewEntity {
+        kind: Kind::Group,
+        lifecycle: Lifecycle::NotStarted,
+        ..new_entity("会場を決める", Some(&group))
+    });
+    assert_eq!(change.check(&board), Ok(()));
+    assert_eq!(change.is_shown_by(&board), Some(false));
+    let entry = change.entry(board.records(), later()).unwrap().unwrap();
+    f.insert_entry(entry);
+    let board = f.board();
+    assert_eq!(change.is_shown_by(&board), Some(true));
+    let detail = board.detail(&id).unwrap();
+    assert_eq!(
+        (
+            detail.kind,
+            detail.stored,
+            detail.title.as_str(),
+            detail.description.as_str(),
+            detail.label
+        ),
+        (
+            Kind::Group,
+            Some(Lifecycle::NotStarted),
+            "会場を決める",
+            "本文",
+            Label::Feat
+        )
+    );
+    assert_eq!(detail.parent.map(|link| link.id), Some(group));
+    assert_eq!(
+        detail.history[0].kind,
+        axon::lifecycle::record::RecordKind::Created
+    );
+}
+
+#[test]
+fn a_fresh_id_names_no_known_entity() {
+    let mut f = Fixture::new();
+    let known = f.issue("a", None);
+    let board = f.board();
+    let mut offered = vec!["axon-0001", "axon-new"].into_iter();
+    let id = board
+        .fresh_id(|prefix| {
+            assert_eq!(prefix, "axon");
+            EntityId::try_from(offered.next().unwrap().to_owned())
+        })
+        .unwrap();
+    assert_eq!((known.as_ref(), id.as_ref()), ("axon-0001", "axon-new"));
+}
+
+#[test]
+fn an_edit_is_one_record_that_keeps_what_it_does_not_set() {
+    use axon::lifecycle::record::RecordKind;
+    let mut f = Fixture::new();
+    let group = f.group("計画", None);
+    let other = f.issue("別", None);
+    let issue = f.issue("会場", None);
+    f.describe(&issue, "前の本文");
+    // The screen read before the parent, a dependency and the description changed elsewhere.
+    let board = f.board();
+    let moved = f.parent_in(&f.store.clone(), &issue, &group);
+    f.insert_entry(moved);
+    f.needs(&issue, &other);
+    f.describe(&issue, "別の場所で変えた本文");
+    let edit = Change::Edit {
+        entity: issue.clone(),
+        edit: Edit {
+            title: Some("会場を決める".into()),
+            description: None,
+            label: Some(Label::Bug),
+        },
+    };
+    assert_eq!(edit.check(&board), Ok(()));
+    let before = f.store.records().count();
+    let entry = edit.entry(&f.store, later()).unwrap().unwrap();
+    f.insert_entry(entry);
+    assert_eq!(f.store.records().count(), before + 1, "one record");
+    let board = f.board();
+    assert_eq!(edit.is_shown_by(&board), Some(true));
+    let current = board.read().current(&issue).unwrap().clone();
+    assert_eq!(
+        (
+            current.title.as_str(),
+            current.description.as_str(),
+            current.label
+        ),
+        ("会場を決める", "別の場所で変えた本文", Label::Bug)
+    );
+    assert_eq!(current.parent, Some(group));
+    assert!(current.needs.contains(&other));
+    let detail = board.detail(&issue).unwrap();
+    assert_eq!(detail.history.last().unwrap().kind, RecordKind::Import);
+
+    // A text edit alone, and a label alone, are the CLI's own records.
+    for (edit, kind) in [
+        (
+            Edit {
+                description: Some("新しい本文".into()),
+                ..Edit::default()
+            },
+            RecordKind::Edit,
+        ),
+        (
+            Edit {
+                label: Some(Label::Docs),
+                ..Edit::default()
+            },
+            RecordKind::Label,
+        ),
+    ] {
+        let change = Change::Edit {
+            entity: issue.clone(),
+            edit,
+        };
+        assert_eq!(change.is_shown_by(&f.board()), Some(false));
+        let entry = change.entry(&f.store, later()).unwrap().unwrap();
+        f.insert_entry(entry);
+        assert_eq!(change.is_shown_by(&f.board()), Some(true));
+        assert_eq!(
+            f.board()
+                .detail(&issue)
+                .unwrap()
+                .history
+                .last()
+                .unwrap()
+                .kind,
+            kind
+        );
+    }
+}
+
+#[test]
+fn an_invalid_edit_writes_nothing_and_a_terminal_entity_is_not_edited() {
+    use axon::lifecycle::{Line, LineProblem, TITLE_LIMIT};
+    let mut f = Fixture::new();
+    let issue = f.issue("会場", None);
+    let board = f.board();
+    assert_eq!(board.detail(&issue).unwrap().editable, Ok(()));
+    // A valid label with an invalid title is refused whole.
+    let edit = Change::Edit {
+        entity: issue.clone(),
+        edit: Edit {
+            title: Some("あ".repeat(TITLE_LIMIT + 1)),
+            description: Some("本文".into()),
+            label: Some(Label::Bug),
+        },
+    };
+    assert_eq!(
+        refused(edit.check(&board)),
+        Refusal::InvalidLine {
+            field: Line::Title,
+            problem: LineProblem::TooLong {
+                length: TITLE_LIMIT + 1,
+                limit: TITLE_LIMIT
+            }
+        }
+    );
+    f.perform(&issue, Operation::Cancel);
+    let board = f.board();
+    assert_eq!(
+        refused(board.detail(&issue).unwrap().editable),
+        Refusal::TerminalTextFixed
+    );
+    let label = Change::Edit {
+        entity: issue.clone(),
+        edit: Edit {
+            label: Some(Label::Bug),
+            ..Edit::default()
+        },
+    };
+    assert_eq!(refused(label.check(&board)), Refusal::TerminalLabelFixed);
+    // A Note is added in any state.
+    let note = Change::AddNote {
+        entity: issue.clone(),
+        body: "取りやめた理由".into(),
+        nonce: axon::lifecycle::Nonce::generate(),
+    };
+    assert_eq!(note.check(&board), Ok(()));
+}
+
+#[test]
+fn a_note_is_checked_by_the_core_and_told_apart_from_another_with_its_body() {
+    use axon::lifecycle::Nonce;
+    let mut f = Fixture::new();
+    let issue = f.issue("会場", None);
+    let board = f.board();
+    let empty = Change::AddNote {
+        entity: issue.clone(),
+        body: " \n ".into(),
+        nonce: Nonce::generate(),
+    };
+    assert_eq!(refused(empty.check(&board)), Refusal::EmptyNote);
+    let note = Change::AddNote {
+        entity: issue.clone(),
+        body: "同じ本文".into(),
+        nonce: Nonce::generate(),
+    };
+    // Another Note with the same body, written after the screen read, is not this one.
+    f.note(&issue, "同じ本文");
+    assert_eq!(note.is_shown_by(&f.board()), Some(false));
+    let entry = note.entry(board.records(), later()).unwrap().unwrap();
+    assert!(matches!(entry, Entry::Note(_)));
+    f.insert_entry(entry);
+    let board = f.board();
+    assert_eq!(note.is_shown_by(&board), Some(true));
+    assert_eq!(board.detail(&issue).unwrap().notes.len(), 2);
+    let gone = Change::AddNote {
+        entity: EntityId::try_from("axon-gone".to_string()).unwrap(),
+        body: "x".into(),
+        nonce: Nonce::generate(),
+    };
+    assert_eq!(gone.is_shown_by(&board), None);
 }

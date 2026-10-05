@@ -975,3 +975,83 @@ fn lifecycle_refusals_name_the_entities_involved_and_keep_the_cli_diagnostics() 
         Refusal::StartedWorkNeedsAdoptedAncestors(vec![id("pending")])
     );
 }
+
+#[test]
+fn text_refusals_tell_what_is_wrong_and_keep_the_cli_diagnostics() {
+    use crate::lifecycle::{Line, LineProblem, TITLE_LIMIT};
+    let both = |result: Result<Option<Record>>| match result {
+        Ok(value) => panic!("expected rejection, got {value:?}"),
+        Err(error) => (
+            error.refusal().expect("a refusal").clone(),
+            error.message().to_owned(),
+        ),
+    };
+    let mut r = empty();
+    register(&mut r, "a", Kind::Issue, None);
+    let title = |value: &str| Some(value.to_owned());
+    assert_eq!(
+        both(r.store.write(&id("a"), title(" "), None, None, r.tick())),
+        (
+            Refusal::InvalidLine {
+                field: Line::Title,
+                problem: LineProblem::Empty
+            },
+            "empty title".into()
+        )
+    );
+    assert_eq!(
+        both(r.store.write(&id("a"), title("a\nb"), None, None, r.tick())),
+        (
+            Refusal::InvalidLine {
+                field: Line::Title,
+                problem: LineProblem::ControlCharacter
+            },
+            "title contains a line break or control character".into()
+        )
+    );
+    let long = "あ".repeat(TITLE_LIMIT + 1);
+    assert_eq!(
+        both(r.store.write(&id("a"), Some(long), None, None, r.tick())),
+        (
+            Refusal::InvalidLine {
+                field: Line::Title,
+                problem: LineProblem::TooLong {
+                    length: TITLE_LIMIT + 1,
+                    limit: TITLE_LIMIT
+                }
+            },
+            format!(
+                "title has {} characters; the limit is {TITLE_LIMIT}",
+                TITLE_LIMIT + 1
+            )
+        )
+    );
+    assert_eq!(
+        both(
+            r.store
+                .write(&id("a"), None, None, Some("\t".into()), r.tick())
+        )
+        .1,
+        "empty reason"
+    );
+    match r.store.add_note(&id("a"), " \n".into(), None, r.tick()) {
+        Err(error) => {
+            assert_eq!(error.refusal(), Some(&Refusal::EmptyNote));
+            assert_eq!(error.message(), "empty Note");
+        }
+        Ok(note) => panic!("expected rejection, got {note:?}"),
+    }
+    r.op("a", Cancel);
+    // A terminal Entity is refused before a change is looked for, even without one.
+    assert_eq!(
+        both(r.store.write(&id("a"), None, None, None, r.tick())),
+        (Refusal::TerminalTextFixed, "terminal text is fixed".into())
+    );
+    assert_eq!(
+        both(r.store.set_label(&id("a"), Label::Feat, None, r.tick())),
+        (
+            Refusal::TerminalLabelFixed,
+            "terminal label is fixed".into()
+        )
+    );
+}

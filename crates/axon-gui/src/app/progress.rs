@@ -172,20 +172,20 @@ impl AxonApp {
             .items_center()
             .gap_2()
             .child(trigger)
-            // Editing the text is offered here; until it is, the place stays reserved.
             .child(
                 Button::new("edit-entity")
                     .outline()
                     .compact()
                     .label("編集")
-                    .disabled(true),
+                    .disabled(detail.editable.is_err() || self.edit_draft().is_some() || busy)
+                    .on_click(cx.listener(|this, _, window, cx| this.start_edit(window, cx))),
             )
             .into_any_element()
     }
 
     fn menu_entry(&self, detail: &EntityDetail, step: &Step) -> MenuEntry {
         let reason = step.check.as_ref().err().map(|rejection| {
-            let mut reason = text::rejection(rejection, Some(step.operation));
+            let mut reason = text::rejection(rejection, text::Doing::Transition(step.operation));
             let named: Vec<String> = related(rejection)
                 .into_iter()
                 .map(|id| self.title_of(id))

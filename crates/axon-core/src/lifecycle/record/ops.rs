@@ -488,7 +488,7 @@ fn write_in(
 ) -> Result<Option<Record>> {
     let current = view.require_settled(id)?;
     if current.is_terminal() {
-        return Err(invalid("terminal text is fixed"));
+        return Err(Refusal::TerminalTextFixed.into());
     }
     let mut after = current.clone();
     if let Some(title) = title {
@@ -520,7 +520,7 @@ fn set_label_in(
 ) -> Result<Option<Record>> {
     let current = view.require_settled(id)?;
     if current.is_terminal() {
-        return Err(invalid("terminal label is fixed"));
+        return Err(Refusal::TerminalLabelFixed.into());
     }
     if current.label == label {
         return Ok(None);

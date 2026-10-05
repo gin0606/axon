@@ -15,7 +15,7 @@ pub mod listing;
 pub mod organize;
 pub mod progress;
 
-pub use change::{Change, Rejection, Section};
+pub use change::{Change, Edit, NewEntity, Rejection, Section};
 pub use detail::{
     Difference, EntityDetail, HistoryEntry, Link, NoteEntry, Structure, Wait, WaitKind,
 };
@@ -80,6 +80,8 @@ pub struct Item {
 
 /// One read of a project's store with the rows derived from it.
 pub struct Board {
+    /// The prefix of the store's Entity IDs.
+    prefix: String,
     records: record::Store,
     view: record::View,
     /// Every known Entity in creation order (ties by ID).
@@ -90,8 +92,9 @@ pub struct Board {
 }
 
 impl Board {
-    pub fn new(records: record::Store, view: record::View) -> Self {
+    pub fn new(prefix: &str, records: record::Store, view: record::View) -> Self {
         let mut board = Self {
+            prefix: prefix.to_owned(),
             records,
             view,
             items: Vec::new(),
@@ -168,6 +171,29 @@ impl Board {
             (Some(item), Some(presented)) => filter.exclusions(item, presented),
             _ => Vec::new(),
         }
+    }
+    /// An Entity ID for a new Entity: the first one `generate` makes for the store's prefix
+    /// that names no Entity of these records, not even one only a Note names. A creation
+    /// written later is checked again against the records under the lock.
+    pub fn fresh_id(
+        &self,
+        mut generate: impl FnMut(&str) -> axon::lifecycle::Result<EntityId>,
+    ) -> axon::lifecycle::Result<EntityId> {
+        for _ in 0..100 {
+            let id = generate(&self.prefix)?;
+            if !self.view.is_known(&id) && !self.view.noted_only().contains(&id) {
+                return Ok(id);
+            }
+        }
+        Err(axon::lifecycle::Error::new(
+            "could not allocate a unique Entity ID after 100 attempts",
+        ))
+    }
+    /// Whether the records hold a Note of `entity` with `nonce`.
+    pub fn has_note(&self, entity: &EntityId, nonce: &axon::lifecycle::Nonce) -> bool {
+        self.records
+            .notes()
+            .any(|(_, note)| &note.entity == entity && &note.nonce == nonce)
     }
     /// The detail of a known Entity, without running any condition.
     pub fn detail(&self, id: &EntityId) -> axon::lifecycle::Result<EntityDetail> {

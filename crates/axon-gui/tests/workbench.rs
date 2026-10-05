@@ -161,7 +161,7 @@ async fn label_menu_lists_core_labels_and_closes_after_a_choice(cx: &mut TestApp
     cx.read(|cx| assert_eq!(workbench.read(cx).label(), chosen));
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find("label").label(), Some("種類: chore ▾"));
+        assert_eq!(window.find("label").label(), Some("label: chore ▾"));
     })
     .unwrap();
 }

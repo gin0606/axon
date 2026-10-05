@@ -1,4 +1,4 @@
-use super::{Refusal, Result, invalid};
+use super::{Line, LineProblem, Refusal, Result, invalid};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Value, value::RawValue};
@@ -300,25 +300,22 @@ fn literal_json(raw: &RawValue) -> serde_json::Result<Value> {
 /// would store a caller's mistake instead of reporting it.
 pub const TITLE_LIMIT: usize = 200;
 pub const REASON_LIMIT: usize = 500;
-pub(crate) fn validate_line(field: &str, value: &str, limit: usize) -> Result<()> {
-    if value.trim().is_empty() {
-        return Err(invalid(format!("empty {field}")));
-    }
-    if value.chars().any(char::is_control) {
-        return Err(invalid(format!(
-            "{field} contains a line break or control character"
-        )));
-    }
-    let length = value.chars().count();
-    if length > limit {
-        return Err(invalid(format!(
-            "{field} has {length} characters; the limit is {limit}"
-        )));
-    }
-    Ok(())
+pub(crate) fn validate_line(field: Line, value: &str, limit: usize) -> Result<()> {
+    let problem = if value.trim().is_empty() {
+        LineProblem::Empty
+    } else if value.chars().any(char::is_control) {
+        LineProblem::ControlCharacter
+    } else {
+        let length = value.chars().count();
+        if length <= limit {
+            return Ok(());
+        }
+        LineProblem::TooLong { length, limit }
+    };
+    Err(Refusal::InvalidLine { field, problem }.into())
 }
 pub(crate) fn validate_reason(reason: &Option<String>) -> Result<()> {
-    reason
-        .as_deref()
-        .map_or(Ok(()), |text| validate_line("reason", text, REASON_LIMIT))
+    reason.as_deref().map_or(Ok(()), |text| {
+        validate_line(Line::Reason, text, REASON_LIMIT)
+    })
 }

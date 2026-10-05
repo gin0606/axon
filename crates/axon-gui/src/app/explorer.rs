@@ -1,7 +1,7 @@
 //! The filters, the shared list and the detail pane of the selected project.
 
 use super::{AxonApp, StoreState, text};
-use crate::board::{EntityDetail, Filter, Layout, Link, State, WaitKind};
+use crate::board::{EntityDetail, Filter, Layout, Link, Section, State, WaitKind};
 use crate::{SelectNextEntity, SelectPreviousEntity};
 use axon::lifecycle::{EntityId, Kind, Label};
 use gpui_kit::component::{
@@ -193,6 +193,15 @@ impl AxonApp {
                     .gap_2()
                     .items_center()
                     .child(Input::new(&self.search).id("search").flex_1())
+                    .child(
+                        Button::new("new-entity")
+                            .outline()
+                            .compact()
+                            .label("＋ 作成")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.new_entity(window, cx)),
+                            ),
+                    )
                     .child(
                         Button::new("reload-list")
                             .outline()
@@ -458,7 +467,13 @@ impl AxonApp {
                     .child(detail.title.clone())
                     .test_support(),
             )
-            .child(self.render_actions(detail, cx));
+            .child(self.render_actions(detail, cx))
+            .children(self.render_edit_blocked(detail, cx));
+        let editing = self.edit_draft();
+        match editing {
+            Some(draft) => pane = pane.child(self.render_edit(detail, draft, cx)),
+            None => pane = pane.children(self.render_outcome(detail, Section::Text, cx)),
+        }
 
         let mut state = format!(
             "{} {}",
@@ -480,6 +495,8 @@ impl AxonApp {
             .child(div().id("detail-state").child(state))
             .child(belongs)
             .child(self.render_progress(detail, cx))
+            // A creation found made after its publication stopped says so on its detail.
+            .children(self.render_outcome(detail, Section::Create, cx))
             .children(self.render_filtered_out(cx));
         if detail.heads > 0 {
             pane = pane.child(
@@ -549,8 +566,11 @@ impl AxonApp {
             pane = pane.child(waits);
         }
 
-        pane = pane.child(self.render_structure(detail, cx));
+        pane = pane
+            .child(self.render_structure(detail, cx))
+            .children(self.render_create_inside(detail, cx));
 
+        // Shown beside the edit form too: the recorded body is what a warning asks to check.
         pane = pane.child(
             div()
                 .id("detail-description")
@@ -619,7 +639,8 @@ impl AxonApp {
             .gap_2()
             .child(section_heading(
                 format!("Note（{} 件）", detail.notes.len()).into(),
-            ));
+            ))
+            .child(self.render_note_form(detail, cx));
         for (ix, note) in detail.notes.iter().enumerate() {
             let mut head = text::time(note.at);
             if let Some(actor) = &note.actor {

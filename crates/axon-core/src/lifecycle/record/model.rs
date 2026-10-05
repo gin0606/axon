@@ -1,5 +1,5 @@
 use super::{EntityId, Kind, Label, Lifecycle, Operation, Recorder, Result, StoreId};
-use crate::lifecycle::{TITLE_LIMIT, invalid, validate_line, validate_reason};
+use crate::lifecycle::{Line, Refusal, TITLE_LIMIT, invalid, validate_line, validate_reason};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -115,7 +115,7 @@ impl Current {
         matches!(self.lifecycle, Lifecycle::Completed | Lifecycle::Cancelled)
     }
     pub(super) fn validate(&self) -> Result<()> {
-        validate_line("title", &self.title, TITLE_LIMIT)?;
+        validate_line(Line::Title, &self.title, TITLE_LIMIT)?;
         if self.condition.as_ref().is_some_and(|s| s.trim().is_empty()) {
             return Err(invalid("empty condition command"));
         }
@@ -271,7 +271,7 @@ impl Note {
     pub(super) fn validate(&self) -> Result<()> {
         validate_reason(&self.reason)?;
         if self.body.trim().is_empty() {
-            return Err(invalid("empty Note"));
+            return Err(Refusal::EmptyNote.into());
         }
         Ok(())
     }

@@ -1,7 +1,7 @@
 //! What the detail pane shows of one Entity, owned so it outlives the read it came from.
 
 use super::progress::{self, Step};
-use super::{Board, Change, Rejection, State};
+use super::{Board, Change, Edit, NewEntity, Rejection, State};
 use axon::lifecycle::{
     EntityId, Kind, Label, Lifecycle,
     record::{Current, RecordKind, Recorder, ViolationKind},
@@ -136,6 +136,12 @@ pub struct EntityDetail {
     /// The lifecycle transitions the state menu offers; none while conflicted.
     pub progress: Vec<Step>,
     pub structure: Structure,
+    /// Whether the core accepts editing the title, description and label on this read: it
+    /// refuses a terminal Entity, and every Entity while any Entity of the store is
+    /// conflicted. Notes are added in any state.
+    pub editable: Result<(), Rejection>,
+    /// For a Group, whether the core accepts creating an Entity inside it on this read.
+    pub create_inside: Option<Result<(), Rejection>>,
 }
 
 /// Whether the core accepts, on this read, each structural change the detail offers.
@@ -253,6 +259,11 @@ pub(super) fn of(board: &Board, id: &EntityId) -> axon::lifecycle::Result<Entity
         Kind::Group => Kind::Issue,
     };
     let check = |change: Change| change.check(board);
+    let editable = check(Change::Edit {
+        entity: id.clone(),
+        edit: Edit::default(),
+    });
+    let create_inside = (detail.row.kind == Kind::Group).then(|| board.check_create_inside(&id));
     let structure = Structure {
         conflicted: !view.derived().conflicted().is_empty(),
         detach: presented.parent.as_ref().map(|_| {
@@ -318,11 +329,37 @@ pub(super) fn of(board: &Board, id: &EntityId) -> axon::lifecycle::Result<Entity
         history,
         progress: progress::steps(board, &id),
         structure,
+        editable,
+        create_inside,
         id,
     })
 }
 
 impl Board {
+    /// Whether the core accepts creating an Entity inside `group`, whatever it is: checked
+    /// with a placeholder value and an ID no Entity has.
+    pub fn check_create_inside(&self, group: &EntityId) -> Result<(), Rejection> {
+        let mut serial = 0;
+        let entity = self
+            .fresh_id(|prefix| {
+                serial += 1;
+                EntityId::try_from(format!("{prefix}-{serial}"))
+            })
+            .map_err(Rejection::from)?;
+        Change::Create {
+            entity,
+            value: NewEntity {
+                kind: Kind::Issue,
+                lifecycle: Lifecycle::Undecided,
+                title: "-".into(),
+                description: String::new(),
+                label: Label::Feat,
+                parent: Some(group.clone()),
+            },
+        }
+        .check(self)
+    }
+
     /// A link to `id`, with what the store holds of it.
     pub fn link(&self, id: &EntityId) -> Link {
         Link {

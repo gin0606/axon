@@ -1,9 +1,11 @@
 //! Why an ordinary operation was refused, as a value naming the Entities involved. The moves,
 //! dependency changes, conversions and lifecycle transitions carry one for each of their rules;
 //! the operations that check settled current values also carry one when conflicts or a missing
-//! or conflicted Entity stop them. Resolve, Notes and declarations keep plain messages. The
-//! text is the core's diagnostic; callers that present the reason otherwise match on the
-//! variant.
+//! or conflicted Entity stop them. A text edit or label change of a terminal Entity, an invalid
+//! title or reason and an empty Note body carry one too, wherever the value is validated
+//! (decoding and declarations included). Resolve and the other rules of Notes and declarations
+//! keep plain messages. The text is the core's diagnostic; callers that present the reason
+//! otherwise match on the variant.
 use super::record::ViolationKind;
 use super::{EntityId, Kind, Lifecycle, Operation};
 use std::fmt;
@@ -79,6 +81,40 @@ pub enum Refusal {
     StartedWorkNeedsAdoptedAncestors(Vec<EntityId>),
     /// These Completed Entities depend on the Entity, so it is not reopened before them.
     CompletedDependents(Vec<EntityId>),
+    /// The title and description of a Completed or Cancelled Entity are fixed.
+    TerminalTextFixed,
+    /// The label of a Completed or Cancelled Entity is fixed.
+    TerminalLabelFixed,
+    /// A single-line value is not acceptable.
+    InvalidLine { field: Line, problem: LineProblem },
+    /// A Note body holds nothing but whitespace.
+    EmptyNote,
+}
+
+/// A value kept on one line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Line {
+    Title,
+    Reason,
+}
+impl Line {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+            Self::Reason => "reason",
+        }
+    }
+}
+
+/// Why a single-line value is not acceptable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineProblem {
+    /// Nothing but whitespace.
+    Empty,
+    /// A line break or another control character.
+    ControlCharacter,
+    /// `length` characters, more than `limit`.
+    TooLong { length: usize, limit: usize },
 }
 
 impl Refusal {
@@ -120,7 +156,11 @@ impl Refusal {
             | Self::CompletedDependenciesFixed
             | Self::ConvertInProgress
             | Self::ConvertTerminal
-            | Self::NotApplicable { .. } => Vec::new(),
+            | Self::NotApplicable { .. }
+            | Self::TerminalTextFixed
+            | Self::TerminalLabelFixed
+            | Self::InvalidLine { .. }
+            | Self::EmptyNote => Vec::new(),
         }
     }
 }
@@ -220,6 +260,21 @@ impl fmt::Display for Refusal {
                 "Completed dependents must be reopened first: {}",
                 joined(dependents)
             ),
+            Self::TerminalTextFixed => f.write_str("terminal text is fixed"),
+            Self::TerminalLabelFixed => f.write_str("terminal label is fixed"),
+            Self::InvalidLine { field, problem } => {
+                let field = field.name();
+                match problem {
+                    LineProblem::Empty => write!(f, "empty {field}"),
+                    LineProblem::ControlCharacter => {
+                        write!(f, "{field} contains a line break or control character")
+                    }
+                    LineProblem::TooLong { length, limit } => {
+                        write!(f, "{field} has {length} characters; the limit is {limit}")
+                    }
+                }
+            }
+            Self::EmptyNote => f.write_str("empty Note"),
         }
     }
 }

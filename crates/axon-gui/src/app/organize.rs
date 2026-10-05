@@ -6,7 +6,7 @@
 use super::{AxonApp, entity_element, named, text};
 use crate::board::{Change, EntityDetail, Purpose, Rejection, Section, organize};
 use crate::project::{ProjectId, WriteOutcome};
-use axon::lifecycle::{EntityId, Operation, Refusal, record::Entry};
+use axon::lifecycle::{EntityId, Refusal};
 use gpui_kit::component::{
     ActiveTheme, Disableable,
     button::{Button, ButtonVariants},
@@ -50,6 +50,9 @@ pub enum OutcomeKind {
     /// Publication stopped midway, so whether the change was made is not known. The store is
     /// read again to tell.
     Unknown { error: String, found: Found },
+    /// Nothing was written: the window stopped before asking, to say something first. The
+    /// same change can be made again.
+    Warning(String),
 }
 
 /// What a read after a publication of unknown outcome shows of the change.
@@ -64,7 +67,7 @@ pub enum Found {
 }
 
 impl Outcome {
-    fn new(project: ProjectId, change: Change, kind: OutcomeKind) -> Self {
+    pub(super) fn new(project: ProjectId, change: Change, kind: OutcomeKind) -> Self {
         Self {
             project,
             change,
@@ -72,8 +75,14 @@ impl Outcome {
             seen: Cell::new(false),
         }
     }
+    /// Whether the user may put the outcome away. A creation or a Note whose publication no read
+    /// has told about stays, so the same one is not sent again by mistake.
+    pub(super) fn is_dismissible(&self) -> bool {
+        !(self.is_pending()
+            && matches!(self.change, Change::Create { .. } | Change::AddNote { .. }))
+    }
     /// A publication of unknown outcome that no read has told about yet: kept until one does.
-    fn is_pending(&self) -> bool {
+    pub(super) fn is_pending(&self) -> bool {
         matches!(
             self.kind,
             OutcomeKind::Unknown {
@@ -107,7 +116,7 @@ impl AxonApp {
         self.outcomes.get(project).map_or(&[], Vec::as_slice)
     }
     /// Removes the outcome kept for `entity` of `project` that `forget` accepts.
-    fn remove_outcome(
+    pub(super) fn remove_outcome(
         &mut self,
         project: &ProjectId,
         entity: &EntityId,
@@ -117,7 +126,7 @@ impl AxonApp {
             kept.retain(|o| o.change.entity() != entity || !forget(o));
         }
     }
-    fn keep_outcome(&mut self, outcome: Outcome) {
+    pub(super) fn keep_outcome(&mut self, outcome: Outcome) {
         let project = outcome.project.clone();
         self.remove_outcome(&project, outcome.change.entity(), |_| true);
         self.outcomes.entry(project).or_default().push(outcome);
@@ -132,7 +141,7 @@ impl AxonApp {
     /// Forgets the outcome kept for `entity`, whatever it is, once the user dismisses it.
     pub fn dismiss_outcome(&mut self, entity: &EntityId, cx: &mut Context<Self>) {
         if let Some(project) = self.explorer.project().cloned() {
-            self.remove_outcome(&project, entity, |_| true);
+            self.remove_outcome(&project, entity, |o| o.is_dismissible());
         }
         cx.notify();
     }
@@ -233,6 +242,7 @@ impl AxonApp {
             return;
         }
         let ticket = self.writes.begin((project.id.clone(), change.clone()));
+        self.lock_drafts(&change, true, cx);
         let connection = self.data.connect(&project);
         cx.spawn(async move |this, cx| {
             let (written, refused) = cx
@@ -242,10 +252,8 @@ impl AxonApp {
                         // What the core refused, told apart from failing to read or write.
                         let mut refused = None;
                         let written = connection.update(|_, records, _| {
-                            match change.record(records, axon::context_now()) {
-                                Ok(record) => {
-                                    Ok((record.into_iter().map(Entry::Record).collect(), ()))
-                                }
+                            match change.entry(records, axon::context_now()) {
+                                Ok(entry) => Ok((entry.into_iter().collect(), ())),
                                 Err(error) => {
                                     let message = error.to_string();
                                     refused = Some(Rejection::from(error));
@@ -261,6 +269,7 @@ impl AxonApp {
                 if !this.writes.finish(&ticket) {
                     return;
                 }
+                this.lock_drafts(&ticket.key().1, false, cx);
                 cx.notify();
                 let (project, change) = ticket.key().clone();
                 // After a switch the result is kept for the project it was made in and shown
@@ -270,10 +279,12 @@ impl AxonApp {
                     // The records show a made change when the project is read again.
                     WriteOutcome::Applied(()) if !on_screen => {
                         this.remove_outcome(&project, change.entity(), |_| true);
+                        this.made(&project, &change, cx);
                         return;
                     }
                     WriteOutcome::Applied(()) => {
                         this.remove_outcome(&project, change.entity(), |_| true);
+                        this.made(&project, &change, cx);
                         if this
                             .picker
                             .as_ref()
@@ -297,6 +308,9 @@ impl AxonApp {
                         found: Found::Pending,
                     },
                 };
+                if !on_screen {
+                    this.creation_left_elsewhere(&project, &change, &kind);
+                }
                 let reload = on_screen && !matches!(kind, OutcomeKind::NotApplied(_));
                 this.keep_outcome(Outcome::new(project, change, kind));
                 if reload {
@@ -322,14 +336,16 @@ impl AxonApp {
 
     /// Called when a read of the selected project is shown: tells what each publication of
     /// unknown outcome in it left.
-    pub(super) fn loaded(&mut self) {
+    pub(super) fn loaded(&mut self, cx: &gpui_kit::App) {
         if std::mem::take(&mut self.reveal_on_load) {
             self.reveal_selected();
         }
         let (Some(board), Some(project)) = (self.explorer.board(), self.explorer.project()) else {
             return;
         };
-        for outcome in self.outcomes.get_mut(project).into_iter().flatten() {
+        let project = project.clone();
+        let mut made = Vec::new();
+        for outcome in self.outcomes.get_mut(&project).into_iter().flatten() {
             if let OutcomeKind::Unknown { found, .. } = &mut outcome.kind
                 && *found == Found::Pending
             {
@@ -338,6 +354,13 @@ impl AxonApp {
                     Some(false) => Found::NotMade,
                     None => Found::Undetermined,
                 };
+                if *found == Found::Made {
+                    made.push(outcome.change.clone());
+                }
+                // A read has told what the creation left, so the notice about it is over.
+                if matches!(outcome.change, Change::Create { .. }) {
+                    self.drafts.created_elsewhere = None;
+                }
                 // A change found made closes its picker, as a saved one does.
                 if *found == Found::Made
                     && self
@@ -350,6 +373,11 @@ impl AxonApp {
                 }
             }
         }
+        for change in made {
+            self.made(&project, &change, cx);
+        }
+        // A creation found made opens its Entity as a saved one does.
+        self.open_created();
         self.drop_picker();
     }
 
@@ -368,6 +396,9 @@ impl AxonApp {
         let id = match section {
             Section::Progress => "progress-outcome",
             Section::Structure | Section::Dependencies => "structure-outcome",
+            Section::Create => "create-outcome",
+            Section::Text => "edit-outcome",
+            Section::Notes => "note-outcome",
         };
         Some(self.render_outcome_kind(id, outcome, cx))
     }
@@ -382,10 +413,13 @@ impl AxonApp {
             .explorer
             .selected()
             .filter(|_| matches!(self.explorer.detail(), Some(Ok(_))));
+        // The workbench shows what became of a creation while it is on screen.
+        let workbench = self.explorer.selected().is_none();
         let others: Vec<&Outcome> = self
             .outcomes_of(project)
             .iter()
             .filter(|o| Some(o.change.entity()) != open)
+            .filter(|o| !(workbench && matches!(o.change, Change::Create { .. })))
             .collect();
         if others.is_empty() {
             return None;
@@ -405,7 +439,18 @@ impl AxonApp {
             .border_color(border);
         for outcome in others {
             let entity = outcome.change.entity().clone();
-            let link = self.render_named(&entity, cx);
+            // A creation names an Entity only once it is in the records.
+            let created = self
+                .explorer
+                .board()
+                .is_some_and(|board| board.item(&entity).is_some());
+            let link = match outcome.change {
+                Change::Create { .. } if !created => {
+                    div().child("新しい Issue・Group").into_any_element()
+                }
+                _ => self.render_named(&entity, cx),
+            };
+            let dismissible = outcome.is_dismissible();
             list = list.child(
                 div()
                     .id(named(format!("other-outcome-{entity}")))
@@ -420,17 +465,22 @@ impl AxonApp {
                             .flex_wrap()
                             .gap_1()
                             .items_center()
-                            .child("変更の結果:")
+                            .child(match outcome.change {
+                                Change::Create { .. } => "作成の結果:",
+                                _ => "変更の結果:",
+                            })
                             .child(link)
-                            .child(
-                                Button::new(named(format!("dismiss-outcome-{entity}")))
-                                    .ghost()
-                                    .compact()
-                                    .label("閉じる")
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.dismiss_outcome(&entity, cx)
-                                    })),
-                            ),
+                            .when(dismissible, |line| {
+                                line.child(
+                                    Button::new(named(format!("dismiss-outcome-{entity}")))
+                                        .ghost()
+                                        .compact()
+                                        .label("閉じる")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.dismiss_outcome(&entity, cx)
+                                        })),
+                                )
+                            }),
                     )
                     .child(self.render_outcome_kind("outcome-message", outcome, cx))
                     .test_support(),
@@ -439,7 +489,7 @@ impl AxonApp {
         Some(list.test_support().into_any_element())
     }
 
-    fn render_outcome_kind(
+    pub(super) fn render_outcome_kind(
         &self,
         id: &'static str,
         outcome: &Outcome,
@@ -457,8 +507,9 @@ impl AxonApp {
         };
         match &outcome.kind {
             OutcomeKind::Rejected(rejection) => {
-                self.render_rejection(id, rejection, operation(&outcome.change), cx)
+                self.render_rejection(id, rejection, text::Doing::of(&outcome.change), cx)
             }
+            OutcomeKind::Warning(text) => message(text.clone()),
             OutcomeKind::NotApplied(error) => message(format!(
                 "保存できませんでした。変更は記録されていないので、もう一度操作できます。（{error}）"
             )),
@@ -521,6 +572,9 @@ impl AxonApp {
                 .id(match section {
                     Section::Progress => "progress-saving",
                     Section::Structure | Section::Dependencies => "structure-saving",
+                    Section::Create => "create-saving",
+                    Section::Text => "edit-saving",
+                    Section::Notes => "note-saving",
                 })
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
@@ -536,13 +590,13 @@ impl AxonApp {
         )
     }
 
-    /// Why the core refused a change, the transition `operation` or a structural one, with a
-    /// link to each Entity it names.
+    /// Why the core refused a change, worded for what it was `doing`, with a link to each
+    /// Entity it names.
     pub(super) fn render_rejection(
         &self,
         id: &'static str,
         rejection: &Rejection,
-        operation: Option<Operation>,
+        doing: text::Doing,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
@@ -550,7 +604,7 @@ impl AxonApp {
         let mut element = div().id(id).flex().flex_col().gap_1().text_sm().child(
             div()
                 .text_color(danger)
-                .child(text::rejection(rejection, operation)),
+                .child(text::rejection(rejection, doing)),
         );
         match rejection {
             Rejection::Refused(Refusal::NewViolations(violations)) => {
@@ -686,14 +740,24 @@ impl AxonApp {
             _ => None,
         };
         if let Some(rejection) = detach_blocked.filter(|r| Some(*r) != shown) {
-            section = section.child(self.render_rejection("detach-blocked", rejection, None, cx));
+            section = section.child(self.render_rejection(
+                "detach-blocked",
+                rejection,
+                text::Doing::Structure,
+                cx,
+            ));
         }
         section = section.child(kind_line);
         if let Err(rejection) = convertible
             && Some(rejection) != shown
             && Some(rejection) != detach_blocked
         {
-            section = section.child(self.render_rejection("convert-blocked", rejection, None, cx));
+            section = section.child(self.render_rejection(
+                "convert-blocked",
+                rejection,
+                text::Doing::Structure,
+                cx,
+            ));
         }
         if let Some(picker) = self
             .picker
@@ -890,7 +954,12 @@ impl AxonApp {
             self.shown_rejection(detail),
         ];
         if let Some(rejection) = blocked.filter(|r| !elsewhere.contains(&Some(*r))) {
-            section = section.child(self.render_rejection("removal-blocked", rejection, None, cx));
+            section = section.child(self.render_rejection(
+                "removal-blocked",
+                rejection,
+                text::Doing::Structure,
+                cx,
+            ));
         }
         if let Some(picker) = self
             .picker
@@ -903,13 +972,5 @@ impl AxonApp {
             .children(self.render_saving(detail, Section::Dependencies, cx))
             .children(self.render_outcome(detail, Section::Dependencies, cx))
             .into_any_element()
-    }
-}
-
-/// The transition a change makes, for wording why it was refused.
-fn operation(change: &Change) -> Option<Operation> {
-    match change {
-        Change::Transition { operation, .. } => Some(*operation),
-        _ => None,
     }
 }
