@@ -1,6 +1,6 @@
 use super::{Result, invalid};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Value, value::RawValue};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -212,7 +212,10 @@ impl fmt::Display for Label {
 #[serde(deny_unknown_fields)]
 pub struct Recorder {
     pub actor: String,
-    #[serde(deserialize_with = "deserialize_recorder_data")]
+    #[serde(
+        serialize_with = "serialize_recorder_data",
+        deserialize_with = "deserialize_recorder_data"
+    )]
     pub data: BTreeMap<String, Value>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -220,6 +223,35 @@ pub struct Recorder {
 pub struct Context {
     pub at: DateTime<Utc>,
     pub recorder: Option<Recorder>,
+}
+
+/// Writes nested object keys in sorted order. `serde_json::Map` keeps insertion order when any
+/// crate in the build enables serde_json's `preserve_order` feature, and the canonical bytes must
+/// not depend on which crates share the build.
+fn serialize_recorder_data<S: Serializer>(
+    data: &BTreeMap<String, Value>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    serializer.collect_map(data.iter().map(|(key, value)| (key, SortedKeys(value))))
+}
+
+struct SortedKeys<'a>(&'a Value);
+impl Serialize for SortedKeys<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        match self.0 {
+            Value::Object(map) => {
+                let mut entries: Vec<_> = map.iter().collect();
+                entries.sort_unstable_by_key(|(key, _)| *key);
+                serializer.collect_map(
+                    entries
+                        .into_iter()
+                        .map(|(key, value)| (key, SortedKeys(value))),
+                )
+            }
+            Value::Array(items) => serializer.collect_seq(items.iter().map(SortedKeys)),
+            value => value.serialize(serializer),
+        }
+    }
 }
 
 /// Recorder metadata is kept as the literal JSON it was written with, so numbers of any

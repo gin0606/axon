@@ -444,6 +444,36 @@ fn the_id_is_the_hash_of_the_bytes_so_a_changed_byte_is_a_different_record() {
     assert!(RecordId::try_from(ids[0].to_string()).is_ok());
 }
 
+/// Built with serde_json's `preserve_order` (as in a build that includes the GUI), `json!` keeps
+/// these keys in insertion order; without it the map sorts them anyway. Either way the bytes must
+/// list every nested key in sorted order, including objects inside arrays.
+#[test]
+fn recorder_metadata_keys_are_sorted_at_every_depth() {
+    let r = Replica::new("r0");
+    let context = Context {
+        at: r.tick().at,
+        recorder: Some(Recorder {
+            actor: "codex".into(),
+            data: BTreeMap::from([(
+                "nested".into(),
+                serde_json::json!({"z": [{"y": 1, "b": {"d": 0, "c": 0}}], "a": 0}),
+            )]),
+        }),
+    };
+    let note = r
+        .store
+        .add_note(&id("i3"), "n".into(), None, context)
+        .unwrap();
+    let bytes = encode(&Entry::Note(note)).unwrap();
+    let text = String::from_utf8(bytes.clone()).unwrap();
+    assert!(
+        text.contains(r#""data":{"nested":{"a":0,"z":[{"b":{"c":0,"d":0},"y":1}]}}"#),
+        "{text}"
+    );
+    let (_, decoded) = decode(&bytes).unwrap();
+    assert_eq!(encode(&decoded).unwrap(), bytes);
+}
+
 #[test]
 fn recorder_numbers_and_nested_data_survive_byte_for_byte() {
     let r = Replica::new("r0");
