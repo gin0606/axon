@@ -4,7 +4,35 @@
 
 A local CLI for managing personal tasks and plans as Issues and Groups. Capture ideas before deciding what to do, organize work with nested Groups and dependencies, and keep notes and a history of changes.
 
-Data lives in a local `.axon/` directory. You can keep it private or track it in Git alongside your project. Shell conditions let you bring work back into view when it becomes relevant.
+Data lives in a local `.axon/` directory. You can keep it private or track it in Git alongside your project.
+
+## Issue lifecycle
+
+Capture work before deciding whether to do it. Once accepted, an Issue moves from not started to in progress to completed.
+
+```mermaid
+flowchart LR
+    U["Undecided"] -->|Accept| N["NotStarted"]
+    N -->|Start| I["InProgress"]
+    I -->|Complete| D["Completed"]
+    N -->|Withdraw| U
+    I -->|Release| N
+    D -->|Reopen| N
+```
+
+You can cancel an undecided, not-started, or in-progress Issue (`Cancelled`), then reconsider it to return it to `Undecided`. See [Lifecycle details](docs/reference/lifecycle.md#遷移) for all states and transitions.
+
+## Resurface when relevant
+
+When a date arrives, a file appears, or an external service changes state: anything a shell command can check can become a resurfacing condition. Use existing CLIs or your own scripts, and combine multiple checks as needed.
+
+Conditions are evaluated when retrieving candidate lists and in other relevant views. Work with a satisfied condition comes back into view. For example, to wait for `ready.txt` to exist, replace `ID` with the target Issue's ID:
+
+```sh
+axon condition set ID --command 'test -f ready.txt'
+```
+
+Exit code `0` means satisfied, `1` means not satisfied, and any other code is an evaluation error. Keep an Issue undecided with a condition attached when you want to think about it later. See [Resurfacing conditions](docs/reference/candidates.md#条件の種類) for details.
 
 ## Install
 
