@@ -10,7 +10,7 @@ readme = "README.md"
 publish = false
 
 [workspace]
-members = ["crates/axon-core", "crates/axon-recorder"]
+members = ["crates/axon-core", "crates/axon-recorder", "crates/axon-gui"]
 default-members = [".", "crates/axon-core", "crates/axon-recorder"]
 
 [workspace.package]

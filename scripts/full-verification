@@ -10,4 +10,6 @@ scripts/check-core-deps
 cargo fmt --check
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace
+# The GUI turns on serde_json features for the whole build; the CLI is released without them.
+cargo test --locked
 cargo run --locked --quiet -- storage check

@@ -11,7 +11,7 @@ pre-commit:
       run: mise exec -- cargo clippy --all-targets --all-features -- -D warnings
     - name: test
       glob: "*.rs"
-      run: mise exec -- cargo test --workspace --lib --bin axon --test smoke
+      run: mise exec -- cargo test --workspace --exclude axon-gui --lib --bin axon --test smoke
 
 post-checkout:
   jobs:

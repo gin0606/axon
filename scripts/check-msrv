@@ -1,10 +1,19 @@
 #!/bin/sh
 # Cargo.toml の workspace.package.rust-version に宣言した最低 Rust version で全 target を検査する。
+# GUI は依存の要求でより新しい版を自身の rust-version に宣言するため、その版で別に検査する。
 set -eu
 
 cd "$(dirname "$0")/.."
 
-msrv=$(cargo metadata --locked --no-deps --format-version 1 |
-	python3 -c 'import json, sys; print(next(p["rust_version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "axon"))')
+rust_version() {
+	cargo metadata --locked --no-deps --format-version 1 |
+		python3 -c 'import json, sys; print(next(p["rust_version"] for p in json.load(sys.stdin)["packages"] if p["name"] == sys.argv[1]))' "$1"
+}
+
+msrv=$(rust_version axon)
 rustup toolchain install "$msrv" --profile minimal
 cargo +"$msrv" check --locked --all-targets --all-features
+
+gui_msrv=$(rust_version axon-gui)
+rustup toolchain install "$gui_msrv" --profile minimal
+cargo +"$gui_msrv" check --locked -p axon-gui --all-targets
