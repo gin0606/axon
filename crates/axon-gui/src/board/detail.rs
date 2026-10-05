@@ -1,7 +1,7 @@
 //! What the detail pane shows of one Entity, owned so it outlives the read it came from.
 
-use super::organize::{Rearrangement, Rejection};
-use super::{Board, State};
+use super::progress::{self, Step};
+use super::{Board, Change, Rejection, State};
 use axon::lifecycle::{
     EntityId, Kind, Label, Lifecycle,
     record::{Current, RecordKind, Recorder, ViolationKind},
@@ -59,7 +59,7 @@ pub struct Wait {
 
 /// One difference between a record's value and the value before it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Change {
+pub enum Difference {
     Lifecycle(Lifecycle, Lifecycle),
     Kind(Kind, Kind),
     Title(String, String),
@@ -79,7 +79,7 @@ pub struct HistoryEntry {
     pub reason: Option<String>,
     /// The changes from the value before; empty for the creation record and when the value
     /// before is not known (a resolve record, a missing parent).
-    pub changes: Vec<Change>,
+    pub changes: Vec<Difference>,
     /// The record is not ordered after the previous one: they were made concurrently.
     pub concurrent_with_previous: bool,
     pub parent_missing: bool,
@@ -133,6 +133,8 @@ pub struct EntityDetail {
     pub heads: usize,
     pub notes: Vec<NoteEntry>,
     pub history: Vec<HistoryEntry>,
+    /// The lifecycle transitions the state menu offers; none while conflicted.
+    pub progress: Vec<Step>,
     pub structure: Structure,
 }
 
@@ -250,18 +252,18 @@ pub(super) fn of(board: &Board, id: &EntityId) -> axon::lifecycle::Result<Entity
         Kind::Issue => Kind::Group,
         Kind::Group => Kind::Issue,
     };
-    let check = |change: Rearrangement| change.check(board);
+    let check = |change: Change| change.check(board);
     let structure = Structure {
         conflicted: !view.derived().conflicted().is_empty(),
         detach: presented.parent.as_ref().map(|_| {
-            check(Rearrangement::Move {
+            check(Change::Move {
                 entity: id.clone(),
                 parent: None,
             })
         }),
         convert: (
             other,
-            check(Rearrangement::Convert {
+            check(Change::Convert {
                 entity: id.clone(),
                 kind: other,
             }),
@@ -270,7 +272,7 @@ pub(super) fn of(board: &Board, id: &EntityId) -> axon::lifecycle::Result<Entity
             .dependencies
             .iter()
             .map(|dependency| {
-                check(Rearrangement::RemoveDependency {
+                check(Change::RemoveDependency {
                     entity: id.clone(),
                     target: dependency.id.clone(),
                 })
@@ -314,6 +316,7 @@ pub(super) fn of(board: &Board, id: &EntityId) -> axon::lifecycle::Result<Entity
         heads: detail.heads.len(),
         notes,
         history,
+        progress: progress::steps(board, &id),
         structure,
         id,
     })
@@ -337,42 +340,45 @@ fn actor(recorder: &Option<Recorder>) -> Option<String> {
     recorder.as_ref().map(|r| r.actor.clone())
 }
 
-fn changes(before: &Current, after: &Current) -> Vec<Change> {
+fn changes(before: &Current, after: &Current) -> Vec<Difference> {
     let mut changes = Vec::new();
     if before.lifecycle != after.lifecycle {
-        changes.push(Change::Lifecycle(before.lifecycle, after.lifecycle));
+        changes.push(Difference::Lifecycle(before.lifecycle, after.lifecycle));
     }
     if before.kind != after.kind {
-        changes.push(Change::Kind(before.kind, after.kind));
+        changes.push(Difference::Kind(before.kind, after.kind));
     }
     if before.title != after.title {
-        changes.push(Change::Title(before.title.clone(), after.title.clone()));
+        changes.push(Difference::Title(before.title.clone(), after.title.clone()));
     }
     if before.description != after.description {
-        changes.push(Change::Description);
+        changes.push(Difference::Description);
     }
     if before.label != after.label {
-        changes.push(Change::Label(before.label, after.label));
+        changes.push(Difference::Label(before.label, after.label));
     }
     if before.parent != after.parent {
-        changes.push(Change::Parent(before.parent.clone(), after.parent.clone()));
+        changes.push(Difference::Parent(
+            before.parent.clone(),
+            after.parent.clone(),
+        ));
     }
     changes.extend(
         after
             .needs
             .difference(&before.needs)
             .cloned()
-            .map(Change::DependencyAdded),
+            .map(Difference::DependencyAdded),
     );
     changes.extend(
         before
             .needs
             .difference(&after.needs)
             .cloned()
-            .map(Change::DependencyRemoved),
+            .map(Difference::DependencyRemoved),
     );
     if before.condition != after.condition {
-        changes.push(Change::Condition);
+        changes.push(Difference::Condition);
     }
     changes
 }

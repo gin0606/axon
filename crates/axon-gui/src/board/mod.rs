@@ -2,20 +2,28 @@
 //!
 //! A [`Board`] owns one read of a store. [`filter`] decides which Entities match,
 //! [`listing`] lays them out as a tree or a flat list, [`detail`] gathers what the detail
-//! pane shows of one Entity, and [`organize`] names the structural changes the core makes. Everything here is a pure derivation from the records: no GPUI,
-//! no disk access, and no condition command is ever run.
+//! pane shows of one Entity, [`change`] names the changes the core makes, [`progress`] the
+//! transitions offered for an Entity and [`organize`] the choices of a structural change.
+//! Everything here is a pure derivation from the records: no GPUI, no disk access, and no
+//! condition command is ever run.
 
+pub mod change;
 pub mod detail;
 pub mod explorer;
 pub mod filter;
 pub mod listing;
 pub mod organize;
+pub mod progress;
 
-pub use detail::{Change, EntityDetail, HistoryEntry, Link, NoteEntry, Structure, Wait, WaitKind};
+pub use change::{Change, Rejection, Section};
+pub use detail::{
+    Difference, EntityDetail, HistoryEntry, Link, NoteEntry, Structure, Wait, WaitKind,
+};
 pub use explorer::Explorer;
-pub use filter::Filter;
+pub use filter::{Exclusion, Filter};
 pub use listing::{Layout, ListRow, Listing};
-pub use organize::{Purpose, Rearrangement, Rejection};
+pub use organize::Purpose;
+pub use progress::Step;
 
 use axon::lifecycle::{EntityId, Kind, Label, Lifecycle, record};
 use axon::read;
@@ -151,6 +159,14 @@ impl Board {
         match (self.item(id), read.presented(id)) {
             (Some(item), Some(presented)) => filter.matches(item, presented),
             _ => false,
+        }
+    }
+    /// Why `filter` leaves the Entity out; empty when it matches or the store does not hold it.
+    pub fn exclusions(&self, filter: &Filter, id: &EntityId) -> Vec<filter::Exclusion> {
+        let read = self.read();
+        match (self.item(id), read.presented(id)) {
+            (Some(item), Some(presented)) => filter.exclusions(item, presented),
+            _ => Vec::new(),
         }
     }
     /// The detail of a known Entity, without running any condition.

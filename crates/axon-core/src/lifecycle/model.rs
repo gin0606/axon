@@ -1,4 +1,4 @@
-use super::{Result, invalid};
+use super::{Refusal, Result, invalid};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Value, value::RawValue};
@@ -135,17 +135,13 @@ impl Operation {
     /// A Group is never started or released: its InProgress is derived from the Issues below
     /// it, so it completes from NotStarted and is cancelled from Undecided or NotStarted.
     pub fn apply_as(self, kind: Kind, before: Lifecycle) -> Result<Lifecycle> {
-        self.next_as(kind, before).ok_or_else(|| match (kind, self, before) {
-            (Kind::Group, Self::Start, _) => invalid(
-                "a Group is not started directly: it is InProgress while a direct child is InProgress or Completed, and its saved lifecycle does not change",
-            ),
-            (Kind::Group, Self::Release, _) => invalid(
-                "a Group is not released directly: it stops being InProgress when no direct child is InProgress or Completed, and its saved lifecycle does not change",
-            ),
-            (Kind::Group, Self::Complete | Self::Cancel, Lifecycle::InProgress) => {
-                invalid(format!("cannot {self:?} a Group from {before:?}"))
+        self.next_as(kind, before).ok_or_else(|| {
+            Refusal::NotApplicable {
+                operation: self,
+                kind,
+                lifecycle: before,
             }
-            _ => invalid(format!("cannot {self:?} from {before:?}")),
+            .into()
         })
     }
 }

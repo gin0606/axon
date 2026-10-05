@@ -5,15 +5,17 @@
 
 mod explorer;
 mod organize;
+mod progress;
 pub mod text;
 
 use explorer::named;
 pub use explorer::{LIST_CONTEXT, entity_element};
 pub use organize::{Found, Outcome, OutcomeKind, PICKER_LIMIT, Picker};
+pub use progress::STATE_MENU_WIDTH;
 
 use crate::{
     Workbench,
-    board::{Board, Explorer, Rearrangement},
+    board::{Board, Change, Explorer},
     project::{
         AppData, CreateError, NameError, Project, ProjectId, Registry, Requests, Status, Step,
         registry::NAME_LIMIT,
@@ -95,12 +97,16 @@ pub struct AxonApp {
     /// The picker choosing a Group or a dependency for the Entity in the detail pane.
     picker: Option<Picker>,
     picker_query: Entity<InputState>,
-    /// The structural change being written, for the project and Entity it was made for. One
-    /// runs at a time, so a repeated click or key does not make a second.
-    writes: Requests<(ProjectId, Rearrangement)>,
-    /// What became of the last structural change of each Entity, per project, that the screen
-    /// does not otherwise show; kept until it has been seen.
+    /// The change being written, for the project and Entity it was made for. One runs at a
+    /// time, so a repeated click or key does not make a second.
+    writes: Requests<(ProjectId, Change)>,
+    /// What became of the last change of each Entity, per project, that the screen does not
+    /// otherwise show; kept until it has been seen.
     outcomes: HashMap<ProjectId, Vec<Outcome>>,
+    guard: progress::MenuGuard,
+    /// The detail shown before a change was saved, kept on screen while the project is read
+    /// again so the pane and its focus stay; its controls wait meanwhile.
+    held: Option<crate::board::EntityDetail>,
     /// Scroll the list to the selection once the next read is shown.
     reveal_on_load: bool,
     /// Give the list the focus at the next render, after the picker holding it closed.
@@ -137,6 +143,18 @@ impl AxonApp {
         })
         .detach();
         let workbench = cx.new(|cx| Workbench::new(window, cx));
+        // Keystrokes reach the state menu's guard before any binding acts on them.
+        let app = cx.entity().downgrade();
+        let own_window = window.window_handle().window_id();
+        cx.intercept_keystrokes(move |event, window, cx| {
+            if window.window_handle().window_id() == own_window {
+                app.update(cx, |this, cx| {
+                    this.intercept_keystroke(&event.keystroke, cx)
+                })
+                .ok();
+            }
+        })
+        .detach();
         let mut this = Self {
             data,
             registry: RegistryState::Loading,
@@ -161,6 +179,8 @@ impl AxonApp {
             picker_query,
             writes: Requests::default(),
             outcomes: HashMap::new(),
+            guard: Default::default(),
+            held: None,
             reveal_on_load: false,
             focus_list: false,
         };
@@ -273,6 +293,9 @@ impl AxonApp {
     /// for the previously selected project becomes stale.
     fn show_selected(&mut self, cx: &mut Context<Self>) {
         self.store_loads.cancel();
+        if self.explorer.project() != self.selected.as_ref() {
+            self.held = None;
+        }
         let project = self.selected().cloned();
         let project_id = project.as_ref().map(|project| &project.id);
         if self.explorer.project() != project_id {
@@ -310,6 +333,7 @@ impl AxonApp {
                         .await;
                     this.update(cx, |this, cx| {
                         if this.store_loads.finish(&ticket) {
+                            this.held = None;
                             this.store = match result {
                                 Ok(board) => {
                                     let summary = Summary {
@@ -853,6 +877,13 @@ impl Render for AxonApp {
                             .on_click(cx.listener(|this, _, _, cx| this.close_entity(cx))),
                     )
                     .into_any_element(),
+                None if let Some(held) = self.held.as_ref().filter(|held| {
+                    self.explorer.selected() == Some(&held.id)
+                        && matches!(self.store, StoreState::Loading)
+                }) =>
+                {
+                    self.render_detail(held, cx)
+                }
                 None if self.explorer.selected().is_some()
                     && matches!(self.store, StoreState::Loading) =>
                 {
@@ -875,6 +906,8 @@ impl Render for AxonApp {
             };
         div()
             .id("axon-app")
+            .capture_any_mouse_down(cx.listener(|this, event, _, _| this.note_press(event)))
+            .capture_key_up(cx.listener(|this, event, _, _| this.note_key_up(event)))
             .size_full()
             .flex()
             .flex_row()

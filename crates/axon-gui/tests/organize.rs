@@ -9,7 +9,7 @@ use axon::lifecycle::{
 use axon_gui::{
     AxonApp, MIN_WINDOW_SIZE,
     app::{Found, OutcomeKind, StoreState, entity_element},
-    board::{Purpose, Rearrangement, Rejection, State},
+    board::{Change, Purpose, Rejection, State},
     project::{AppData, FaultPoint, ProjectConnection, ProjectId, WriteOutcome},
 };
 use gpui_kit::test::TestWindowExt;
@@ -465,16 +465,16 @@ fn another_project_s_entities_cannot_be_named(cx: &mut TestAppContext) {
     let (_, before) = seed.read(&issue);
     let (_, foreign_before) = other.read(&foreign);
     for change in [
-        Rearrangement::Move {
+        Change::Move {
             entity: issue.clone(),
             parent: Some(foreign.clone()),
         },
-        Rearrangement::AddDependency {
+        Change::AddDependency {
             entity: issue.clone(),
             target: foreign.clone(),
         },
     ] {
-        cx.update(|cx| app.update(cx, |app, cx| app.rearrange(change, cx)));
+        cx.update(|cx| app.update(cx, |app, cx| app.apply(change, cx)));
         cx.run_until_parked();
         assert!(rejection(&app, cx).is_some());
     }
@@ -520,16 +520,16 @@ fn one_change_is_written_at_a_time(cx: &mut TestAppContext) {
     // make another.
     cx.update(|cx| {
         app.update(cx, |app, cx| {
-            app.rearrange(
-                Rearrangement::Convert {
+            app.apply(
+                Change::Convert {
                     entity: issue.clone(),
                     kind: Kind::Group,
                 },
                 cx,
             );
-            assert!(app.is_rearranging());
-            app.rearrange(
-                Rearrangement::Move {
+            assert!(app.is_saving());
+            app.apply(
+                Change::Move {
                     entity: issue.clone(),
                     parent: Some(group.clone()),
                 },
@@ -542,7 +542,7 @@ fn one_change_is_written_at_a_time(cx: &mut TestAppContext) {
     assert_eq!(now.kind, Kind::Group);
     assert_eq!(now.parent, None);
     assert_eq!(after, before + 1);
-    cx.read(|cx| assert!(!app.read(cx).is_rearranging()));
+    cx.read(|cx| assert!(!app.read(cx).is_saving()));
 }
 
 #[gpui_kit::test]
@@ -559,8 +559,8 @@ fn a_change_finishing_after_a_switch_stays_with_its_project(cx: &mut TestAppCont
 
     cx.update(|cx| {
         app.update(cx, |app, cx| {
-            app.rearrange(
-                Rearrangement::Convert {
+            app.apply(
+                Change::Convert {
                     entity: issue.clone(),
                     kind: Kind::Group,
                 },
@@ -656,7 +656,7 @@ fn a_failed_save_keeps_the_screen_and_can_be_tried_again(cx: &mut TestAppContext
             "{:?}",
             app.outcome()
         );
-        assert!(!app.is_rearranging());
+        assert!(!app.is_saving());
         // Nothing is read again, so the screen and the selection stay.
         assert!(matches!(app.store(), StoreState::Loaded(_)));
         assert_eq!(app.explorer().selected(), Some(&issue));
@@ -694,8 +694,8 @@ fn a_refusal_after_a_switch_is_shown_back_in_its_project(cx: &mut TestAppContext
 
     cx.update(|cx| {
         app.update(cx, |app, cx| {
-            app.rearrange(
-                Rearrangement::Convert {
+            app.apply(
+                Change::Convert {
                     entity: group.clone(),
                     kind: Kind::Issue,
                 },
@@ -711,7 +711,7 @@ fn a_refusal_after_a_switch_is_shown_back_in_its_project(cx: &mut TestAppContext
     assert!(!exists(handle, "structure-saving", cx));
     cx.read(|cx| {
         let app = app.read(cx);
-        assert!(!app.is_rearranging());
+        assert!(!app.is_saving());
         assert!(app.outcome().is_none());
         assert_eq!(app.outcomes_of(&first).len(), 1);
     });
@@ -752,8 +752,8 @@ fn the_outcome_for_another_entity_shows_in_the_open_detail(cx: &mut TestAppConte
     seed.create(Kind::Issue, "後から足した子", Some(&group));
     cx.update(|cx| {
         app.update(cx, |app, cx| {
-            app.rearrange(
-                Rearrangement::Convert {
+            app.apply(
+                Change::Convert {
                     entity: group.clone(),
                     kind: Kind::Issue,
                 },
@@ -917,8 +917,8 @@ fn an_outcome_never_drawn_is_not_forgotten(cx: &mut TestAppContext) {
     // Refused and then left before any frame drew the reason.
     cx.update(|cx| {
         app.update(cx, |app, cx| {
-            app.rearrange(
-                Rearrangement::Convert {
+            app.apply(
+                Change::Convert {
                     entity: group.clone(),
                     kind: Kind::Issue,
                 },

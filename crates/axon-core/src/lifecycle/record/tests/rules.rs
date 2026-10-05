@@ -847,3 +847,131 @@ fn refusals_keep_the_cli_diagnostics() {
         "Completed dependencies are fixed"
     );
 }
+
+#[test]
+fn lifecycle_refusals_name_the_entities_involved_and_keep_the_cli_diagnostics() {
+    let message = |result: Result<Record>| match result {
+        Ok(value) => panic!("expected rejection, got {value:?}"),
+        Err(error) => error.message().to_owned(),
+    };
+    let mut r = empty();
+    register(&mut r, "plan", Kind::Group, None);
+    register(&mut r, "a", Kind::Issue, Some("plan"));
+    register(&mut r, "b", Kind::Issue, Some("plan"));
+    register(&mut r, "dep", Kind::Issue, None);
+    r.add_dep("a", "dep");
+
+    // A Group is never started or released, whatever its lifecycle.
+    assert_eq!(
+        refusal(r.try_op("plan", Start)),
+        Refusal::NotApplicable {
+            operation: Start,
+            kind: Kind::Group,
+            lifecycle: Lifecycle::NotStarted
+        }
+    );
+    assert!(message(r.try_op("plan", Release)).starts_with("a Group is not released directly"));
+    assert_eq!(
+        message(r.try_op("a", Reopen)),
+        "cannot Reopen from NotStarted"
+    );
+    assert_eq!(
+        refusal(r.try_op("a", Start)),
+        Refusal::DependenciesNotCompleted(vec![id("dep")])
+    );
+    assert_eq!(
+        message(r.try_op("a", Start)),
+        "dependencies must be Completed"
+    );
+    // The final confirmation of the Group waits for every child to end.
+    let open = refusal(r.try_op("plan", Complete));
+    assert_eq!(open, Refusal::ChildrenNotEnded(vec![id("a"), id("b")]));
+    assert_eq!(open.related(), [&id("a"), &id("b")]);
+    assert_eq!(
+        message(r.try_op("plan", Cancel)),
+        "all children must be terminal"
+    );
+
+    // Working through a child, the Group is not withdrawn.
+    r.op("b", Start);
+    assert_eq!(
+        refusal(r.try_op("plan", Withdraw)),
+        Refusal::WorkingGroupWithdrawn(vec![id("b")])
+    );
+    assert_eq!(
+        message(r.try_op("plan", Withdraw)),
+        "a Group that is InProgress through its children cannot be withdrawn"
+    );
+
+    // An ancestor's open dependency keeps everything under it from starting.
+    register(&mut r, "outer", Kind::Group, None);
+    register(&mut r, "inner", Kind::Group, Some("outer"));
+    register(&mut r, "leaf", Kind::Issue, Some("inner"));
+    r.add_dep("inner", "dep");
+    let refused = refusal(r.try_op("leaf", Start));
+    assert_eq!(
+        refused,
+        Refusal::AncestorDependenciesNotCompleted {
+            ancestor: id("inner"),
+            dependencies: vec![id("dep")]
+        }
+    );
+    assert_eq!(refused.related(), [&id("inner"), &id("dep")]);
+    assert_eq!(
+        message(r.try_op("leaf", Start)),
+        "dependencies of ancestor inner must be Completed"
+    );
+    // Unadopted ancestors are named nearest first, whichever operation they stop.
+    r.op("outer", Withdraw);
+    assert_eq!(
+        refusal(r.try_op("leaf", Start)),
+        Refusal::AncestorsNotAdopted(vec![id("outer")])
+    );
+    assert_eq!(
+        message(r.try_op("leaf", Start)),
+        "all ancestor Groups must be adopted (NotStarted)"
+    );
+
+    // A finished parent fixes the lifecycle of what is under it.
+    r.op("leaf", Cancel);
+    r.op("inner", Cancel);
+    assert_eq!(
+        refusal(r.try_op("leaf", Reconsider)),
+        Refusal::ParentClosed(id("inner"))
+    );
+    assert_eq!(
+        message(r.try_op("leaf", Reconsider)),
+        "parent must be an unfinished Group"
+    );
+
+    // Completed dependents are reopened first.
+    r.op("dep", Start);
+    r.op("dep", Complete);
+    r.op("a", Start);
+    r.op("a", Complete);
+    assert_eq!(
+        refusal(r.try_op("dep", Reopen)),
+        Refusal::CompletedDependents(vec![id("a")])
+    );
+    assert_eq!(
+        message(r.try_op("dep", Reopen)),
+        "Completed dependents must be reopened first: a"
+    );
+
+    // A Group with started work below it is accepted only under adopted ancestors.
+    register(&mut r, "pending", Kind::Group, None);
+    r.op("pending", Withdraw);
+    register(&mut r, "mid", Kind::Group, None);
+    register(&mut r, "sub", Kind::Group, Some("mid"));
+    register(&mut r, "work", Kind::Issue, Some("sub"));
+    r.op("work", Start);
+    r.op("work", Complete);
+    r.op("sub", Cancel);
+    r.op("mid", Cancel);
+    r.op("mid", Reconsider);
+    r.move_to("mid", Some("pending"));
+    assert_eq!(
+        refusal(r.try_op("mid", Accept)),
+        Refusal::StartedWorkNeedsAdoptedAncestors(vec![id("pending")])
+    );
+}

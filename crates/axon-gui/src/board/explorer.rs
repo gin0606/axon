@@ -1,7 +1,7 @@
 //! What the window explores of the selected project: the board last read, the filter, the
 //! layout, the rows they give and the Entity open in the detail pane.
 
-use super::{Board, EntityDetail, Filter, Layout, Listing, State, listing};
+use super::{Board, EntityDetail, Filter, Layout, Listing, State, filter::Exclusion, listing};
 use crate::project::ProjectId;
 use axon::lifecycle::EntityId;
 
@@ -52,12 +52,12 @@ impl Explorer {
     pub fn detail(&self) -> Option<&Result<EntityDetail, String>> {
         self.detail.as_ref()
     }
-    /// Whether the selected Entity is left out by the filter, so the list does not show it as
-    /// a match.
-    pub fn selected_is_filtered_out(&self) -> bool {
+    /// Why the filter leaves the selected Entity out; empty when it matches or nothing is
+    /// selected.
+    pub fn selected_exclusions(&self) -> Vec<Exclusion> {
         match (&self.board, &self.selected) {
-            (Some(board), Some(id)) => !board.matches(&self.filter, id),
-            _ => false,
+            (Some(board), Some(id)) => board.exclusions(&self.filter, id),
+            _ => Vec::new(),
         }
     }
 

@@ -34,6 +34,16 @@ impl Default for Filter {
     }
 }
 
+/// Why the filter leaves an Entity out: its value in a facet with that value not chosen, or a
+/// search its title and description do not contain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Exclusion {
+    State(State),
+    Kind(Kind),
+    Label(Label),
+    Query(String),
+}
+
 impl Filter {
     /// Whether an Entity with this row and presented value matches. The presented value is the
     /// current one, or the first head's while conflicted.
@@ -42,6 +52,25 @@ impl Filter {
             && self.kinds.contains(&item.kind)
             && self.labels.contains(&item.label)
             && (self.query.is_empty() || !read::matches_in(presented, &self.query).is_empty())
+    }
+
+    /// Each facet that leaves the Entity out, in the order the filter shows them; empty
+    /// exactly when [`Self::matches`] holds.
+    pub fn exclusions(&self, item: &Item, presented: &Current) -> Vec<Exclusion> {
+        let mut found = Vec::new();
+        if !self.states.contains(&item.state) {
+            found.push(Exclusion::State(item.state));
+        }
+        if !self.kinds.contains(&item.kind) {
+            found.push(Exclusion::Kind(item.kind));
+        }
+        if !self.labels.contains(&item.label) {
+            found.push(Exclusion::Label(item.label));
+        }
+        if !self.query.is_empty() && read::matches_in(presented, &self.query).is_empty() {
+            found.push(Exclusion::Query(self.query.clone()));
+        }
+        found
     }
 
     pub fn toggle_state(&mut self, state: State, on: bool) {

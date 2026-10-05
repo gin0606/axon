@@ -35,7 +35,7 @@ impl Error {
     pub fn message(&self) -> &str {
         &self.message
     }
-    /// Why a structural operation was refused, when that is what the error is.
+    /// Why an ordinary operation was refused, when that is what the error is.
     pub fn refusal(&self) -> Option<&Refusal> {
         self.refusal.as_ref()
     }

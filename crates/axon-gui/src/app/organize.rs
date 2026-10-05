@@ -1,13 +1,12 @@
-//! Rearranging the structure from the detail pane: moving the Entity under a Group or out of
-//! one, adding and removing dependencies, and converting its kind. The core decides every rule;
-//! the write runs on the background executor under the store's lock, and the window reads the
-//! store again to show the result.
+//! Writing changes from the detail pane and keeping what became of them, and the structural
+//! changes: moving the Entity under a Group or out of one, adding and removing dependencies,
+//! and converting its kind. The core decides every rule; the write runs on the background
+//! executor under the store's lock, and the window reads the store again to show the result.
 
 use super::{AxonApp, entity_element, named, text};
-use crate::board::{EntityDetail, Purpose, Rearrangement, Rejection, organize};
+use crate::board::{Change, EntityDetail, Purpose, Rejection, Section, organize};
 use crate::project::{ProjectId, WriteOutcome};
-use axon::lifecycle::Refusal;
-use axon::lifecycle::{EntityId, record::Entry};
+use axon::lifecycle::{EntityId, Operation, Refusal, record::Entry};
 use gpui_kit::component::{
     ActiveTheme, Disableable,
     button::{Button, ButtonVariants},
@@ -31,11 +30,11 @@ pub struct Picker {
     pub purpose: Purpose,
 }
 
-/// What became of a structural change, for the project it was made in.
+/// What became of a change, for the project it was made in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Outcome {
     pub project: ProjectId,
-    pub change: Rearrangement,
+    pub change: Change,
     pub kind: OutcomeKind,
     /// The detail of its Entity has drawn it, so leaving that detail may forget it.
     pub seen: Cell<bool>,
@@ -65,7 +64,7 @@ pub enum Found {
 }
 
 impl Outcome {
-    fn new(project: ProjectId, change: Rearrangement, kind: OutcomeKind) -> Self {
+    fn new(project: ProjectId, change: Change, kind: OutcomeKind) -> Self {
         Self {
             project,
             change,
@@ -137,9 +136,14 @@ impl AxonApp {
         }
         cx.notify();
     }
-    /// Whether a structural change is being written, in any project.
-    pub fn is_rearranging(&self) -> bool {
+    /// Whether a change is being written, in any project.
+    pub fn is_saving(&self) -> bool {
         self.writes.pending().is_some()
+    }
+    /// Whether the controls of the detail pane wait: a change is being written, or the
+    /// project is read again and the detail shown is the one from before.
+    pub(super) fn is_settling(&self) -> bool {
+        self.is_saving() || matches!(self.store, super::StoreState::Loading)
     }
 
     /// Forgets the outcome of the Entity that was open (`previous`) once another one, or none,
@@ -198,16 +202,16 @@ impl AxonApp {
     pub fn choose(&mut self, target: EntityId, cx: &mut Context<Self>) {
         if let Some(picker) = &self.picker {
             let change = picker.purpose.change(picker.entity.clone(), target);
-            self.rearrange(change, cx);
+            self.apply(change, cx);
         }
     }
 
     /// Makes `change` in the selected project. A change the core refuses on the records on
     /// screen is answered at once; otherwise it is written under the store's lock, where the
-    /// core checks it again against the latest records. While one change is written, another
-    /// does nothing.
-    pub fn rearrange(&mut self, change: Rearrangement, cx: &mut Context<Self>) {
-        if self.is_rearranging() {
+    /// core checks it again against the latest records. While one change is written, in any
+    /// project, another does nothing.
+    pub fn apply(&mut self, change: Change, cx: &mut Context<Self>) {
+        if self.is_saving() {
             return;
         }
         let Some(project) = self.selected().cloned() else {
@@ -279,7 +283,7 @@ impl AxonApp {
                             this.focus_list = true;
                         }
                         this.reveal_on_load = true;
-                        this.reload_selected(cx);
+                        this.reload_held(cx);
                         return;
                     }
                     // The records under the lock refused what the screen allowed, so they
@@ -296,13 +300,24 @@ impl AxonApp {
                 let reload = on_screen && !matches!(kind, OutcomeKind::NotApplied(_));
                 this.keep_outcome(Outcome::new(project, change, kind));
                 if reload {
-                    this.reload_selected(cx);
+                    this.reload_held(cx);
                 }
             })
             .ok();
         })
         .detach();
         cx.notify();
+    }
+
+    /// Reads the selected project again after a write, keeping the detail on screen until the
+    /// new read replaces it, so what has the focus in it keeps it.
+    fn reload_held(&mut self, cx: &mut Context<Self>) {
+        self.held = self
+            .explorer
+            .detail()
+            .and_then(|detail| detail.as_ref().ok())
+            .cloned();
+        self.reload_selected(cx);
     }
 
     /// Called when a read of the selected project is shown: tells what each publication of
@@ -338,19 +353,23 @@ impl AxonApp {
         self.drop_picker();
     }
 
-    /// The outcome of the last change for the Entity in `detail`, in the section it belongs to
-    /// (`dependency`).
-    fn render_outcome(
+    /// The outcome of the last change for the Entity in `detail`, in the `section` it was
+    /// made from.
+    pub(super) fn render_outcome(
         &self,
         detail: &EntityDetail,
-        dependency: bool,
+        section: Section,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let outcome = self
             .outcome_for(&detail.id)
-            .filter(|o| o.change.is_dependency() == dependency)?;
+            .filter(|o| o.change.section() == section)?;
         outcome.seen.set(true);
-        Some(self.render_outcome_kind("structure-outcome", &outcome.kind, cx))
+        let id = match section {
+            Section::Progress => "progress-outcome",
+            Section::Structure | Section::Dependencies => "structure-outcome",
+        };
+        Some(self.render_outcome_kind(id, outcome, cx))
     }
 
     /// The outcomes of the project on screen that the detail pane does not show, whether no
@@ -413,7 +432,7 @@ impl AxonApp {
                                     })),
                             ),
                     )
-                    .child(self.render_outcome_kind("outcome-message", &outcome.kind, cx))
+                    .child(self.render_outcome_kind("outcome-message", outcome, cx))
                     .test_support(),
             );
         }
@@ -423,7 +442,7 @@ impl AxonApp {
     fn render_outcome_kind(
         &self,
         id: &'static str,
-        kind: &OutcomeKind,
+        outcome: &Outcome,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let danger = cx.theme().danger;
@@ -436,8 +455,10 @@ impl AxonApp {
                 .test_support()
                 .into_any_element()
         };
-        match kind {
-            OutcomeKind::Rejected(rejection) => self.render_rejection(id, rejection, cx),
+        match &outcome.kind {
+            OutcomeKind::Rejected(rejection) => {
+                self.render_rejection(id, rejection, operation(&outcome.change), cx)
+            }
             OutcomeKind::NotApplied(error) => message(format!(
                 "保存できませんでした。変更は記録されていないので、もう一度操作できます。（{error}）"
             )),
@@ -476,22 +497,31 @@ impl AxonApp {
         detail.structure.conflicted
     }
 
-    /// What the write in progress means for the Entity in `detail`, in the section of that
-    /// change (`dependency`): its own change being saved, or another one holding it back.
-    fn render_saving(
+    /// What the write in progress means for the Entity in `detail`, in `section`: its own
+    /// change being saved there, or another one holding every change back, said beside the
+    /// state menu.
+    pub(super) fn render_saving(
         &self,
         detail: &EntityDetail,
-        dependency: bool,
+        section: Section,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let (project, change) = self.writes.pending()?.key();
         let own = Some(project) == self.explorer.project() && change.entity() == &detail.id;
-        if own && change.is_dependency() != dependency || !own && dependency {
+        let shown_in = if own {
+            change.section()
+        } else {
+            Section::Progress
+        };
+        if shown_in != section {
             return None;
         }
         Some(
             div()
-                .id("structure-saving")
+                .id(match section {
+                    Section::Progress => "progress-saving",
+                    Section::Structure | Section::Dependencies => "structure-saving",
+                })
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
                 .child(if own {
@@ -506,21 +536,22 @@ impl AxonApp {
         )
     }
 
-    fn render_rejection(
+    /// Why the core refused a change, the transition `operation` or a structural one, with a
+    /// link to each Entity it names.
+    pub(super) fn render_rejection(
         &self,
         id: &'static str,
         rejection: &Rejection,
+        operation: Option<Operation>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
         let danger = theme.danger;
-        let mut element = div()
-            .id(id)
-            .flex()
-            .flex_col()
-            .gap_1()
-            .text_sm()
-            .child(div().text_color(danger).child(text::rejection(rejection)));
+        let mut element = div().id(id).flex().flex_col().gap_1().text_sm().child(
+            div()
+                .text_color(danger)
+                .child(text::rejection(rejection, operation)),
+        );
         match rejection {
             Rejection::Refused(Refusal::NewViolations(violations)) => {
                 // One line per Entity, so each is linked once.
@@ -559,7 +590,7 @@ impl AxonApp {
 
     /// A link to the Entity `id` in the records read, or its ID alone while none are: without
     /// a read the records cannot tell whether it is there.
-    fn render_named(&self, id: &EntityId, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_named(&self, id: &EntityId, cx: &mut Context<Self>) -> AnyElement {
         match self.explorer.board() {
             Some(board) => self.render_link(&board.link(id), cx),
             None => div().child(id.to_string()).into_any_element(),
@@ -574,7 +605,7 @@ impl AxonApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let muted = cx.theme().muted_foreground;
-        let busy = self.is_rearranging();
+        let busy = self.is_settling();
         let structure = &detail.structure;
         let entity = detail.id.clone();
 
@@ -600,7 +631,7 @@ impl AxonApp {
                     })),
             );
         if let Some(detach) = &structure.detach {
-            let change = Rearrangement::Move {
+            let change = Change::Move {
                 entity: entity.clone(),
                 parent: None,
             };
@@ -610,13 +641,15 @@ impl AxonApp {
                     .compact()
                     .label("所属から外す")
                     .disabled(busy || detach.is_err())
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.rearrange(change.clone(), cx)),
-                    ),
+                    .on_click(cx.listener(move |this, event, _, cx| {
+                        if this.accepts_click(event) {
+                            this.apply(change.clone(), cx)
+                        }
+                    })),
             );
         }
         let (other, convertible) = &structure.convert;
-        let convert = Rearrangement::Convert {
+        let convert = Change::Convert {
             entity: entity.clone(),
             kind: *other,
         };
@@ -634,9 +667,11 @@ impl AxonApp {
                     .compact()
                     .label(format!("{} に変換", text::kind(*other)))
                     .disabled(busy || convertible.is_err())
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.rearrange(convert.clone(), cx)),
-                    ),
+                    .on_click(cx.listener(move |this, event, _, cx| {
+                        if this.accepts_click(event) {
+                            this.apply(convert.clone(), cx)
+                        }
+                    })),
             );
 
         let mut section = div()
@@ -651,14 +686,14 @@ impl AxonApp {
             _ => None,
         };
         if let Some(rejection) = detach_blocked.filter(|r| Some(*r) != shown) {
-            section = section.child(self.render_rejection("detach-blocked", rejection, cx));
+            section = section.child(self.render_rejection("detach-blocked", rejection, None, cx));
         }
         section = section.child(kind_line);
         if let Err(rejection) = convertible
             && Some(rejection) != shown
             && Some(rejection) != detach_blocked
         {
-            section = section.child(self.render_rejection("convert-blocked", rejection, cx));
+            section = section.child(self.render_rejection("convert-blocked", rejection, None, cx));
         }
         if let Some(picker) = self
             .picker
@@ -668,15 +703,15 @@ impl AxonApp {
             section = section.child(self.render_picker(picker, cx));
         }
         section = section
-            .children(self.render_saving(detail, false, cx))
-            .children(self.render_outcome(detail, false, cx));
+            .children(self.render_saving(detail, Section::Structure, cx))
+            .children(self.render_outcome(detail, Section::Structure, cx));
         section.into_any_element()
     }
 
     fn render_picker(&self, picker: &Picker, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let (muted, border) = (theme.muted_foreground, theme.border);
-        let busy = self.is_rearranging();
+        let busy = self.is_settling();
         let heading = match picker.purpose {
             Purpose::Parent => "移動先の Group を選ぶ（中の仕事も一緒に移動します）",
             Purpose::Dependency => "追加する依存先を選ぶ（選んだ仕事の完了を待ちます）",
@@ -719,9 +754,11 @@ impl AxonApp {
                     .when(!busy, |row| {
                         row.cursor_pointer()
                             .hover(|style| style.bg(theme.list_hover))
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.choose(target.clone(), cx)),
-                            )
+                            .on_click(cx.listener(move |this, event, _, cx| {
+                                if this.accepts_click(event) {
+                                    this.choose(target.clone(), cx)
+                                }
+                            }))
                     })
                     .child(format!(
                         "{} {}（{} · {} · {}）",
@@ -778,7 +815,7 @@ impl AxonApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let muted = cx.theme().muted_foreground;
-        let busy = self.is_rearranging();
+        let busy = self.is_settling();
         let mut section = div()
             .id("detail-dependencies")
             .flex()
@@ -812,7 +849,7 @@ impl AxonApp {
         }
         let mut blocked = None;
         for (dependency, removable) in detail.dependencies.iter().zip(&detail.structure.removals) {
-            let change = Rearrangement::RemoveDependency {
+            let change = Change::RemoveDependency {
                 entity: detail.id.clone(),
                 target: dependency.id.clone(),
             };
@@ -837,8 +874,10 @@ impl AxonApp {
                             .compact()
                             .label("解除")
                             .disabled(busy || removable.is_err())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.rearrange(change.clone(), cx)
+                            .on_click(cx.listener(move |this, event, _, cx| {
+                                if this.accepts_click(event) {
+                                    this.apply(change.clone(), cx)
+                                }
                             })),
                     ),
             );
@@ -851,7 +890,7 @@ impl AxonApp {
             self.shown_rejection(detail),
         ];
         if let Some(rejection) = blocked.filter(|r| !elsewhere.contains(&Some(*r))) {
-            section = section.child(self.render_rejection("removal-blocked", rejection, cx));
+            section = section.child(self.render_rejection("removal-blocked", rejection, None, cx));
         }
         if let Some(picker) = self
             .picker
@@ -861,8 +900,16 @@ impl AxonApp {
             section = section.child(self.render_picker(picker, cx));
         }
         section
-            .children(self.render_saving(detail, true, cx))
-            .children(self.render_outcome(detail, true, cx))
+            .children(self.render_saving(detail, Section::Dependencies, cx))
+            .children(self.render_outcome(detail, Section::Dependencies, cx))
             .into_any_element()
+    }
+}
+
+/// The transition a change makes, for wording why it was refused.
+fn operation(change: &Change) -> Option<Operation> {
+    match change {
+        Change::Transition { operation, .. } => Some(*operation),
+        _ => None,
     }
 }

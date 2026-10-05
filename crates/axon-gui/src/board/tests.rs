@@ -204,9 +204,9 @@ fn detail_gathers_relations_waits_notes_and_history() {
     assert_eq!(kinds, ["created", "dependency", "edit"]);
     assert_eq!(
         detail.history[1].changes,
-        [Change::DependencyAdded(first.clone())]
+        [Difference::DependencyAdded(first.clone())]
     );
-    assert_eq!(detail.history[2].changes, [Change::Description]);
+    assert_eq!(detail.history[2].changes, [Difference::Description]);
 
     let first = board.detail(&first).unwrap();
     assert_eq!(first.dependents, [board.link(&second)]);
@@ -413,11 +413,11 @@ fn history_shows_each_change_in_its_direction() {
             .collect::<Vec<_>>(),
         [
             vec![],
-            vec![Change::Lifecycle(
+            vec![Difference::Lifecycle(
                 Lifecycle::NotStarted,
                 Lifecycle::InProgress
             )],
-            vec![Change::Lifecycle(
+            vec![Difference::Lifecycle(
                 Lifecycle::InProgress,
                 Lifecycle::Completed
             )],
@@ -449,7 +449,7 @@ fn rearrangements_are_checked_and_made_by_the_core() {
     let other = f.group("別", None);
     let board = f.board();
 
-    let into_child = Rearrangement::Move {
+    let into_child = Change::Move {
         entity: outer.clone(),
         parent: Some(inner.clone()),
     };
@@ -459,7 +459,7 @@ fn rearrangements_are_checked_and_made_by_the_core() {
             destination: inner.clone()
         }))
     );
-    let on_ancestor = Rearrangement::AddDependency {
+    let on_ancestor = Change::AddDependency {
         entity: leaf.clone(),
         target: outer.clone(),
     };
@@ -472,7 +472,7 @@ fn rearrangements_are_checked_and_made_by_the_core() {
     );
 
     // A move takes the subtree along and is what a later read shows.
-    let mv = Rearrangement::Move {
+    let mv = Change::Move {
         entity: inner.clone(),
         parent: Some(other.clone()),
     };
@@ -634,17 +634,22 @@ fn a_read_tells_whether_each_kind_of_change_was_made() {
         recorder: None,
     };
     for change in [
-        Rearrangement::AddDependency {
+        Change::AddDependency {
             entity: second.clone(),
             target: first.clone(),
         },
-        Rearrangement::RemoveDependency {
+        Change::RemoveDependency {
             entity: second.clone(),
             target: first.clone(),
         },
-        Rearrangement::Convert {
+        Change::Convert {
             entity: second.clone(),
             kind: Kind::Group,
+        },
+        Change::Transition {
+            entity: first.clone(),
+            operation: Operation::Start,
+            to: Lifecycle::InProgress,
         },
     ] {
         let board = f.board();
@@ -653,9 +658,154 @@ fn a_read_tells_whether_each_kind_of_change_was_made() {
         f.insert_entry(Entry::Record(record));
         assert_eq!(change.is_shown_by(&f.board()), Some(true), "{change:?}");
     }
-    let missing = Rearrangement::Convert {
+    let missing = Change::Convert {
         entity: EntityId::try_from("axon-gone".to_string()).unwrap(),
         kind: Kind::Group,
     };
     assert_eq!(missing.is_shown_by(&f.board()), None);
+}
+
+/// The operations the state menu offers for `id`, with whether the core accepts each.
+fn offered(board: &Board, id: &EntityId) -> Vec<(Operation, bool)> {
+    board
+        .detail(id)
+        .unwrap()
+        .progress
+        .iter()
+        .map(|step| (step.operation, step.check.is_ok()))
+        .collect()
+}
+
+#[test]
+fn the_menu_offers_what_leads_somewhere_from_the_kind_and_lifecycle() {
+    use Operation::*;
+    let mut f = Fixture::new();
+    let undecided = f.create(Kind::Issue, Lifecycle::Undecided, "u", Label::Feat, None);
+    let issue = f.issue("i", None);
+    let group = f.group("g", None);
+    let child = f.issue("c", Some(&group));
+    let board = f.board();
+    assert_eq!(
+        offered(&board, &undecided),
+        [(Accept, true), (Cancel, true)]
+    );
+    assert_eq!(
+        offered(&board, &issue),
+        [(Start, true), (Withdraw, true), (Cancel, true)]
+    );
+    // A Group is never started or released; it completes as the final confirmation, after
+    // every child has ended.
+    let detail = board.detail(&group).unwrap();
+    assert_eq!(
+        offered(&board, &group),
+        [(Complete, false), (Withdraw, true), (Cancel, false)]
+    );
+    assert_eq!(
+        detail.progress[0].check,
+        Err(Rejection::Refused(Refusal::ChildrenNotEnded(vec![
+            child.clone()
+        ])))
+    );
+
+    f.perform(&child, Start);
+    let board = f.board();
+    assert_eq!(
+        offered(&board, &child),
+        [(Complete, true), (Release, true), (Cancel, true)]
+    );
+    assert_eq!(
+        offered(&board, &group),
+        [(Complete, false), (Withdraw, false), (Cancel, false)],
+        "working through its child"
+    );
+    f.perform(&child, Complete);
+    let board = f.board();
+    assert_eq!(offered(&board, &child), [(Reopen, true)]);
+    assert_eq!(
+        offered(&board, &group),
+        [(Complete, true), (Withdraw, false), (Cancel, true)]
+    );
+    f.perform(&group, Complete);
+    let board = f.board();
+    assert_eq!(offered(&board, &group), [(Reopen, true)]);
+    // Under the finished Group the child stays as it is.
+    assert_eq!(
+        board.detail(&child).unwrap().progress[0].check,
+        Err(Rejection::Refused(Refusal::ParentClosed(group.clone())))
+    );
+    f.perform(&issue, Cancel);
+    assert_eq!(offered(&f.board(), &issue), [(Reconsider, true)]);
+}
+
+#[test]
+fn each_offered_transition_agrees_with_what_the_core_writes() {
+    let mut f = Fixture::new();
+    let outer = f.create(Kind::Group, Lifecycle::Undecided, "o", Label::Feat, None);
+    let inner = f.group("in", Some(&outer));
+    let leaf = f.issue("l", Some(&inner));
+    let dep = f.issue("d", None);
+    let waiting = f.issue("w", None);
+    f.needs(&waiting, &dep);
+    let board = f.board();
+    for id in [&outer, &inner, &leaf, &dep, &waiting] {
+        for step in board.detail(id).unwrap().progress {
+            let written = board
+                .records()
+                .perform(id, step.operation, None, axon::context_now())
+                .map(|_| ())
+                .map_err(Rejection::from);
+            assert_eq!(step.check, written, "{id} {:?}", step.operation);
+        }
+    }
+    let leaf_start = board.detail(&leaf).unwrap().progress[0].clone();
+    assert_eq!(
+        leaf_start.check,
+        Err(Rejection::Refused(Refusal::AncestorsNotAdopted(vec![
+            outer.clone()
+        ])))
+    );
+    let waiting_start = board.detail(&waiting).unwrap().progress[0].clone();
+    assert_eq!(
+        waiting_start.check,
+        Err(Rejection::Refused(Refusal::DependenciesNotCompleted(vec![
+            dep.clone()
+        ])))
+    );
+}
+
+#[test]
+fn a_filter_says_which_facets_leave_an_entity_out() {
+    let mut f = Fixture::new();
+    let done = f.create(
+        Kind::Group,
+        Lifecycle::NotStarted,
+        "完了した会",
+        Label::Docs,
+        None,
+    );
+    f.perform(&done, Operation::Complete);
+    let board = f.board();
+    let mut filter = Filter::default();
+    assert_eq!(
+        board.exclusions(&filter, &done),
+        [Exclusion::State(State::Completed)]
+    );
+    filter.kinds = [Kind::Issue].into();
+    filter.toggle_label(Label::Docs, false);
+    filter.query = "読書".into();
+    assert_eq!(
+        board.exclusions(&filter, &done),
+        [
+            Exclusion::State(State::Completed),
+            Exclusion::Kind(Kind::Group),
+            Exclusion::Label(Label::Docs),
+            Exclusion::Query("読書".into())
+        ]
+    );
+    assert!(!board.matches(&filter, &done));
+    assert!(
+        board
+            .exclusions(&Filter::default(), &f.issue("x", None))
+            .is_empty()
+    );
 }

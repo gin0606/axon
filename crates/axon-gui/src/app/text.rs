@@ -1,7 +1,7 @@
 //! Display text for the core's values. The spelling of labels stays the one records and the
 //! CLI use; states, situations and record kinds are shown in Japanese.
 
-use crate::board::{Change, Rejection, State, WaitKind};
+use crate::board::{Difference, Rejection, State, WaitKind};
 use axon::lifecycle::{
     Kind, Lifecycle, Operation, Refusal, record::RecordKind, record::ViolationKind,
 };
@@ -124,23 +124,23 @@ pub fn record(kind: &RecordKind) -> String {
     }
 }
 
-pub fn change(change: &Change) -> String {
-    match change {
-        Change::Lifecycle(before, after) => {
+pub fn difference(difference: &Difference) -> String {
+    match difference {
+        Difference::Lifecycle(before, after) => {
             format!("状態: {} → {}", lifecycle(*before), lifecycle(*after))
         }
-        Change::Kind(before, after) => format!("種類: {} → {}", kind(*before), kind(*after)),
-        Change::Title(before, after) => format!("タイトル: {before} → {after}"),
-        Change::Description => "本文を変更".into(),
-        Change::Label(before, after) => format!("label: {before} → {after}"),
-        Change::Parent(before, after) => format!(
+        Difference::Kind(before, after) => format!("種類: {} → {}", kind(*before), kind(*after)),
+        Difference::Title(before, after) => format!("タイトル: {before} → {after}"),
+        Difference::Description => "本文を変更".into(),
+        Difference::Label(before, after) => format!("label: {before} → {after}"),
+        Difference::Parent(before, after) => format!(
             "所属: {} → {}",
             before.as_ref().map_or("なし".into(), ToString::to_string),
             after.as_ref().map_or("なし".into(), ToString::to_string)
         ),
-        Change::DependencyAdded(id) => format!("依存先を追加: {id}"),
-        Change::DependencyRemoved(id) => format!("依存先を削除: {id}"),
-        Change::Condition => "再浮上条件を変更".into(),
+        Difference::DependencyAdded(id) => format!("依存先を追加: {id}"),
+        Difference::DependencyRemoved(id) => format!("依存先を削除: {id}"),
+        Difference::Condition => "再浮上条件を変更".into(),
     }
 }
 
@@ -150,16 +150,36 @@ pub fn time(at: DateTime<Utc>) -> String {
         .to_string()
 }
 
-/// Why the core refused a structural change. The Entities it names are shown beside it.
-pub fn rejection(rejection: &Rejection) -> String {
+/// What the state menu calls a transition of an Entity of `kind`. Completing a Group is the
+/// final confirmation of the whole plan, told apart from its children ending.
+pub fn step(kind: Kind, operation: Operation) -> &'static str {
+    match (kind, operation) {
+        (_, Operation::Accept) => "採用する",
+        (_, Operation::Start) => "着手する",
+        (Kind::Group, Operation::Complete) => "Group 全体を確認して完了にする",
+        (Kind::Issue, Operation::Complete) => "完了にする",
+        (_, Operation::Release) => "未着手に戻す",
+        (_, Operation::Withdraw) => "採用を撤回する",
+        (_, Operation::Reopen) => "再開する",
+        (_, Operation::Reconsider) => "再検討する",
+        (_, Operation::Cancel) => "取りやめる",
+    }
+}
+
+/// Why the core refused a change: a lifecycle transition (`operation`) or, without one, a
+/// structural change. The Entities it names are shown beside it.
+pub fn rejection(rejection: &Rejection, operation: Option<Operation>) -> String {
     let refusal = match rejection {
         Rejection::Refused(refusal) => refusal,
         Rejection::Other(message) => return format!("変更できません。（{message}）"),
     };
+    let progress = operation.is_some();
     match refusal {
+        Refusal::Conflicted(_) if progress => "衝突している Issue・Group があるため、解決するまで状態を変更できません。解決は CLI の axon resolve で行います。",
         Refusal::Conflicted(_) => "衝突している Issue・Group があるため、解決するまで構造を変更できません。解決は CLI の axon resolve で行います。",
         Refusal::EntityConflicted(_) => "衝突しているため変更できません。CLI の axon resolve で解決してから変更してください。",
         Refusal::Missing(_) => "次の Issue・Group が記録にないため変更できません。「再読み込み」で記録を読み直してください。",
+        Refusal::ParentClosed(_) if progress => "所属している Group が完了・取りやめか、記録にないため、状態を変更できません。先に Group を再開か再検討してください。",
         Refusal::ParentClosed(_) => "所属している Group が完了または取りやめのため、その中からは外せず、移動もできません。Group を再開か再検討すると変更できます。",
         Refusal::DestinationNotOpenGroup(_) => "移動先は、このプロジェクトの記録にあり、完了も取りやめもしていない Group である必要があります。",
         Refusal::SelfContainment => "Group を自身の中に入れることはできません。",
@@ -174,6 +194,15 @@ pub fn rejection(rejection: &Rejection) -> String {
         Refusal::ConvertInProgress => "着手中の Issue は変換できません。作業を解放してから変換してください。",
         Refusal::ConvertTerminal => "完了・取りやめの仕事は変換できません。再開か再検討をしてから変換してください。",
         Refusal::GroupWithChildren(_) => "子を持つ Group は Issue に変換できません。子を外すか移動してから変換してください。",
+        Refusal::NotApplicable { .. } => "今の状態からはこの操作はできません。「再読み込み」で記録を読み直してください。",
+        Refusal::AncestorsNotAdopted(_) => "祖先の Group が採用済み（未着手）でないため、できません。先に次の Group を採用してください。",
+        Refusal::DependenciesNotCompleted(_) => "依存先が完了していないため、できません。次の仕事の完了を待っています。",
+        Refusal::AncestorDependenciesNotCompleted { .. } => "祖先の Group の依存先が完了していないため、着手できません。次の Group と依存先です。",
+        Refusal::ChildrenNotEnded(_) if operation == Some(Operation::Complete) => "配下の仕事がすべて終了（完了か取りやめ）するまで、完了にできません。次の仕事が終了していません。",
+        Refusal::ChildrenNotEnded(_) => "配下の仕事がすべて終了（完了か取りやめ）するまで、取りやめられません。次の仕事が終了していません。",
+        Refusal::WorkingGroupWithdrawn(_) => "配下に着手中・完了の仕事があり、この Group は着手中として扱われるため、採用を撤回できません。次の仕事です。",
+        Refusal::StartedWorkNeedsAdoptedAncestors(_) => "配下に着手中・完了の仕事がある Group は、祖先の Group がすべて採用済みのときだけ採用できます。次の Group が採用済みではありません。",
+        Refusal::CompletedDependents(_) => "この仕事に依存している次の仕事が完了しているため、再開できません。先にそれらを再開してください。",
     }
     .into()
 }

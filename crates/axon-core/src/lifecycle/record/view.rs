@@ -655,51 +655,64 @@ impl View {
         let parent_terminal = self.parent_current(id).is_some_and(Current::is_terminal);
         let parent_waived = self.in_violation(id) && (!parent_terminal || !current.is_terminal());
         if !self.parent_open(id) && !parent_waived {
-            return Err(invalid("parent must be an unfinished Group"));
+            let parent = current.parent.clone().expect("only a parent can be closed");
+            return Err(Refusal::ParentClosed(parent).into());
         }
-        let adopted_ancestors = "all ancestor Groups must be adopted (NotStarted)";
-        let deps_completed = "dependencies must be Completed";
+        let unadopted = || Refusal::AncestorsNotAdopted(self.unadopted_ancestors(id));
+        let open_dependencies = || Refusal::DependenciesNotCompleted(self.open_dependencies(id));
         match operation {
             Operation::Start => {
                 if !self.ancestors_adopted(id) {
-                    return Err(invalid(adopted_ancestors));
+                    return Err(unadopted().into());
                 }
                 if !self.dependencies_completed(id) {
-                    return Err(invalid(deps_completed));
+                    return Err(open_dependencies().into());
                 }
                 if let Some(ancestor) = self
                     .ancestors(id)
                     .into_iter()
                     .find(|a| !self.dependencies_completed(a))
                 {
-                    return Err(invalid(format!(
-                        "dependencies of ancestor {ancestor} must be Completed"
-                    )));
+                    let dependencies = self.open_dependencies(&ancestor);
+                    return Err(Refusal::AncestorDependenciesNotCompleted {
+                        ancestor,
+                        dependencies,
+                    }
+                    .into());
                 }
             }
             Operation::Complete => {
                 if !self.dependencies_completed(id) {
-                    return Err(invalid(deps_completed));
+                    return Err(open_dependencies().into());
                 }
                 if !self.children_ended(id) {
-                    return Err(invalid("all children must be terminal"));
+                    return Err(Refusal::ChildrenNotEnded(self.open_children(id)).into());
                 }
                 if !self.ancestors_adopted(id) {
-                    return Err(invalid(adopted_ancestors));
+                    return Err(unadopted().into());
                 }
             }
             // An Issue has children only after an integration (a conversion merged with a
             // registration); ending it would still leave them under a terminal parent.
             Operation::Cancel => {
                 if !self.children_ended(id) {
-                    return Err(invalid("all children must be terminal"));
+                    return Err(Refusal::ChildrenNotEnded(self.open_children(id)).into());
                 }
             }
             Operation::Withdraw => {
                 if self.working.contains(id) {
-                    return Err(invalid(
-                        "a Group that is InProgress through its children cannot be withdrawn",
-                    ));
+                    let started = self
+                        .children(id)
+                        .iter()
+                        .filter(|child| {
+                            matches!(
+                                self.effective_lifecycle(child),
+                                Some(Lifecycle::InProgress | Lifecycle::Completed)
+                            )
+                        })
+                        .cloned()
+                        .collect();
+                    return Err(Refusal::WorkingGroupWithdrawn(started).into());
                 }
             }
             Operation::Accept => {
@@ -707,14 +720,15 @@ impl View {
                     && self.has_started_descendant(id)
                     && !self.ancestors_adopted(id)
                 {
-                    return Err(invalid(
-                        "a Group with InProgress or Completed work below it is accepted only under adopted ancestors",
-                    ));
+                    return Err(Refusal::StartedWorkNeedsAdoptedAncestors(
+                        self.unadopted_ancestors(id),
+                    )
+                    .into());
                 }
             }
             Operation::Reopen => {
                 if !self.ancestors_adopted(id) {
-                    return Err(invalid(adopted_ancestors));
+                    return Err(unadopted().into());
                 }
                 let dependents = self.completed_dependents(id);
                 let dependents_waived = self.in_violation(id)
@@ -725,19 +739,55 @@ impl View {
                         })
                     });
                 if !dependents.is_empty() && !dependents_waived {
-                    return Err(invalid(format!(
-                        "Completed dependents must be reopened first: {}",
-                        dependents
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )));
+                    return Err(Refusal::CompletedDependents(
+                        dependents.into_iter().cloned().collect(),
+                    )
+                    .into());
                 }
             }
             Operation::Release | Operation::Reconsider => {}
         }
         Ok(())
+    }
+    /// The ancestors that keep [`Self::ancestors_adopted`] from holding, nearest first: those
+    /// not NotStarted, and a missing or conflicted one, where the walk stops.
+    fn unadopted_ancestors(&self, id: &EntityId) -> Vec<EntityId> {
+        let mut found = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut next = self.current(id).and_then(|c| c.parent.as_ref());
+        while let Some(ancestor) = next {
+            if !seen.insert(ancestor) {
+                break;
+            }
+            let Some(current) = self.current(ancestor) else {
+                found.push(ancestor.clone());
+                break;
+            };
+            if current.lifecycle != Lifecycle::NotStarted {
+                found.push(ancestor.clone());
+            }
+            next = current.parent.as_ref();
+        }
+        found
+    }
+    /// The dependencies that keep [`Self::dependencies_completed`] from holding.
+    fn open_dependencies(&self, id: &EntityId) -> Vec<EntityId> {
+        self.current(id)
+            .into_iter()
+            .flat_map(|current| &current.needs)
+            .filter(|d| {
+                self.current(d)
+                    .is_none_or(|dep| dep.lifecycle != Lifecycle::Completed)
+            })
+            .cloned()
+            .collect()
+    }
+    fn open_children(&self, id: &EntityId) -> Vec<EntityId> {
+        self.children(id)
+            .iter()
+            .filter(|child| !self.settled[*child].current.is_terminal())
+            .cloned()
+            .collect()
     }
 }
 

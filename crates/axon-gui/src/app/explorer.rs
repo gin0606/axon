@@ -455,8 +455,10 @@ impl AxonApp {
                 div()
                     .id("detail-title")
                     .text_xl()
-                    .child(detail.title.clone()),
-            );
+                    .child(detail.title.clone())
+                    .test_support(),
+            )
+            .child(self.render_actions(detail, cx));
 
         let mut state = format!(
             "{} {}",
@@ -476,19 +478,9 @@ impl AxonApp {
         }
         pane = pane
             .child(div().id("detail-state").child(state))
-            .child(belongs);
-
-        if self.explorer.selected_is_filtered_out() {
-            pane = pane.child(
-                div()
-                    .id("detail-filtered-out")
-                    .text_sm()
-                    .text_color(warning)
-                    .child(
-                        "現在の絞り込みに一致しないため、一覧には一致として表示されていません。",
-                    ),
-            );
-        }
+            .child(belongs)
+            .child(self.render_progress(detail, cx))
+            .children(self.render_filtered_out(cx));
         if detail.heads > 0 {
             pane = pane.child(
                 div()
@@ -684,7 +676,7 @@ impl AxonApp {
                         .pl_4()
                         .text_xs()
                         .text_color(muted)
-                        .child(text::change(change)),
+                        .child(text::difference(change)),
                 );
             }
             if let Some(reason) = &entry.reason {

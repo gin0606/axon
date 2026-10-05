@@ -372,7 +372,7 @@ fn the_detail_shows_relations_waits_notes_and_history(cx: &mut TestAppContext) {
                 .collect::<Vec<_>>(),
             ["created", "dependency"]
         );
-        assert!(!explorer.selected_is_filtered_out());
+        assert!(explorer.selected_exclusions().is_empty());
     });
 
     // To the dependency from the waiting reasons, then to the parent from where it belongs.
@@ -404,7 +404,7 @@ fn the_detail_shows_relations_waits_notes_and_history(cx: &mut TestAppContext) {
     // A selection the filter leaves out stays open and says so.
     click(handle, "state-NotStarted", cx);
     assert_eq!(detail_title(&app, cx).as_deref(), Some("案内を送る"));
-    cx.read(|cx| assert!(app.read(cx).explorer().selected_is_filtered_out()));
+    cx.read(|cx| assert!(!app.read(cx).explorer().selected_exclusions().is_empty()));
     assert!(
         !rows(&app, cx)
             .iter()
