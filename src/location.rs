@@ -406,6 +406,17 @@ impl Location {
             git: Some(Git::of(found)?),
         })
     }
+    /// A management root that an application owns, opened without discovery and without Git
+    /// even when it lies inside a Git worktree: no Git process runs, no index is checked, and
+    /// initialization takes its lock inside `.axon` as it does outside Git.
+    pub fn standalone(root: &Path) -> Result<Self> {
+        let root = fs::canonicalize(root)?;
+        Ok(Self {
+            worktree: root.clone(),
+            root,
+            git: None,
+        })
+    }
     pub(crate) fn header(&self) -> PathBuf {
         self.root.join(".axon").join(HEADER_FILE)
     }
@@ -532,5 +543,33 @@ impl Location {
                 header.display()
             ))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_standalone_root_never_consults_git() {
+        let base =
+            std::env::temp_dir().join(format!("axon-standalone-{:032x}", rand::random::<u128>()));
+        // An empty `.git` makes Git discovery fail: only a root that skips Git can use it.
+        fs::create_dir_all(base.join(".git")).unwrap();
+        let root = base.join("app/project");
+        fs::create_dir_all(&root).unwrap();
+        assert!(Location::explicit(&root).is_err());
+
+        let location = Location::standalone(&root).unwrap();
+        assert!(!location.initialized().unwrap());
+        location.init("demo").unwrap();
+        assert!(location.initialized().unwrap());
+        location.check_index().unwrap();
+        let (header, _, view) = location.open().unwrap().read().unwrap();
+        assert_eq!(header.prefix, "demo");
+        assert_eq!(view.known().count(), 0);
+        assert!(root.join(".axon/axon-init.lock").exists());
+        assert!(!base.join(".git/axon-init.lock").exists());
+        fs::remove_dir_all(&base).unwrap();
     }
 }

@@ -9,7 +9,13 @@ publish = false
 
 [dependencies]
 axon = { path = "../.." }
+dirs = "6.0.0"
 gpui-kit = "=0.7.1"
+rand = "0.10.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0"
 
 [dev-dependencies]
+chrono = "0.4.45"
 gpui-kit = { version = "=0.7.1", features = ["test-support"] }
+tempfile = "3.22.0"

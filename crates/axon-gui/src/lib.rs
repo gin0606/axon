@@ -2,7 +2,12 @@
 //!
 //! The GUI depends on the `axon` library (storage adapters and the re-exported core) and
 //! converts core values into display text and GPUI elements here. Nothing from GPUI flows back
-//! into the core crates.
+//! into the core crates. [`project`] holds the projects without GPUI; [`app`] is the window.
+
+pub mod app;
+pub mod project;
+
+pub use app::AxonApp;
 
 use axon::lifecycle::Label;
 use gpui_kit::component::{
@@ -12,18 +17,19 @@ use gpui_kit::component::{
     menu::{DropdownMenu, PopupMenuItem},
 };
 use gpui_kit::{
-    App, AppContext, Bounds, Context, Entity, KeyBinding, Menu, MenuItem, OsAction, Render,
-    TitlebarOptions, Window, WindowBounds, WindowOptions, actions, base::input as edit, div,
-    prelude::*, px, size,
+    App, AppContext, Bounds, Context, Entity, Global, KeyBinding, Menu, MenuItem, OsAction, Render,
+    SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions, actions,
+    base::input as edit, div, prelude::*, px, size,
 };
+use project::{AppData, InstanceError, InstanceLock, data::LocateError};
 
 actions!(axon_gui, [Quit, FocusNextField, FocusPreviousField]);
 
 /// Key context wrapping the body editor, so Tab leaves the body instead of indenting it.
 const BODY_CONTEXT: &str = "AxonBody";
 
-/// Smallest window that still shows every control of the workbench.
-pub const MIN_WINDOW_SIZE: (f32, f32) = (420., 320.);
+/// Smallest window that still shows the project column and every control of the workbench.
+pub const MIN_WINDOW_SIZE: (f32, f32) = (640., 400.);
 
 /// Registers the components, key bindings and application menus. Call once before opening
 /// windows.
@@ -65,7 +71,7 @@ pub fn menus() -> Vec<Menu> {
 
 /// Options of the main window: centered, titled, and never smaller than [`MIN_WINDOW_SIZE`].
 pub fn main_window_options(cx: &App) -> WindowOptions {
-    let bounds = Bounds::centered(None, size(px(720.), px(520.)), cx);
+    let bounds = Bounds::centered(None, size(px(920.), px(600.)), cx);
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(size(px(MIN_WINDOW_SIZE.0), px(MIN_WINDOW_SIZE.1))),
@@ -77,13 +83,111 @@ pub fn main_window_options(cx: &App) -> WindowOptions {
     }
 }
 
-/// Opens the main window with the workbench and focuses the title field.
-pub fn open_main_window(cx: &mut App) -> gpui_kit::Result<Entity<Workbench>> {
+/// What a start found: the data to open, or why this instance must not open it.
+pub enum Startup {
+    Ready { data: AppData, lock: InstanceLock },
+    Refused(String),
+}
+
+/// Locates the data directory and takes the single-instance lock. A second instance on the
+/// same data is refused, so only one process ever writes it.
+pub fn startup() -> Startup {
+    startup_on(AppData::locate())
+}
+
+/// [`startup`] on a data directory already located, or the reason none was.
+pub fn startup_on(data: Result<AppData, LocateError>) -> Startup {
+    let data = match data {
+        Ok(data) => data,
+        Err(error) => {
+            return Startup::Refused(format!("データの保存場所を決められません: {error}"));
+        }
+    };
+    match data.lock_instance() {
+        Ok(lock) => Startup::Ready { data, lock },
+        Err(InstanceError::AlreadyRunning) => Startup::Refused(format!(
+            "Axon はすでに起動しています。同じデータを二つのアプリから書き換えないよう、こちらは開きません。（データの保存場所: {}）",
+            data.dir().display()
+        )),
+        Err(error @ InstanceError::Io(_)) => Startup::Refused(format!(
+            "データの保存場所を使えません: {}: {error}",
+            data.dir().display()
+        )),
+    }
+}
+
+/// Keeps the instance lock for as long as the application runs.
+struct HeldInstanceLock(#[allow(dead_code)] InstanceLock);
+impl Global for HeldInstanceLock {}
+
+/// Opens the window [`startup`] calls for: the main window holding the lock, or a notice.
+pub fn open_startup_window(startup: Startup, cx: &mut App) -> gpui_kit::Result<()> {
+    match startup {
+        Startup::Ready { data, lock } => {
+            cx.set_global(HeldInstanceLock(lock));
+            open_main_window(data, cx).map(|_| ())
+        }
+        Startup::Refused(message) => open_notice_window(message, cx).map(|_| ()),
+    }
+}
+
+/// Opens the main window on `data`. The caller holds its instance lock.
+pub fn open_main_window(data: AppData, cx: &mut App) -> gpui_kit::Result<Entity<AxonApp>> {
     let options = main_window_options(cx);
-    let (_, workbench) = gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| Workbench::new(window, cx))
+    let (_, app) = gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| AxonApp::new(data, window, cx))
     })?;
-    Ok(workbench)
+    Ok(app)
+}
+
+/// A window that only explains why the application did not open its data.
+pub struct Notice {
+    message: SharedString,
+}
+impl Notice {
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+impl Render for Notice {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        div()
+            .id("notice")
+            .size_full()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_4()
+            .bg(theme.background)
+            .text_color(theme.foreground)
+            .child(div().id("notice-message").child(self.message.clone()))
+            .child(
+                Button::new("quit")
+                    .outline()
+                    .label("終了")
+                    .on_click(|_, _, cx| cx.quit()),
+            )
+    }
+}
+
+pub fn open_notice_window(message: String, cx: &mut App) -> gpui_kit::Result<Entity<Notice>> {
+    let bounds = Bounds::centered(None, size(px(480.), px(200.)), cx);
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: Some(TitlebarOptions {
+            title: Some("Axon".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let (_, notice) = gpui_kit::open_window(options, cx, |window, cx| {
+        Theme::sync_system_appearance(Some(window), cx);
+        cx.new(|_| Notice {
+            message: message.into(),
+        })
+    })?;
+    Ok(notice)
 }
 
 /// A draft editor: a title line, a label chosen from a menu, and a multi-line body.

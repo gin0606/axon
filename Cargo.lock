@@ -619,7 +619,13 @@ name = "axon-gui"
 version = "0.1.0"
 dependencies = [
  "axon",
+ "chrono",
+ "dirs 6.0.0",
  "gpui-kit",
+ "rand 0.10.2",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
