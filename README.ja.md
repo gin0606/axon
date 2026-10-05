@@ -2,13 +2,13 @@
 
 [English](README.md)
 
-Issue と Group で個人の仕事や計画を管理するローカル CLI です。アイデアを未判断のまま記録し、Group の階層や依存関係で仕事を整理して、Note と変更履歴を残せます。
+Issue と Group で個人の仕事や計画を管理するローカル CLI です。アイデアを未判断（`Undecided`）のまま記録し、Group の階層や依存関係で仕事を整理して、Note と変更履歴を残せます。
 
 データはローカルの `.axon/` に保存します。個人用に保持することも、プロジェクトと一緒に Git で管理することもできます。
 
 ## Issue のライフサイクル
 
-思いついた仕事は、実施するか決める前に記録できます。採用した Issue は、未着手から着手中、完了へ進みます。
+思いついた仕事は、実施するか決める前に記録できます。`Accept` した Issue は、`NotStarted` から `InProgress`、`Completed` へ進みます。
 
 ```mermaid
 flowchart LR
@@ -20,7 +20,7 @@ flowchart LR
     D -->|再開| N
 ```
 
-未判断・未着手・着手中の Issue は取りやめ（`Cancelled`）にでき、再検討すると未判断に戻ります。全ての状態と遷移は [ライフサイクルの詳細](docs/reference/lifecycle.md#遷移) を参照してください。
+`Undecided`・`NotStarted`・`InProgress` の Issue は、`Cancel` によって `Cancelled` にできます。`Reconsider` すると `Undecided` に戻ります。全ての状態と遷移は [ライフサイクルの詳細](docs/reference/lifecycle.md#遷移) を参照してください。
 
 ## 必要になったら再浮上
 
@@ -32,7 +32,7 @@ flowchart LR
 axon condition set ID --command 'test -f ready.txt'
 ```
 
-コマンドの終了コードが `0` なら成立、`1` なら未成立、それ以外は判定エラーです。「後で考える」Issue は、未判断のまま条件を付けて残せます。詳しくは [再浮上条件](docs/reference/candidates.md#条件の種類) を参照してください。
+コマンドの終了コードが `0` なら成立、`1` なら未成立、それ以外は判定エラーです。「後で考える」Issue は、`Undecided` のまま条件を付けて残せます。詳しくは [再浮上条件](docs/reference/candidates.md#条件の種類) を参照してください。
 
 ## インストール
 
