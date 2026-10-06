@@ -128,7 +128,7 @@ fn valid_lifecycle(value: &str) -> bool {
     )
 }
 
-/// Parse syntax and file-local constraints. Storage identities are checked separately against the set of records read when the operation started.
+/// Parse syntax and file-local constraints. Storage identities are checked separately against the set of records read when the operation started. The parent rule reads only the file's `references` kinds here; `prepare` and `check` also read the stored ones.
 pub fn parse(input: &str) -> Result<Declaration> {
     let value = parse_unvalidated(input)?;
     value.validate()?;
@@ -136,7 +136,8 @@ pub fn parse(input: &str) -> Result<Declaration> {
 }
 /// Parses the strict YAML without the local validation. Only `prepare` and `check` (which `apply`
 /// runs) may take the result: they validate it against the store first, so that a record moved
-/// between `issues` and `groups` is reported as such.
+/// between `issues` and `groups`, or a `references` kind that storage has since changed, is
+/// reported as such.
 pub fn parse_unvalidated(input: &str) -> Result<Declaration> {
     use granit_parser::{BufferedInput, Scanner, TokenType};
     for token in Scanner::new(BufferedInput::new(input.chars())) {
@@ -187,6 +188,13 @@ impl Declaration {
         self.groups.iter().chain(&self.issues)
     }
     pub fn validate(&self) -> Result<()> {
+        self.validate_with(&|_| None)
+    }
+    /// Validation with the stored kind of IDs outside the file, where the store is known. The
+    /// parent rule then refuses an external parent only when neither the file's `references`
+    /// nor storage holds it as a Group, so a stale `references` kind is left to its own
+    /// diagnosis.
+    pub(crate) fn validate_with(&self, stored: &dyn Fn(&str) -> Option<Kind>) -> Result<()> {
         for record in self.records() {
             if let Err(e) = Label::from_name(&record.label) {
                 let name = record.id.as_deref().or(record.key.as_deref());
@@ -196,10 +204,10 @@ impl Declaration {
                 )));
             }
         }
-        self.validate_local()
+        self.validate_local(stored)
             .map_err(|e| invalid(format!("identity/reference: {}", e.0)))
     }
-    fn validate_local(&self) -> Result<()> {
+    fn validate_local(&self, stored: &dyn Fn(&str) -> Option<Kind>) -> Result<()> {
         if self.schema != SCHEMA {
             return Err(invalid(format!(
                 "schema: unsupported schema {}; expected {SCHEMA}",
@@ -278,10 +286,11 @@ impl Declaration {
             if let Some(parent) = &record.parent {
                 let target = self.target(parent)?;
                 if self.issues.iter().any(|r| self.record_target(r) == target)
-                    || self
-                        .references
-                        .iter()
-                        .any(|r| r.kind == "issue" && target == (0, r.id.clone()))
+                    || self.references.iter().any(|r| {
+                        r.kind == "issue"
+                            && target == (0, r.id.clone())
+                            && stored(&r.id) != Some(Kind::Group)
+                    })
                 {
                     return Err(invalid(format!("{label}: parent must be a Group")));
                 }
@@ -323,7 +332,15 @@ impl Declaration {
     }
     /// Canonical order uses creation times from the same view used for export or validation.
     pub fn serialize(&self, view: &View) -> Result<String> {
-        self.validate()?;
+        self.serialize_with(view, &|_| None)
+    }
+    /// `serialize` validating with the stored kinds of IDs outside the file, as `validate_with`.
+    pub(crate) fn serialize_with(
+        &self,
+        view: &View,
+        stored: &dyn Fn(&str) -> Option<Kind>,
+    ) -> Result<String> {
+        self.validate_with(stored)?;
         let mut out = format!("schema: {SCHEMA}\n");
         for (label, records) in [("groups", &self.groups), ("issues", &self.issues)] {
             let mut ordered = Vec::new();

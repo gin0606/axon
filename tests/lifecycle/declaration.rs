@@ -1195,6 +1195,184 @@ fn declaration_existing_kind_rejection_names_convert_and_export() {
     }
 }
 
+#[test]
+fn declaration_stale_reference_kind_of_a_parent_is_reported_and_prepared() {
+    for converted_to in ["group", "issue"] {
+        let f = Fixture::new();
+        f.ok(&["init", "demo"]);
+        let target = if converted_to == "group" {
+            f.accepted("Target")
+        } else {
+            created(&f.ok(&[
+                "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Target",
+            ]))
+        };
+        let record = f.accepted("Record");
+        f.ok(&["dep", "add", &record, "--needs", &target]);
+        let exported = f.ok(&["export", &record]);
+        f.ok(&["convert", &target, "--kind", converted_to]);
+        // The dependency only puts the target into references; a child that needs its own
+        // parent would form a completion cycle.
+        let input = exported
+            .replace("parent: null", &format!("parent: {{ id: {target} }}"))
+            .replace(&format!("needs:\n      - {{ id: {target} }}"), "needs: []");
+        assert!(input.contains("needs: []"), "{input}");
+        let error = rejected(&f, &input);
+        assert!(
+            error.contains(&format!("read-only: {target}: kind is fixed"))
+                && error.contains("run axon import prepare FILE"),
+            "{converted_to}: {error}"
+        );
+        let path = f.0.join("plan.yaml");
+        if converted_to == "group" {
+            f.ok(&["import", "prepare", path.to_str().unwrap()]);
+            let prepared = declaration::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(prepared.references[0].kind, "group");
+            f.ok(&["import", "check", path.to_str().unwrap()]);
+            f.ok(&["import", "apply", path.to_str().unwrap()]);
+            assert!(
+                f.ok(&["show", &record, "--details", "--skip-conditions"])
+                    .contains(&format!("Parent: {target}")),
+            );
+        } else {
+            // The target really is an Issue now, so prepare refuses it as a parent.
+            let before = snapshot(&f);
+            let error = failure(f.run(&["import", "prepare", path.to_str().unwrap()]));
+            assert!(error.contains("parent must be a Group"), "{error}");
+            assert_eq!(snapshot(&f), before);
+            assert_eq!(fs::read_to_string(&path).unwrap(), input);
+        }
+    }
+}
+
+#[test]
+fn declaration_stale_reference_kind_does_not_hide_unrelated_local_errors() {
+    let f = Fixture::new();
+    f.ok(&["init", "demo"]);
+    let target = f.accepted("Target");
+    let record = f.accepted("Record");
+    f.ok(&["dep", "add", &record, "--needs", &target]);
+    let exported = f.ok(&["export", &record]);
+    f.ok(&["convert", &target, "--kind", "group"]);
+    let input = exported
+        .replace("parent: null", &format!("parent: {{ id: {target} }}"))
+        .replace("title: Record", "title: \"  \"");
+    let error = rejected(&f, &input);
+    assert!(
+        error.contains("invalid lifecycle or empty title") && !error.contains("kind is fixed"),
+        "{error}"
+    );
+    let path = f.0.join("plan.yaml");
+    let before = snapshot(&f);
+    assert!(
+        failure(f.run(&["import", "prepare", path.to_str().unwrap()]))
+            .contains("invalid lifecycle or empty title")
+    );
+    assert_eq!(snapshot(&f), before);
+    assert_eq!(fs::read_to_string(&path).unwrap(), input);
+    // A value that is not a kind stays a schema problem of the reference.
+    let input = exported.replace("kind: issue", "kind: Group");
+    let error = rejected(&f, &input);
+    assert!(
+        error.contains("invalid or duplicate external reference")
+            && !error.contains("kind is fixed"),
+        "{error}"
+    );
+}
+
+#[test]
+fn declaration_stale_reference_kinds_are_all_prepared() {
+    let f = Fixture::new();
+    f.ok(&["init", "demo"]);
+    let needed = f.accepted("Needed");
+    let parent = f.accepted("Parent");
+    let record = f.accepted("Record");
+    f.ok(&["dep", "add", &record, "--needs", &needed]);
+    f.ok(&["dep", "add", &record, "--needs", &parent]);
+    let exported = f.ok(&["export", &record]);
+    f.ok(&["convert", &needed, "--kind", "group"]);
+    f.ok(&["convert", &parent, "--kind", "group"]);
+    // Both references keep their export-time kind; one of them is now the parent.
+    let input = exported
+        .replace("parent: null", &format!("parent: {{ id: {parent} }}"))
+        .replace(&format!("\n      - {{ id: {parent} }}"), "");
+    assert!(
+        input.contains(&format!("- {{ id: {needed} }}"))
+            && !input.contains(&format!("- {{ id: {parent} }}")),
+        "{input}"
+    );
+    let error = rejected(&f, &input);
+    let first = needed.clone().min(parent.clone());
+    assert!(
+        error.contains(&format!("read-only: {first}: kind is fixed"))
+            && error.contains("run axon import prepare FILE"),
+        "{error}"
+    );
+    let path = f.0.join("plan.yaml");
+    f.ok(&["import", "prepare", path.to_str().unwrap()]);
+    f.ok(&["import", "apply", path.to_str().unwrap()]);
+    assert!(
+        f.ok(&["show", &record, "--details", "--skip-conditions"])
+            .contains(&format!("Parent: {parent}"))
+    );
+}
+
+#[test]
+fn declaration_stale_reference_kind_keeps_other_diagnoses() {
+    let f = Fixture::new();
+    f.ok(&["init", "demo"]);
+    // Exported as an Issue and converted to a Group, so the file's stale kind would break the
+    // parent rule if it were the only kind read.
+    let target = f.accepted("Target");
+    let record = f.accepted("Record");
+    let other = f.accepted("Other");
+    f.ok(&["dep", "add", &record, "--needs", &target]);
+    let group = created(&f.ok(&[
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Moved",
+    ]));
+    f.ok(&[
+        "capture", "--label", "chore", "--title", "Child", "--parent", &group,
+    ]);
+    let exported = f.ok(&["export", &record, &other]);
+    let both = f.ok(&["export", &group, &record]);
+    f.ok(&["convert", &target, "--kind", "group"]);
+    let parented = exported.replace(
+        &format!("parent: null\n    needs:\n      - {{ id: {target} }}"),
+        &format!("parent: {{ id: {target} }}\n    needs: []"),
+    );
+    assert!(
+        parented.contains(&format!("parent: {{ id: {target} }}")),
+        "{parented}"
+    );
+    // An unrelated self-dependency is reported as itself, not as the parent rule.
+    let mut lines: Vec<String> = parented.lines().map(String::from).collect();
+    let other_needs = lines
+        .iter()
+        .rposition(|line| line.trim() == "needs: []")
+        .unwrap();
+    lines[other_needs] = format!("    needs:\n      - {{ id: {other} }}");
+    let error = rejected(&f, &(lines.join("\n") + "\n"));
+    assert!(error.contains("self dependency"), "{error}");
+
+    // A moved Group record is still reported as the move.
+    let (head, rest) = both.split_once("issues:\n").unwrap();
+    let (prefix, group_record) = head.split_once("groups:\n").unwrap();
+    let moved = format!("{prefix}groups: []\nissues:\n{group_record}{rest}").replace(
+        &format!("parent: null\n    needs:\n      - {{ id: {target} }}"),
+        &format!("parent: {{ id: {target} }}\n    needs: []"),
+    );
+    assert!(
+        moved.contains(&format!("parent: {{ id: {target} }}")),
+        "{moved}"
+    );
+    let error = rejected(&f, &moved);
+    assert!(
+        error.contains(&format!("read-only: {group}: kind is fixed"))
+            && error.contains("move it back to groups"),
+        "{error}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn declaration_cli_handles_every_control_in_output_paths() {

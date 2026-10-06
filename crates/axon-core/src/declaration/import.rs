@@ -50,6 +50,17 @@ fn export_again(id: &EntityId) -> String {
          file and transfer your edits"
     )
 }
+/// The stored kind of a settled Entity named in the file, for the parent rule.
+fn stored_kind(view: &View, value: &str) -> Option<Kind> {
+    Some(view.current(&id(value).ok()?)?.kind)
+}
+fn reference_kind_fixed(id: &EntityId, stored: Kind) -> Error {
+    invalid(format!(
+        "read-only: {id}: kind is fixed: the referenced {id} is {} in storage; \
+         run axon import prepare FILE to regenerate references",
+        article(stored)
+    ))
+}
 fn declared_lifecycle(value: &str) -> Result<Lifecycle> {
     Ok(match value {
         "undecided" => Lifecycle::Undecided,
@@ -159,17 +170,16 @@ impl Declaration {
                 .collect::<Result<_>>()?,
         })
     }
-    /// Local validation, except that a failure caused only by records moved between `issues` and
-    /// `groups` is reported as the move: moving a Group record breaks its children's parents
-    /// before the kind is checked. `prepare` and `check` start with it, so they accept an
-    /// unvalidated declaration.
+    /// Local validation against the store, where a failure caused only by records moved between
+    /// `issues` and `groups` is reported as the move: moving a Group record breaks its
+    /// children's parents before the kind is checked. `prepare` and `check` start with it, so
+    /// they accept an unvalidated declaration.
     fn validate_against(&self, store: &Store) -> Result<()> {
-        let error = match self.validate() {
+        let view = store.view().ok();
+        let stored = |value: &str| stored_kind(view.as_ref()?, value);
+        let error = match self.validate_with(&stored) {
             Ok(()) => return Ok(()),
             Err(error) => error,
-        };
-        let Ok(view) = store.view() else {
-            return Err(error);
         };
         let mut restored = Declaration {
             groups: Vec::new(),
@@ -178,15 +188,15 @@ impl Declaration {
         };
         let mut moved = None;
         for (kind, r) in self.typed_records() {
-            let stored = r
+            let current = r
                 .base
                 .as_ref()
                 .and_then(|_| record_id(r).ok())
-                .and_then(|id| Some((view.current(&id)?.kind, id)));
-            let kind = match stored {
-                Some((stored, id)) if stored != kind => {
-                    moved.get_or_insert_with(|| kind_fixed(&id, stored, kind));
-                    stored
+                .and_then(|id| Some((view.as_ref()?.current(&id)?.kind, id)));
+            let kind = match current {
+                Some((current, id)) if current != kind => {
+                    moved.get_or_insert_with(|| kind_fixed(&id, current, kind));
+                    current
                 }
                 _ => kind,
             };
@@ -196,7 +206,7 @@ impl Declaration {
             }
         }
         match moved {
-            Some(moved) if restored.validate().is_ok() => Err(moved),
+            Some(moved) if restored.validate_with(&stored).is_ok() => Err(moved),
             _ => Err(error),
         }
     }
@@ -403,7 +413,7 @@ impl Declaration {
         for r in self.records() {
             record_id(r)?;
         }
-        if self.serialize(&view)? != input {
+        if self.serialize_with(&view, &|value| stored_kind(&view, value))? != input {
             return Err(invalid(
                 "schema: non-canonical declaration; run axon import prepare FILE",
             ));
@@ -412,11 +422,7 @@ impl Declaration {
             let id = id(&reference.id)?;
             let current = settled(&view, &id)?;
             if reference.kind != kind(current.kind) {
-                return Err(invalid(format!(
-                    "read-only: {id}: kind is fixed: the referenced {id} is {} in storage; \
-                     run axon import prepare FILE to regenerate references",
-                    article(current.kind)
-                )));
+                return Err(reference_kind_fixed(&id, current.kind));
             }
         }
         let conflicts: Vec<_> = self

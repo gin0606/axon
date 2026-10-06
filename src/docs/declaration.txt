@@ -57,7 +57,8 @@ groups is rejected as read-only. Move it back, or run axon convert and then
 export the file's records again; an Entity converted in storage after export
 needs only the new export. Export again into a separate file and transfer your
 edits. A reference whose kind differs from storage is rejected until axon
-import prepare regenerates the references.
+import prepare regenerates the references; prepare then rejects a parent that
+storage holds as an Issue.
 
 Export never changes storage or runs resurfacing conditions. This explanation
 and --example do not open storage.

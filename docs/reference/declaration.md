@@ -182,7 +182,7 @@ description の全文差分は file 自体の git diff に任せ、CLI では変
 
 - 既存 Entity の `lifecycle` の書き換えは、書き換えたすべての Entity について、file の値を保存値へ戻すことを示す。保存値から宣言値へ一つの通常コマンド（`axon accept|withdraw|start|release|complete|cancel|reconsider|reopen`）で遷移できる場合はそのコマンドも示す。保存値が終了していなければ `axon import apply` の後に実行するよう示す。同じ record の他の項目も編集していると、前に実行すれば `base` が一致しなくなるためである。保存値が `Completed`・`Cancelled` なら title・description・label の編集も拒否されるため、先に実行してから取り直すよう示し、他に変更がなければ戻して実行するだけで足りることも示す。一つのコマンドで遷移できなければその旨を示し、Group の `in-progress` には保存されない実効値であることを示す。コマンドの前提（依存先の完了など）や、他の編集が遷移後にだけ通ること（採用前の Group の下への移動など）は判定しないため、示した手順がそれらで拒否されることはある
 - 既存 Entity の kind の不一致は、record を移したなら元の list へ戻すこと、種類を変えるなら`axon convert`を使うこと、変換の後、または`axon export`の後に保存先で変換されていた場合は取り直すことを示す。record の移動と保存先での変換は区別できないため、両方を示す。Group の record を `issues` へ移すと子の親が Issue を指して局所規則の検証に失敗するが、移した record を元の list へ戻せばその検証を通る場合は、kind の不一致として診断する
-- `references` の kind の不一致は、`axon import prepare FILE` での再生成を示す
+- `references` の kind の不一致は、`axon import prepare FILE` での再生成を示す。`prepare`・`check`・`apply` の局所規則（親が Group であること）は、編集集合外の親を、`references` の kind と保存先の現在値のどちらかが Group なら通す。このため、`parent` に指定した参照先が`axon export`の後に Group へ変換されても、`check`・`apply` はこの不一致として診断し、`prepare` は `references` を再生成する。逆に Issue へ変換された参照先を親にした場合は、`check`・`apply` はこの不一致として診断し、`prepare` は再生成した kind での検証で親が Group でないとして拒否する
 - `base` の不一致は、保存先の Entity が `base` と一致しないこと（`axon export` の後の変更か `base` の改変で、両者は区別しない）と、取り直しを示す。`prepare` は既存 Entity の `base` を更新しないため、この競合を解消しない
 
 終了した Entity を別の読み取り専用セクションに分けない。共通コアは`Cancelled`の dependency 編集を許し、終了していない Group の間での終了 Entity の所属変更を許す（`Completed` の Entity の移動先は、所属なしか、自身と全祖先が採用済みの Group に限る）ため、終了 Entity にも編集できる項目が残る。同じ list に置き、項目単位で拒否する。
