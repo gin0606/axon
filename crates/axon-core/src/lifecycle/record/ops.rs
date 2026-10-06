@@ -10,10 +10,15 @@ use std::collections::BTreeSet;
 impl Store {
     fn settled_view(&self) -> Result<View> {
         let view = self.view()?;
-        if !view.conflicted().is_empty() {
-            return Err(Refusal::Conflicted(view.conflicted().iter().cloned().collect()).into());
-        }
+        settled(&view)?;
         Ok(view)
+    }
+
+    /// The ordinary operations of this set checked against `view`, which the caller derived
+    /// from this same set with [`Store::view`]. Checking several operations on one read then
+    /// derives the view once instead of once per operation.
+    pub fn prepared<'a>(&'a self, view: &'a View) -> Prepared<'a> {
+        Prepared { store: self, view }
     }
 
     /// Registers an Entity as Undecided or NotStarted with its initial value. The parent must
@@ -21,8 +26,7 @@ impl Store {
     /// containment line. The result may not add a violation nor put a new completion-path
     /// edge on a cycle.
     pub fn create(&self, id: EntityId, current: Current, context: Context) -> Result<Record> {
-        let view = self.settled_view()?;
-        create_in(self, &view, id, current, context)
+        self.prepared(&self.view()?).create(id, current, context)
     }
     /// One lifecycle transition. Performing `Complete` on a Group is the caller's explicit
     /// final confirmation of that plan. The result may not add a violation: a waiver relaxes
@@ -34,8 +38,8 @@ impl Store {
         reason: Option<String>,
         context: Context,
     ) -> Result<Record> {
-        let view = self.settled_view()?;
-        perform_in(self, &view, id, operation, reason, context)
+        self.prepared(&self.view()?)
+            .perform(id, operation, reason, context)
     }
     /// Edits title and description of an unfinished Entity. None when nothing changes; a
     /// terminal Entity is rejected before that, even for its own values.
@@ -48,8 +52,8 @@ impl Store {
         context: Context,
     ) -> Result<Option<Record>> {
         validate_reason(&reason)?;
-        let view = self.settled_view()?;
-        write_in(&view, id, title, description, reason, context)
+        self.prepared(&self.view()?)
+            .write(id, title, description, reason, context)
     }
     /// Sets the label of an unfinished Entity. None when unchanged; a terminal Entity is
     /// rejected before that, even for its own label.
@@ -61,8 +65,8 @@ impl Store {
         context: Context,
     ) -> Result<Option<Record>> {
         validate_reason(&reason)?;
-        let view = self.settled_view()?;
-        set_label_in(&view, id, label, reason, context)
+        self.prepared(&self.view()?)
+            .set_label(id, label, reason, context)
     }
     /// Sets or clears the condition command without evaluating it. None when unchanged.
     pub fn set_condition(
@@ -102,8 +106,8 @@ impl Store {
         context: Context,
     ) -> Result<Option<Record>> {
         validate_reason(&reason)?;
-        let view = self.settled_view()?;
-        set_parent_in(self, &view, id, parent, reason, context)
+        self.prepared(&self.view()?)
+            .set_parent(id, parent, reason, context)
     }
     /// Adds a dependency. None when present. The result may not add a violation nor put the
     /// new edge on a completion cycle, even between Entities already on one.
@@ -115,8 +119,8 @@ impl Store {
         context: Context,
     ) -> Result<Option<Record>> {
         validate_reason(&reason)?;
-        let view = self.settled_view()?;
-        add_dependency_in(self, &view, id, target, reason, context)
+        self.prepared(&self.view()?)
+            .add_dependency(id, target, reason, context)
     }
     pub fn remove_dependency(
         &self,
@@ -126,8 +130,8 @@ impl Store {
         context: Context,
     ) -> Result<Option<Record>> {
         validate_reason(&reason)?;
-        let view = self.settled_view()?;
-        remove_dependency_in(&view, id, target, reason, context)
+        self.prepared(&self.view()?)
+            .remove_dependency(id, target, reason, context)
     }
     /// Converts between Issue and Group. None when the Entity already has that kind. The
     /// result may not add a violation.
@@ -139,27 +143,8 @@ impl Store {
         context: Context,
     ) -> Result<Option<Record>> {
         validate_reason(&reason)?;
-        let view = self.settled_view()?;
-        let current = view.require_settled(id)?;
-        if current.kind == kind {
-            return Ok(None);
-        }
-        match current.lifecycle {
-            Lifecycle::Undecided | Lifecycle::NotStarted => {}
-            Lifecycle::InProgress => return Err(Refusal::ConvertInProgress.into()),
-            Lifecycle::Completed | Lifecycle::Cancelled => {
-                return Err(Refusal::ConvertTerminal.into());
-            }
-        }
-        if kind == Kind::Issue && !view.children(id).is_empty() {
-            return Err(Refusal::GroupWithChildren(view.children(id).to_vec()).into());
-        }
-        let after = Current {
-            kind,
-            ..current.clone()
-        };
-        let record = follow(&view, id, RecordKind::Convert, after, reason, context);
-        without_new_violations(self, &view, record).map(Some)
+        self.prepared(&self.view()?)
+            .convert(id, kind, reason, context)
     }
     /// The final value `axon import apply` gives an existing Entity, validated as the sequence
     /// text edit, label, dependency removals, move, dependency additions, and recorded once. None
@@ -288,6 +273,145 @@ impl Store {
         note.validate()?;
         Ok(note)
     }
+}
+
+/// The ordinary operations of a record set against a view derived from it beforehand, from
+/// [`Store::prepared`]. Each gives what the `Store` method of the same name gives on that
+/// set; with a view of another set the result is unspecified.
+#[derive(Debug, Clone, Copy)]
+pub struct Prepared<'a> {
+    store: &'a Store,
+    view: &'a View,
+}
+
+impl Prepared<'_> {
+    /// See [`Store::create`].
+    pub fn create(&self, id: EntityId, current: Current, context: Context) -> Result<Record> {
+        settled(self.view)?;
+        create_in(self.store, self.view, id, current, context)
+    }
+    /// See [`Store::perform`].
+    pub fn perform(
+        &self,
+        id: &EntityId,
+        operation: Operation,
+        reason: Option<String>,
+        context: Context,
+    ) -> Result<Record> {
+        settled(self.view)?;
+        perform_in(self.store, self.view, id, operation, reason, context)
+    }
+    /// See [`Store::write`].
+    pub fn write(
+        &self,
+        id: &EntityId,
+        title: Option<String>,
+        description: Option<String>,
+        reason: Option<String>,
+        context: Context,
+    ) -> Result<Option<Record>> {
+        validate_reason(&reason)?;
+        settled(self.view)?;
+        write_in(self.view, id, title, description, reason, context)
+    }
+    /// See [`Store::set_label`].
+    pub fn set_label(
+        &self,
+        id: &EntityId,
+        label: Label,
+        reason: Option<String>,
+        context: Context,
+    ) -> Result<Option<Record>> {
+        validate_reason(&reason)?;
+        settled(self.view)?;
+        set_label_in(self.view, id, label, reason, context)
+    }
+    /// See [`Store::set_parent`].
+    pub fn set_parent(
+        &self,
+        id: &EntityId,
+        parent: Option<EntityId>,
+        reason: Option<String>,
+        context: Context,
+    ) -> Result<Option<Record>> {
+        validate_reason(&reason)?;
+        settled(self.view)?;
+        set_parent_in(self.store, self.view, id, parent, reason, context)
+    }
+    /// See [`Store::add_dependency`].
+    pub fn add_dependency(
+        &self,
+        id: &EntityId,
+        target: &EntityId,
+        reason: Option<String>,
+        context: Context,
+    ) -> Result<Option<Record>> {
+        validate_reason(&reason)?;
+        settled(self.view)?;
+        add_dependency_in(self.store, self.view, id, target, reason, context)
+    }
+    /// See [`Store::remove_dependency`].
+    pub fn remove_dependency(
+        &self,
+        id: &EntityId,
+        target: &EntityId,
+        reason: Option<String>,
+        context: Context,
+    ) -> Result<Option<Record>> {
+        validate_reason(&reason)?;
+        settled(self.view)?;
+        remove_dependency_in(self.view, id, target, reason, context)
+    }
+    /// See [`Store::convert`].
+    pub fn convert(
+        &self,
+        id: &EntityId,
+        kind: Kind,
+        reason: Option<String>,
+        context: Context,
+    ) -> Result<Option<Record>> {
+        validate_reason(&reason)?;
+        settled(self.view)?;
+        convert_in(self.store, self.view, id, kind, reason, context)
+    }
+}
+
+/// Rejects every ordinary operation while any Entity is conflicted.
+fn settled(view: &View) -> Result<()> {
+    if !view.conflicted().is_empty() {
+        return Err(Refusal::Conflicted(view.conflicted().iter().cloned().collect()).into());
+    }
+    Ok(())
+}
+
+fn convert_in(
+    store: &Store,
+    view: &View,
+    id: &EntityId,
+    kind: Kind,
+    reason: Option<String>,
+    context: Context,
+) -> Result<Option<Record>> {
+    let current = view.require_settled(id)?;
+    if current.kind == kind {
+        return Ok(None);
+    }
+    match current.lifecycle {
+        Lifecycle::Undecided | Lifecycle::NotStarted => {}
+        Lifecycle::InProgress => return Err(Refusal::ConvertInProgress.into()),
+        Lifecycle::Completed | Lifecycle::Cancelled => {
+            return Err(Refusal::ConvertTerminal.into());
+        }
+    }
+    if kind == Kind::Issue && !view.children(id).is_empty() {
+        return Err(Refusal::GroupWithChildren(view.children(id).to_vec()).into());
+    }
+    let after = Current {
+        kind,
+        ..current.clone()
+    };
+    let record = follow(view, id, RecordKind::Convert, after, reason, context);
+    without_new_violations(store, view, record).map(Some)
 }
 
 /// The fields `Store::import` moves to their final values; the rest of the value stays.

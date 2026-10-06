@@ -732,3 +732,39 @@ fn the_row_chosen_with_the_keyboard_stays_in_view(cx: &mut TestAppContext) {
         assert!(first.bounds().origin.y >= top, "{:?}", first.bounds());
     });
 }
+
+#[gpui_kit::test]
+fn the_list_builds_only_the_rows_in_view(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let long = "一覧の行の高さを変えないほど長いタイトル".repeat(8);
+    let ids: Vec<_> = (0..200)
+        .map(|ix| {
+            let title = if ix == 1 {
+                long.clone()
+            } else {
+                format!("仕事 {ix}")
+            };
+            seed.create(Kind::Issue, Lifecycle::Undecided, &title, Label::Feat, None)
+        })
+        .collect();
+    let (handle, app) = open(&data, cx);
+    assert_eq!(rows(&app, cx).len(), ids.len());
+    with_window(handle, cx, |window, _| {
+        let list = window.within("entity-list");
+        let first = list.find(entity_element(&ids[0])).bounds();
+        let long = list.find(entity_element(&ids[1])).bounds();
+        assert_eq!(first.size.height, long.size.height);
+        assert!(list.try_find(entity_element(ids.last().unwrap())).is_none());
+    });
+
+    // Selecting a row out of view scrolls it in, and it opens like any other row.
+    app.update(cx, |app, cx| app.open_entity(ids[150].clone(), cx));
+    with_window(handle, cx, |window, _| {
+        let list = window.within("entity-list");
+        assert!(list.find(entity_element(&ids[150])).visible());
+        assert!(list.try_find(entity_element(&ids[0])).is_none());
+    });
+    click_in(handle, "entity-list", entity_element(&ids[149]), cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("仕事 149"));
+}

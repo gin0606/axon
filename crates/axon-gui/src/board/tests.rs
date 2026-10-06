@@ -482,7 +482,10 @@ fn rearrangements_are_checked_and_made_by_the_core() {
         at: chrono::DateTime::from_timestamp(1_900_000_000, 0).unwrap(),
         recorder: None,
     };
-    let entry = mv.entry(board.records(), context).unwrap().unwrap();
+    let entry = mv
+        .entry(board.records(), board.read().derived(), context)
+        .unwrap()
+        .unwrap();
     f.insert_entry(entry);
     let board = f.board();
     assert_eq!(mv.is_shown_by(&board), Some(true));
@@ -654,7 +657,10 @@ fn a_read_tells_whether_each_kind_of_change_was_made() {
     ] {
         let board = f.board();
         assert_eq!(change.is_shown_by(&board), Some(false), "{change:?}");
-        let entry = change.entry(board.records(), context()).unwrap().unwrap();
+        let entry = change
+            .entry(board.records(), board.read().derived(), context())
+            .unwrap()
+            .unwrap();
         f.insert_entry(entry);
         assert_eq!(change.is_shown_by(&f.board()), Some(true), "{change:?}");
     }
@@ -892,7 +898,10 @@ fn a_creation_is_checked_by_the_core_and_shown_once_the_entity_is_read() {
     });
     assert_eq!(change.check(&board), Ok(()));
     assert_eq!(change.is_shown_by(&board), Some(false));
-    let entry = change.entry(board.records(), later()).unwrap().unwrap();
+    let entry = change
+        .entry(board.records(), board.read().derived(), later())
+        .unwrap()
+        .unwrap();
     f.insert_entry(entry);
     let board = f.board();
     assert_eq!(change.is_shown_by(&board), Some(true));
@@ -959,7 +968,10 @@ fn an_edit_is_one_record_that_keeps_what_it_does_not_set() {
     };
     assert_eq!(edit.check(&board), Ok(()));
     let before = f.store.records().count();
-    let entry = edit.entry(&f.store, later()).unwrap().unwrap();
+    let entry = edit
+        .entry(&f.store, &f.store.view().unwrap(), later())
+        .unwrap()
+        .unwrap();
     f.insert_entry(entry);
     assert_eq!(f.store.records().count(), before + 1, "one record");
     let board = f.board();
@@ -1000,7 +1012,10 @@ fn an_edit_is_one_record_that_keeps_what_it_does_not_set() {
             edit,
         };
         assert_eq!(change.is_shown_by(&f.board()), Some(false));
-        let entry = change.entry(&f.store, later()).unwrap().unwrap();
+        let entry = change
+            .entry(&f.store, &f.store.view().unwrap(), later())
+            .unwrap()
+            .unwrap();
         f.insert_entry(entry);
         assert_eq!(change.is_shown_by(&f.board()), Some(true));
         assert_eq!(
@@ -1085,7 +1100,10 @@ fn a_note_is_checked_by_the_core_and_told_apart_from_another_with_its_body() {
     // Another Note with the same body, written after the screen read, is not this one.
     f.note(&issue, "同じ本文");
     assert_eq!(note.is_shown_by(&f.board()), Some(false));
-    let entry = note.entry(board.records(), later()).unwrap().unwrap();
+    let entry = note
+        .entry(board.records(), board.read().derived(), later())
+        .unwrap()
+        .unwrap();
     assert!(matches!(entry, Entry::Note(_)));
     f.insert_entry(entry);
     let board = f.board();
@@ -1097,4 +1115,74 @@ fn a_note_is_checked_by_the_core_and_told_apart_from_another_with_its_body() {
         nonce: Nonce::generate(),
     };
     assert_eq!(gone.is_shown_by(&board), None);
+}
+
+#[test]
+fn while_an_entity_is_conflicted_only_notes_are_accepted() {
+    let mut f = Fixture::new();
+    let group = f.group("計画", None);
+    let other = f.issue("別の仕事", None);
+    let id = f.issue("競合", None);
+    let fork = f.store.clone();
+    let started = f.perform_in(&fork, &id, Operation::Start);
+    let cancelled = f.perform_in(&fork, &id, Operation::Cancel);
+    f.insert_entry(started);
+    f.insert_entry(cancelled);
+    let board = f.board();
+    let note = Change::AddNote {
+        entity: other.clone(),
+        body: "補足".into(),
+        nonce: axon::lifecycle::Nonce::generate(),
+    };
+    assert_eq!(note.check(&board), Ok(()));
+    let refused = [
+        Change::Edit {
+            entity: other.clone(),
+            edit: Edit {
+                title: Some("直す".into()),
+                ..Edit::default()
+            },
+        },
+        Change::Transition {
+            entity: other.clone(),
+            operation: Operation::Start,
+            to: Lifecycle::InProgress,
+        },
+        Change::Move {
+            entity: other.clone(),
+            parent: Some(group.clone()),
+        },
+        Change::AddDependency {
+            entity: other.clone(),
+            target: group.clone(),
+        },
+        Change::Convert {
+            entity: other.clone(),
+            kind: Kind::Group,
+        },
+        Change::RemoveDependency {
+            entity: other.clone(),
+            target: group.clone(),
+        },
+    ];
+    for change in refused {
+        assert!(
+            matches!(
+                change.check(&board),
+                Err(Rejection::Refused(Refusal::Conflicted(ref ids))) if ids.contains(&id)
+            ),
+            "{change:?}"
+        );
+    }
+    let detail = board.detail(&other).unwrap();
+    assert!(matches!(
+        detail.editable,
+        Err(Rejection::Refused(Refusal::Conflicted(_)))
+    ));
+    assert!(!detail.progress.is_empty());
+    assert!(detail.progress.iter().all(|step| step.check.is_err()));
+    assert!(matches!(
+        board.check_create_inside(&group),
+        Err(Rejection::Refused(Refusal::Conflicted(_)))
+    ));
 }

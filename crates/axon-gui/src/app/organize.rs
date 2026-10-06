@@ -251,8 +251,8 @@ impl AxonApp {
                     async move {
                         // What the core refused, told apart from failing to read or write.
                         let mut refused = None;
-                        let written = connection.update(|_, records, _| {
-                            match change.entry(records, axon::context_now()) {
+                        let written = connection.update(|_, records, view| {
+                            match change.entry(records, view, axon::context_now()) {
                                 Ok(entry) => Ok((entry.into_iter().collect(), ())),
                                 Err(error) => {
                                     let message = error.to_string();

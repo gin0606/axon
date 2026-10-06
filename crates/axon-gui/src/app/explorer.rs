@@ -11,9 +11,10 @@ use gpui_kit::component::{
     input::Input,
 };
 use gpui_kit::{
-    AnyElement, Context, ElementId, Hsla, IntoElement, SharedString, Window, base::TestSupportExt,
-    div, prelude::*, px,
+    AnyElement, Context, ElementId, Hsla, IntoElement, ScrollStrategy, SharedString, Window,
+    base::TestSupportExt, div, prelude::*, px, uniform_list,
 };
+use std::ops::Range;
 
 /// The deepest level that still indents further in the list.
 const MAX_INDENT: usize = 8;
@@ -37,13 +38,13 @@ impl AxonApp {
         cx: &mut Context<Self>,
     ) {
         self.explorer.update_filter(change);
-        self.list_scroll.set_offset(Default::default());
+        self.scroll_list_to_top();
         cx.notify();
     }
 
     pub fn set_layout(&mut self, layout: Layout, cx: &mut Context<Self>) {
         self.explorer.set_layout(layout);
-        self.list_scroll.set_offset(Default::default());
+        self.scroll_list_to_top();
         cx.notify();
     }
 
@@ -57,6 +58,11 @@ impl AxonApp {
         cx.notify();
     }
 
+    /// Scrolls the list back to its first row.
+    pub(super) fn scroll_list_to_top(&self) {
+        self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
+    }
+
     /// Scrolls the list to the selected row, when the list shows it.
     pub(super) fn reveal_selected(&self) {
         let listing = self.explorer.listing();
@@ -65,7 +71,7 @@ impl AxonApp {
             .selected()
             .and_then(|id| listing.rows.iter().position(|row| &row.id == id))
         {
-            self.list_scroll.scroll_to_item(ix);
+            self.list_scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
         }
     }
 
@@ -162,7 +168,6 @@ impl AxonApp {
         let muted = theme.muted_foreground;
         let listing = self.explorer.listing();
         let layout = self.explorer.layout();
-        let selected = self.explorer.selected().cloned();
         let layout_button = |id: &'static str, label: &'static str, value: Layout| {
             let button = Button::new(id)
                 .compact()
@@ -252,28 +257,59 @@ impl AxonApp {
                 )
                 .into_any_element()
         } else {
-            let mut rows = div()
+            // Only the rows in view are built, so a frame costs the same however many
+            // Entities the project holds. Every row has the same height for that.
+            let rows = uniform_list(
+                "entity-rows",
+                listing.rows.len(),
+                cx.processor(|this, range: Range<usize>, _, cx| this.render_rows(range, cx)),
+            )
+            .track_scroll(&self.list_scroll)
+            .size_full();
+            div()
                 .id("entity-list")
                 .track_focus(&self.list_focus)
                 .key_context(LIST_CONTEXT)
                 .on_action(cx.listener(|this, _: &SelectNextEntity, _, cx| this.step(1, cx)))
                 .on_action(cx.listener(|this, _: &SelectPreviousEntity, _, cx| this.step(-1, cx)))
-                .track_scroll(&self.list_scroll)
                 .rounded_md()
                 .border_1()
                 .border_color(gpui_kit::transparent_black())
                 .focus(|style| style.border_color(theme.ring))
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
+                .child(rows)
+                .into_any_element()
+        };
+        Some(
+            div()
+                .id("list-pane")
+                .flex_1()
+                .min_h_0()
                 .flex()
                 .flex_col()
-                .gap_px();
-            for row in &listing.rows {
+                .gap_2()
+                .child(header)
+                .child(body)
+                .into_any_element(),
+        )
+    }
+
+    /// The list rows in `range` of the listing. Both lines of a row are truncated, so every
+    /// row has the height the list measures on the first.
+    fn render_rows(&self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let Some(board) = self.explorer.board() else {
+            return Vec::new();
+        };
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let selected = self.explorer.selected();
+        let rows = self.explorer.listing().rows.get(range).unwrap_or_default();
+        rows.iter()
+            .map(|row| {
                 let item = board
                     .item(&row.id)
                     .expect("a listed Entity is on the board");
-                let is_selected = selected.as_ref() == Some(&row.id);
                 let mut meta = vec![
                     text::kind(item.kind).to_string(),
                     text::state(item.state).to_string(),
@@ -324,25 +360,13 @@ impl AxonApp {
                                     .child(meta.join(" · ")),
                             ),
                     );
-                if is_selected {
+                if selected == Some(&row.id) {
                     line = line.bg(theme.list_active);
                 }
-                rows = rows.child(line.test_support());
-            }
-            rows.into_any_element()
-        };
-        Some(
-            div()
-                .id("list-pane")
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(header)
-                .child(body)
-                .into_any_element(),
-        )
+                // The gap between rows, inside each row so the heights stay equal.
+                div().pb_px().child(line.test_support()).into_any_element()
+            })
+            .collect()
     }
 
     /// A clickable reference to another Entity, or its ID when the store does not hold it.

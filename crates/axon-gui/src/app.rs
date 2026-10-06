@@ -31,7 +31,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, Render,
-    ScrollHandle, SharedString, Window, div, prelude::*, px,
+    SharedString, UniformListScrollHandle, Window, div, prelude::*, px,
 };
 use std::collections::HashMap;
 
@@ -95,7 +95,7 @@ pub struct AxonApp {
     explorer: Explorer,
     search: Entity<InputState>,
     list_focus: FocusHandle,
-    list_scroll: ScrollHandle,
+    list_scroll: UniformListScrollHandle,
     /// The picker choosing a Group or a dependency for the Entity in the detail pane.
     picker: Option<Picker>,
     picker_query: Entity<InputState>,
@@ -178,7 +178,7 @@ impl AxonApp {
             search,
             // A tab stop, so the arrow keys are reachable from the keyboard alone.
             list_focus: cx.focus_handle().tab_stop(true),
-            list_scroll: ScrollHandle::new(),
+            list_scroll: UniformListScrollHandle::new(),
             picker: None,
             picker_query,
             writes: Requests::default(),
@@ -330,7 +330,7 @@ impl AxonApp {
         if self.explorer.project() != project_id {
             // An Entity to open after a creation belongs to the project left.
             self.drafts.open_on_load = None;
-            self.list_scroll.set_offset(Default::default());
+            self.scroll_list_to_top();
             if self.picker.take().is_some() {
                 self.focus_list = true;
             }

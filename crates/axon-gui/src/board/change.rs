@@ -8,7 +8,7 @@
 use super::Board;
 use axon::lifecycle::{
     Context, EntityId, Error, Kind, Label, Lifecycle, Operation, Refusal,
-    record::{Current, Entry, Imported, Nonce, Store},
+    record::{Current, Entry, Imported, Nonce, Store, View},
 };
 use chrono::DateTime;
 use std::collections::BTreeSet;
@@ -140,9 +140,15 @@ impl Change {
         }
     }
 
-    /// The entry the change adds to `records`, by the core's operation for it; none when the
-    /// records show the change already.
-    pub fn entry(&self, records: &Store, context: Context) -> Result<Option<Entry>, Error> {
+    /// The entry the change adds to `records`, by the core's operation for it checked against
+    /// `view`, the view derived from `records`; none when the records show the change already.
+    pub fn entry(
+        &self,
+        records: &Store,
+        view: &View,
+        context: Context,
+    ) -> Result<Option<Entry>, Error> {
+        let operations = records.prepared(view);
         let record = match self {
             Self::Create { entity, value } => {
                 let current = Current {
@@ -156,14 +162,17 @@ impl Change {
                     parent: value.parent.clone(),
                     needs: BTreeSet::new(),
                 };
-                records.create(entity.clone(), current, context).map(Some)
+                operations
+                    .create(entity.clone(), current, context)
+                    .map(Some)
             }
-            Self::Edit { entity, edit } => edit_record(records, entity, edit, context),
+            Self::Edit { entity, edit } => edit_record(records, view, entity, edit, context),
             Self::AddNote {
                 entity,
                 body,
                 nonce,
             } => {
+                // A Note is checked against the records alone, conflicts or not.
                 return records
                     .add_note(entity, body.clone(), None, context)
                     .map(|note| {
@@ -175,30 +184,33 @@ impl Change {
             }
             Self::Transition {
                 entity, operation, ..
-            } => records.perform(entity, *operation, None, context).map(Some),
+            } => operations
+                .perform(entity, *operation, None, context)
+                .map(Some),
             Self::Move { entity, parent } => {
-                records.set_parent(entity, parent.clone(), None, context)
+                operations.set_parent(entity, parent.clone(), None, context)
             }
             Self::AddDependency { entity, target } => {
-                records.add_dependency(entity, target, None, context)
+                operations.add_dependency(entity, target, None, context)
             }
             Self::RemoveDependency { entity, target } => {
-                records.remove_dependency(entity, target, None, context)
+                operations.remove_dependency(entity, target, None, context)
             }
-            Self::Convert { entity, kind } => records.convert(entity, *kind, None, context),
+            Self::Convert { entity, kind } => operations.convert(entity, *kind, None, context),
         };
         record.map(|record| record.map(Entry::Record))
     }
 
-    /// Whether the core accepts the change on the records of `board`. The write checks again
-    /// against the records it finds under the store's lock; this only answers before writing.
+    /// Whether the core accepts the change on the records of `board`, checked against the view
+    /// the board derived when it was read. The write checks again against the records it finds
+    /// under the store's lock; this only answers before writing.
     pub fn check(&self, board: &Board) -> Result<(), Rejection> {
         // The record is discarded, so its time is never seen.
         let context = Context {
             at: DateTime::UNIX_EPOCH,
             recorder: None,
         };
-        self.entry(board.records(), context)
+        self.entry(board.records(), board.read().derived(), context)
             .map(|_| ())
             .map_err(Rejection::from)
     }
@@ -242,25 +254,26 @@ impl Change {
 /// single-record update, which keeps the parent and dependencies the records hold.
 fn edit_record(
     records: &Store,
+    view: &View,
     entity: &EntityId,
     edit: &Edit,
     context: Context,
 ) -> Result<Option<axon::lifecycle::record::Record>, Error> {
     let text = edit.title.is_some() || edit.description.is_some();
+    let operations = records.prepared(view);
     match (text, edit.label) {
-        (_, None) => records.write(
+        (_, None) => operations.write(
             entity,
             edit.title.clone(),
             edit.description.clone(),
             None,
             context,
         ),
-        (false, Some(label)) => records.set_label(entity, label, None, context),
+        (false, Some(label)) => operations.set_label(entity, label, None, context),
         (true, Some(label)) => {
-            let view = records.view()?;
             // Without a settled value the core's text edit gives the reason.
             let Some(current) = view.current(entity) else {
-                return records.write(entity, edit.title.clone(), None, None, context);
+                return operations.write(entity, edit.title.clone(), None, None, context);
             };
             let value = Imported {
                 title: edit.title.clone().unwrap_or_else(|| current.title.clone()),

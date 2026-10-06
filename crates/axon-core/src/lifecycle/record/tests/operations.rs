@@ -1325,28 +1325,52 @@ fn unsettled_references_fail_the_prerequisites_without_being_misreported() {
 
 #[test]
 fn single_edit_apis_validate_reasons_before_noops_and_preserve_them_in_records() {
-    fn edit(r: &Replica, operation: usize, reason: Option<String>) -> Result<Option<Record>> {
+    /// The edit `operation` of i3, through the `Store` or, when `prepared`, through the
+    /// operations against a view derived beforehand.
+    fn edit(
+        r: &Replica,
+        operation: usize,
+        reason: Option<String>,
+        prepared: bool,
+    ) -> Result<Option<Record>> {
         let target = id("i3");
+        if !prepared {
+            return match operation {
+                0 => r
+                    .store
+                    .write(&target, Some("revised".into()), None, reason, r.tick()),
+                1 => r.store.set_label(&target, Label::Bug, reason, r.tick()),
+                2 => r
+                    .store
+                    .set_parent(&target, Some(id("g2")), reason, r.tick()),
+                3 => r.store.add_dependency(&target, &id("g2"), reason, r.tick()),
+                4 => r
+                    .store
+                    .remove_dependency(&target, &id("g2"), reason, r.tick()),
+                5 => r
+                    .store
+                    .set_condition(&target, Some("exit 2".into()), reason, r.tick()),
+                6 => r.store.convert(&target, Kind::Group, reason, r.tick()),
+                _ => unreachable!(),
+            };
+        }
+        let view = r.view();
+        let ops = r.store.prepared(&view);
         match operation {
-            0 => r
-                .store
-                .write(&target, Some("revised".into()), None, reason, r.tick()),
-            1 => r.store.set_label(&target, Label::Bug, reason, r.tick()),
-            2 => r
-                .store
-                .set_parent(&target, Some(id("g2")), reason, r.tick()),
-            3 => r.store.add_dependency(&target, &id("g2"), reason, r.tick()),
-            4 => r
-                .store
-                .remove_dependency(&target, &id("g2"), reason, r.tick()),
+            0 => ops.write(&target, Some("revised".into()), None, reason, r.tick()),
+            1 => ops.set_label(&target, Label::Bug, reason, r.tick()),
+            2 => ops.set_parent(&target, Some(id("g2")), reason, r.tick()),
+            3 => ops.add_dependency(&target, &id("g2"), reason, r.tick()),
+            4 => ops.remove_dependency(&target, &id("g2"), reason, r.tick()),
+            // `Prepared` has no condition operation; the Store path stands in for it.
             5 => r
                 .store
                 .set_condition(&target, Some("exit 2".into()), reason, r.tick()),
-            6 => r.store.convert(&target, Kind::Group, reason, r.tick()),
+            6 => ops.convert(&target, Kind::Group, reason, r.tick()),
             _ => unreachable!(),
         }
     }
-    for operation in 0..7 {
+    for (operation, prepared) in (0..7).flat_map(|o| [(o, false), (o, true)]) {
         let mut r = Replica::new("r0");
         if operation == 4 {
             r.add_dep("i3", "g2");
@@ -1364,19 +1388,97 @@ fn single_edit_apis_validate_reasons_before_noops_and_preserve_them_in_records()
         for changed in [false, true] {
             let before = r.store.clone();
             for invalid in &invalid {
-                assert!(error(edit(&r, operation, Some(invalid.clone()))).contains("reason"));
+                assert!(
+                    error(edit(&r, operation, Some(invalid.clone()), prepared)).contains("reason")
+                );
                 assert_eq!(r.store, before);
             }
-            let result = edit(&r, operation, Some(reason.clone())).unwrap();
+            let result = edit(&r, operation, Some(reason.clone()), prepared).unwrap();
             if changed {
                 assert!(result.is_none());
                 assert_eq!(r.store, before);
             } else {
                 let record = result.unwrap();
                 assert_eq!(record.reason.as_deref(), Some(reason.as_str()));
-                assert_eq!(edit(&r, operation, None).unwrap().unwrap().reason, None);
+                assert_eq!(
+                    edit(&r, operation, None, prepared).unwrap().unwrap().reason,
+                    None
+                );
                 insert(&mut r.store, record);
             }
         }
     }
+}
+
+#[test]
+fn operations_against_a_view_check_like_the_store_and_stop_on_conflicts() {
+    let r = Replica::new("r0");
+    let view = r.view();
+    let ops = r.store.prepared(&view);
+    let at = r.tick();
+    let new = current(Kind::Issue, Lifecycle::NotStarted, Some("g2"));
+    assert_eq!(
+        ops.create(id("i4"), new.clone(), at.clone()).unwrap(),
+        r.store.create(id("i4"), new, at.clone()).unwrap()
+    );
+    assert_eq!(
+        ops.perform(&id("i3"), Start, None, at.clone()).unwrap(),
+        r.store.perform(&id("i3"), Start, None, at.clone()).unwrap()
+    );
+    // A refused operation gives the same reason, including the checks after the operation.
+    assert_eq!(
+        error(ops.perform(&id("g0"), Cancel, None, at.clone())),
+        error(r.store.perform(&id("g0"), Cancel, None, at.clone()))
+    );
+    assert_eq!(
+        error(ops.set_parent(&id("g0"), Some(id("g0")), None, at.clone())),
+        error(
+            r.store
+                .set_parent(&id("g0"), Some(id("g0")), None, at.clone())
+        )
+    );
+    assert_eq!(
+        error(ops.add_dependency(&id("i1"), &id("g0"), None, at.clone())),
+        error(
+            r.store
+                .add_dependency(&id("i1"), &id("g0"), None, at.clone())
+        )
+    );
+    assert_eq!(
+        error(ops.convert(&id("g0"), Kind::Issue, None, at.clone())),
+        error(r.store.convert(&id("g0"), Kind::Issue, None, at.clone()))
+    );
+    assert_eq!(
+        ops.set_parent(&id("i3"), Some(id("g2")), None, at.clone())
+            .unwrap(),
+        r.store
+            .set_parent(&id("i3"), Some(id("g2")), None, at.clone())
+            .unwrap()
+    );
+    assert_eq!(
+        ops.add_dependency(&id("i3"), &id("g2"), None, at.clone())
+            .unwrap(),
+        r.store
+            .add_dependency(&id("i3"), &id("g2"), None, at.clone())
+            .unwrap()
+    );
+    assert_eq!(
+        ops.convert(&id("i3"), Kind::Group, None, at.clone())
+            .unwrap(),
+        r.store.convert(&id("i3"), Kind::Group, None, at).unwrap()
+    );
+
+    let c = conflicted_replica();
+    let view = c.view();
+    let ops = c.store.prepared(&view);
+    let blocked = "conflicted Entities block";
+    let new = current(Kind::Issue, Lifecycle::NotStarted, None);
+    assert!(error(ops.create(id("i4"), new, c.tick())).contains(blocked));
+    assert!(error(ops.perform(&id("i3"), Start, None, c.tick())).contains(blocked));
+    assert!(error(ops.write(&id("i3"), Some("x".into()), None, None, c.tick())).contains(blocked));
+    assert!(error(ops.set_label(&id("i3"), Label::Bug, None, c.tick())).contains(blocked));
+    assert!(error(ops.set_parent(&id("i3"), Some(id("g2")), None, c.tick())).contains(blocked));
+    assert!(error(ops.add_dependency(&id("i3"), &id("g2"), None, c.tick())).contains(blocked));
+    assert!(error(ops.remove_dependency(&id("i3"), &id("g2"), None, c.tick())).contains(blocked));
+    assert!(error(ops.convert(&id("i3"), Kind::Group, None, c.tick())).contains(blocked));
 }

@@ -19,7 +19,7 @@ pub use model::{
     Current, Entry, Header, NONCE_LENGTH, Nonce, Note, RECORD_ID_LENGTH, Record, RecordId,
     RecordKind,
 };
-pub use ops::Imported;
+pub use ops::{Imported, Prepared};
 pub use store::Store;
 pub use view::{Settled, View, Violation, ViolationKind};
 
