@@ -78,8 +78,13 @@ impl Outcome {
     /// Whether the user may put the outcome away. A creation or a Note whose publication no read
     /// has told about stays, so the same one is not sent again by mistake.
     pub(super) fn is_dismissible(&self) -> bool {
-        !(self.is_pending()
-            && matches!(self.change, Change::Create { .. } | Change::AddNote { .. }))
+        !(self.is_pending_creation()
+            || self.is_pending() && matches!(self.change, Change::AddNote { .. }))
+    }
+    /// A creation whose publication of unknown outcome no read has told about yet: the same
+    /// one is not sent again in its project until one does.
+    pub(super) fn is_pending_creation(&self) -> bool {
+        self.is_pending() && matches!(self.change, Change::Create { .. })
     }
     /// A publication of unknown outcome that no read has told about yet: kept until one does.
     pub(super) fn is_pending(&self) -> bool {
@@ -356,10 +361,6 @@ impl AxonApp {
                 };
                 if *found == Found::Made {
                     made.push(outcome.change.clone());
-                }
-                // A read has told what the creation left, so the notice about it is over.
-                if matches!(outcome.change, Change::Create { .. }) {
-                    self.drafts.created_elsewhere = None;
                 }
                 // A change found made closes its picker, as a saved one does.
                 if *found == Found::Made

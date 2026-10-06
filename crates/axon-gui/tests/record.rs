@@ -957,6 +957,182 @@ fn an_unknown_creation_stays_until_a_read_tells_what_it_left(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
+fn an_unknown_creation_holds_back_only_its_own_project(cx: &mut TestAppContext) {
+    use std::sync::{Arc, Mutex};
+    let (_dir, data) = data();
+    // Set once the project exists: the publication stops after writing, and the store is
+    // moved away so that project cannot be read again until it is put back.
+    let records: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::default();
+    let armed = records.clone();
+    let data = data.with_fault(move |at| {
+        if at == FaultPoint::AfterPublish
+            && let Some(records) = armed.lock().unwrap().take()
+        {
+            std::fs::rename(&records, records.with_extension("aside")).unwrap();
+            return Err(std::io::Error::other("injected"));
+        }
+        Ok(())
+    });
+    let (first, seed) = Seed::new(&data, "読書会");
+    let (second, other) = Seed::new(&data, "家計");
+    let (handle, app) = open(&data, cx);
+    app.update(cx, |app, cx| app.select(first.clone(), cx));
+    cx.run_until_parked();
+    fill_workbench(handle, &app, "会場を決める", "", cx);
+    let path = data.project_root(&first).join(".axon/records");
+    *records.lock().unwrap() = Some(path.clone());
+    click(handle, "create-entity", cx);
+    let pending = |app: &Entity<AxonApp>, cx: &mut TestAppContext| {
+        cx.read(|cx| {
+            app.read(cx).outcomes_of(&first).iter().any(|o| {
+                matches!(
+                    o.kind,
+                    OutcomeKind::Unknown {
+                        found: Found::Pending,
+                        ..
+                    }
+                )
+            })
+        })
+    };
+    assert!(pending(&app, cx));
+    let held = |app: &Entity<AxonApp>, cx: &mut TestAppContext| {
+        cx.read(|cx| app.read(cx).creations_held_elsewhere(cx))
+    };
+
+    // The other project, with its own store, takes a creation, an edit and a Note, and says
+    // what holds the first one back until it is read.
+    app.update(cx, |app, cx| app.select(second.clone(), cx));
+    cx.run_until_parked();
+    assert!(exists(handle, "creation-held-elsewhere", cx));
+    let notice = held(&app, cx);
+    assert!(
+        notice[0].contains("作成欄の入力はこの作成のものです"),
+        "{notice:?}"
+    );
+    click(handle, "create-entity", cx);
+    let created = other.all();
+    assert_eq!(created.len(), 1, "created in the other project");
+    assert_eq!(created[0].1.title, "会場を決める");
+    let issue = created[0].0.clone();
+    assert_eq!(selected(&app, cx), Some(issue.clone()));
+    click(handle, "edit-entity", cx);
+    set_edit_title(handle, &app, "家計簿をつける", cx);
+    click(handle, "save-edit", cx);
+    assert_eq!(other.current(&issue).title, "家計簿をつける");
+    click(handle, "write-note", cx);
+    type_text(handle, "毎週まとめる", cx);
+    click(handle, "add-note", cx);
+    assert_eq!(other.notes(&issue), ["毎週まとめる"]);
+    assert!(
+        pending(&app, cx),
+        "still waiting for a read of its own project"
+    );
+    // Neither typing nor creating there puts away what holds the first project back.
+    let notice = held(&app, cx);
+    assert_eq!(notice.len(), 1);
+    assert!(
+        notice[0].contains("「読書会」には作成できません"),
+        "{notice:?}"
+    );
+    assert!(
+        !notice[0].contains("作成欄の入力はこの作成のものです"),
+        "the workbench was emptied: {notice:?}"
+    );
+    click(handle, "new-entity", cx);
+    type_text(handle, "次の予定", cx);
+    assert!(exists(handle, "creation-held-elsewhere", cx));
+
+    // Back in its project, which still cannot be read: its outcome stays and cannot be put
+    // away, and nothing is created there.
+    app.update(cx, |app, cx| app.select(first.clone(), cx));
+    cx.run_until_parked();
+    assert!(held(&app, cx).is_empty(), "said by its own outcome there");
+    type_text(handle, "の案内を送る", cx);
+    click(handle, "create-entity", cx);
+    assert!(pending(&app, cx));
+    assert!(exists(handle, "create-outcome", cx));
+    assert!(!exists(handle, "dismiss-create-outcome", cx));
+    std::fs::rename(path.with_extension("aside"), &path).unwrap();
+    assert_eq!(seed.all().len(), 1);
+    assert_eq!(other.all().len(), 1);
+
+    // Once a read tells what it left, that project takes a creation again.
+    click(handle, "reload", cx);
+    assert!(!pending(&app, cx));
+    assert!(held(&app, cx).is_empty());
+    assert_eq!(
+        workbench_text(&app, cx).0,
+        "次の予定の案内を送る",
+        "typed since, so kept"
+    );
+    click(handle, "new-entity", cx);
+    click(handle, "create-entity", cx);
+    let titles: BTreeSet<_> = seed.all().into_iter().map(|(_, c)| c.title).collect();
+    assert_eq!(
+        titles,
+        BTreeSet::from(["会場を決める".to_owned(), "次の予定の案内を送る".to_owned()])
+    );
+    // Nor is it said in the other project any more.
+    app.update(cx, |app, cx| app.select(second.clone(), cx));
+    cx.run_until_parked();
+    assert!(!exists(handle, "creation-held-elsewhere", cx));
+}
+
+#[gpui_kit::test]
+fn an_unknown_creation_after_leaving_its_project_is_said_until_read(cx: &mut TestAppContext) {
+    use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
+    let (_dir, data) = data();
+    let armed = Arc::new(AtomicBool::new(false));
+    let fault = armed.clone();
+    let data = data.with_fault(move |at| {
+        if at == FaultPoint::AfterPublish && fault.swap(false, Ordering::SeqCst) {
+            return Err(std::io::Error::other("injected"));
+        }
+        Ok(())
+    });
+    let (first, seed) = Seed::new(&data, "読書会");
+    let (second, other) = Seed::new(&data, "家計");
+    let (handle, app) = open(&data, cx);
+    app.update(cx, |app, cx| app.select(first.clone(), cx));
+    cx.run_until_parked();
+    fill_workbench(handle, &app, "会場を決める", "", cx);
+    armed.store(true, Ordering::SeqCst);
+    // The write runs on; the project changes before it ends.
+    let switcher = app.clone();
+    let away = second.clone();
+    with_window(handle, cx, |window, cx| {
+        window.click("create-entity", cx);
+        switcher.update(cx, |app, cx| app.select(away, cx));
+    });
+    assert_eq!(seed.all().len(), 1);
+
+    // Said once, by what holds it back, and kept through a creation here.
+    assert!(exists(handle, "creation-held-elsewhere", cx));
+    assert!(!exists(handle, "created-elsewhere", cx));
+    click(handle, "title", cx);
+    type_text(handle, "（家計）", cx);
+    click(handle, "create-entity", cx);
+    assert_eq!(other.all().len(), 1);
+    click(handle, "new-entity", cx);
+    assert!(exists(handle, "creation-held-elsewhere", cx));
+
+    // Read in its project, it is found made and no longer said anywhere.
+    app.update(cx, |app, cx| app.select(first.clone(), cx));
+    cx.run_until_parked();
+    assert!(matches!(
+        outcome_of(&app, cx),
+        Some(OutcomeKind::Unknown {
+            found: Found::Made,
+            ..
+        })
+    ));
+    app.update(cx, |app, cx| app.select(second.clone(), cx));
+    cx.run_until_parked();
+    assert!(!exists(handle, "creation-held-elsewhere", cx));
+}
+
+#[gpui_kit::test]
 fn a_creation_saved_after_leaving_its_project_says_where_it_went(cx: &mut TestAppContext) {
     let (_dir, data) = data();
     let (first, seed) = Seed::new(&data, "読書会");

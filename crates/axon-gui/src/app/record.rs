@@ -71,6 +71,14 @@ pub(super) struct Submitted {
     body: String,
 }
 
+impl Submitted {
+    /// Whether the workbench holds exactly `title` and `body`.
+    fn matches(workbench: &crate::Workbench, title: &str, body: &str, cx: &App) -> bool {
+        workbench.title().read(cx).value().as_ref() == title
+            && workbench.body().read(cx).value().as_ref() == body
+    }
+}
+
 /// The drafts the window keeps.
 pub(super) struct Drafts {
     /// The kind and lifecycle the next creation uses.
@@ -78,8 +86,9 @@ pub(super) struct Drafts {
     pub lifecycle: Lifecycle,
     /// The Group to create inside, for the project it belongs to.
     pub parent: Option<(ProjectId, EntityId)>,
-    /// Empty the workbench at the next render, when it still holds this.
-    pub clear: Option<Submitted>,
+    /// Empty the workbench at the next render, when it still holds one of these: creations
+    /// in several projects can be found made before it.
+    pub clear: Vec<Submitted>,
     /// Open this Entity once the next read of the project on screen shows it.
     pub open_on_load: Option<(ProjectId, EntityId)>,
     pub edits: std::collections::HashMap<(ProjectId, EntityId), EditDraft>,
@@ -90,7 +99,7 @@ pub(super) struct Drafts {
     pub asking: bool,
     /// Why no ID could be allocated for the last creation.
     pub create_error: Option<String>,
-    /// A creation saved after its project was left: the workbench was emptied for it.
+    /// A creation saved, or not saved, after its project was left.
     pub created_elsewhere: Option<String>,
 }
 
@@ -100,7 +109,7 @@ impl Default for Drafts {
             kind: Kind::Issue,
             lifecycle: Lifecycle::Undecided,
             parent: None,
-            clear: None,
+            clear: Vec::new(),
             open_on_load: None,
             edits: Default::default(),
             notes: Default::default(),
@@ -166,21 +175,17 @@ impl AxonApp {
     }
 
     /// Whether a publication of unknown outcome that no read has told about holds back a
-    /// save: any change of `entity` in the project on screen, or, without one, a creation in
-    /// any project, since the workbench is shared. Submitting again could make it twice.
+    /// save in the project on screen: any change of `entity`, or, without one, a creation.
+    /// Submitting again there could make it twice. Another project, written to its own store,
+    /// is not held back. While a creation waits, its project is also not loaded, since the
+    /// read that loads it tells what the creation left; this keeps the rule apart from that.
     fn awaits_check(&self, entity: Option<&EntityId>) -> bool {
-        match entity {
-            Some(entity) => self.explorer.project().is_some_and(|project| {
-                self.outcomes_of(project)
-                    .iter()
-                    .any(|o| o.is_pending() && o.change.entity() == entity)
-            }),
-            None => self
-                .outcomes
-                .values()
-                .flatten()
-                .any(|o| o.is_pending() && matches!(o.change, Change::Create { .. })),
-        }
+        self.explorer.project().is_some_and(|project| {
+            self.outcomes_of(project).iter().any(|o| match entity {
+                Some(entity) => o.is_pending() && o.change.entity() == entity,
+                None => o.is_pending_creation(),
+            })
+        })
     }
 
     /// Creates an Entity in the project on screen from the workbench. A value the core refuses
@@ -437,7 +442,7 @@ impl AxonApp {
         let key = (project.clone(), change.entity().clone());
         match change {
             Change::Create { entity, value } => {
-                self.drafts.clear = Some(Submitted {
+                self.drafts.clear.push(Submitted {
                     title: value.title.clone(),
                     body: value.description.clone(),
                 });
@@ -486,15 +491,11 @@ impl AxonApp {
 
     /// Empties the workbench once its creation is saved, unless more was typed since.
     pub(super) fn clear_saved_workbench(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(submitted) = self.drafts.clear.take() else {
-            return;
-        };
+        let submitted = std::mem::take(&mut self.drafts.clear);
         let workbench = self.workbench.clone();
-        let unchanged = {
-            let workbench = workbench.read(cx);
-            workbench.title().read(cx).value().as_ref() == submitted.title
-                && workbench.body().read(cx).value().as_ref() == submitted.body
-        };
+        let unchanged = submitted
+            .iter()
+            .any(|s| Submitted::matches(workbench.read(cx), &s.title, &s.body, cx));
         if unchanged {
             workbench.update(cx, |workbench, cx| workbench.clear(window, cx));
         }
@@ -510,27 +511,58 @@ impl AxonApp {
         }
     }
 
-    /// Says on the workbench that a creation in a project not on screen was not saved, or
-    /// may have been: its outcome waits in that project.
+    /// Says on the workbench that a creation in a project not on screen was not saved. One
+    /// whose publication stopped midway is said by [`Self::creations_held_elsewhere`] for as
+    /// long as it waits for a read.
     pub(super) fn creation_left_elsewhere(
         &mut self,
         project: &ProjectId,
         change: &Change,
         kind: &super::OutcomeKind,
     ) {
-        if let Change::Create { value, .. } = change {
+        if let Change::Create { value, .. } = change
+            && !matches!(kind, super::OutcomeKind::Unknown { .. })
+        {
             let name = self.project_name(project);
-            let what = match kind {
-                super::OutcomeKind::Unknown { .. } => format!(
-                    "保存が途中で止まり、作成されたか確認できていません。「{name}」に切り替えて読み直すまで、作成はできません"
-                ),
-                _ => "作成できませんでした。何も記録していません".into(),
-            };
             self.drafts.created_elsewhere = Some(format!(
-                "「{}」の「{name}」への作成: {what}。「{name}」に切り替えると理由を確かめられます。作成欄の入力はそのまま残しています。",
+                "「{}」の「{name}」への作成: 作成できませんでした。何も記録していません。「{name}」に切り替えると理由を確かめられます。作成欄の入力はそのまま残しています。",
                 value.title
             ));
         }
+    }
+
+    /// For each project not on screen with a creation that no read has told about yet, what
+    /// holds creating there back, ordered by project name. When the workbench still holds what
+    /// was submitted for it, says so, since creating here would make the same in this project.
+    pub fn creations_held_elsewhere(&self, cx: &App) -> Vec<String> {
+        let workbench = self.workbench.read(cx);
+        let ready = matches!(self.store, StoreState::Loaded(_)) && self.explorer.board().is_some();
+        let mut held: Vec<_> = self
+            .outcomes
+            .iter()
+            .filter(|(project, _)| Some(*project) != self.explorer.project())
+            .flat_map(|(project, kept)| kept.iter().map(move |o| (project, o)))
+            .filter_map(|(project, outcome)| match &outcome.change {
+                Change::Create { value, .. } if outcome.is_pending_creation() => {
+                    Some((self.project_name(project), value))
+                }
+                _ => None,
+            })
+            .map(|(name, value)| {
+                let mut line = format!(
+                    "「{}」の「{name}」への作成は、保存が途中で止まり、作成されたか確認できていません。「{name}」に切り替えて読み直すまで、「{name}」には作成できません。",
+                    value.title
+                );
+                if ready
+                    && Submitted::matches(workbench, &value.title, &value.description, cx)
+                {
+                    line.push_str("作成欄の入力はこの作成のものです。ここで「作成」すると、入力は表示中のプロジェクトへの作成に使われ、保存されると空になります。");
+                }
+                (name, line)
+            })
+            .collect();
+        held.sort();
+        held.into_iter().map(|(_, line)| line).collect()
     }
 
     /// Opens the Entity created last once the read shows it.
@@ -576,10 +608,7 @@ impl AxonApp {
     /// no read has told yet what a publication of unknown outcome left.
     pub(super) fn forget_create_outcome(&mut self, cx: &mut Context<Self>) {
         let mut changed = self.drafts.create_error.take().is_some();
-        // What holds every creation back stays said until a read tells.
-        if !self.awaits_check(None) {
-            changed |= self.drafts.created_elsewhere.take().is_some();
-        }
+        changed |= self.drafts.created_elsewhere.take().is_some();
         if let Some(project) = self.explorer.project()
             && let Some(kept) = self.outcomes.get_mut(project)
         {
@@ -824,6 +853,20 @@ impl AxonApp {
                                 })),
                         )
                     }),
+            );
+        }
+        let held = self.creations_held_elsewhere(cx);
+        if !held.is_empty() {
+            footer = footer.child(
+                div()
+                    .id("creation-held-elsewhere")
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .children(held.into_iter().map(|line| div().child(line)))
+                    .test_support(),
             );
         }
         div()
