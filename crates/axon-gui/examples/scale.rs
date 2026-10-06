@@ -1,12 +1,14 @@
-//! Seeds a project with thousands of records and times what the window derives from them.
+//! Seeds a management root with thousands of records, registers it, and times what the window
+//! derives from them.
 //!
 //! ```sh
-//! cargo run --release -p axon-gui --example scale -- <data-dir> [top-level-groups]
-//! AXON_GUI_DATA_DIR=<data-dir> cargo run --release -p axon-gui
+//! cargo run --release -p axon-gui --example scale -- <dir> [top-level-groups]
+//! AXON_GUI_DATA_DIR=<dir>/data cargo run --release -p axon-gui
 //! ```
 //!
-//! `<data-dir>` is an absolute path, as for `AXON_GUI_DATA_DIR`. One that does not exist yet
-//! is seeded first; one that exists has its seeded project measured again.
+//! `<dir>` is an absolute path. One that does not exist yet is seeded first: the management
+//! root `<dir>/root` gets the records, and the data directory `<dir>/data` registers it. One
+//! that exists has its seeded root measured again.
 //! Remove the directory of a seeding that failed or was stopped before measuring again.
 //! Each top-level Group holds 4 Groups of 10 Issues each, so
 //! the default of 110 Groups and 50 top-level Issues makes 5,000 Entities. Half the Issues
@@ -18,35 +20,35 @@ use axon::lifecycle::{
 };
 use axon::location::Location;
 use axon_gui::board::{Board, Filter, Layout, State, listing::listing};
-use axon_gui::project::AppData;
+use axon_gui::project::{AppData, ProjectConnection};
 use chrono::{TimeDelta, Utc};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-/// The name of the project the example seeds and measures.
-const PROJECT: &str = "大量データ";
 const SUBGROUPS: usize = 4;
 const ISSUES: usize = 10;
 const LOOSE_ISSUES: usize = 50;
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let dir = PathBuf::from(
-        args.next()
-            .expect("usage: scale <data-dir> [top-level-groups]"),
-    );
+    let dir = PathBuf::from(args.next().expect("usage: scale <dir> [top-level-groups]"));
     let groups: usize = args.next().map_or(110, |n| n.parse().expect("a count"));
     assert!(groups > 0, "at least one top-level Group");
+    assert!(dir.is_absolute(), "an absolute directory");
     let seed = !dir.exists();
-    let data = AppData::at(&dir).unwrap();
+    let root = dir.join("root");
+    let data = AppData::at(dir.join("data")).unwrap();
     if seed {
-        let registry = data.create_project(PROJECT).unwrap();
-        let project = registry.projects().last().unwrap().clone();
+        std::fs::create_dir_all(&root).unwrap();
+        // Initialized without Git, so a directory inside a worktree of this repository is
+        // seeded as it is outside one.
+        let location = Location::standalone(&root).unwrap();
+        location.init("axon").unwrap();
         let started = Instant::now();
         // Written through the core, as the CLI would; the window only reads.
-        Location::standalone(&data.project_root(&project.id))
-            .and_then(|location| location.open())
+        location
+            .open()
             .and_then(|mut store| {
                 store.update(|header, records, _| {
                     let mut seed = Seed::new(records.clone(), &header.prefix);
@@ -55,19 +57,17 @@ fn main() {
                 })
             })
             .unwrap();
-        println!(
-            "seeded {} in {:.1?}",
-            data.project_root(&project.id).display(),
-            started.elapsed()
-        );
+        println!("seeded {} in {:.1?}", root.display(), started.elapsed());
+        data.lock_instance().unwrap().register(&root).unwrap();
     }
+    let seeded = std::fs::canonicalize(&root).expect("a seeded root");
     let registry = data.load_registry().unwrap();
-    let project = registry
-        .projects()
+    let registered = registry
+        .roots()
         .iter()
-        .find(|project| project.name == PROJECT)
-        .expect("a seeded project");
-    let connection = data.connect(project);
+        .find(|registered| registered.path() == seeded)
+        .expect("the seeded root is registered");
+    let connection = ProjectConnection::new(registered.clone());
 
     let load = time(5, || connection.load().unwrap());
     let (_, records, view) = connection.load().unwrap();

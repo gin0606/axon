@@ -1,5 +1,6 @@
 fn main() {
-    // The lock is taken before any window opens and kept until the process ends.
+    // The lock is taken before any window opens. The main window keeps it, and closing that
+    // window ends the application, so it is held until the process ends.
     let startup = axon_gui::startup();
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)

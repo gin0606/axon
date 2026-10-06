@@ -217,7 +217,7 @@ impl AxonApp {
                 .id("list-empty")
                 .text_sm()
                 .text_color(muted)
-                .child("このプロジェクトにはまだ Issue・Group がありません。")
+                .child("このリポジトリにはまだ Issue・Group がありません。")
                 .into_any_element()
         } else if listing.rows.is_empty() {
             div()

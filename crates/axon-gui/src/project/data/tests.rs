@@ -1,8 +1,10 @@
 use super::*;
+use crate::project::ProjectConnection;
 use axon::lifecycle::{
     Context, Kind, Label, Lifecycle,
     record::{Current, Entry, new_entity_id},
 };
+use axon::location::Location;
 use std::{
     collections::BTreeSet,
     io::{BufRead, BufReader},
@@ -16,39 +18,17 @@ fn data() -> (tempfile::TempDir, AppData) {
     (dir, data)
 }
 
-fn no_fault(_: FaultPoint) -> io::Result<()> {
-    Ok(())
-}
-
-fn fail_at(target: Step) -> impl FnMut(FaultPoint) -> io::Result<()> {
-    fail_on(FaultPoint::Before(target))
-}
-
-fn fail_on(target: FaultPoint) -> impl FnMut(FaultPoint) -> io::Result<()> {
-    move |point| {
-        if point == target {
-            Err(io::Error::other(format!("injected at {point:?}")))
-        } else {
-            Ok(())
-        }
-    }
-}
-
-fn counter(start: u64) -> impl FnMut() -> u64 {
-    let mut next = start;
-    move || {
-        next += 1;
-        next
-    }
-}
-
-fn entities(connection: &ProjectConnection) -> usize {
-    connection.read(|_, _, view| view.known().count()).unwrap()
+/// A management root initialized as `axon init` would, at `dir/name`.
+fn store(dir: &Path, name: &str) -> PathBuf {
+    let root = dir.join(name);
+    fs::create_dir_all(&root).unwrap();
+    Location::explicit(&root).unwrap().init("axon").unwrap();
+    root
 }
 
 /// Writes an Entity as the CLI would, through the core and not the window's connection.
-fn create_entity(connection: &ProjectConnection, title: &str) {
-    let mut store = Location::standalone(connection.root())
+fn create_entity(root: &Path, title: &str) {
+    let mut store = Location::explicit(root)
         .and_then(|location| location.open())
         .unwrap();
     let outcome = store.update(|header, records, _| {
@@ -76,407 +56,374 @@ fn create_entity(connection: &ProjectConnection, title: &str) {
     assert!(outcome.is_ok(), "{outcome:?}");
 }
 
-#[test]
-fn projects_get_separate_stores_that_survive_a_restart() {
-    let (_dir, data) = data();
-    let registry = data.load_registry().unwrap();
-    assert!(registry.projects().is_empty());
-    data.create_project("読書会").unwrap();
-    let registry = data.create_project(" 家計簿 ").unwrap();
-    let [reading, budget] = registry.projects() else {
-        panic!("two projects expected: {registry:?}");
-    };
-    assert_eq!(
-        (reading.name.as_str(), budget.name.as_str()),
-        ("読書会", "家計簿")
-    );
-    assert!([reading, budget].iter().all(|p| p.status == Status::Ready));
-    assert_ne!(reading.id, budget.id);
+fn titles(root: &ProjectRoot) -> Vec<String> {
+    ProjectConnection::new(root.clone())
+        .read(|_, _, view| {
+            let mut titles: Vec<_> = view
+                .known()
+                .filter_map(|id| view.current(id))
+                .map(|current| current.title.clone())
+                .collect();
+            titles.sort();
+            titles
+        })
+        .unwrap()
+}
 
-    for project in [reading, budget] {
-        let root = data.project_root(&project.id);
-        assert!(
-            root.is_absolute() && root.starts_with(data.dir()),
-            "{root:?}"
-        );
-        assert!(root.join(".axon/header.json").is_file());
-        assert!(root.join(".axon/records").is_dir());
-        let prefix = data
-            .connect(project)
-            .read(|header, _, _| header.prefix.clone())
-            .unwrap();
-        assert_eq!(prefix, STORE_PREFIX);
+/// Every file and directory under `dir` with its length and modification time.
+fn snapshot(dir: &Path) -> Vec<(PathBuf, u64, std::time::SystemTime)> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        if metadata.is_dir() {
+            pending.extend(fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+        }
+        found.push((path, metadata.len(), metadata.modified().unwrap()));
     }
+    found.sort();
+    found
+}
 
-    let (a, b) = (data.connect(reading), data.connect(budget));
-    create_entity(&a, "最初の本を選ぶ");
-    assert_eq!((entities(&a), entities(&b)), (1, 0));
+/// Takes the lock of `data` again after its holder in this process dropped it. A child process
+/// another test is starting may hold a copy of the descriptor until it executes; the lock is
+/// free once it does.
+fn relock(data: &AppData) -> InstanceLock {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match data.lock_instance() {
+            Ok(lock) => return lock,
+            Err(InstanceError::AlreadyRunning) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10))
+            }
+            Err(error) => panic!("{error}"),
+        }
+    }
+}
 
-    // A new process sees the same list and the same roots.
+#[test]
+fn registered_roots_are_read_apart_and_survive_a_restart() {
+    let (dir, data) = data();
+    let reading = store(dir.path(), "読書会");
+    let budget = store(dir.path(), "家計簿");
+    create_entity(&reading, "最初の本を選ぶ");
+    create_entity(&budget, "予算を決める");
+
+    let lock = data.lock_instance().unwrap();
+    assert!(data.load_registry().unwrap().roots().is_empty());
+    let (_, first) = lock.register(&reading).unwrap();
+    let (registry, second) = lock.register(&budget).unwrap();
+    assert_eq!(registry.roots(), [first.clone(), second.clone()]);
+    assert_eq!(first.path(), fs::canonicalize(&reading).unwrap());
+    assert_eq!(
+        (first.name(), second.name()),
+        ("読書会".into(), "家計簿".into())
+    );
+    assert_eq!(titles(&first), ["最初の本を選ぶ"]);
+    assert_eq!(titles(&second), ["予算を決める"]);
+
+    // A new process sees the same list.
+    drop(lock);
     let restarted = AppData::at(data.dir().to_path_buf()).unwrap();
-    let reloaded = restarted.load_registry().unwrap();
-    assert_eq!(reloaded, registry);
-    let reading = reloaded.get(&reading.id).unwrap();
-    assert_eq!(restarted.connect(reading), a);
-    assert_eq!(entities(&restarted.connect(reading)), 1);
+    let _lock = relock(&restarted);
+    assert_eq!(restarted.load_registry().unwrap(), registry);
 }
 
 #[test]
-fn invalid_names_write_nothing() {
-    let (_dir, data) = data();
-    let registry = data.create_project("読書会").unwrap();
-    for (name, expected) in [
-        ("  ", NameError::Empty),
-        ("読書会", NameError::Duplicate),
-        ("a\tb", NameError::ControlCharacter),
+fn registration_needs_a_directory_with_a_header_and_writes_nothing_otherwise() {
+    let (dir, data) = data();
+    let lock = data.lock_instance().unwrap();
+    let empty = dir.path().join("空");
+    fs::create_dir(&empty).unwrap();
+    let headless = dir.path().join("headless");
+    fs::create_dir_all(headless.join(".axon/records")).unwrap();
+    let file = dir.path().join("file.txt");
+    fs::write(&file, "").unwrap();
+    let stray = dir.path().join("stray");
+    fs::create_dir(&stray).unwrap();
+    fs::write(stray.join(".axon"), "").unwrap();
+
+    for (path, refused) in [
+        (&empty, "NotAStore"),
+        (&headless, "NotAStore"),
+        (&stray, "NotAStore"),
+        (&file, "NotADirectory"),
+        (&dir.path().join("missing"), "Unreachable"),
     ] {
-        match data.create_project(name) {
-            Err(CreateError::Name(error)) => assert_eq!(error, expected),
-            other => panic!("{name:?}: {other:?}"),
-        }
-    }
-    assert_eq!(data.load_registry().unwrap(), registry);
-    assert_eq!(
-        fs::read_dir(data.dir().join(PROJECTS_DIRECTORY))
-            .unwrap()
-            .count(),
-        1
-    );
-}
-
-#[test]
-fn a_failure_before_registration_leaves_nothing_to_finish() {
-    for step in [Step::Directory, Step::Register] {
-        let (_dir, data) = data();
-        let before = data.create_project("既存").unwrap();
-        let error = data
-            .create_project_with("読書会", &mut rand::random, &mut fail_at(step))
-            .unwrap_err();
+        let error = lock.register(path).unwrap_err();
         assert!(
-            matches!(&error, CreateError::Failed { step: failed, .. } if *failed == step),
-            "{error:?}"
+            format!("{error:?}").starts_with(refused),
+            "{path:?}: {error:?}"
         );
-        assert_eq!(data.load_registry().unwrap(), before);
-        assert_eq!(
-            fs::read_dir(data.dir().join(PROJECTS_DIRECTORY))
-                .unwrap()
-                .count(),
-            1,
-            "{step:?} left a directory behind"
-        );
-        // Retrying is creating anew.
-        let after = data.create_project("読書会").unwrap();
-        assert_eq!(after.projects().len(), 2);
     }
-}
-
-#[test]
-fn an_interrupted_initialization_is_registered_and_can_be_finished() {
-    let (_dir, data) = data();
-    let error = data
-        .create_project_with("読書会", &mut rand::random, &mut fail_at(Step::Initialize))
-        .unwrap_err();
     assert!(matches!(
-        error,
-        CreateError::Failed {
-            step: Step::Initialize,
-            ..
-        }
+        lock.register(&empty),
+        Err(UpdateError::NotAStore(header)) if header.ends_with(".axon/header.json")
     ));
-    let registry = data.load_registry().unwrap();
-    let [project] = registry.projects() else {
-        panic!("{registry:?}");
-    };
-    assert_eq!(project.status, Status::Creating);
-    let root = data.project_root(&project.id);
-    assert!(!root.join(".axon").exists());
-    // Residue of an initialization that stopped half way does not block finishing.
-    fs::create_dir_all(root.join(".axon/records")).unwrap();
-    assert!(data.connect(project).read(|_, _, _| ()).is_err());
-
-    let finished = data.finish_creation(&project.id).unwrap();
-    assert_eq!(finished.get(&project.id).unwrap().status, Status::Ready);
-    assert_eq!(data.load_registry().unwrap(), finished);
-    assert_eq!(entities(&data.connect(project)), 0);
-    // Finishing a ready project changes nothing.
-    assert_eq!(data.finish_creation(&project.id).unwrap(), finished);
+    assert!(!data.dir().join(REGISTRY_FILE).exists());
 }
 
 #[test]
-fn finishing_keeps_a_store_that_already_exists() {
-    let (_dir, data) = data();
-    data.create_project_with("読書会", &mut rand::random, &mut fail_at(Step::Finish))
-        .unwrap_err();
-    let registry = data.load_registry().unwrap();
-    let project = registry.projects()[0].clone();
-    assert_eq!(project.status, Status::Creating);
-    let connection = data.connect(&project);
-    create_entity(&connection, "消えてはいけない記録");
-    let header = fs::read(data.project_root(&project.id).join(".axon/header.json")).unwrap();
-
-    let finished = data.finish_creation(&project.id).unwrap();
-    assert_eq!(finished.get(&project.id).unwrap().status, Status::Ready);
-    assert_eq!(entities(&connection), 1);
-    assert_eq!(
-        fs::read(data.project_root(&project.id).join(".axon/header.json")).unwrap(),
-        header
-    );
-}
-
-#[test]
-fn finishing_refuses_foreign_files() {
-    let (_dir, data) = data();
-    data.create_project_with("読書会", &mut rand::random, &mut fail_at(Step::Initialize))
-        .unwrap_err();
-    let registry = data.load_registry().unwrap();
-    let id = registry.projects()[0].id.clone();
-    let foreign = data.project_root(&id).join(".axon/notes.txt");
-    fs::create_dir_all(foreign.parent().unwrap()).unwrap();
-    fs::write(&foreign, "手書きのメモ").unwrap();
-    let error = data.finish_creation(&id).unwrap_err();
-    assert!(matches!(
-        error,
-        CreateError::Failed {
-            step: Step::Initialize,
-            ..
-        }
-    ));
-    assert_eq!(fs::read_to_string(&foreign).unwrap(), "手書きのメモ");
+fn the_same_root_is_registered_once_however_it_is_named() {
+    let (dir, data) = data();
+    let root = store(dir.path(), "repo");
+    let lock = data.lock_instance().unwrap();
+    let (registry, _) = lock.register(&root).unwrap();
+    let mut aliases = vec![root.join("."), root.join("../repo")];
+    #[cfg(unix)]
+    {
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        aliases.push(link);
+    }
+    for alias in aliases {
+        assert!(
+            matches!(lock.register(&alias), Err(UpdateError::Duplicate(_))),
+            "{alias:?}"
+        );
+    }
     assert_eq!(data.load_registry().unwrap(), registry);
 }
 
 #[test]
-fn an_existing_directory_is_never_reused() {
-    let (_dir, data) = data();
-    let taken = ProjectId::from_bits(1);
-    let leftover = data.project_root(&taken);
-    fs::create_dir_all(&leftover).unwrap();
-    fs::write(leftover.join("keep"), "残す").unwrap();
-    let registry = data
-        .create_project_with("読書会", &mut counter(0), &mut no_fault)
-        .unwrap();
-    assert_eq!(registry.projects()[0].id, ProjectId::from_bits(2));
-    assert_eq!(fs::read_to_string(leftover.join("keep")).unwrap(), "残す");
+fn unregistering_leaves_the_store_untouched() {
+    let (dir, data) = data();
+    let root = store(dir.path(), "repo");
+    create_entity(&root, "残る記録");
+    let other = store(dir.path(), "other");
+    let lock = data.lock_instance().unwrap();
+    let (_, registered) = lock.register(&root).unwrap();
+    let (_, kept) = lock.register(&other).unwrap();
+    let before = snapshot(&root);
+
+    let registry = lock.unregister(&registered).unwrap();
+    assert_eq!(registry.roots(), [kept]);
+    assert_eq!(data.load_registry().unwrap(), registry);
+    assert_eq!(snapshot(&root), before);
+    assert!(matches!(
+        lock.unregister(&registered),
+        Err(UpdateError::Unknown(_))
+    ));
+    // It can be registered again.
+    lock.register(&root).unwrap();
 }
 
 #[test]
-fn unreadable_data_is_an_error_not_an_empty_list() {
-    let (_dir, data) = data();
-    let registry = data.create_project("読書会").unwrap();
-    let project = registry.projects()[0].clone();
-
-    fs::remove_dir_all(data.project_root(&project.id)).unwrap();
-    assert!(data.connect(&project).read(|_, _, _| ()).is_err());
-    assert!(
-        !data.project_root(&project.id).exists(),
-        "a read never initializes"
-    );
-
+fn an_unreadable_registry_is_an_error_and_is_not_overwritten() {
+    let (dir, data) = data();
+    let root = store(dir.path(), "repo");
+    let lock = data.lock_instance().unwrap();
     let path = data.dir().join(REGISTRY_FILE);
-    fs::write(&path, "{ broken").unwrap();
-    assert!(matches!(
-        data.load_registry(),
-        Err(RegistryError::Decode(DecodeError::Invalid(_)))
-    ));
-    fs::write(&path, r#"{"format":9,"projects":[]}"#).unwrap();
-    assert!(matches!(
-        data.load_registry(),
-        Err(RegistryError::Decode(DecodeError::Format(9)))
-    ));
+    for (content, expected) in [
+        ("{ broken", "Invalid"),
+        (r#"{"format":9,"roots":[]}"#, "Format"),
+    ] {
+        fs::write(&path, content).unwrap();
+        let error = data.load_registry().unwrap_err();
+        assert!(
+            format!("{error:?}").contains(expected),
+            "{content}: {error:?}"
+        );
+        assert!(matches!(lock.register(&root), Err(UpdateError::Read(_))));
+        let registered = ProjectRoot::new(fs::canonicalize(&root).unwrap()).unwrap();
+        assert!(matches!(
+            lock.unregister(&registered),
+            Err(UpdateError::Read(_))
+        ));
+        assert_eq!(fs::read_to_string(&path).unwrap(), content);
+    }
     fs::remove_file(&path).unwrap();
     fs::create_dir(&path).unwrap();
     assert!(matches!(data.load_registry(), Err(RegistryError::Io(_))));
 }
 
 #[test]
-fn a_registered_project_without_its_directory_can_be_finished() {
-    let (_dir, data) = data();
-    // What a registration whose replacement landed but did not become durable can leave.
-    let id = ProjectId::from_bits(7);
-    let registry = Registry::default()
-        .with_creating(id.clone(), "読書会")
+fn the_files_of_earlier_builds_are_neither_read_nor_removed() {
+    let (dir, data) = data();
+    fs::create_dir_all(data.dir().join("projects/000000000001/.axon/records")).unwrap();
+    let old = r#"{"format":1,"projects":[]}"#;
+    fs::write(data.dir().join("projects.json"), old).unwrap();
+    let before = snapshot(&data.dir().join("projects"));
+
+    assert!(data.load_registry().unwrap().roots().is_empty());
+    let lock = data.lock_instance().unwrap();
+    lock.register(&store(dir.path(), "repo")).unwrap();
+    assert_eq!(
+        fs::read_to_string(data.dir().join("projects.json")).unwrap(),
+        old
+    );
+    assert_eq!(snapshot(&data.dir().join("projects")), before);
+}
+
+/// Runs Git in `repository` without the user's configuration, feeding it `input`.
+fn git(repository: &Path, args: &[&str], input: &str) -> String {
+    let mut command = Command::new("git");
+    // A Git hook running the tests sets variables that would point Git at another repository.
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(name);
+        }
+    }
+    let mut child = command
+        .args(args)
+        .current_dir(repository)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
         .unwrap();
-    fs::create_dir_all(data.dir()).unwrap();
-    fs::write(data.dir().join(REGISTRY_FILE), registry.encode()).unwrap();
-    assert!(!data.project_root(&id).exists());
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "git {args:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
 
-    let finished = data.finish_creation(&id).unwrap();
-    assert_eq!(finished.get(&id).unwrap().status, Status::Ready);
-    assert_eq!(entities(&data.connect(finished.get(&id).unwrap())), 0);
+/// A Git repository whose subdirectory `sub` is a management root holding one Entity, added to
+/// the index.
+fn repository_with_a_store(dir: &Path) -> (PathBuf, PathBuf) {
+    let repository = dir.join("repository");
+    fs::create_dir(&repository).unwrap();
+    git(&repository, &["init", "-q"], "");
+    let root = repository.join("sub");
+    fs::create_dir(&root).unwrap();
+    Location::explicit(&root).unwrap().init("axon").unwrap();
+    create_entity(&root, "Git の中の記録");
+    git(&repository, &["add", "."], "");
+    (repository, root)
+}
+
+/// Leaves `path` (relative to the repository) unmerged in the index, as a conflicting merge
+/// does.
+fn conflict(repository: &Path, path: &str) {
+    let blob = git(repository, &["hash-object", "-w", "--stdin"], "");
+    let blob = blob.trim();
+    let zero = "0".repeat(40);
+    git(
+        repository,
+        &["update-index", "--index-info"],
+        &format!("0 {zero}\t{path}\n100644 {blob} 2\t{path}\n100644 {blob} 3\t{path}\n"),
+    );
 }
 
 #[test]
-fn changes_are_made_to_the_registry_on_disk() {
-    let (_dir, data) = data();
-    data.create_project("読書会").unwrap();
-    // Another view of the same data creates a project; a later creation keeps it.
-    let other = AppData::at(data.dir().to_path_buf()).unwrap();
-    other.create_project("家計簿").unwrap();
-    let registry = data.create_project("旅行").unwrap();
-    let names: Vec<_> = registry
-        .projects()
-        .iter()
-        .map(|p| p.name.as_str())
-        .collect();
-    assert_eq!(names, ["読書会", "家計簿", "旅行"]);
-    assert!(matches!(
-        data.create_project("家計簿"),
-        Err(CreateError::Name(NameError::Duplicate))
-    ));
-}
-
-#[test]
-fn a_data_directory_inside_a_repository_is_not_treated_as_git() {
-    // An empty `.git` makes Git discovery fail; the application's own roots never consult it.
+fn a_root_inside_a_git_repository_is_read_without_changing_it() {
     let dir = tempfile::tempdir().unwrap();
-    fs::create_dir(dir.path().join(".git")).unwrap();
+    let (repository, root) = repository_with_a_store(dir.path());
     let data = AppData::at(dir.path().join("data")).unwrap();
-    let registry = data.create_project("読書会").unwrap();
-    let project = &registry.projects()[0];
-    assert_eq!(entities(&data.connect(project)), 0);
-    assert!(!dir.path().join(".git/axon-init.lock").exists());
+    let lock = data.lock_instance().unwrap();
+    let (_, registered) = lock.register(&root).unwrap();
+    let store = root.join(".axon");
+    let before = snapshot(&store);
+    let index = fs::read(repository.join(".git/index")).unwrap();
+    assert_eq!(titles(&registered), ["Git の中の記録"]);
+    assert_eq!(snapshot(&store), before);
+    assert_eq!(fs::read(repository.join(".git/index")).unwrap(), index);
 }
 
 #[test]
-fn a_lost_registry_beside_existing_stores_is_not_a_first_start() {
-    let (_dir, data) = data();
-    // Directories without a store are what failed creations leave; they do not count.
-    fs::create_dir_all(data.dir().join(PROJECTS_DIRECTORY).join("000000000001")).unwrap();
-    assert_eq!(data.load_registry().unwrap(), Registry::default());
-
-    data.create_project("読書会").unwrap();
-    fs::remove_file(data.dir().join(REGISTRY_FILE)).unwrap();
-    assert!(matches!(
-        data.load_registry(),
-        Err(RegistryError::Missing { .. })
-    ));
-    assert!(matches!(
-        data.create_project("家計簿"),
-        Err(CreateError::Failed {
-            step: Step::Read,
-            ..
-        })
-    ));
+fn an_unmerged_store_is_registered_and_its_read_fails_on_the_merge() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repository, root) = repository_with_a_store(dir.path());
+    let data = AppData::at(dir.path().join("data")).unwrap();
+    let lock = data.lock_instance().unwrap();
+    // Only the header decides the registration; the merge is the read's error.
+    conflict(&repository, "sub/.axon/.gitignore");
+    let (_, registered) = lock.register(&root).unwrap();
+    let read = || {
+        ProjectConnection::new(registered.clone())
+            .read(|_, _, _| ())
+            .unwrap_err()
+    };
     assert!(
-        !data.dir().join(REGISTRY_FILE).exists(),
-        "nothing is written over it"
+        matches!(read(), axon::Error::Unmerged { .. }),
+        "{:?}",
+        read()
+    );
+
+    // A header the merge left out is explained by the merge, not reported as missing.
+    conflict(&repository, "sub/.axon/header.json");
+    fs::remove_file(root.join(".axon/header.json")).unwrap();
+    assert!(
+        matches!(read(), axon::Error::Unmerged { .. }),
+        "{:?}",
+        read()
     );
 }
 
 #[cfg(unix)]
 #[test]
-fn a_store_that_cannot_be_looked_at_is_not_absent() {
+fn a_registry_that_cannot_be_written_stays_as_it_was() {
     use std::os::unix::fs::PermissionsExt;
-    let (_dir, data) = data();
-    let registry = data.create_project("読書会").unwrap();
-    fs::remove_file(data.dir().join(REGISTRY_FILE)).unwrap();
-    let root = data.project_root(&registry.projects()[0].id);
-    fs::set_permissions(&root, fs::Permissions::from_mode(0o000)).unwrap();
-    let searchable = fs::symlink_metadata(root.join(".axon")).is_ok();
-    let loaded = data.load_registry();
-    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
-    if searchable {
+    let (dir, data) = data();
+    let lock = data.lock_instance().unwrap();
+    let (registry, kept) = lock.register(&store(dir.path(), "kept")).unwrap();
+    let added = store(dir.path(), "added");
+    fs::set_permissions(data.dir(), fs::Permissions::from_mode(0o555)).unwrap();
+    let writable = fs::File::create(data.dir().join("probe")).is_ok();
+    let registered = lock.register(&added);
+    let unregistered = lock.unregister(&kept);
+    fs::set_permissions(data.dir(), fs::Permissions::from_mode(0o755)).unwrap();
+    if writable {
         return; // Permissions do not apply to this user (root); nothing to observe.
     }
-    assert!(matches!(loaded, Err(RegistryError::Io(_))), "{loaded:?}");
+    assert!(
+        matches!(registered, Err(UpdateError::Save(_))),
+        "{registered:?}"
+    );
+    assert!(
+        matches!(unregistered, Err(UpdateError::Save(_))),
+        "{unregistered:?}"
+    );
+    assert_eq!(data.load_registry().unwrap(), registry);
 }
 
 #[test]
-fn failures_after_registration_name_the_project() {
-    for step in [Step::Initialize, Step::Finish] {
-        let (_dir, data) = data();
-        let error = data
-            .create_project_with("読書会", &mut rand::random, &mut fail_at(step))
+fn a_registered_store_with_parts_missing_is_not_empty() {
+    let (dir, data) = data();
+    let root = store(dir.path(), "repo");
+    let lock = data.lock_instance().unwrap();
+    let (_, registered) = lock.register(&root).unwrap();
+    // Git keeps no empty directory, so a checkout of a store without records has none: the
+    // store is empty, as the CLI reads it.
+    fs::remove_dir_all(root.join(".axon/records")).unwrap();
+    assert!(titles(&registered).is_empty());
+    // `.axon` replaced by a file holds no header either.
+    fs::remove_dir_all(root.join(".axon")).unwrap();
+    fs::write(root.join(".axon"), "").unwrap();
+    for removed in [root.join(".axon/header.json"), root.clone()] {
+        if removed.is_dir() {
+            fs::remove_dir_all(&removed).unwrap();
+        } else if removed.exists() {
+            fs::remove_file(&removed).unwrap();
+        }
+        let error = ProjectConnection::new(registered.clone())
+            .read(|_, _, _| ())
             .unwrap_err();
-        let registry = data.load_registry().unwrap();
-        assert_eq!(
-            error.project(),
-            Some(&registry.projects()[0].id),
-            "{step:?}"
-        );
-    }
-    let (_dir, data) = data();
-    let error = data
-        .create_project_with("読書会", &mut rand::random, &mut fail_at(Step::Register))
-        .unwrap_err();
-    assert_eq!(error.project(), None);
-}
-
-#[test]
-fn a_registration_replaced_but_not_durable_can_be_finished() {
-    let (_dir, data) = data();
-    let error = data
-        .create_project_with(
-            "読書会",
-            &mut rand::random,
-            &mut fail_on(FaultPoint::Replaced(Step::Register)),
-        )
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        CreateError::Failed {
-            step: Step::Register,
-            ..
-        }
-    ));
-    let registry = data.load_registry().unwrap();
-    let project = registry.projects()[0].clone();
-    assert_eq!(error.project(), Some(&project.id));
-    assert_eq!(project.status, Status::Creating);
-    assert!(data.project_root(&project.id).is_dir());
-    let finished = data.finish_creation(&project.id).unwrap();
-    assert_eq!(finished.get(&project.id).unwrap().status, Status::Ready);
-}
-
-#[test]
-fn a_finish_replaced_but_not_durable_is_ready_and_names_the_project() {
-    let (_dir, data) = data();
-    let error = data
-        .create_project_with(
-            "読書会",
-            &mut rand::random,
-            &mut fail_on(FaultPoint::Replaced(Step::Finish)),
-        )
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        CreateError::Failed {
-            step: Step::Finish,
-            ..
-        }
-    ));
-    let registry = data.load_registry().unwrap();
-    assert_eq!(error.project(), Some(&registry.projects()[0].id));
-    assert_eq!(registry.projects()[0].status, Status::Ready);
-}
-
-#[test]
-fn a_store_with_parts_missing_is_not_empty() {
-    let (_dir, data) = data();
-    let registry = data.create_project("読書会").unwrap();
-    let project = &registry.projects()[0];
-    let root = data.project_root(&project.id);
-    for (remove, missing) in [
-        (root.join(".axon/records"), root.join(".axon/records")),
-        (
-            root.join(".axon/header.json"),
-            root.join(".axon/header.json"),
-        ),
-        (root.clone(), root.clone()),
-    ] {
-        if remove.is_dir() {
-            fs::remove_dir_all(&remove).unwrap();
-        } else {
-            fs::remove_file(&remove).unwrap();
-        }
-        let error = data.connect(project).read(|_, _, _| ()).unwrap_err();
         let text = error.to_string();
         assert!(
-            text.contains("missing") && text.contains(&missing.display().to_string()),
+            text.contains("missing") && text.contains(&removed.display().to_string()),
             "{text}"
         );
         assert!(!text.contains("axon init"), "{text}");
     }
+    assert!(!root.exists(), "a read never creates a store");
+    fs::write(&root, "").unwrap();
+    let error = ProjectConnection::new(registered.clone())
+        .read(|_, _, _| ())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("not a directory") && error.contains(&root.display().to_string()),
+        "{error}"
+    );
+    fs::remove_file(&root).unwrap();
+    assert_eq!(data.load_registry().unwrap().roots(), [registered]);
 }
 
 #[test]
@@ -488,26 +435,18 @@ fn the_data_directory_is_absolute() {
 }
 
 #[test]
-fn a_second_instance_lock_is_refused_until_the_first_is_released() {
-    let (_dir, data) = data();
+fn only_the_holder_of_the_instance_lock_changes_the_registry() {
+    let (dir, data) = data();
     let first = data.lock_instance().unwrap();
+    // A second instance cannot take the lock, and without it there is no way to register.
     assert!(matches!(
         data.lock_instance(),
         Err(InstanceError::AlreadyRunning)
     ));
+    let (registry, _) = first.register(&store(dir.path(), "repo")).unwrap();
     drop(first);
-    // A child process another test is starting may hold a copy of the descriptor until it
-    // executes; the lock is free once it does.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        match data.lock_instance() {
-            Ok(_) => break,
-            Err(InstanceError::AlreadyRunning) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(10))
-            }
-            Err(error) => panic!("{error}"),
-        }
-    }
+    let second = relock(&data);
+    assert_eq!(second.data().load_registry().unwrap(), registry);
 }
 
 const LOCK_CHILD_DIR: &str = "AXON_GUI_TEST_LOCK_DIR";

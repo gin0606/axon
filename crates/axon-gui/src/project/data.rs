@@ -1,25 +1,24 @@
-//! The application data directory: the single-instance lock, the registry file and one
-//! management root per project. Every function here blocks on the filesystem; the window
-//! calls them on the background executor.
+//! The application data directory: the single-instance lock and the file listing the
+//! registered management roots. Every function here blocks on the filesystem; the window calls
+//! them on the background executor.
 //!
 //! ```text
 //! <data directory>/
-//!     instance.lock          held while the application runs
-//!     projects.json          the registry: IDs, names and creation status
-//!     projects/<id>/.axon/   each project's store, in the format the CLI uses
+//!     instance.lock   held while the application runs
+//!     roots.json      the registry: the registered management roots
 //! ```
+//!
+//! `projects.json` and `projects/`, which earlier builds kept their own stores in, are neither
+//! read nor removed.
 
-use super::{
-    connection::ProjectConnection,
-    registry::{ChangeError, DecodeError, NameError, Project, ProjectId, Registry, Status},
-};
-use axon::location::{Location, Presence, presence};
+use super::registry::{ChangeError, DecodeError, ProjectRoot, Registry};
+use axon::file::HEADER_FILE;
 use std::{
     fmt,
     fs::{self, File, OpenOptions, TryLockError},
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::Mutex,
 };
 
 /// The environment variable that replaces the data directory, for trying the application or
@@ -31,56 +30,13 @@ pub const APP_DIRECTORY: &str = "Axon";
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub const APP_DIRECTORY: &str = "axon";
 pub const INSTANCE_LOCK: &str = "instance.lock";
-pub const REGISTRY_FILE: &str = "projects.json";
-pub const PROJECTS_DIRECTORY: &str = "projects";
-/// The ID prefix of every project's store: Entity IDs read `axon-…` as in the CLI's default
-/// examples, whatever the project is called.
-pub const STORE_PREFIX: &str = "axon";
+pub const REGISTRY_FILE: &str = "roots.json";
 
 /// The location of the application's data.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppData {
     dir: PathBuf,
-    fault: Fault,
 }
-
-/// Where a test makes creating or finishing a project fail.
-#[doc(hidden)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FaultPoint {
-    /// Before the step does anything.
-    Before(Step),
-    /// After the step replaced the registry file, before the replacement is made durable.
-    Replaced(Step),
-}
-
-/// A failure injected into creation by a test of the window; the application never sets one.
-#[derive(Clone, Default)]
-struct Fault(Option<Arc<dyn Fn(FaultPoint) -> io::Result<()> + Send + Sync>>);
-impl Fault {
-    fn inject(&self, point: FaultPoint) -> io::Result<()> {
-        match &self.0 {
-            Some(fault) => fault(point),
-            None => Ok(()),
-        }
-    }
-}
-impl fmt::Debug for Fault {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(if self.0.is_some() {
-            "Fault(set)"
-        } else {
-            "Fault(none)"
-        })
-    }
-}
-/// Two locations of the same directory are equal whatever their test hooks.
-impl PartialEq for Fault {
-    fn eq(&self, _: &Self) -> bool {
-        true
-    }
-}
-impl Eq for Fault {}
 
 /// Why the data directory could not be determined.
 #[derive(Debug, PartialEq, Eq)]
@@ -122,112 +78,68 @@ impl fmt::Display for InstanceError {
     }
 }
 
-/// Held for the lifetime of the application. The OS releases it when the process ends, even
-/// abnormally, so a crash never blocks the next start.
-#[derive(Debug)]
-pub struct InstanceLock {
-    _file: File,
-}
-
 /// Why the registry could not be read. A registry that cannot be read is never treated as
 /// empty and never overwritten.
 #[derive(Debug)]
 pub enum RegistryError {
     Io(io::Error),
     Decode(DecodeError),
-    /// There is no registry file, but `projects/` holds a store: the list was lost, and an
-    /// empty one would hide those projects and be written over them.
-    Missing {
-        store: PathBuf,
-    },
 }
 impl fmt::Display for RegistryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => write!(f, "{error}"),
             Self::Decode(error) => write!(f, "{error}"),
-            Self::Missing { store } => write!(
-                f,
-                "{REGISTRY_FILE} is missing although a project store exists at {}",
-                store.display()
-            ),
         }
     }
 }
 
-/// The step of creating a project that failed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Step {
-    /// Reading the registry, or finding the project in it. Nothing was written.
-    Read,
-    /// Making the project's directory. Nothing is registered.
-    Directory,
-    /// Adding the project to the registry in [`Status::Creating`]. When the replacement of the
-    /// file failed, nothing is registered; when only making it durable failed, the project is
-    /// registered and its directory kept. Read the registry to tell which.
-    Register,
-    /// Initializing the store. The project is registered and finishing it can be retried.
-    Initialize,
-    /// Marking the project ready. The store exists; finishing it can be retried, and the
-    /// registry may already say ready.
-    Finish,
-}
-
-/// Why creating or finishing a project failed.
+/// Why registering or unregistering a root changed nothing, or may not have.
 #[derive(Debug)]
-pub enum CreateError {
-    /// The name was refused; nothing was written.
-    Name(NameError),
-    /// `project` is the project the failure concerns once it may be registered: from a
-    /// replaced registration on, and for every failure of finishing.
-    Failed {
-        step: Step,
-        reason: String,
-        project: Option<ProjectId>,
+pub enum UpdateError {
+    /// The chosen path cannot be resolved or looked at.
+    Unreachable {
+        path: PathBuf,
+        error: io::Error,
     },
+    NotADirectory(PathBuf),
+    /// The directory has no `.axon` header: the missing header's path.
+    NotAStore(PathBuf),
+    /// The path cannot be written to the registry file, which holds UTF-8.
+    Unrepresentable(PathBuf),
+    Duplicate(ProjectRoot),
+    /// The root to unregister is not registered.
+    Unknown(ProjectRoot),
+    /// The registry could not be read, so nothing was written.
+    Read(RegistryError),
+    /// Writing the registry failed. The file may already hold the change; read it to tell.
+    Save(io::Error),
 }
-impl CreateError {
-    pub fn project(&self) -> Option<&ProjectId> {
-        match self {
-            Self::Name(_) => None,
-            Self::Failed { project, .. } => project.as_ref(),
-        }
-    }
-    fn concerning(self, id: &ProjectId) -> Self {
-        match self {
-            Self::Failed { step, reason, .. } => Self::Failed {
-                step,
-                reason,
-                project: Some(id.clone()),
-            },
-            other => other,
-        }
-    }
-}
-impl fmt::Display for CreateError {
+impl fmt::Display for UpdateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Name(error) => write!(f, "invalid name: {error:?}"),
-            Self::Failed { step, reason, .. } => write!(f, "{step:?} failed: {reason}"),
+            Self::Unreachable { path, error } => write!(f, "{}: {error}", path.display()),
+            Self::NotADirectory(path) => write!(f, "{} is not a directory", path.display()),
+            Self::NotAStore(header) => write!(f, "{} does not exist", header.display()),
+            Self::Unrepresentable(path) => write!(f, "{} is not valid UTF-8", path.display()),
+            Self::Duplicate(root) => write!(f, "{root} is already registered"),
+            Self::Unknown(root) => write!(f, "{root} is not registered"),
+            Self::Read(error) => write!(f, "cannot read {REGISTRY_FILE}: {error}"),
+            Self::Save(error) => write!(f, "cannot write {REGISTRY_FILE}: {error}"),
         }
     }
 }
 
-/// A failed replacement of the registry file, and whether the new file was already in place.
-struct SaveError {
-    replaced: bool,
-    error: io::Error,
-}
-
-/// Attempts to find an unused directory name before giving up.
-const ID_ATTEMPTS: usize = 16;
-
-fn failed(step: Step) -> impl Fn(io::Error) -> CreateError {
-    move |error| CreateError::Failed {
-        step,
-        reason: error.to_string(),
-        project: None,
-    }
+/// Held for the lifetime of the application, and the only way to change the registry: one
+/// process at a time does. The OS releases it when the process ends, even abnormally, so a
+/// crash never blocks the next start.
+#[derive(Debug)]
+pub struct InstanceLock {
+    _file: File,
+    data: AppData,
+    /// Held across each read-modify-write of the registry, so changes from one process never
+    /// overwrite one another either.
+    changing: Mutex<()>,
 }
 
 impl AppData {
@@ -237,26 +149,7 @@ impl AppData {
         if dir.is_relative() {
             return Err(LocateError::Relative(dir));
         }
-        Ok(Self {
-            dir,
-            fault: Fault::default(),
-        })
-    }
-
-    /// The same data with `fault` called at each [`FaultPoint`] of creating or finishing a
-    /// project; an error it returns fails the step there.
-    /// For tests only.
-    #[doc(hidden)]
-    pub fn with_fault(
-        mut self,
-        fault: impl Fn(FaultPoint) -> io::Result<()> + Send + Sync + 'static,
-    ) -> Self {
-        self.fault = Fault(Some(Arc::new(fault)));
-        self
-    }
-
-    fn inject(&self, point: FaultPoint) -> io::Result<()> {
-        self.fault.inject(point)
+        Ok(Self { dir })
     }
 
     /// The directory [`DATA_DIR_ENV`] names when set and not empty, otherwise
@@ -276,22 +169,15 @@ impl AppData {
         &self.dir
     }
 
-    fn projects_dir(&self) -> PathBuf {
-        self.dir.join(PROJECTS_DIRECTORY)
-    }
-
-    /// The management root of a project: the directory holding its `.axon`.
-    pub fn project_root(&self, id: &ProjectId) -> PathBuf {
-        self.projects_dir().join(id.as_str())
-    }
-
-    pub fn connect(&self, project: &Project) -> ProjectConnection {
-        ProjectConnection::new(project.id.clone(), self.project_root(&project.id))
-    }
-
     /// Takes the single-instance lock, creating the data directory if needed.
     pub fn lock_instance(&self) -> Result<InstanceLock, InstanceError> {
+        let created = !self.dir.exists();
         fs::create_dir_all(&self.dir).map_err(InstanceError::Io)?;
+        // A new data directory is made durable once, so a registry saved in it is not lost
+        // with the directory's entry.
+        if created && let Some(parent) = self.dir.parent() {
+            sync_directory(parent).map_err(InstanceError::Io)?;
+        }
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -300,212 +186,27 @@ impl AppData {
             .open(self.dir.join(INSTANCE_LOCK))
             .map_err(InstanceError::Io)?;
         match file.try_lock() {
-            Ok(()) => Ok(InstanceLock { _file: file }),
+            Ok(()) => Ok(InstanceLock {
+                _file: file,
+                data: self.clone(),
+                changing: Mutex::new(()),
+            }),
             Err(TryLockError::WouldBlock) => Err(InstanceError::AlreadyRunning),
             Err(TryLockError::Error(error)) => Err(InstanceError::Io(error)),
         }
     }
 
-    /// The registry. No file and no store under `projects/` is the empty registry of a first
-    /// start; directories without a store are what failed creations leave and do not count.
+    /// The registry. No file is the empty registry of a first start.
     pub fn load_registry(&self) -> Result<Registry, RegistryError> {
         match fs::read(self.dir.join(REGISTRY_FILE)) {
             Ok(bytes) => Registry::decode(&bytes).map_err(RegistryError::Decode),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let entries = match fs::read_dir(self.projects_dir()) {
-                    Ok(entries) => entries,
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                        return Ok(Registry::default());
-                    }
-                    Err(error) => return Err(RegistryError::Io(error)),
-                };
-                for entry in entries {
-                    let store = entry.map_err(RegistryError::Io)?.path().join(".axon");
-                    // Only a store known to be absent is absent: one that cannot be looked at
-                    // may hold a project.
-                    match fs::symlink_metadata(&store) {
-                        Ok(_) => return Err(RegistryError::Missing { store }),
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-                            ) => {}
-                        Err(error) => return Err(RegistryError::Io(error)),
-                    }
-                }
-                Ok(Registry::default())
-            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Registry::default()),
             Err(error) => Err(RegistryError::Io(error)),
         }
     }
 
-    /// Creates a project named `name` and returns the registry that now includes it as
-    /// [`Status::Ready`]. The registry is read again first, so the change is made to what is
-    /// on disk; callers hold the instance lock and run one change at a time.
-    pub fn create_project(&self, name: &str) -> Result<Registry, CreateError> {
-        self.create_project_with(name, &mut rand::random, &mut |point| self.inject(point))
-    }
-
-    /// Finishes a project left in [`Status::Creating`]: initializes its store unless one is
-    /// already there, makes it durable, then marks the project ready. An existing store is
-    /// kept as it is.
-    pub fn finish_creation(&self, id: &ProjectId) -> Result<Registry, CreateError> {
-        self.finish_creation_with(id, &mut |point| self.inject(point))
-    }
-
-    pub(crate) fn create_project_with(
-        &self,
-        name: &str,
-        bits: &mut dyn FnMut() -> u64,
-        fault: &mut dyn FnMut(FaultPoint) -> io::Result<()>,
-    ) -> Result<Registry, CreateError> {
-        let registry = self.read_for_change()?;
-        registry.check_name(name).map_err(CreateError::Name)?;
-        let projects = self.projects_dir();
-        let id = (|| {
-            fault(FaultPoint::Before(Step::Directory))?;
-            fs::create_dir_all(&projects)?;
-            for _ in 0..ID_ATTEMPTS {
-                let id = ProjectId::from_bits(bits());
-                if registry.get(&id).is_some() {
-                    continue;
-                }
-                // A directory left by an earlier failed creation is never reused: whatever it
-                // holds stays where it is.
-                match fs::create_dir(self.project_root(&id)) {
-                    Ok(()) => {
-                        sync_directory(&projects)?;
-                        return Ok(id);
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                    Err(error) => return Err(error),
-                }
-            }
-            Err(io::Error::other(
-                "no unused project directory name was found",
-            ))
-        })()
-        .map_err(failed(Step::Directory))?;
-        let pending = registry
-            .with_creating(id.clone(), name)
-            .map_err(|error| match error {
-                ChangeError::Name(error) => CreateError::Name(error),
-                other => CreateError::Failed {
-                    step: Step::Register,
-                    reason: format!("{other:?}"),
-                    project: None,
-                },
-            })?;
-        let saved = fault(FaultPoint::Before(Step::Register))
-            .map_err(|error| SaveError {
-                replaced: false,
-                error,
-            })
-            .and_then(|()| self.save_registry(&pending, Step::Register, fault));
-        if let Err(SaveError { replaced, error }) = saved {
-            // Before the replacement the empty directory belongs to no project, and a failure
-            // to remove it only leaves an unused directory. After it, the project is registered
-            // and its directory stays.
-            if !replaced {
-                let _ = fs::remove_dir(self.project_root(&id));
-                return Err(failed(Step::Register)(error));
-            }
-            return Err(failed(Step::Register)(error).concerning(&id));
-        }
-        self.finish_in(&pending, &id, fault)
-            .map_err(|error| error.concerning(&id))
-    }
-
-    pub(crate) fn finish_creation_with(
-        &self,
-        id: &ProjectId,
-        fault: &mut dyn FnMut(FaultPoint) -> io::Result<()>,
-    ) -> Result<Registry, CreateError> {
-        let registry = self.read_for_change()?;
-        self.finish_in(&registry, id, fault)
-            .map_err(|error| error.concerning(id))
-    }
-
-    fn read_for_change(&self) -> Result<Registry, CreateError> {
-        self.load_registry().map_err(|error| CreateError::Failed {
-            step: Step::Read,
-            reason: error.to_string(),
-            project: None,
-        })
-    }
-
-    fn finish_in(
-        &self,
-        registry: &Registry,
-        id: &ProjectId,
-        fault: &mut dyn FnMut(FaultPoint) -> io::Result<()>,
-    ) -> Result<Registry, CreateError> {
-        let project = registry.get(id).ok_or_else(|| CreateError::Failed {
-            step: Step::Read,
-            reason: format!("project {id} is not registered"),
-            project: None,
-        })?;
-        if project.status == Status::Ready {
-            return Ok(registry.clone());
-        }
-        let root = self.project_root(id);
-        let mut initialize = || -> Result<(), String> {
-            let text = |error: io::Error| error.to_string();
-            fault(FaultPoint::Before(Step::Initialize)).map_err(text)?;
-            // The registration is durable before a store exists that only it names: a store
-            // without its entry would make the registry look lost.
-            sync_directory(&self.dir).map_err(text)?;
-            // The directory is missing when the registration was replaced but not made durable
-            // and the creation removed nothing, or when it was lost since: nothing to keep.
-            fs::create_dir_all(&root).map_err(text)?;
-            let location = Location::standalone(&root).map_err(|error| error.to_string())?;
-            // An existing store is the result of an earlier attempt and is kept; `init` refuses
-            // anything else that is not the residue of an interrupted initialization.
-            if !matches!(presence(&root), Ok(Presence::Store)) {
-                location
-                    .init(STORE_PREFIX)
-                    .map_err(|error| error.to_string())?;
-            }
-            // `init` reports a store whose last sync failed as failed; a retry finds it present
-            // and makes it durable here before the registry calls it ready.
-            // Every level down from the directory holding the data directory, whose entry a
-            // first start created.
-            let mut directories = vec![root.join(".axon"), root.clone(), self.projects_dir()];
-            directories.extend(self.dir.parent().map(Path::to_path_buf));
-            for directory in directories {
-                sync_directory(&directory).map_err(text)?;
-            }
-            Ok(())
-        };
-        initialize().map_err(|reason| CreateError::Failed {
-            step: Step::Initialize,
-            reason,
-            project: None,
-        })?;
-        let ready = registry
-            .with_ready(id)
-            .map_err(|error| CreateError::Failed {
-                step: Step::Finish,
-                reason: format!("{error:?}"),
-                project: None,
-            })?;
-        fault(FaultPoint::Before(Step::Finish))
-            .map_err(|error| SaveError {
-                replaced: false,
-                error,
-            })
-            .and_then(|()| self.save_registry(&ready, Step::Finish, fault))
-            .map_err(|SaveError { error, .. }| failed(Step::Finish)(error))?;
-        Ok(ready)
-    }
-
     /// Replaces the registry file atomically: a reader sees the old file or the new one.
-    fn save_registry(
-        &self,
-        registry: &Registry,
-        step: Step,
-        fault: &mut dyn FnMut(FaultPoint) -> io::Result<()>,
-    ) -> Result<(), SaveError> {
+    fn save_registry(&self, registry: &Registry) -> io::Result<()> {
         let path = self.dir.join(REGISTRY_FILE);
         let temp = self.dir.join(format!("{REGISTRY_FILE}.tmp"));
         let written = (|| {
@@ -526,17 +227,73 @@ impl AppData {
         })();
         if let Err(error) = written {
             let _ = fs::remove_file(&temp);
-            return Err(SaveError {
-                replaced: false,
-                error,
-            });
+            return Err(error);
         }
-        fault(FaultPoint::Replaced(step))
-            .and_then(|()| sync_directory(&self.dir))
-            .map_err(|error| SaveError {
-                replaced: true,
-                error,
-            })
+        sync_directory(&self.dir)
+    }
+}
+
+/// The management root `path` names, normalized: absolute, without symlinks, `.` or `..`. It
+/// must be a directory holding an `.axon` header; nothing else about the store is checked, so
+/// a store that cannot be read is registered and shows its error once selected.
+pub fn management_root(path: &Path) -> Result<ProjectRoot, UpdateError> {
+    let unreachable = |path: &Path| {
+        let path = path.to_path_buf();
+        move |error| UpdateError::Unreachable { path, error }
+    };
+    let resolved = fs::canonicalize(path).map_err(unreachable(path))?;
+    if !fs::metadata(&resolved)
+        .map_err(unreachable(&resolved))?
+        .is_dir()
+    {
+        return Err(UpdateError::NotADirectory(resolved));
+    }
+    let header = resolved.join(".axon").join(HEADER_FILE);
+    match fs::symlink_metadata(&header) {
+        Ok(_) => {}
+        // `.axon` that is not a directory holds no header either.
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Err(UpdateError::NotAStore(header));
+        }
+        Err(error) => return Err(unreachable(&header)(error)),
+    }
+    ProjectRoot::new(resolved.clone()).map_err(|_| UpdateError::Unrepresentable(resolved))
+}
+
+impl InstanceLock {
+    pub fn data(&self) -> &AppData {
+        &self.data
+    }
+
+    /// Registers the management root `path` names and returns the registry now on disk with
+    /// the root it registered. The registry is read again first, so the change is made to the
+    /// file, not to what a window holds.
+    pub fn register(&self, path: &Path) -> Result<(Registry, ProjectRoot), UpdateError> {
+        let root = management_root(path)?;
+        let _changing = self.changing.lock().unwrap_or_else(|e| e.into_inner());
+        let registry = self.data.load_registry().map_err(UpdateError::Read)?;
+        let next = registry
+            .with(root.clone())
+            .map_err(|_: ChangeError| UpdateError::Duplicate(root.clone()))?;
+        self.data.save_registry(&next).map_err(UpdateError::Save)?;
+        Ok((next, root))
+    }
+
+    /// Removes `root` from the registry, leaving its files as they are, and returns the
+    /// registry now on disk.
+    pub fn unregister(&self, root: &ProjectRoot) -> Result<Registry, UpdateError> {
+        let _changing = self.changing.lock().unwrap_or_else(|e| e.into_inner());
+        let registry = self.data.load_registry().map_err(UpdateError::Read)?;
+        let next = registry
+            .without(root)
+            .map_err(|_: ChangeError| UpdateError::Unknown(root.clone()))?;
+        self.data.save_registry(&next).map_err(UpdateError::Save)?;
+        Ok(next)
     }
 }
 

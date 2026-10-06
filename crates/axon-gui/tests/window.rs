@@ -7,24 +7,30 @@ use axon::lifecycle::{
     record::{Current, Entry, new_entity_id},
 };
 use axon::location::Location;
-use axon_gui::{AxonApp, MIN_WINDOW_SIZE, app::entity_element, project::AppData};
+use axon_gui::{
+    AxonApp, MIN_WINDOW_SIZE,
+    app::entity_element,
+    project::{AppData, InstanceLock},
+};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
     Action, AppContext, Bounds, Entity, Focusable, MenuItem, Point, TestAppContext, WindowBounds,
     WindowHandle, WindowOptions, base::Root, px, size,
 };
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 type Window = WindowHandle<Root>;
 
-/// A project holding one Issue, written through the core as the CLI would.
-fn data_with_an_issue() -> (tempfile::TempDir, AppData) {
+/// A registered management root holding one Issue, written through the core as the CLI would.
+fn data_with_an_issue() -> (tempfile::TempDir, Arc<InstanceLock>) {
     let dir = tempfile::tempdir().unwrap();
-    let data = AppData::at(dir.path().join("data")).unwrap();
-    let registry = data.create_project("読書会").unwrap();
-    let root = data.project_root(&registry.projects()[0].id);
-    Location::standalone(&root)
-        .and_then(|location| location.open())
+    let root = dir.path().join("読書会");
+    std::fs::create_dir(&root).unwrap();
+    let location = Location::explicit(&root).unwrap();
+    location.init("axon").unwrap();
+    location
+        .open()
         .and_then(|mut store| {
             store.update(|header, records, _| {
                 let record = records.create(
@@ -49,10 +55,15 @@ fn data_with_an_issue() -> (tempfile::TempDir, AppData) {
             })
         })
         .unwrap();
-    (dir, data)
+    let lock = AppData::at(dir.path().join("data"))
+        .unwrap()
+        .lock_instance()
+        .unwrap();
+    lock.register(&root).unwrap();
+    (dir, Arc::new(lock))
 }
 
-fn open(data: &AppData, cx: &mut TestAppContext) -> (Window, Entity<AxonApp>) {
+fn open(data: &Arc<InstanceLock>, cx: &mut TestAppContext) -> (Window, Entity<AxonApp>) {
     cx.update(axon_gui::init);
     let data = data.clone();
     let (window, app) = cx.update(|cx| {

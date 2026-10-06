@@ -1,5 +1,5 @@
-//! Headless UI tests of the shared list and the detail pane on records written to independent
-//! temporary projects through the library.
+//! Headless UI tests of the shared list and the detail pane on records written to temporary
+//! management roots through the library and registered in a temporary data directory.
 
 use axon::lifecycle::{
     Context, EntityId, Kind, Label, Lifecycle, Operation,
@@ -10,7 +10,7 @@ use axon_gui::{
     AxonApp, MIN_WINDOW_SIZE,
     app::{StoreState, Summary, entity_element},
     board::{Layout, State, WaitKind},
-    project::{AppData, ProjectId},
+    project::{AppData, InstanceLock, ProjectRoot},
 };
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
@@ -19,24 +19,33 @@ use gpui_kit::{
 };
 use std::collections::BTreeSet;
 use std::fs;
+use std::sync::Arc;
 
 type Window = WindowHandle<Root>;
 
-fn data() -> (tempfile::TempDir, AppData) {
+/// A data directory with no registration yet, and the lock the window changes it through.
+fn data() -> (tempfile::TempDir, Arc<InstanceLock>) {
     let dir = tempfile::tempdir().unwrap();
-    let data = AppData::at(dir.path().join("data")).unwrap();
-    (dir, data)
+    let lock = AppData::at(dir.path().join("data"))
+        .unwrap()
+        .lock_instance()
+        .unwrap();
+    (dir, Arc::new(lock))
 }
 
 /// Writes records to one project through the core as the CLI would, one update each.
 struct Seed(Location);
 
 impl Seed {
-    fn new(data: &AppData, name: &str) -> (ProjectId, Self) {
-        let registry = data.create_project(name).unwrap();
-        let project = registry.projects().last().unwrap().clone();
-        let location = Location::standalone(&data.project_root(&project.id)).unwrap();
-        (project.id.clone(), Self(location))
+    /// Initializes a management root named `name` beside the data directory, as `axon init`
+    /// would, and registers it.
+    fn new(data: &InstanceLock, name: &str) -> (ProjectRoot, Self) {
+        let root = data.data().dir().parent().unwrap().join(name);
+        fs::create_dir_all(&root).unwrap();
+        let location = Location::explicit(&root).unwrap();
+        location.init("axon").unwrap();
+        let (_, registered) = data.register(&root).unwrap();
+        (registered, Self(location))
     }
 
     fn write(&self, entry: impl FnOnce(&axon::lifecycle::record::Store, &str) -> Entry) -> Entry {
@@ -140,7 +149,7 @@ fn now() -> Context {
 }
 
 fn open_sized(
-    data: &AppData,
+    data: &Arc<InstanceLock>,
     width: f32,
     height: f32,
     cx: &mut TestAppContext,
@@ -164,7 +173,7 @@ fn open_sized(
     (window.downcast::<Root>().expect("Base Root"), app)
 }
 
-fn open(data: &AppData, cx: &mut TestAppContext) -> (Window, Entity<AxonApp>) {
+fn open(data: &Arc<InstanceLock>, cx: &mut TestAppContext) -> (Window, Entity<AxonApp>) {
     open_sized(data, 1200., 760., cx)
 }
 
@@ -369,7 +378,7 @@ fn the_detail_shows_relations_waits_notes_and_history(cx: &mut TestAppContext) {
     let (_dir, data) = data();
     let (project, seed) = Seed::new(&data, "読書会");
     let plan = plan(&seed);
-    let store = data.project_root(&project).join(".axon");
+    let store = project.path().join(".axon");
     let before = snapshot(&store);
     let (handle, app) = open(&data, cx);
 
@@ -575,8 +584,8 @@ fn the_conflicted_state_is_offered_only_while_a_conflict_exists(cx: &mut TestApp
 
     // A failed read of the same project keeps the choice as the last read left it.
     click(handle, "state-Conflicted", cx);
-    let root = cx.read(|cx| app.read(cx).data().project_root(&first));
-    fs::remove_dir_all(root.join(".axon/records")).unwrap();
+    let root = first.path().to_path_buf();
+    fs::remove_file(root.join(".axon/header.json")).unwrap();
     reload(&app, cx);
     cx.read(|cx| assert!(matches!(app.read(cx).store(), StoreState::Failed(_))));
     assert!(offers_conflicted(handle, cx));
@@ -586,7 +595,7 @@ fn the_conflicted_state_is_offered_only_while_a_conflict_exists(cx: &mut TestApp
 #[gpui_kit::test]
 fn an_empty_project_is_not_a_filter_without_matches(cx: &mut TestAppContext) {
     let (_dir, data) = data();
-    Seed::new(&data, "空のプロジェクト");
+    Seed::new(&data, "空のリポジトリ");
     let (handle, app) = open(&data, cx);
     cx.read(|cx| {
         let explorer = app.read(cx).explorer();
@@ -624,12 +633,9 @@ fn reloading_keeps_the_selection_and_shows_new_records(cx: &mut TestAppContext) 
         assert_eq!(detail.notes[1].body, "返事が来た");
     });
 
-    // A record gone from the store (here: the whole store) drops nothing silently.
-    let root = cx.read(|cx| {
-        let app = app.read(cx);
-        app.data().project_root(&app.selected().unwrap().id)
-    });
-    fs::remove_dir_all(root.join(".axon/records")).unwrap();
+    // A store that can no longer be read (here: its header is gone) drops nothing silently.
+    let root = cx.read(|cx| app.read(cx).selected().unwrap().path().to_path_buf());
+    fs::remove_file(root.join(".axon/header.json")).unwrap();
     click(handle, "reload-list", cx);
     cx.read(|cx| {
         let app = app.read(cx);
@@ -864,11 +870,8 @@ fn coming_back_to_the_window_reads_the_records_again(cx: &mut TestAppContext) {
 
     // A store that can no longer be read shows no earlier list.
     deactivate(handle, cx);
-    let root = cx.read(|cx| {
-        let app = app.read(cx);
-        app.data().project_root(&app.selected().unwrap().id)
-    });
-    fs::remove_dir_all(root.join(".axon/records")).unwrap();
+    let root = cx.read(|cx| app.read(cx).selected().unwrap().path().to_path_buf());
+    fs::remove_file(root.join(".axon/header.json")).unwrap();
     activate(handle, cx);
     cx.read(|cx| {
         let app = app.read(cx);

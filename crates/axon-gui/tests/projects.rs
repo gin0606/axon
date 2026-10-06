@@ -1,41 +1,88 @@
-//! Headless UI tests of project creation, switching and restart on an independent data
-//! directory. Disk access runs for real; "restart" opens a new window on the same directory.
+//! Headless UI tests of registering, switching and unregistering management roots, on
+//! temporary roots and a temporary data directory. Disk access runs for real; folder choices
+//! are answered by the test platform; "reopening" opens a new window on the same data.
 
+use axon::lifecycle::{
+    Context, Kind, Label, Lifecycle,
+    record::{Current, Entry, new_entity_id},
+};
+use axon::location::Location;
+use axon_gui::Startup;
 use axon_gui::{
     AxonApp, MIN_WINDOW_SIZE,
     app::{RegistryState, StoreState, Summary},
-    project::{AppData, ProjectId, Registry, Status},
-};
-use axon_gui::{
-    Startup,
-    project::{FaultPoint, InstanceError, Step},
+    project::{AppData, InstanceError, InstanceLock, ProjectRoot, Registry, data::REGISTRY_FILE},
 };
 use gpui_kit::test::{TestAppContextExt, TestWindowExt};
 use gpui_kit::{
     AppContext, Bounds, ElementId, Entity, Point, TestAppContext, VisualTestContext, WindowBounds,
     WindowHandle, WindowOptions, base::Root, px, size,
 };
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::{fs, time::Duration};
 
 type Window = WindowHandle<Root>;
 
-fn data() -> (tempfile::TempDir, AppData) {
+/// A temporary directory holding the data directory `data` and the roots the test makes.
+fn data() -> (tempfile::TempDir, Arc<InstanceLock>) {
     let dir = tempfile::tempdir().unwrap();
-    let data = AppData::at(dir.path().join("data")).unwrap();
-    (dir, data)
+    let lock = AppData::at(dir.path().join("data"))
+        .unwrap()
+        .lock_instance()
+        .unwrap();
+    (dir, Arc::new(lock))
+}
+
+/// A management root initialized as `axon init` would, holding an Issue for each title.
+fn root(dir: &Path, name: &str, titles: &[&str]) -> PathBuf {
+    let root = dir.join(name);
+    fs::create_dir_all(&root).unwrap();
+    Location::explicit(&root).unwrap().init("axon").unwrap();
+    for title in titles {
+        write_issue(&root, title);
+    }
+    root
+}
+
+/// Writes an Issue to the store at `root` through the core, as the CLI would.
+fn write_issue(root: &Path, title: &str) {
+    Location::explicit(root)
+        .and_then(|location| location.open())
+        .unwrap()
+        .update(|header, records, _| {
+            let record = records.create(
+                new_entity_id(&header.prefix)?,
+                Current {
+                    kind: Kind::Issue,
+                    lifecycle: Lifecycle::NotStarted,
+                    owner: None,
+                    title: title.into(),
+                    description: String::new(),
+                    label: Label::Feat,
+                    condition: None,
+                    parent: None,
+                    needs: BTreeSet::new(),
+                },
+                Context {
+                    at: chrono::Utc::now(),
+                    recorder: None,
+                },
+            )?;
+            Ok((vec![Entry::Record(record)], ()))
+        })
+        .unwrap();
 }
 
 fn open_sized(
-    data: &AppData,
+    lock: &Arc<InstanceLock>,
     width: f32,
     height: f32,
     cx: &mut TestAppContext,
 ) -> (Window, Entity<AxonApp>) {
-    let data = data.clone();
+    let lock = lock.clone();
     let (window, app) = cx.update(|cx| {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds {
@@ -45,7 +92,7 @@ fn open_sized(
             ..axon_gui::main_window_options(cx)
         };
         gpui_kit::open_window(options, cx, |window, cx| {
-            cx.new(|cx| AxonApp::new(data, window, cx))
+            cx.new(|cx| AxonApp::new(lock, window, cx))
         })
         .expect("open the main window")
     });
@@ -53,14 +100,14 @@ fn open_sized(
     (window.downcast::<Root>().expect("Base Root"), app)
 }
 
-fn open(data: &AppData, cx: &mut TestAppContext) -> (Window, Entity<AxonApp>) {
-    open_sized(data, 920., 600., cx)
+fn open(lock: &Arc<InstanceLock>, cx: &mut TestAppContext) -> (Window, Entity<AxonApp>) {
+    open_sized(lock, 920., 600., cx)
 }
 
 /// Initializes the app once, as `main` does, and opens its window.
-fn start(data: &AppData, cx: &mut TestAppContext) -> (Window, Entity<AxonApp>) {
+fn start(lock: &Arc<InstanceLock>, cx: &mut TestAppContext) -> (Window, Entity<AxonApp>) {
     cx.update(axon_gui::init);
-    open(data, cx)
+    open(lock, cx)
 }
 
 fn with_window(
@@ -80,41 +127,55 @@ fn click(handle: Window, id: &'static str, cx: &mut TestAppContext) {
     with_window(handle, cx, |window, cx| window.click(id, cx));
 }
 
-fn type_text(handle: Window, text: &str, cx: &mut TestAppContext) {
-    with_window(handle, cx, |window, cx| window.input(text, cx));
+/// Clicks "＋ リポジトリを登録" and chooses `path` in the folder dialog.
+fn add(handle: Window, path: Option<&Path>, cx: &mut TestAppContext) {
+    click(handle, "add-root", cx);
+    assert!(cx.did_prompt_for_paths(), "no folder dialog");
+    cx.simulate_path_prompt_response(|options| {
+        assert!(options.directories && !options.files && !options.multiple);
+        path.map(|path| vec![path.to_path_buf()])
+    });
+    cx.run_until_parked();
 }
 
-fn press(handle: Window, key: &str, cx: &mut TestAppContext) {
-    with_window(handle, cx, |window, cx| window.press(key, cx));
-}
-
-/// Opens the form, types `name` and presses Enter.
-fn create(handle: Window, name: &str, cx: &mut TestAppContext) {
-    click(handle, "new-project", cx);
-    type_text(handle, name, cx);
-    press(handle, "enter", cx);
-}
-
-fn registry(app: &Entity<AxonApp>, cx: &mut TestAppContext) -> Registry {
+fn registered(app: &Entity<AxonApp>, cx: &mut TestAppContext) -> Vec<ProjectRoot> {
     cx.read(|cx| match app.read(cx).registry() {
-        RegistryState::Loaded(registry) => registry.clone(),
+        RegistryState::Loaded(registry) => registry.roots().to_vec(),
         other => panic!("registry not loaded: {other:?}"),
     })
 }
 
-fn selected(app: &Entity<AxonApp>, cx: &mut TestAppContext) -> Option<(String, Status)> {
-    cx.read(|cx| {
-        app.read(cx)
-            .selected()
-            .map(|project| (project.name.clone(), project.status))
-    })
+fn selected(app: &Entity<AxonApp>, cx: &mut TestAppContext) -> Option<String> {
+    cx.read(|cx| app.read(cx).selected().map(ProjectRoot::name))
 }
 
 fn store(app: &Entity<AxonApp>, cx: &mut TestAppContext) -> StoreState {
     cx.read(|cx| app.read(cx).store().clone())
 }
 
-/// Chooses the `index`-th project from the switch menu.
+fn notice(app: &Entity<AxonApp>, cx: &mut TestAppContext) -> Option<String> {
+    cx.read(|cx| app.read(cx).notice().map(str::to_owned))
+}
+
+/// The titles of the Entities the window shows.
+fn titles(app: &Entity<AxonApp>, cx: &mut TestAppContext) -> Vec<String> {
+    cx.read(|cx| {
+        let board = app.read(cx).explorer().board().expect("a board");
+        let mut titles: Vec<_> = board
+            .items()
+            .iter()
+            .map(|item| item.title.clone())
+            .collect();
+        titles.sort();
+        titles
+    })
+}
+
+fn canonical(path: &Path) -> ProjectRoot {
+    ProjectRoot::new(fs::canonicalize(path).unwrap()).unwrap()
+}
+
+/// Chooses the `index`-th root from the switch menu.
 async fn switch_to(handle: Window, index: usize, cx: &mut TestAppContext) {
     with_window(handle, cx, |window, cx| {
         window.click("project-switch", cx);
@@ -131,137 +192,183 @@ async fn switch_to(handle: Window, index: usize, cx: &mut TestAppContext) {
 const EMPTY: StoreState = StoreState::Loaded(Summary { entities: 0 });
 
 #[gpui_kit::test]
-async fn two_japanese_projects_are_created_switched_and_reopened(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    let (handle, app) = start(&data, cx);
-    assert!(registry(&app, cx).projects().is_empty());
+async fn two_roots_are_registered_switched_and_kept_after_reopening(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &["会場を決める", "本を選ぶ"]);
+    let budget = root(dir.path(), "家計簿", &["予算を決める"]);
+    let (handle, app) = start(&lock, cx);
+    assert!(registered(&app, cx).is_empty());
     assert_eq!(selected(&app, cx), None);
     assert_eq!(store(&app, cx), StoreState::None);
 
-    create(handle, "読書会", cx);
-    assert_eq!(selected(&app, cx), Some(("読書会".into(), Status::Ready)));
-    assert_eq!(store(&app, cx), EMPTY);
-    cx.read(|cx| assert!(!app.read(cx).is_form_open()));
-
-    click(handle, "new-project", cx);
-    type_text(handle, "家計簿", cx);
-    click(handle, "create-project", cx);
-    assert_eq!(selected(&app, cx), Some(("家計簿".into(), Status::Ready)));
-
-    let created = registry(&app, cx);
-    let [first, second] = created.projects() else {
-        panic!("{created:?}");
-    };
-    let roots = [data.project_root(&first.id), data.project_root(&second.id)];
-    assert_ne!(roots[0], roots[1]);
-    for root in &roots {
-        assert!(root.join(".axon/header.json").is_file(), "{root:?}");
-    }
+    add(handle, Some(&reading), cx);
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+    assert_eq!(titles(&app, cx), ["会場を決める", "本を選ぶ"]);
+    add(handle, Some(&budget), cx);
+    assert_eq!(selected(&app, cx).as_deref(), Some("家計簿"));
+    assert_eq!(titles(&app, cx), ["予算を決める"]);
+    assert_eq!(
+        registered(&app, cx),
+        [canonical(&reading), canonical(&budget)]
+    );
+    with_window(handle, cx, |window, _| {
+        assert_eq!(window.find("project-switch").label(), Some("家計簿 ▾"));
+    });
 
     switch_to(handle, 0, cx).await;
-    assert_eq!(selected(&app, cx), Some(("読書会".into(), Status::Ready)));
-    assert_eq!(store(&app, cx), EMPTY);
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+    assert_eq!(titles(&app, cx), ["会場を決める", "本を選ぶ"]);
 
-    // A new window on the same data, as after a restart, lists the same projects.
-    let (_, restarted) = open(&data, cx);
-    assert_eq!(registry(&restarted, cx), created);
+    // A new window on the same data, as after a restart, lists the same roots.
+    let (_, reopened) = open(&lock, cx);
+    assert_eq!(registered(&reopened, cx), registered(&app, cx));
+    assert_eq!(selected(&reopened, cx).as_deref(), Some("読書会"));
+    assert_eq!(titles(&reopened, cx), ["会場を決める", "本を選ぶ"]);
     assert_eq!(
-        selected(&restarted, cx),
-        Some(("読書会".into(), Status::Ready))
+        lock.data().load_registry().unwrap().roots(),
+        registered(&app, cx)
     );
-    assert_eq!(store(&restarted, cx), EMPTY);
 }
 
 #[gpui_kit::test]
-fn refused_names_keep_the_input_and_write_nothing(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    let (handle, app) = start(&data, cx);
-    create(handle, "読書会", cx);
+fn duplicates_and_folders_without_a_store_are_refused(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &[]);
+    let plain = dir.path().join("plain");
+    fs::create_dir(&plain).unwrap();
+    let (handle, app) = start(&lock, cx);
+    add(handle, Some(&reading), cx);
+    let saved = fs::read(lock.data().dir().join(REGISTRY_FILE)).unwrap();
 
-    click(handle, "new-project", cx);
-    press(handle, "enter", cx);
-    cx.read(|cx| {
-        let app = app.read(cx);
-        assert!(app.is_form_open());
-        assert_eq!(app.form_error(), Some("名前を入力してください。"));
+    add(handle, Some(&reading.join(".")), cx);
+    let refused = notice(&app, cx).expect("a notice");
+    assert!(refused.contains("すでに登録"), "{refused}");
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+    add(handle, Some(&plain), cx);
+    let refused = notice(&app, cx).expect("a notice");
+    assert!(refused.contains(".axon"), "{refused}");
+    with_window(handle, cx, |window, _| {
+        assert!(window.find("notice").visible())
     });
-    type_text(handle, "読書会", cx);
-    click(handle, "create-project", cx);
-    cx.read(|cx| {
-        let app = app.read(cx);
-        assert_eq!(
-            app.form_error(),
-            Some("同じ名前のプロジェクトがすでにあります。")
-        );
-        assert_eq!(app.name_input().read(cx).value(), "読書会");
-    });
-    assert_eq!(registry(&app, cx).projects().len(), 1);
-    assert_eq!(data.load_registry().unwrap().projects().len(), 1);
-
-    click(handle, "cancel-create", cx);
-    cx.read(|cx| {
-        let app = app.read(cx);
-        assert!(!app.is_form_open());
-        assert_eq!(app.form_error(), None);
-        assert_eq!(app.name_input().read(cx).value(), "");
-    });
+    cx.read(|cx| assert!(!app.read(cx).is_busy()));
+    assert_eq!(registered(&app, cx), [canonical(&reading)]);
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+    assert_eq!(
+        fs::read(lock.data().dir().join(REGISTRY_FILE)).unwrap(),
+        saved
+    );
 }
 
 #[gpui_kit::test]
-fn a_repeated_submission_creates_one_project(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    let (handle, app) = start(&data, cx);
-    click(handle, "new-project", cx);
-    type_text(handle, "読書会", cx);
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.press("enter", cx);
-        window.press("enter", cx);
-    })
-    .unwrap();
-    cx.read(|cx| assert!(app.read(cx).is_busy()));
-    cx.run_until_parked();
+fn cancelling_the_folder_dialog_changes_nothing(cx: &mut TestAppContext) {
+    let (_dir, lock) = data();
+    let (handle, app) = start(&lock, cx);
+    add(handle, None, cx);
     cx.read(|cx| {
         let app = app.read(cx);
         assert!(!app.is_busy());
-        assert_eq!(app.form_error(), None);
+        assert_eq!(app.notice(), None);
     });
-    assert_eq!(registry(&app, cx).projects().len(), 1);
-    assert_eq!(data.load_registry().unwrap().projects().len(), 1);
+    assert!(registered(&app, cx).is_empty());
+    assert!(!lock.data().dir().join(REGISTRY_FILE).exists());
 }
 
 #[gpui_kit::test]
-async fn an_unreadable_project_is_reported_and_others_stay_reachable(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    data.create_project("読書会").unwrap();
-    let registry = data.create_project("家計簿").unwrap();
-    let broken = registry.projects()[0].id.clone();
-    fs::remove_dir_all(data.project_root(&broken)).unwrap();
+fn unregistering_keeps_the_files_and_selects_another_root(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &["会場を決める"]);
+    let budget = root(dir.path(), "家計簿", &[]);
+    let (handle, app) = start(&lock, cx);
+    add(handle, Some(&reading), cx);
+    add(handle, Some(&budget), cx);
+    let before = fs::read_dir(reading.join(".axon/records")).unwrap().count();
 
-    let (handle, app) = start(&data, cx);
-    assert_eq!(selected(&app, cx), Some(("読書会".into(), Status::Ready)));
-    assert!(matches!(store(&app, cx), StoreState::Failed(_)));
-    assert!(
-        !data.project_root(&broken).exists(),
-        "reading never recreates a missing store"
+    cx.update(|cx| app.update(cx, |app, cx| app.select(canonical(&reading), cx)));
+    click(handle, "remove-root", cx);
+    assert_eq!(registered(&app, cx), [canonical(&budget)]);
+    assert_eq!(selected(&app, cx).as_deref(), Some("家計簿"));
+    assert_eq!(store(&app, cx), EMPTY);
+    assert_eq!(
+        lock.data().load_registry().unwrap().roots(),
+        [canonical(&budget)]
+    );
+    assert!(reading.join(".axon/header.json").is_file());
+    assert_eq!(
+        fs::read_dir(reading.join(".axon/records")).unwrap().count(),
+        before
     );
 
+    click(handle, "remove-root", cx);
+    assert!(registered(&app, cx).is_empty());
+    assert_eq!(store(&app, cx), StoreState::None);
+    with_window(handle, cx, |window, _| {
+        assert!(window.try_find("remove-root").is_none())
+    });
+}
+
+#[gpui_kit::test]
+async fn a_missing_root_is_reported_and_others_stay_reachable(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &["会場を決める"]);
+    let budget = root(dir.path(), "家計簿", &["予算を決める"]);
+    lock.register(&reading).unwrap();
+    lock.register(&budget).unwrap();
+    fs::remove_dir_all(&reading).unwrap();
+
+    let (handle, app) = start(&lock, cx);
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+    let StoreState::Failed(error) = store(&app, cx) else {
+        panic!("{:?}", store(&app, cx));
+    };
+    assert!(error.contains("missing"), "{error}");
+    cx.read(|cx| assert!(app.read(cx).explorer().board().is_none()));
+    assert!(!reading.exists(), "reading never recreates a missing root");
+
     switch_to(handle, 1, cx).await;
-    assert_eq!(selected(&app, cx), Some(("家計簿".into(), Status::Ready)));
-    assert_eq!(store(&app, cx), EMPTY);
+    assert_eq!(selected(&app, cx).as_deref(), Some("家計簿"));
+    assert_eq!(titles(&app, cx), ["予算を決める"]);
+}
+
+#[gpui_kit::test]
+fn a_root_inside_a_git_repository_is_registered_and_read(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let repository = dir.path().join("repository");
+    fs::create_dir(&repository).unwrap();
+    let mut command = Command::new("git");
+    // A Git hook running the tests sets variables that would point Git at another repository.
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(name);
+        }
+    }
+    let status = command
+        .args(["init", "-q"])
+        .current_dir(&repository)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let inside = root(&repository, "sub", &["Git の中の記録"]);
+    let (handle, app) = start(&lock, cx);
+    add(handle, Some(&inside), cx);
+    assert_eq!(selected(&app, cx).as_deref(), Some("sub"));
+    assert_eq!(titles(&app, cx), ["Git の中の記録"]);
 }
 
 // Which read finishes first depends on the scheduler's seed; several seeds cover both orders.
 #[gpui_kit::test(iterations = 32)]
-fn only_the_last_selected_project_is_shown(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    data.create_project("読書会").unwrap();
-    let registry = data.create_project("家計簿").unwrap();
-    let [readable, broken] = [0, 1].map(|ix| registry.projects()[ix].id.clone());
-    fs::remove_dir_all(data.project_root(&broken)).unwrap();
-    let (_, app) = start(&data, cx);
+fn only_the_last_selected_root_is_shown(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let (_, readable) = lock.register(&root(dir.path(), "読書会", &[])).unwrap();
+    let broken = root(dir.path(), "家計簿", &[]);
+    let (_, missing) = lock.register(&broken).unwrap();
+    fs::remove_dir_all(&broken).unwrap();
+    let (_, app) = start(&lock, cx);
 
     // Both reads run; whichever finishes first, the result shown is the last selection's.
-    for (first, last) in [(&readable, &broken), (&broken, &readable)] {
+    for (first, last) in [(&readable, &missing), (&missing, &readable)] {
         cx.update(|cx| {
             app.update(cx, |app, cx| {
                 app.select(first.clone(), cx);
@@ -280,50 +387,34 @@ fn only_the_last_selected_project_is_shown(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn an_interrupted_creation_is_shown_and_can_be_finished(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    // What a creation that stopped before initializing the store leaves behind.
-    let id = ProjectId::from_bits(0xabc);
-    let registry = Registry::default()
-        .with_creating(id.clone(), "読書会")
-        .unwrap();
-    fs::create_dir_all(data.project_root(&id)).unwrap();
-    fs::write(data.dir().join("projects.json"), registry.encode()).unwrap();
-
-    let (handle, app) = start(&data, cx);
+fn a_root_registered_while_another_was_chosen_leaves_the_choice(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let (_, first) = lock.register(&root(dir.path(), "読書会", &[])).unwrap();
+    let (_, second) = lock.register(&root(dir.path(), "家計簿", &[])).unwrap();
+    let added = root(dir.path(), "旅行", &[]);
+    let (handle, app) = start(&lock, cx);
+    click(handle, "add-root", cx);
+    cx.update(|cx| app.update(cx, |app, cx| app.select(second.clone(), cx)));
+    cx.simulate_path_prompt_response(|_| Some(vec![added.clone()]));
+    cx.run_until_parked();
     assert_eq!(
-        selected(&app, cx),
-        Some(("読書会".into(), Status::Creating))
+        registered(&app, cx),
+        [first, second.clone(), canonical(&added)]
     );
-    assert_eq!(store(&app, cx), StoreState::Incomplete { error: None });
-    with_window(handle, cx, |window, _| {
-        assert_eq!(
-            window.find("project-switch").label(),
-            Some("読書会（作成未完了） ▾")
-        );
-    });
-
-    click(handle, "retry-creation", cx);
-    assert_eq!(selected(&app, cx), Some(("読書会".into(), Status::Ready)));
-    assert_eq!(store(&app, cx), EMPTY);
-    assert_eq!(
-        data.load_registry().unwrap().get(&id).unwrap().status,
-        Status::Ready
-    );
+    assert_eq!(selected(&app, cx).as_deref(), Some("家計簿"));
 }
 
 #[gpui_kit::test]
 fn an_unreadable_registry_is_not_an_empty_list(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    fs::create_dir_all(data.dir()).unwrap();
-    let path = data.dir().join("projects.json");
+    let (_dir, lock) = data();
+    let path = lock.data().dir().join(REGISTRY_FILE);
     fs::write(&path, "{ broken").unwrap();
 
-    let (handle, app) = start(&data, cx);
+    let (handle, app) = start(&lock, cx);
     cx.read(|cx| assert!(matches!(app.read(cx).registry(), RegistryState::Failed(_))));
-    // Neither creating nor switching is offered on a list that was not read.
-    click(handle, "new-project", cx);
-    cx.read(|cx| assert!(!app.read(cx).is_form_open()));
+    // Neither registering nor switching is offered on a list that was not read.
+    click(handle, "add-root", cx);
+    assert!(!cx.did_prompt_for_paths());
     with_window(handle, cx, |window, cx| window.click("project-switch", cx));
     with_window(handle, cx, |window, _| {
         assert!(window.try_find("popup-menu").is_none())
@@ -333,23 +424,22 @@ fn an_unreadable_registry_is_not_an_empty_list(cx: &mut TestAppContext) {
     // Once repaired, reloading reads it.
     fs::write(&path, Registry::default().encode()).unwrap();
     click(handle, "reload", cx);
-    assert!(registry(&app, cx).projects().is_empty());
+    assert!(registered(&app, cx).is_empty());
 }
 
 #[gpui_kit::test]
-fn smallest_main_window_keeps_projects_and_the_list_usable(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    data.create_project("とても長い名前のプロジェクトでも窓に収まる")
-        .unwrap();
+fn smallest_main_window_keeps_the_roots_and_the_list_usable(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let long = "とても長い名前のリポジトリでも窓に収まる".repeat(3);
+    lock.register(&root(dir.path(), &long, &[])).unwrap();
     cx.update(axon_gui::init);
-    let (handle, _app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
-    click(handle, "new-project", cx);
+    let (handle, _app) = open_sized(&lock, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
     with_window(handle, cx, |window, _| {
         let viewport = window.viewport_size();
         for id in [
             ElementId::from("project-switch"),
-            "project-name".into(),
-            "create-project".into(),
+            "add-root".into(),
+            "remove-root".into(),
             "search".into(),
             "reload-list".into(),
             "detail-empty".into(),
@@ -366,6 +456,33 @@ fn smallest_main_window_keeps_projects_and_the_list_usable(cx: &mut TestAppConte
                     && bounds.bottom_right().y <= viewport.height,
                 "{id:?} overflows the window: {bounds:?}"
             );
+        }
+    });
+}
+
+#[gpui_kit::test]
+fn a_long_name_and_an_error_fit_in_the_smallest_window(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let missing = root(dir.path(), &"長".repeat(80), &[]);
+    lock.register(&missing).unwrap();
+    fs::remove_dir_all(&missing).unwrap();
+    cx.update(axon_gui::init);
+    let (handle, app) = open_sized(&lock, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
+    assert!(matches!(store(&app, cx), StoreState::Failed(_)));
+    with_window(handle, cx, |window, _| {
+        let viewport = window.viewport_size();
+        for id in [
+            ElementId::from("reload"),
+            "remove-root".into(),
+            "detail-empty".into(),
+        ] {
+            let bounds = window.find(id.clone()).bounds();
+            assert!(
+                bounds.bottom_right().x <= viewport.width
+                    && bounds.bottom_right().y <= viewport.height,
+                "{id:?} overflows the window: {bounds:?}"
+            );
+            assert!(bounds.size.height >= px(20.), "{id:?}: {bounds:?}");
         }
     });
 }
@@ -388,135 +505,15 @@ fn a_refused_start_explains_itself(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_failed_creation_keeps_the_name_and_registers_nothing(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    // A file where the project directories go makes creation fail before registering.
-    fs::create_dir_all(data.dir()).unwrap();
-    fs::write(
-        data.dir().join("projects.json"),
-        Registry::default().encode(),
-    )
-    .unwrap();
-    fs::write(data.dir().join("projects"), "").unwrap();
-    let (handle, app) = start(&data, cx);
-    create(handle, " 読書会 ", cx);
-    cx.read(|cx| {
-        let app = app.read(cx);
-        assert!(!app.is_busy());
-        assert!(app.is_form_open());
-        assert_eq!(app.name_input().read(cx).value(), " 読書会 ");
-        let error = app.form_error().unwrap();
-        assert!(error.contains("何も登録されていない"), "{error}");
-    });
-    assert!(registry(&app, cx).projects().is_empty());
-    assert!(data.load_registry().unwrap().projects().is_empty());
-
-    fs::remove_file(data.dir().join("projects")).unwrap();
-    click(handle, "create-project", cx);
-    assert_eq!(selected(&app, cx), Some(("読書会".into(), Status::Ready)));
-    cx.read(|cx| assert!(!app.read(cx).is_form_open()));
-}
-
-/// A project left in creation whose directory holds a file the store must not replace.
-fn blocked_creation(data: &AppData) -> ProjectId {
-    let id = ProjectId::from_bits(0xabc);
-    let registry = data
-        .load_registry()
-        .unwrap()
-        .with_creating(id.clone(), "読書会")
-        .unwrap();
-    let foreign = data.project_root(&id).join(".axon/notes.txt");
-    fs::create_dir_all(foreign.parent().unwrap()).unwrap();
-    fs::write(&foreign, "手書きのメモ").unwrap();
-    fs::write(data.dir().join("projects.json"), registry.encode()).unwrap();
-    id
-}
-
-#[gpui_kit::test]
-fn a_failed_retry_explains_itself_and_keeps_existing_files(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    fs::create_dir_all(data.dir()).unwrap();
-    let id = blocked_creation(&data);
-    let (handle, app) = start(&data, cx);
-    click(handle, "retry-creation", cx);
-    assert_eq!(
-        selected(&app, cx),
-        Some(("読書会".into(), Status::Creating))
-    );
-    let StoreState::Incomplete { error: Some(error) } = store(&app, cx) else {
-        panic!("{:?}", store(&app, cx));
-    };
-    assert!(error.contains("保存先を準備できませんでした"), "{error}");
-    assert_eq!(
-        fs::read_to_string(data.project_root(&id).join(".axon/notes.txt")).unwrap(),
-        "手書きのメモ"
-    );
-}
-
-#[gpui_kit::test(iterations = 8)]
-fn a_retry_result_is_not_shown_on_another_project(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    let registry = data.create_project("家計簿").unwrap();
-    let other = registry.projects()[0].id.clone();
-    let blocked = blocked_creation(&data);
-    let (_, app) = start(&data, cx);
-    cx.update(|cx| {
-        app.update(cx, |app, cx| {
-            app.select(blocked, cx);
-            app.retry_creation(cx);
-            assert!(app.is_busy());
-            app.select(other, cx);
-        })
-    });
-    cx.run_until_parked();
-    assert_eq!(selected(&app, cx), Some(("家計簿".into(), Status::Ready)));
-    assert_eq!(store(&app, cx), EMPTY);
-    cx.read(|cx| assert!(!app.read(cx).is_busy()));
-}
-
-#[gpui_kit::test]
-fn a_long_name_and_an_error_fit_in_the_smallest_window(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    let registry = data.create_project(&"長".repeat(80)).unwrap();
-    fs::remove_dir_all(data.project_root(&registry.projects()[0].id)).unwrap();
-    cx.update(axon_gui::init);
-    let (handle, app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
-    assert!(matches!(store(&app, cx), StoreState::Failed(_)));
-    with_window(handle, cx, |window, _| {
-        let viewport = window.viewport_size();
-        for id in [ElementId::from("reload"), "detail-empty".into()] {
-            let bounds = window.find(id.clone()).bounds();
-            assert!(
-                bounds.bottom_right().x <= viewport.width
-                    && bounds.bottom_right().y <= viewport.height,
-                "{id:?} overflows the window: {bounds:?}"
-            );
-            assert!(bounds.size.height >= px(20.), "{id:?}: {bounds:?}");
-        }
-    });
-}
-
-#[gpui_kit::test]
 fn the_main_window_holds_the_instance_lock(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
+    let dir = tempfile::tempdir().unwrap();
+    let data = AppData::at(dir.path().join("data")).unwrap();
     cx.update(axon_gui::init);
-    let Startup::Ready {
-        data: located,
-        lock,
-    } = axon_gui::startup_on(Ok(data.clone()))
-    else {
+    let Startup::Ready(lock) = axon_gui::startup_on(Ok(data.clone())) else {
         panic!("the first start is refused");
     };
-    cx.update(|cx| {
-        axon_gui::open_startup_window(
-            Startup::Ready {
-                data: located,
-                lock,
-            },
-            cx,
-        )
-    })
-    .unwrap();
+    cx.update(|cx| axon_gui::open_startup_window(Startup::Ready(lock), cx))
+        .unwrap();
     cx.run_until_parked();
     assert!(matches!(
         data.lock_instance(),
@@ -526,163 +523,6 @@ fn the_main_window_holds_the_instance_lock(cx: &mut TestAppContext) {
         panic!("a second start is not refused");
     };
     assert!(message.contains("すでに起動しています"), "{message}");
-}
-
-/// Data whose creation fails at `point` while the returned flag is set.
-fn failing_at(point: FaultPoint) -> (tempfile::TempDir, AppData, Arc<AtomicBool>) {
-    let (dir, data) = data();
-    let failing = Arc::new(AtomicBool::new(true));
-    let data = data.with_fault({
-        let failing = failing.clone();
-        move |at| {
-            if at == point && failing.load(Ordering::SeqCst) {
-                Err(std::io::Error::other("injected"))
-            } else {
-                Ok(())
-            }
-        }
-    });
-    (dir, data, failing)
-}
-
-#[gpui_kit::test]
-fn a_creation_stopped_after_registration_is_selected_and_can_be_finished(cx: &mut TestAppContext) {
-    cx.update(axon_gui::init);
-    for point in [
-        FaultPoint::Before(Step::Initialize),
-        FaultPoint::Before(Step::Finish),
-        FaultPoint::Replaced(Step::Register),
-    ] {
-        let (_dir, data, failing) = failing_at(point);
-        let (handle, app) = open(&data, cx);
-        create(handle, " 読書会 ", cx);
-        assert_eq!(
-            selected(&app, cx),
-            Some(("読書会".into(), Status::Creating))
-        );
-        cx.read(|cx| {
-            let app = app.read(cx);
-            assert!(!app.is_form_open(), "{point:?}");
-            assert_eq!(app.form_error(), None);
-            assert_eq!(app.name_input().read(cx).value(), "");
-        });
-        let StoreState::Incomplete { error: Some(error) } = store(&app, cx) else {
-            panic!("{point:?}: {:?}", store(&app, cx));
-        };
-        assert!(error.contains("作成を再試行"), "{error}");
-
-        failing.store(false, Ordering::SeqCst);
-        click(handle, "retry-creation", cx);
-        assert_eq!(selected(&app, cx), Some(("読書会".into(), Status::Ready)));
-        assert_eq!(store(&app, cx), EMPTY);
-    }
-}
-
-#[gpui_kit::test]
-fn a_ready_project_whose_save_was_not_confirmed_is_reported(cx: &mut TestAppContext) {
-    let (_dir, data, _) = failing_at(FaultPoint::Replaced(Step::Finish));
-    let (handle, app) = start(&data, cx);
-    create(handle, "読書会", cx);
-    assert_eq!(selected(&app, cx), Some(("読書会".into(), Status::Ready)));
-    assert_eq!(store(&app, cx), EMPTY);
-    cx.read(|cx| {
-        let app = app.read(cx);
-        assert!(!app.is_form_open());
-        let notice = app.notice().expect("a notice");
-        assert!(notice.contains("確認できませんでした"), "{notice}");
-    });
-}
-
-#[gpui_kit::test]
-fn a_creation_failing_after_a_switch_keeps_the_choice_and_says_so(cx: &mut TestAppContext) {
-    let (_dir, data, _) = failing_at(FaultPoint::Before(Step::Initialize));
-    let setup = AppData::at(data.dir().to_path_buf()).unwrap();
-    setup.create_project("家計簿").unwrap();
-    let chosen = setup.create_project("旅行").unwrap().projects()[1]
-        .id
-        .clone();
-    let (handle, app) = start(&data, cx);
-    click(handle, "new-project", cx);
-    type_text(handle, "読書会", cx);
-    cx.update_window(handle.into(), |_, window, cx| window.press("enter", cx))
-        .unwrap();
-    cx.update(|cx| app.update(cx, |app, cx| app.select(chosen, cx)));
-    cx.run_until_parked();
-    assert_eq!(selected(&app, cx), Some(("旅行".into(), Status::Ready)));
-    cx.read(|cx| {
-        let notice = app.read(cx).notice().expect("a notice").to_owned();
-        assert!(notice.contains("読書会"), "{notice}");
-    });
-    let incomplete = registry(&app, cx).projects()[2].clone();
-    assert_eq!(incomplete.status, Status::Creating);
-    cx.update(|cx| app.update(cx, |app, cx| app.select(incomplete.id, cx)));
-    assert!(matches!(
-        store(&app, cx),
-        StoreState::Incomplete { error: Some(_) }
-    ));
-}
-
-#[gpui_kit::test]
-fn a_project_chosen_during_creation_stays_chosen(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    data.create_project("家計簿").unwrap();
-    let chosen = data.create_project("旅行").unwrap().projects()[1]
-        .id
-        .clone();
-    let (handle, app) = start(&data, cx);
-    click(handle, "new-project", cx);
-    type_text(handle, "読書会", cx);
-    cx.update_window(handle.into(), |_, window, cx| window.press("enter", cx))
-        .unwrap();
-    // Away and back to the project shown at submission is still a choice the user made.
-    let first = registry(&app, cx).projects()[0].id.clone();
-    cx.update(|cx| {
-        app.update(cx, |app, cx| {
-            app.select(chosen, cx);
-            app.select(first, cx);
-        })
-    });
-    cx.run_until_parked();
-    assert_eq!(registry(&app, cx).projects().len(), 3);
-    assert_eq!(selected(&app, cx), Some(("家計簿".into(), Status::Ready)));
-}
-
-#[gpui_kit::test(iterations = 8)]
-fn a_retry_error_stays_with_its_project(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    fs::create_dir_all(data.dir()).unwrap();
-    let blocked = blocked_creation(&data);
-    // Another project left in creation, with nothing in its way.
-    let other = ProjectId::from_bits(0xdef);
-    let registry = data
-        .load_registry()
-        .unwrap()
-        .with_creating(other.clone(), "家計簿")
-        .unwrap();
-    fs::create_dir_all(data.project_root(&other)).unwrap();
-    fs::write(data.dir().join("projects.json"), registry.encode()).unwrap();
-
-    let (_, app) = start(&data, cx);
-    cx.update(|cx| {
-        app.update(cx, |app, cx| {
-            app.select(blocked.clone(), cx);
-            app.retry_creation(cx);
-            app.select(other.clone(), cx);
-        })
-    });
-    cx.run_until_parked();
-    assert_eq!(
-        selected(&app, cx),
-        Some(("家計簿".into(), Status::Creating))
-    );
-    assert_eq!(store(&app, cx), StoreState::Incomplete { error: None });
-
-    // Back on the blocked project, the reason is still there.
-    cx.update(|cx| app.update(cx, |app, cx| app.select(blocked, cx)));
-    let StoreState::Incomplete { error: Some(error) } = store(&app, cx) else {
-        panic!("{:?}", store(&app, cx));
-    };
-    assert!(error.contains("保存先を準備できませんでした"), "{error}");
 }
 
 /// Brings the window to the front, as coming back to the app does; the activation is
@@ -698,11 +538,10 @@ fn reads(app: &Entity<AxonApp>, cx: &mut TestAppContext) -> u64 {
 
 #[gpui_kit::test]
 fn coming_back_reads_an_unreadable_registry_again(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    fs::create_dir_all(data.dir()).unwrap();
-    let path = data.dir().join("projects.json");
+    let (dir, lock) = data();
+    let path = lock.data().dir().join(REGISTRY_FILE);
     fs::write(&path, "{ broken").unwrap();
-    let (handle, app) = start(&data, cx);
+    let (handle, app) = start(&lock, cx);
     cx.read(|cx| assert!(matches!(app.read(cx).registry(), RegistryState::Failed(_))));
 
     // Coming back while the registry is read again starts no other read.
@@ -713,37 +552,128 @@ fn coming_back_reads_an_unreadable_registry_again(cx: &mut TestAppContext) {
     assert_eq!(reads(&app, cx), before + 1);
     cx.read(|cx| assert!(matches!(app.read(cx).registry(), RegistryState::Failed(_))));
 
-    // Coming back reads what the reload would: the registry, then the project it holds.
+    // Coming back reads what the reload would: the registry, then the root it holds.
     fs::write(&path, Registry::default().encode()).unwrap();
-    data.create_project("読書会").unwrap();
+    lock.register(&root(dir.path(), "読書会", &[])).unwrap();
     VisualTestContext::from_window(handle.into(), cx).deactivate_window();
     request_activation(handle, cx);
     cx.run_until_parked();
-    assert_eq!(selected(&app, cx), Some(("読書会".into(), Status::Ready)));
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
     assert_eq!(store(&app, cx), EMPTY);
 }
 
 #[gpui_kit::test]
-fn coming_back_while_a_project_is_created_starts_no_read(cx: &mut TestAppContext) {
-    let (_dir, data) = data();
-    data.create_project("読書会").unwrap();
-    let (handle, app) = start(&data, cx);
+fn coming_back_while_a_folder_is_chosen_starts_no_read(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    lock.register(&root(dir.path(), "読書会", &[])).unwrap();
+    let added = root(dir.path(), "家計簿", &[]);
+    let (handle, app) = start(&lock, cx);
     assert_eq!(store(&app, cx), EMPTY);
-    click(handle, "new-project", cx);
-    type_text(handle, "家計簿", cx);
 
     let before = reads(&app, cx);
-    cx.update_window(handle.into(), |_, window, cx| {
-        app.update(cx, |app, cx| app.submit(window, cx))
-    })
-    .unwrap();
+    click(handle, "add-root", cx);
+    cx.read(|cx| assert!(app.read(cx).is_busy()));
+    // The dialog closing brings the window back to the front.
+    VisualTestContext::from_window(handle.into(), cx).deactivate_window();
     request_activation(handle, cx);
     cx.run_until_parked();
-    assert_eq!(selected(&app, cx), Some(("家計簿".into(), Status::Ready)));
+    assert_eq!(reads(&app, cx), before);
+    cx.simulate_path_prompt_response(|_| Some(vec![added.clone()]));
+    cx.run_until_parked();
+    assert_eq!(selected(&app, cx).as_deref(), Some("家計簿"));
     assert_eq!(store(&app, cx), EMPTY);
     assert_eq!(
         reads(&app, cx),
         before + 1,
-        "only the created project is read"
+        "only the registered root is read"
     );
+}
+
+#[cfg(unix)]
+#[gpui_kit::test]
+fn a_registration_that_cannot_be_saved_shows_the_list_on_disk(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, lock) = data();
+    lock.register(&root(dir.path(), "読書会", &[])).unwrap();
+    let added = root(dir.path(), "家計簿", &[]);
+    let (handle, app) = start(&lock, cx);
+    // Writable again however the test ends, so the temporary directory can be removed.
+    struct ReadOnly(PathBuf);
+    impl Drop for ReadOnly {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+        }
+    }
+    let data_dir = ReadOnly(lock.data().dir().to_path_buf());
+    fs::set_permissions(&data_dir.0, fs::Permissions::from_mode(0o555)).unwrap();
+    let writable = fs::File::create(data_dir.0.join("probe")).is_ok();
+    add(handle, Some(&added), cx);
+    drop(data_dir);
+    if writable {
+        return; // Permissions do not apply to this user (root); nothing to observe.
+    }
+    let saved = notice(&app, cx).expect("a notice");
+    assert!(saved.contains("保存できませんでした"), "{saved}");
+    cx.read(|cx| assert!(!app.read(cx).is_busy()));
+    assert_eq!(
+        registered(&app, cx),
+        lock.data().load_registry().unwrap().roots()
+    );
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+}
+
+#[gpui_kit::test]
+fn records_written_while_a_folder_is_chosen_show_after_cancelling(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &["会場を決める"]);
+    lock.register(&reading).unwrap();
+    let (handle, app) = start(&lock, cx);
+    click(handle, "add-root", cx);
+    // The CLI writes while the dialog is open; coming back to the window reads nothing yet.
+    write_issue(&reading, "本を選ぶ");
+    VisualTestContext::from_window(handle.into(), cx).deactivate_window();
+    request_activation(handle, cx);
+    cx.run_until_parked();
+    cx.simulate_path_prompt_response(|_| None);
+    cx.run_until_parked();
+    assert_eq!(titles(&app, cx), ["会場を決める", "本を選ぶ"]);
+}
+
+#[gpui_kit::test]
+fn a_root_no_longer_registered_cannot_be_selected(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let (_, first) = lock.register(&root(dir.path(), "読書会", &[])).unwrap();
+    let (_, second) = lock.register(&root(dir.path(), "家計簿", &[])).unwrap();
+    let (handle, app) = start(&lock, cx);
+    cx.update(|cx| app.update(cx, |app, cx| app.select(second.clone(), cx)));
+    click(handle, "remove-root", cx);
+    // A menu opened before the unregistration still offers the removed root.
+    cx.update(|cx| app.update(cx, |app, cx| app.select(second, cx)));
+    cx.run_until_parked();
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+    assert_eq!(registered(&app, cx), [first]);
+}
+
+#[gpui_kit::test]
+fn a_refused_change_shows_the_list_on_disk(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &[]);
+    let (_, first) = lock.register(&reading).unwrap();
+    let (_, second) = lock.register(&root(dir.path(), "家計簿", &[])).unwrap();
+    let (handle, app) = start(&lock, cx);
+    // The list changes on disk behind the window.
+    lock.unregister(&first).unwrap();
+    click(handle, "remove-root", cx);
+    let refused = notice(&app, cx).expect("a notice");
+    assert!(refused.contains("登録されていません"), "{refused}");
+    assert_eq!(registered(&app, cx), std::slice::from_ref(&second));
+    assert_eq!(selected(&app, cx).as_deref(), Some("家計簿"));
+
+    lock.register(&reading).unwrap();
+    lock.unregister(&first).unwrap();
+    lock.register(&reading).unwrap();
+    add(handle, Some(&reading), cx);
+    let refused = notice(&app, cx).expect("a notice");
+    assert!(refused.contains("すでに登録"), "{refused}");
+    assert_eq!(registered(&app, cx), [second, first]);
 }

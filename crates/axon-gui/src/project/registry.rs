@@ -1,95 +1,80 @@
-//! The list of projects and the rules for changing it, as values. Nothing here touches the
-//! filesystem: [`super::data`] reads and writes the file this module encodes.
+//! The registered management roots and the rules for changing the list, as values. Nothing here
+//! touches the filesystem: [`super::data`] reads and writes the file this module encodes.
 
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+};
 
 /// The version of the registry file this build reads and writes. A file of another version is
 /// refused rather than rewritten, so a newer application's list is never lost.
 pub const FORMAT: u32 = 1;
-/// The longest project name, in characters.
-pub const NAME_LIMIT: usize = 80;
-/// The number of lowercase hexadecimal digits in a [`ProjectId`].
-pub const ID_LENGTH: usize = 12;
 
-/// The stable identifier of a project. It names the project's directory, so the display name
-/// can be any text and is free to change without moving data.
+/// A registered management root: the absolute path of the directory holding `.axon`. It
+/// identifies the registration, so each worktree of one repository is a registration of its own.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-pub struct ProjectId(String);
+pub struct ProjectRoot(PathBuf);
 
-impl ProjectId {
-    /// The identifier spelled by the lowest [`ID_LENGTH`] hexadecimal digits of `bits`; the
-    /// shell supplies the randomness.
-    pub fn from_bits(bits: u64) -> Self {
-        Self(format!(
-            "{:0width$x}",
-            bits & ((1 << (4 * ID_LENGTH)) - 1),
-            width = ID_LENGTH
-        ))
+impl ProjectRoot {
+    /// The registration of `path`, which must be absolute and UTF-8 so that the registry file
+    /// can hold it. The caller normalizes it first.
+    pub fn new(path: PathBuf) -> Result<Self, String> {
+        let Some(text) = path.to_str() else {
+            return Err(format!("{} is not valid UTF-8", path.display()));
+        };
+        Self::try_from(text.to_owned())
     }
-    pub fn as_str(&self) -> &str {
+    pub fn path(&self) -> &Path {
         &self.0
     }
+    /// The name shown for the registration: the directory's own name, or the whole path for a
+    /// root that has none.
+    pub fn name(&self) -> String {
+        match self.0.file_name() {
+            Some(name) => name.to_string_lossy().into_owned(),
+            None => self.0.display().to_string(),
+        }
+    }
 }
-impl TryFrom<String> for ProjectId {
+impl TryFrom<String> for ProjectRoot {
     type Error = String;
     fn try_from(value: String) -> Result<Self, String> {
-        if value.len() == ID_LENGTH
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            Ok(Self(value))
+        let path = PathBuf::from(value);
+        if path.is_absolute() {
+            Ok(Self(path))
         } else {
             Err(format!(
-                "invalid project ID {value:?}: expected {ID_LENGTH} lowercase hexadecimal digits"
+                "invalid management root {}: expected an absolute path",
+                path.display()
             ))
         }
     }
 }
-impl From<ProjectId> for String {
-    fn from(id: ProjectId) -> Self {
-        id.0
+impl From<ProjectRoot> for String {
+    fn from(root: ProjectRoot) -> Self {
+        // Only UTF-8 paths are ever constructed.
+        root.0.to_string_lossy().into_owned()
     }
 }
-impl fmt::Display for ProjectId {
+impl fmt::Display for ProjectRoot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        write!(f, "{}", self.0.display())
     }
 }
 
-/// Whether the project's store is known to exist.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Status {
-    /// Registered, but the store may not be initialized yet: creation was interrupted or
-    /// failed after the project was recorded. Finishing it initializes the store if absent.
-    Creating,
-    /// The store was initialized. A missing or unreadable store is then an error, never a
-    /// reason to initialize an empty one in its place.
-    Ready,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Project {
-    pub id: ProjectId,
-    pub name: String,
-    pub status: Status,
-}
-
-/// The projects in creation order.
+/// The registered roots in registration order.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Registry {
-    projects: Vec<Project>,
+    roots: Vec<ProjectRoot>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct File {
     format: u32,
-    projects: Vec<Project>,
+    roots: Vec<ProjectRoot>,
 }
 
 /// Why a registry file could not be read.
@@ -97,7 +82,7 @@ struct File {
 pub enum DecodeError {
     /// A format this build does not know.
     Format(u32),
-    /// Not a registry: unreadable JSON, a missing field, an invalid ID or name.
+    /// Not a registry: unreadable JSON, a missing field, a relative or repeated root.
     Invalid(String),
 }
 impl fmt::Display for DecodeError {
@@ -112,67 +97,21 @@ impl fmt::Display for DecodeError {
     }
 }
 
-/// Why a name was refused.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum NameError {
-    Empty,
-    TooLong,
-    ControlCharacter,
-    Duplicate,
-}
-
 /// Why a change to the registry was refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChangeError {
-    Name(NameError),
-    /// The ID is already registered.
-    DuplicateId,
-    /// No project with that ID.
+    /// The root is already registered.
+    Duplicate,
+    /// The root is not registered.
     Unknown,
 }
 
-/// Control, line and paragraph separator, format characters (zero-width and bidirectional
-/// controls among them) and blank fillers: they break a name across lines, hide it, or make it
-/// display as another. Variation selectors stay allowed for kanji variants, and the joiners and
-/// tag characters that emoji sequences are built from stay allowed too.
-fn invisible(c: char) -> bool {
-    c.is_control()
-        || matches!(
-            c,
-            '\u{00AD}'
-                | '\u{0600}'..='\u{0605}'
-                | '\u{061C}'
-                | '\u{06DD}'
-                | '\u{070F}'
-                | '\u{180E}'
-                | '\u{200B}'
-                | '\u{200E}'..='\u{200F}'
-                | '\u{2028}'..='\u{202E}'
-                | '\u{2060}'..='\u{2064}'
-                | '\u{2066}'..='\u{206F}'
-                | '\u{FEFF}'
-                | '\u{FFF9}'..='\u{FFFB}'
-                | '\u{034F}'
-                | '\u{0890}'..='\u{0891}'
-                | '\u{08E2}'
-                | '\u{115F}'..='\u{1160}'
-                | '\u{3164}'
-                | '\u{FFA0}'
-                | '\u{110BD}'
-                | '\u{110CD}'
-                | '\u{13430}'..='\u{1343F}'
-                | '\u{1BCA0}'..='\u{1BCA3}'
-                | '\u{1D173}'..='\u{1D17A}'
-                | '\u{E0000}'..='\u{E001F}'
-        )
-}
-
 impl Registry {
-    pub fn projects(&self) -> &[Project] {
-        &self.projects
+    pub fn roots(&self) -> &[ProjectRoot] {
+        &self.roots
     }
-    pub fn get(&self, id: &ProjectId) -> Option<&Project> {
-        self.projects.iter().find(|project| &project.id == id)
+    pub fn contains(&self, root: &ProjectRoot) -> bool {
+        self.roots.contains(root)
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
@@ -188,22 +127,11 @@ impl Registry {
         let file: File = serde_json::from_slice(bytes)
             .map_err(|error| DecodeError::Invalid(error.to_string()))?;
         let mut registry = Self::default();
-        for project in file.projects {
-            if registry.get(&project.id).is_some() {
-                return Err(DecodeError::Invalid(format!(
-                    "project ID {} appears twice",
-                    project.id
-                )));
+        for root in file.roots {
+            if registry.contains(&root) {
+                return Err(DecodeError::Invalid(format!("{root} appears twice")));
             }
-            // Stored names are taken as written: rules for new names may tighten later, and a
-            // name they would refuse must not make the whole list unreadable.
-            if project.name.is_empty() {
-                return Err(DecodeError::Invalid(format!(
-                    "project {} has an empty name",
-                    project.id
-                )));
-            }
-            registry.projects.push(project);
+            registry.roots.push(root);
         }
         Ok(registry)
     }
@@ -211,68 +139,30 @@ impl Registry {
     pub fn encode(&self) -> Vec<u8> {
         let mut bytes = serde_json::to_vec_pretty(&File {
             format: FORMAT,
-            projects: self.projects.clone(),
+            roots: self.roots.clone(),
         })
         .expect("a registry always serializes");
         bytes.push(b'\n');
         bytes
     }
 
-    /// The name a project would be stored under: `raw` without surrounding whitespace, when it
-    /// is not blank, fits [`NAME_LIMIT`], has no control characters and no other project has
-    /// it. A name made only of whitespace, joiners, tag characters and variation selectors is
-    /// blank.
-    pub fn check_name(&self, raw: &str) -> Result<String, NameError> {
-        let name = raw.trim();
-        // Line breaks and other control whitespace are left to the control-character check.
-        if name.chars().all(|c| {
-            (c.is_whitespace() && !invisible(c))
-                || matches!(
-                    c,
-                    '\u{200C}'..='\u{200D}'
-                        | '\u{E0020}'..='\u{E007F}'
-                        | '\u{FE00}'..='\u{FE0F}'
-                        | '\u{E0100}'..='\u{E01EF}'
-                )
-        }) {
-            return Err(NameError::Empty);
-        }
-        if name.chars().count() > NAME_LIMIT {
-            return Err(NameError::TooLong);
-        }
-        if name.chars().any(invisible) {
-            return Err(NameError::ControlCharacter);
-        }
-        if self.projects.iter().any(|project| project.name == name) {
-            return Err(NameError::Duplicate);
-        }
-        Ok(name.to_owned())
-    }
-
-    /// The registry with a new project, in [`Status::Creating`], appended.
-    pub fn with_creating(&self, id: ProjectId, raw_name: &str) -> Result<Self, ChangeError> {
-        let name = self.check_name(raw_name).map_err(ChangeError::Name)?;
-        if self.get(&id).is_some() {
-            return Err(ChangeError::DuplicateId);
+    /// The registry with `root` appended.
+    pub fn with(&self, root: ProjectRoot) -> Result<Self, ChangeError> {
+        if self.contains(&root) {
+            return Err(ChangeError::Duplicate);
         }
         let mut next = self.clone();
-        next.projects.push(Project {
-            id,
-            name,
-            status: Status::Creating,
-        });
+        next.roots.push(root);
         Ok(next)
     }
 
-    /// The registry with the project marked [`Status::Ready`].
-    pub fn with_ready(&self, id: &ProjectId) -> Result<Self, ChangeError> {
+    /// The registry without `root`.
+    pub fn without(&self, root: &ProjectRoot) -> Result<Self, ChangeError> {
+        if !self.contains(root) {
+            return Err(ChangeError::Unknown);
+        }
         let mut next = self.clone();
-        let project = next
-            .projects
-            .iter_mut()
-            .find(|project| &project.id == id)
-            .ok_or(ChangeError::Unknown)?;
-        project.status = Status::Ready;
+        next.roots.retain(|registered| registered != root);
         Ok(next)
     }
 }
@@ -281,124 +171,54 @@ impl Registry {
 mod tests {
     use super::*;
 
-    fn id(bits: u64) -> ProjectId {
-        ProjectId::from_bits(bits)
+    /// The registration of `path` under an absolute directory of this platform.
+    fn root(path: &str) -> ProjectRoot {
+        ProjectRoot::new(std::env::temp_dir().join(path)).unwrap()
     }
 
     #[test]
-    fn ids_are_fixed_width_lowercase_hex() {
-        assert_eq!(id(0).as_str(), "000000000000");
-        assert_eq!(id(u64::MAX).as_str(), "ffffffffffff");
-        assert_eq!(id(0xab).as_str(), "0000000000ab");
-        for invalid in [
-            "",
-            "00000000000",
-            "0000000000000",
-            "00000000000G",
-            "00000000000A",
-            "../../etc/pw",
-        ] {
-            assert!(
-                ProjectId::try_from(invalid.to_owned()).is_err(),
-                "{invalid}"
-            );
+    fn roots_are_absolute_and_named_after_their_directory() {
+        assert!(ProjectRoot::new(PathBuf::from("relative/repo")).is_err());
+        assert!(ProjectRoot::new(PathBuf::new()).is_err());
+        assert_eq!(root("work/読書会").name(), "読書会");
+        assert_eq!(root("work/axon-worktrees/gui").name(), "gui");
+        let top = std::env::temp_dir()
+            .ancestors()
+            .last()
+            .unwrap()
+            .to_path_buf();
+        assert_eq!(
+            ProjectRoot::new(top.clone()).unwrap().name(),
+            top.display().to_string()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let invalid = PathBuf::from(std::ffi::OsString::from_vec(b"/work/\xff".to_vec()));
+            assert!(ProjectRoot::new(invalid).is_err());
         }
     }
 
     #[test]
-    fn names_are_trimmed_bounded_and_unique() {
-        let registry = Registry::default();
-        assert_eq!(registry.check_name("  読書会 "), Ok("読書会".into()));
-        for blank in [
-            " \t",
-            "\u{200D}",
-            "\u{E0061}\u{FE0F}",
-            "\u{200D} \u{200D}",
-            "\u{200C}\u{3000}\u{E0100}",
-            "\u{FE0F}\u{00A0}\u{E0061}",
-            "\u{E0020}\u{E007F} \u{FE00}\u{E01EF}",
-        ] {
-            assert_eq!(
-                registry.check_name(blank),
-                Err(NameError::Empty),
-                "{blank:?}"
-            );
-        }
-        for name in [
-            "改\n行",
-            "改\u{2028}行",
-            "\u{200B}",
-            "名\u{202E}前",
-            "読書会\u{E0001}",
-            "\u{3164}",
-            "\u{200D}\n\u{200D}",
-            "\u{200D}\u{2028}\u{200D}",
-        ] {
-            assert_eq!(
-                registry.check_name(name),
-                Err(NameError::ControlCharacter),
-                "{name:?}"
-            );
-        }
-        for name in [
-            "👨\u{200D}💻 開発",
-            "🏴\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}",
-            "葛\u{E0100}飾",
-        ] {
-            assert_eq!(registry.check_name(name), Ok(name.to_owned()), "{name:?}");
-        }
-        assert_eq!(
-            registry.check_name(&"あ".repeat(NAME_LIMIT)),
-            Ok("あ".repeat(NAME_LIMIT))
-        );
-        assert_eq!(
-            registry.check_name(&"あ".repeat(NAME_LIMIT + 1)),
-            Err(NameError::TooLong)
-        );
-        let registry = registry.with_creating(id(1), "読書会").unwrap();
-        assert_eq!(registry.check_name("読書会 "), Err(NameError::Duplicate));
-        assert_eq!(
-            registry.with_creating(id(2), "読書会"),
-            Err(ChangeError::Name(NameError::Duplicate))
-        );
-        assert_eq!(
-            registry.with_creating(id(1), "家計"),
-            Err(ChangeError::DuplicateId)
-        );
-    }
-
-    #[test]
-    fn creation_then_ready_round_trips_through_the_file() {
+    fn registering_and_unregistering_keep_the_order_and_refuse_duplicates() {
         let registry = Registry::default()
-            .with_creating(id(1), "読書会")
+            .with(root("work/a"))
             .unwrap()
-            .with_creating(id(2), "家計")
+            .with(root("work/b"))
             .unwrap()
-            .with_ready(&id(1))
+            .with(root("work/c"))
             .unwrap();
-        assert_eq!(
-            registry.projects(),
-            [
-                Project {
-                    id: id(1),
-                    name: "読書会".into(),
-                    status: Status::Ready
-                },
-                Project {
-                    id: id(2),
-                    name: "家計".into(),
-                    status: Status::Creating
-                },
-            ]
-        );
-        assert_eq!(Registry::decode(&registry.encode()), Ok(registry.clone()));
-        assert_eq!(registry.with_ready(&id(3)), Err(ChangeError::Unknown));
+        assert_eq!(registry.with(root("work/b")), Err(ChangeError::Duplicate));
+        let registry = registry.without(&root("work/b")).unwrap();
+        assert_eq!(registry.roots(), [root("work/a"), root("work/c")]);
+        assert_eq!(registry.without(&root("work/b")), Err(ChangeError::Unknown));
+        assert_eq!(Registry::decode(&registry.encode()), Ok(registry));
     }
 
     #[test]
     fn foreign_or_damaged_files_are_refused() {
         assert_eq!(
-            Registry::decode(br#"{"format":2,"projects":[]}"#),
+            Registry::decode(br#"{"format":2,"roots":[]}"#),
             Err(DecodeError::Format(2))
         );
         for invalid in [
@@ -406,11 +226,11 @@ mod tests {
             b"{",
             b"[]",
             br#"{"format":1}"#,
-            br#"{"format":1,"projects":[],"extra":0}"#,
-            br#"{"format":1,"projects":[{"id":"x","name":"a","status":"ready"}]}"#,
-            br#"{"format":1,"projects":[{"id":"000000000001","name":"","status":"ready"}]}"#,
-            br#"{"format":1,"projects":[{"id":"000000000001","name":"a","status":"gone"}]}"#,
-            br#"{"format":1,"projects":[{"id":"000000000001","name":"a","status":"ready"},{"id":"000000000001","name":"b","status":"ready"}]}"#,
+            br#"{"format":1,"roots":[],"extra":0}"#,
+            br#"{"format":1,"roots":["relative"]}"#,
+            br#"{"format":1,"roots":[1]}"#,
+            // The list of the application's own projects is another file.
+            br#"{"format":1,"projects":[]}"#,
         ] {
             assert!(
                 matches!(Registry::decode(invalid), Err(DecodeError::Invalid(_))),
@@ -418,15 +238,17 @@ mod tests {
                 String::from_utf8_lossy(invalid)
             );
         }
+        let twice = serde_json::to_vec(&serde_json::json!({
+            "format": 1,
+            "roots": [root("work/a"), root("work/a")],
+        }))
+        .unwrap();
+        assert!(
+            matches!(Registry::decode(&twice), Err(DecodeError::Invalid(reason)) if reason.contains("twice"))
+        );
         assert_eq!(
-            Registry::decode(br#"{"format":1,"projects":[]}"#),
+            Registry::decode(br#"{"format":1,"roots":[]}"#),
             Ok(Registry::default())
         );
-        // A stored name a newer rule would refuse is still read.
-        let stored = Registry::decode(
-            br#"{"format":1,"projects":[{"id":"000000000001","name":" a\u200b","status":"ready"}]}"#,
-        )
-        .unwrap();
-        assert_eq!(stored.projects()[0].name, " a\u{200b}");
     }
 }

@@ -2,8 +2,8 @@
 //!
 //! The GUI depends on the `axon` library (storage adapters and the re-exported core) and
 //! converts core values into display text and GPUI elements here. Nothing from GPUI flows back
-//! into the core crates. [`project`] holds the projects and [`board`] the records of one as
-//! values, both without GPUI; [`app`] is the window.
+//! into the core crates. [`project`] holds the registered management roots and [`board`] the
+//! records of one as values, both without GPUI; [`app`] is the window.
 
 pub mod app;
 pub mod board;
@@ -13,15 +13,16 @@ pub use app::AxonApp;
 
 use gpui_kit::component::{ActiveTheme, Theme, button::Button};
 use gpui_kit::{
-    App, AppContext, Bounds, Context, Entity, Global, KeyBinding, Menu, MenuItem, OsAction, Render,
+    App, AppContext, Bounds, Context, Entity, KeyBinding, Menu, MenuItem, OsAction, Render,
     SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions, actions,
     base::input as edit, div, prelude::*, px, size,
 };
 use project::{AppData, InstanceError, InstanceLock, data::LocateError};
+use std::sync::Arc;
 
 actions!(axon_gui, [Quit, SelectNextEntity, SelectPreviousEntity]);
 
-/// Smallest window that still shows the project column, the list and the detail pane side by
+/// Smallest window that still shows the left column, the list and the detail pane side by
 /// side.
 pub const MIN_WINDOW_SIZE: (f32, f32) = (880., 520.);
 
@@ -71,12 +72,13 @@ pub fn main_window_options(cx: &App) -> WindowOptions {
 
 /// What a start found: the data to open, or why this instance must not open it.
 pub enum Startup {
-    Ready { data: AppData, lock: InstanceLock },
+    /// The lock, which also gives the data it was taken on.
+    Ready(InstanceLock),
     Refused(String),
 }
 
 /// Locates the data directory and takes the single-instance lock. A second instance on the
-/// same data is refused, so only one process ever writes it.
+/// same data is refused, so only one process ever changes the list of registered roots.
 pub fn startup() -> Startup {
     startup_on(AppData::locate())
 }
@@ -90,9 +92,9 @@ pub fn startup_on(data: Result<AppData, LocateError>) -> Startup {
         }
     };
     match data.lock_instance() {
-        Ok(lock) => Startup::Ready { data, lock },
+        Ok(lock) => Startup::Ready(lock),
         Err(InstanceError::AlreadyRunning) => Startup::Refused(format!(
-            "Axon はすでに起動しています。同じデータを二つのアプリから書き換えないよう、こちらは開きません。（データの保存場所: {}）",
+            "Axon はすでに起動しています。登録したリポジトリの一覧を二つのアプリから書き換えないよう、こちらは開きません。（データの保存場所: {}）",
             data.dir().display()
         )),
         Err(error @ InstanceError::Io(_)) => Startup::Refused(format!(
@@ -102,26 +104,23 @@ pub fn startup_on(data: Result<AppData, LocateError>) -> Startup {
     }
 }
 
-/// Keeps the instance lock for as long as the application runs.
-struct HeldInstanceLock(#[allow(dead_code)] InstanceLock);
-impl Global for HeldInstanceLock {}
-
 /// Opens the window [`startup`] calls for: the main window holding the lock, or a notice.
 pub fn open_startup_window(startup: Startup, cx: &mut App) -> gpui_kit::Result<()> {
     match startup {
-        Startup::Ready { data, lock } => {
-            cx.set_global(HeldInstanceLock(lock));
-            open_main_window(data, cx).map(|_| ())
-        }
+        Startup::Ready(lock) => open_main_window(Arc::new(lock), cx).map(|_| ()),
         Startup::Refused(message) => open_notice_window(message, cx).map(|_| ()),
     }
 }
 
-/// Opens the main window on `data`. The caller holds its instance lock.
-pub fn open_main_window(data: AppData, cx: &mut App) -> gpui_kit::Result<Entity<AxonApp>> {
+/// Opens the main window, which keeps `lock` for as long as it is open. Closing the window
+/// ends the application.
+pub fn open_main_window(
+    lock: Arc<InstanceLock>,
+    cx: &mut App,
+) -> gpui_kit::Result<Entity<AxonApp>> {
     let options = main_window_options(cx);
     let (_, app) = gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| AxonApp::new(data, window, cx))
+        cx.new(|cx| AxonApp::new(lock, window, cx))
     })?;
     Ok(app)
 }

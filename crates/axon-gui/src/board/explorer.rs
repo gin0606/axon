@@ -2,13 +2,13 @@
 //! layout, the rows they give and the Entity open in the detail pane.
 
 use super::{Board, EntityDetail, Filter, Layout, Listing, State, filter::Exclusion, listing};
-use crate::project::ProjectId;
+use crate::project::ProjectRoot;
 use axon::lifecycle::EntityId;
 
 #[derive(Default)]
 pub struct Explorer {
     /// The project the board and the selection belong to.
-    project: Option<ProjectId>,
+    project: Option<ProjectRoot>,
     board: Option<Board>,
     filter: Filter,
     /// The filter offers the Conflicted state: the last board read for the project holds a
@@ -22,7 +22,7 @@ pub struct Explorer {
 
 impl Explorer {
     /// The project the board and the selection belong to.
-    pub fn project(&self) -> Option<&ProjectId> {
+    pub fn project(&self) -> Option<&ProjectRoot> {
         self.project.as_ref()
     }
     pub fn board(&self) -> Option<&Board> {
@@ -63,7 +63,7 @@ impl Explorer {
 
     /// Forgets the board while `project` is read, or when it could not be read. The selection
     /// survives for the same project and is dropped when the project changes.
-    pub fn unload(&mut self, project: Option<&ProjectId>) {
+    pub fn unload(&mut self, project: Option<&ProjectRoot>) {
         if self.project.as_ref() != project {
             self.selected = None;
             self.project = project.cloned();
@@ -76,7 +76,7 @@ impl Explorer {
     }
 
     /// Shows a board read for `project`. A board of any other project is ignored.
-    pub fn load(&mut self, project: &ProjectId, board: Board) {
+    pub fn load(&mut self, project: &ProjectRoot, board: Board) {
         if self.project.as_ref() != Some(project) {
             return;
         }

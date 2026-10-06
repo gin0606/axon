@@ -1,66 +1,72 @@
-//! Reading one project's store, and telling the results of earlier requests apart from the
-//! current one.
+//! Reading the store of one registered management root, and telling the results of earlier
+//! requests apart from the current one.
 
-use super::registry::ProjectId;
+use super::registry::ProjectRoot;
 use axon::{
     Error,
-    file::{HEADER_FILE, RECORDS_DIRECTORY, Store},
+    file::{HEADER_FILE, Store},
     lifecycle::record::{self, Header},
     location::Location,
 };
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-/// Read access to the store of one project. Every request goes to the management root fixed
-/// at construction, so a request made before switching projects still reads the project it was
-/// made for. Nothing here takes the store's lock or writes to it. The functions block; run them
-/// on the background executor.
+/// Read access to the store of one registered management root. Every request goes to the root
+/// fixed at construction, so a request made before switching still reads the root it was made
+/// for. Nothing here takes the store's lock or writes to it. The functions block; run them on
+/// the background executor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectConnection {
-    project: ProjectId,
-    root: PathBuf,
+    root: ProjectRoot,
 }
 
 impl ProjectConnection {
-    pub fn new(project: ProjectId, root: PathBuf) -> Self {
-        Self { project, root }
+    pub fn new(root: ProjectRoot) -> Self {
+        Self { root }
     }
-    pub fn project(&self) -> &ProjectId {
-        &self.project
-    }
-    /// The management root: the directory holding `.axon`.
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
-    /// A missing or uninitialized store is an error, never an empty one. The root is the
-    /// application's own, so Git is not consulted.
+    /// Opens the root as given, without discovery, as `axon storage check ROOT` does: inside a
+    /// Git worktree an unmerged index is an error. A missing root or header is an error, never
+    /// an empty store; a missing records directory is an empty store, as in the CLI, since Git
+    /// does not keep an empty directory.
     fn open(&self) -> axon::Result<Store> {
-        // The store of a project is created once and never again in its place, so any part of
-        // it that is gone is reported as missing: not as empty, and without the CLI's advice
-        // to initialize.
+        let root = self.root.path();
+        // A registered store is never created by the application, so a root or header that is
+        // gone is reported as missing: not as empty, and without the CLI's advice to
+        // initialize.
         let missing = |what: &Path| {
             Error::Invalid(format!(
-                "the store of this project is missing: {} does not exist; it is not created again in its place",
+                "the registered store is missing: {} does not exist",
                 what.display()
             ))
         };
+        // A path through something that is no longer a directory is as missing as one that is
+        // gone; any other failure to look is reported with the path.
         let present = |path: &Path| match std::fs::symlink_metadata(path) {
             Ok(_) => Ok(true),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(Error::Io(error)),
-        };
-        if !present(&self.root)? {
-            return Err(missing(&self.root));
-        }
-        let location = Location::standalone(&self.root)?;
-        let directory = self.root.join(".axon");
-        for path in [
-            directory.join(HEADER_FILE),
-            directory.join(RECORDS_DIRECTORY),
-        ] {
-            if !present(&path)? {
-                return Err(missing(&path));
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                Ok(false)
             }
+            Err(error) => Err(Error::Invalid(format!("{}: {error}", path.display()))),
+        };
+        if !present(root)? {
+            return Err(missing(root));
+        }
+        if !root.is_dir() {
+            return Err(Error::Invalid(format!(
+                "the registered management root is not a directory: {}",
+                root.display()
+            )));
+        }
+        let location = Location::explicit(root)?;
+        let header = root.join(".axon").join(HEADER_FILE);
+        if !present(&header)? {
+            // An unresolved merge explains a missing header better than its absence does.
+            location.check_index()?;
+            return Err(missing(&header));
         }
         location.open()
     }
@@ -81,11 +87,11 @@ impl ProjectConnection {
     }
 }
 
-/// Identifies one request, made for `key` (usually the [`ProjectId`] it reads). A
-/// newer request for the same purpose makes it stale, so its result is dropped instead of being
-/// shown for another project.
+/// Identifies one request, made for `key` (usually the [`ProjectRoot`] it reads). A newer
+/// request for the same purpose makes it stale, so its result is dropped instead of being shown
+/// for another registration.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Ticket<K = ProjectId> {
+pub struct Ticket<K = ProjectRoot> {
     key: K,
     serial: u64,
 }
@@ -95,9 +101,9 @@ impl<K> Ticket<K> {
     }
 }
 
-/// The latest request of one purpose, such as loading the selected project.
+/// The latest request of one purpose, such as loading the selected registration.
 #[derive(Debug)]
-pub struct Requests<K = ProjectId> {
+pub struct Requests<K = ProjectRoot> {
     issued: u64,
     current: Option<Ticket<K>>,
 }
@@ -148,8 +154,8 @@ mod tests {
 
     #[test]
     fn only_the_latest_request_is_applied_once() {
-        let a = ProjectId::from_bits(1);
-        let b = ProjectId::from_bits(2);
+        let a = ProjectRoot::new(std::env::temp_dir().join("a")).unwrap();
+        let b = ProjectRoot::new(std::env::temp_dir().join("b")).unwrap();
         let mut requests = Requests::default();
         let first = requests.begin(a.clone());
         let second = requests.begin(b.clone());
@@ -157,7 +163,7 @@ mod tests {
         assert_eq!(again.key(), &a);
         assert_ne!(
             first, again,
-            "a new request for the same project is a new ticket"
+            "a new request for the same root is a new ticket"
         );
         assert!(!requests.finish(&first));
         assert!(!requests.finish(&second));

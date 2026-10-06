@@ -1,8 +1,8 @@
-//! Times the window's frames and list operations on a project the `scale` example seeded.
-//! Ignored by default; run against an absolute data directory with
+//! Times the window's frames and list operations on a management root the `scale` example
+//! seeded and registered. Ignored by default; run against the example's absolute directory with
 //!
 //! ```sh
-//! AXON_GUI_SCALE_DIR=<data-dir> cargo test --release -p axon-gui --test scale -- --ignored --nocapture
+//! AXON_GUI_SCALE_DIR=<dir> cargo test --release -p axon-gui --test scale -- --ignored --nocapture
 //! ```
 
 use axon_gui::{AxonApp, board::Layout, project::AppData};
@@ -11,13 +11,20 @@ use gpui_kit::{
     AppContext, Bounds, ElementId, Point, TestAppContext, WindowBounds, WindowOptions, base::Root,
     px, size,
 };
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[gpui_kit::test]
-#[ignore = "measures a seeded project named by AXON_GUI_SCALE_DIR"]
+#[ignore = "measures a seeded root in the directory named by AXON_GUI_SCALE_DIR"]
 fn frames_and_list_operations(cx: &mut TestAppContext) {
     let dir = std::env::var("AXON_GUI_SCALE_DIR").expect("AXON_GUI_SCALE_DIR");
-    let data = AppData::at(dir).unwrap();
+    let data = Arc::new(
+        AppData::at(PathBuf::from(dir).join("data"))
+            .unwrap()
+            .lock_instance()
+            .unwrap(),
+    );
     cx.update(axon_gui::init);
     let (window, app) = cx.update(|cx| {
         let options = WindowOptions {
