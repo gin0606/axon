@@ -16,8 +16,9 @@ use axon::lifecycle::{
     Context, EntityId, Kind, Label, Lifecycle, Operation,
     record::{Current, Entry, Store, new_entity_id},
 };
+use axon::location::Location;
 use axon_gui::board::{Board, Filter, Layout, State, listing::listing};
-use axon_gui::project::{AppData, WriteOutcome};
+use axon_gui::project::AppData;
 use chrono::{TimeDelta, Utc};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -43,12 +44,17 @@ fn main() {
         let registry = data.create_project(PROJECT).unwrap();
         let project = registry.projects().last().unwrap().clone();
         let started = Instant::now();
-        let outcome = data.connect(&project).update(|header, records, _| {
-            let mut seed = Seed::new(records.clone(), &header.prefix);
-            seed.populate(groups);
-            Ok((seed.entries, ()))
-        });
-        assert!(matches!(outcome, WriteOutcome::Applied(())), "{outcome:?}");
+        // Written through the core, as the CLI would; the window only reads.
+        Location::standalone(&data.project_root(&project.id))
+            .and_then(|location| location.open())
+            .and_then(|mut store| {
+                store.update(|header, records, _| {
+                    let mut seed = Seed::new(records.clone(), &header.prefix);
+                    seed.populate(groups);
+                    Ok((seed.entries, ()))
+                })
+            })
+            .unwrap();
         println!(
             "seeded {} in {:.1?}",
             data.project_root(&project.id).display(),
@@ -64,14 +70,14 @@ fn main() {
     let connection = data.connect(project);
 
     let load = time(5, || connection.load().unwrap());
-    let (header, records, view) = connection.load().unwrap();
+    let (_, records, view) = connection.load().unwrap();
     // The window moves a read into its board; copies made beforehand keep cloning untimed.
     let mut reads = vec![(records.clone(), view.clone()); 5].into_iter();
     let board_new = time(5, || {
         let (records, view) = reads.next().unwrap();
-        Board::new(&header.prefix, records, view)
+        Board::new(records, view)
     });
-    let board = Board::new(&header.prefix, records.clone(), view);
+    let board = Board::new(records.clone(), view);
     let notes = records.notes().count();
     println!(
         "{} Entities, {} Notes, {} entries",
@@ -144,8 +150,8 @@ fn main() {
         let runs = time(10, || board.detail(&id).unwrap());
         println!("detail ({name}): {}", median(runs));
     }
-    // The detail checks every transition and structural change it offers, so its time
-    // depends on the Entity: the slowest of the first ones shows the worst case.
+    // The detail gathers the relations, Notes and history of the Entity, so its time depends
+    // on the Entity: the slowest of the first ones shows the worst case.
     let slowest = board
         .items()
         .iter()

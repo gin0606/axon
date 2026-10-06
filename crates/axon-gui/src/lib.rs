@@ -1,4 +1,4 @@
-//! GPUI desktop shell for Axon.
+//! GPUI desktop shell for Axon: a viewer of the records, which it never changes.
 //!
 //! The GUI depends on the `axon` library (storage adapters and the re-exported core) and
 //! converts core values into display text and GPUI elements here. Nothing from GPUI flows back
@@ -11,13 +11,7 @@ pub mod project;
 
 pub use app::AxonApp;
 
-use axon::lifecycle::Label;
-use gpui_kit::component::{
-    ActiveTheme, Theme,
-    button::Button,
-    input::{Input, InputState, Textarea, TextareaState},
-    menu::{DropdownMenu, PopupMenuItem},
-};
+use gpui_kit::component::{ActiveTheme, Theme, button::Button};
 use gpui_kit::{
     App, AppContext, Bounds, Context, Entity, Global, KeyBinding, Menu, MenuItem, OsAction, Render,
     SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions, actions,
@@ -25,22 +19,10 @@ use gpui_kit::{
 };
 use project::{AppData, InstanceError, InstanceLock, data::LocateError};
 
-actions!(
-    axon_gui,
-    [
-        Quit,
-        FocusNextField,
-        FocusPreviousField,
-        SelectNextEntity,
-        SelectPreviousEntity
-    ]
-);
+actions!(axon_gui, [Quit, SelectNextEntity, SelectPreviousEntity]);
 
-/// Key context wrapping a multi-line editor, so Tab leaves it instead of indenting it.
-pub(crate) const BODY_CONTEXT: &str = "AxonBody";
-
-/// Smallest window that still shows the project column, the list and the detail pane (or the
-/// workbench in its place) side by side.
+/// Smallest window that still shows the project column, the list and the detail pane side by
+/// side.
 pub const MIN_WINDOW_SIZE: (f32, f32) = (880., 520.);
 
 /// Registers the components, key bindings and application menus. Call once before opening
@@ -49,48 +31,11 @@ pub fn init(cx: &mut App) {
     gpui_kit::init(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new(
-            "tab",
-            FocusNextField,
-            Some(&format!("{BODY_CONTEXT} > Input")),
-        ),
-        KeyBinding::new(
-            "shift-tab",
-            FocusPreviousField,
-            Some(&format!("{BODY_CONTEXT} > Input")),
-        ),
         KeyBinding::new("down", SelectNextEntity, Some(app::LIST_CONTEXT)),
         KeyBinding::new("up", SelectPreviousEntity, Some(app::LIST_CONTEXT)),
     ]);
-    cx.on_action(|_: &Quit, cx| request_quit(cx));
+    cx.on_action(|_: &Quit, cx| cx.quit());
     cx.set_menus(menus());
-}
-
-/// The main window, which asks before anything unsaved in it is lost.
-pub(crate) struct MainWindow {
-    pub window: gpui_kit::AnyWindowHandle,
-    pub app: gpui_kit::WeakEntity<AxonApp>,
-}
-impl Global for MainWindow {}
-
-/// Quits the application, after the main window has asked about anything unsaved in it.
-pub fn request_quit(cx: &mut App) {
-    // The action may arrive while the main window is being updated, where it cannot be updated
-    // again; asking waits until that ends.
-    cx.defer(ask_and_quit);
-}
-
-fn ask_and_quit(cx: &mut App) {
-    if let Some(main) = cx.try_global::<MainWindow>() {
-        let (window, app) = (main.window, main.app.clone());
-        let asked = window.update(cx, |_, window, cx| {
-            app.update(cx, |this, cx| this.request_quit(window, cx))
-        });
-        if matches!(asked, Ok(Ok(()))) {
-            return;
-        }
-    }
-    cx.quit();
 }
 
 /// The menu bar: the application menu and the standard editing commands that text inputs
@@ -229,142 +174,4 @@ pub fn open_notice_window(message: String, cx: &mut App) -> gpui_kit::Result<Ent
         })
     })?;
     Ok(notice)
-}
-
-/// A draft editor: a title line, a label chosen from a menu, and a multi-line body.
-pub struct Workbench {
-    title: Entity<InputState>,
-    body: Entity<TextareaState>,
-    label: Label,
-    /// The text is being saved: it takes no typing until the save ends, so what is emptied
-    /// afterwards is exactly what was saved.
-    locked: bool,
-}
-
-impl Workbench {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let title = cx.new(|cx| InputState::new(window, cx).placeholder("タイトル"));
-        let body = cx.new(|cx| TextareaState::new(window, cx).placeholder("本文"));
-        title.update(cx, |title, cx| title.focus(window, cx));
-        Theme::sync_system_appearance(Some(window), cx);
-        cx.observe_window_appearance(window, |_, window, cx| {
-            Theme::sync_system_appearance(Some(window), cx)
-        })
-        .detach();
-        Self {
-            title,
-            body,
-            label: Label::Feat,
-            locked: false,
-        }
-    }
-
-    pub fn title(&self) -> &Entity<InputState> {
-        &self.title
-    }
-
-    pub fn body(&self) -> &Entity<TextareaState> {
-        &self.body
-    }
-
-    pub fn label(&self) -> Label {
-        self.label
-    }
-
-    fn select_label(&mut self, label: Label, cx: &mut Context<Self>) {
-        self.label = label;
-        cx.notify();
-    }
-
-    pub fn set_locked(&mut self, locked: bool, cx: &mut Context<Self>) {
-        self.locked = locked;
-        cx.notify();
-    }
-
-    /// Empties the title and the body, keeping the label for the next draft.
-    pub fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.title
-            .update(cx, |title, cx| title.set_value("", window, cx));
-        self.body
-            .update(cx, |body, cx| body.set_value("", window, cx));
-        cx.notify();
-    }
-
-    /// Whether neither the title nor the body holds anything typed.
-    pub fn is_blank(&self, cx: &App) -> bool {
-        self.title.read(cx).value().is_empty() && self.body.read(cx).value().is_empty()
-    }
-}
-
-/// A button that shows `current` and opens a menu of every label, calling `select` with the
-/// chosen one. The names are the spelling records and the CLI use.
-pub(crate) fn label_button(
-    id: &'static str,
-    current: Label,
-    select: impl Fn(Label, &mut App) + 'static,
-) -> impl IntoElement {
-    let select = std::rc::Rc::new(select);
-    Button::new(id)
-        .outline()
-        .label(format!("label: {} ▾", current.name()))
-        .dropdown_menu(move |menu, _, _| {
-            Label::ALL.into_iter().fold(menu, |menu, label| {
-                let select = select.clone();
-                menu.item(
-                    PopupMenuItem::new(label.name())
-                        .checked(label == current)
-                        .on_click(move |_, _, cx| select(label, cx)),
-                )
-            })
-        })
-}
-
-impl Render for Workbench {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let current = self.label;
-        let workbench = cx.entity().downgrade();
-        div()
-            .id("workbench")
-            .size_full()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .p_4()
-            .bg(theme.background)
-            .text_color(theme.foreground)
-            .on_action(|_: &FocusNextField, window, cx| window.focus_next(cx))
-            .on_action(|_: &FocusPreviousField, window, cx| window.focus_prev(cx))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        Input::new(&self.title)
-                            .id("title")
-                            .readonly(self.locked)
-                            .flex_1(),
-                    )
-                    .child(label_button("label", current, move |label, cx| {
-                        workbench
-                            .update(cx, |this, cx| this.select_label(label, cx))
-                            .ok();
-                    })),
-            )
-            .child(
-                div()
-                    .key_context(BODY_CONTEXT)
-                    .flex_1()
-                    .min_h(px(80.))
-                    .child(Textarea::new(&self.body).readonly(self.locked).size_full()),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child("Tab で次の欄へ、Shift-Tab で前の欄へ移動します。"),
-            )
-    }
 }

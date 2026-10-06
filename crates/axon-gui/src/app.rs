@@ -1,37 +1,30 @@
 //! The main window: project switching, creation and the filters on the left, the shared list of
-//! the selected project in the middle, and the detail of the selected Entity (or the draft
-//! workbench) on the right. Disk access runs on the background executor; each result is applied
-//! only while the request that produced it is still the current one.
+//! the selected project in the middle, and the detail of the selected Entity on the right. The
+//! window only reads the records of a project and never changes them. Disk access runs on the
+//! background executor; each result is applied only while the request that produced it is
+//! still the current one.
 
 mod explorer;
-mod organize;
-mod progress;
-mod record;
 pub mod text;
 
-use explorer::named;
 pub use explorer::{LIST_CONTEXT, entity_element};
-pub use organize::{Found, Outcome, OutcomeKind, PICKER_LIMIT, Picker};
-pub use progress::STATE_MENU_WIDTH;
-pub use record::{EDITOR_HEIGHT, EditDraft};
 
 use crate::{
-    FocusNextField, FocusPreviousField, MainWindow, Workbench,
-    board::{Board, Change, Explorer},
+    board::{Board, Explorer},
     project::{
         AppData, CreateError, NameError, Project, ProjectId, Registry, Requests, Status, Step,
         registry::NAME_LIMIT,
     },
 };
 use gpui_kit::component::{
-    ActiveTheme, Disableable,
+    ActiveTheme, Disableable, Theme,
     button::{Button, ButtonVariants},
     input::{Input, InputEvent, InputState},
     menu::{DropdownMenu, PopupMenuItem},
 };
 use gpui_kit::{
-    AnyElement, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, Render,
-    SharedString, UniformListScrollHandle, Window, div, prelude::*, px,
+    AnyElement, AppContext, Context, Entity, FocusHandle, IntoElement, Render, SharedString,
+    UniformListScrollHandle, Window, base::TestSupportExt, div, prelude::*, px,
 };
 use std::collections::HashMap;
 
@@ -91,30 +84,10 @@ pub struct AxonApp {
     switches: u64,
     /// Why the last attempt to finish each incomplete project failed, kept across switching.
     incomplete_errors: HashMap<ProjectId, String>,
-    workbench: Entity<Workbench>,
     explorer: Explorer,
     search: Entity<InputState>,
     list_focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
-    /// The picker choosing a Group or a dependency for the Entity in the detail pane.
-    picker: Option<Picker>,
-    picker_query: Entity<InputState>,
-    /// The change being written, for the project and Entity it was made for. One runs at a
-    /// time, so a repeated click or key does not make a second.
-    writes: Requests<(ProjectId, Change)>,
-    /// What became of the last change of each Entity, per project, that the screen does not
-    /// otherwise show; kept until it has been seen.
-    outcomes: HashMap<ProjectId, Vec<Outcome>>,
-    guard: progress::MenuGuard,
-    /// The detail shown before a change was saved, kept on screen while the project is read
-    /// again so the pane and its focus stay; its controls wait meanwhile.
-    held: Option<crate::board::EntityDetail>,
-    /// Scroll the list to the selection once the next read is shown.
-    reveal_on_load: bool,
-    /// Give the list the focus at the next render, after the picker holding it closed.
-    focus_list: bool,
-    /// What was typed and not saved yet, and the choices of the next creation.
-    drafts: record::Drafts,
 }
 
 impl AxonApp {
@@ -138,25 +111,9 @@ impl AxonApp {
             },
         )
         .detach();
-        let picker_query =
-            cx.new(|cx| InputState::new(window, cx).placeholder("タイトル・ID で探す"));
-        cx.subscribe(&picker_query, |_, _, event: &InputEvent, cx| {
-            if let InputEvent::Change = event {
-                cx.notify();
-            }
-        })
-        .detach();
-        let workbench = cx.new(|cx| Workbench::new(window, cx));
-        // Keystrokes reach the state menu's guard before any binding acts on them.
-        let app = cx.entity().downgrade();
-        let own_window = window.window_handle().window_id();
-        cx.intercept_keystrokes(move |event, window, cx| {
-            if window.window_handle().window_id() == own_window {
-                app.update(cx, |this, cx| {
-                    this.intercept_keystroke(&event.keystroke, cx)
-                })
-                .ok();
-            }
+        Theme::sync_system_appearance(Some(window), cx);
+        cx.observe_window_appearance(window, |_, window, cx| {
+            Theme::sync_system_appearance(Some(window), cx)
         })
         .detach();
         let mut this = Self {
@@ -173,46 +130,12 @@ impl AxonApp {
             notice: None,
             switches: 0,
             incomplete_errors: HashMap::new(),
-            workbench,
             explorer: Explorer::default(),
             search,
             // A tab stop, so the arrow keys are reachable from the keyboard alone.
             list_focus: cx.focus_handle().tab_stop(true),
             list_scroll: UniformListScrollHandle::new(),
-            picker: None,
-            picker_query,
-            writes: Requests::default(),
-            outcomes: HashMap::new(),
-            guard: Default::default(),
-            held: None,
-            reveal_on_load: false,
-            focus_list: false,
-            drafts: Default::default(),
         };
-        // Closing the window or quitting with something unsaved asks first.
-        cx.set_global(MainWindow {
-            window: window.window_handle(),
-            app: cx.entity().downgrade(),
-        });
-        let workbench_title = this.workbench.read(cx).title().clone();
-        let workbench_body = this.workbench.read(cx).body().clone();
-        cx.subscribe(&workbench_title, |this, _, event: &InputEvent, cx| {
-            if let InputEvent::Change = event {
-                this.forget_create_outcome(cx);
-            }
-        })
-        .detach();
-        cx.subscribe(&workbench_body, |this, _, event: &InputEvent, cx| {
-            if let InputEvent::Change = event {
-                this.forget_create_outcome(cx);
-            }
-        })
-        .detach();
-        let app = cx.entity().downgrade();
-        window.on_window_should_close(cx, move |window, cx| {
-            app.update(cx, |this, cx| this.should_close(window, cx))
-                .unwrap_or(true)
-        });
         this.reload_registry(cx);
         this
     }
@@ -247,14 +170,15 @@ impl AxonApp {
     pub fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
     }
-    pub fn workbench(&self) -> &Entity<Workbench> {
-        &self.workbench
-    }
     pub fn explorer(&self) -> &Explorer {
         &self.explorer
     }
     pub fn search_input(&self) -> &Entity<InputState> {
         &self.search
+    }
+    /// The focus of the list, where the arrow keys move the selection.
+    pub fn list_focus(&self) -> &FocusHandle {
+        &self.list_focus
     }
 
     /// Reads the registry again, keeping the selection when it still exists.
@@ -322,23 +246,11 @@ impl AxonApp {
     /// for the previously selected project becomes stale.
     fn show_selected(&mut self, cx: &mut Context<Self>) {
         self.store_loads.cancel();
-        if self.explorer.project() != self.selected.as_ref() {
-            self.held = None;
-        }
         let project = self.selected().cloned();
         let project_id = project.as_ref().map(|project| &project.id);
         if self.explorer.project() != project_id {
-            // An Entity to open after a creation belongs to the project left.
-            self.drafts.open_on_load = None;
             self.scroll_list_to_top();
-            if self.picker.take().is_some() {
-                self.focus_list = true;
-            }
-            self.reveal_on_load = false;
-            // Leaving the project closes the detail, where its outcome was seen.
-            let open = self.explorer.selected().cloned();
             self.explorer.deselect();
-            self.drop_outcome(open);
         }
         self.explorer.unload(project_id);
         self.store = match project {
@@ -357,30 +269,25 @@ impl AxonApp {
                     // The rows are derived off the UI thread too; the window only filters them.
                     let result = cx
                         .background_spawn(async move {
-                            connection.load().map(|(header, records, view)| {
-                                Board::new(&header.prefix, records, view)
-                            })
+                            connection
+                                .load()
+                                .map(|(_, records, view)| Board::new(records, view))
                         })
                         .await;
                     this.update(cx, |this, cx| {
                         if this.store_loads.finish(&ticket) {
-                            this.held = None;
                             this.store = match result {
                                 Ok(board) => {
                                     let summary = Summary {
                                         entities: board.len(),
                                     };
                                     this.explorer.load(ticket.key(), board);
-                                    this.loaded(cx);
                                     StoreState::Loaded(summary)
                                 }
                                 Err(error) => {
                                     // Nothing of the project is shown, so neither is a selection
                                     // that a later read would bring back unasked.
-                                    let open = this.explorer.selected().cloned();
                                     this.explorer.deselect();
-                                    this.drop_outcome(open);
-                                    this.reveal_on_load = false;
                                     StoreState::Failed(error.to_string())
                                 }
                             };
@@ -644,7 +551,7 @@ impl AxonApp {
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         match self.registry {
             RegistryState::Failed(_) => self.reload_registry(cx),
-            _ => self.refresh(cx),
+            _ => self.reload_selected(cx),
         }
     }
 
@@ -862,16 +769,7 @@ impl AxonApp {
 }
 
 impl Render for AxonApp {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.clear_saved_workbench(window, cx);
-        // Only while the closed picker's search still has the focus (or nothing has), not over
-        // a field chosen since.
-        if std::mem::take(&mut self.focus_list) {
-            let query = self.picker_query.read(cx).focus_handle(cx);
-            if window.focused(cx).is_none_or(|focused| focused == query) {
-                window.focus(&self.list_focus, cx);
-            }
-        }
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let (background, foreground, border, muted, danger) = (
             theme.background,
@@ -908,13 +806,6 @@ impl Render for AxonApp {
                         .on_click(cx.listener(|this, _, _, cx| this.close_entity(cx))),
                 )
                 .into_any_element(),
-            None if let Some(held) = self.held.as_ref().filter(|held| {
-                self.explorer.selected() == Some(&held.id)
-                    && matches!(self.store, StoreState::Loading)
-            }) =>
-            {
-                self.render_detail(held, cx)
-            }
             None if self.explorer.selected().is_some()
                 && matches!(self.store, StoreState::Loading) =>
             {
@@ -925,14 +816,21 @@ impl Render for AxonApp {
                     .child("読み込み中…")
                     .into_any_element()
             }
-            None => self.render_create(cx),
+            // Nothing is open: the column stays empty, and points at the list while it has rows.
+            None => div()
+                .id("detail-empty")
+                .size_full()
+                .p_4()
+                .text_sm()
+                .text_color(muted)
+                .when(self.explorer.listing().matched > 0, |empty| {
+                    empty.child("一覧から Issue・Group を選ぶと、ここに詳細を表示します。")
+                })
+                .test_support()
+                .into_any_element(),
         };
         div()
             .id("axon-app")
-            .capture_any_mouse_down(cx.listener(|this, event, _, _| this.note_press(event)))
-            .capture_key_up(cx.listener(|this, event, _, _| this.note_key_up(event)))
-            .on_action(|_: &FocusNextField, window, cx| window.focus_next(cx))
-            .on_action(|_: &FocusPreviousField, window, cx| window.focus_prev(cx))
             .size_full()
             .flex()
             .flex_row()
@@ -967,7 +865,6 @@ impl Render for AxonApp {
                             .child(status),
                     )
                     .children(action)
-                    .children(self.render_other_outcomes(cx))
                     .children(list),
             )
             .child(

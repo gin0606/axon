@@ -1,7 +1,7 @@
 //! The filters, the shared list and the detail pane of the selected project.
 
 use super::{AxonApp, StoreState, text};
-use crate::board::{EntityDetail, Filter, Layout, Link, Section, State, WaitKind};
+use crate::board::{EntityDetail, Exclusion, Filter, Layout, Link, State, WaitKind};
 use crate::{SelectNextEntity, SelectPreviousEntity};
 use axon::lifecycle::{EntityId, Kind, Label};
 use gpui_kit::component::{
@@ -27,7 +27,7 @@ pub fn entity_element(id: &EntityId) -> ElementId {
     ElementId::Name(format!("entity-{id}").into())
 }
 
-pub(super) fn named(name: String) -> ElementId {
+fn named(name: String) -> ElementId {
     ElementId::Name(name.into())
 }
 
@@ -50,10 +50,7 @@ impl AxonApp {
 
     /// Opens a known Entity in the detail pane.
     pub fn open_entity(&mut self, id: EntityId, cx: &mut Context<Self>) {
-        let previous = self.explorer.selected().cloned();
         self.explorer.select(id);
-        self.drop_picker();
-        self.drop_outcome(previous);
         self.reveal_selected();
         cx.notify();
     }
@@ -64,7 +61,7 @@ impl AxonApp {
     }
 
     /// Scrolls the list to the selected row, when the list shows it.
-    pub(super) fn reveal_selected(&self) {
+    fn reveal_selected(&self) {
         let listing = self.explorer.listing();
         if let Some(ix) = self
             .explorer
@@ -77,22 +74,14 @@ impl AxonApp {
 
     /// Moves the selection through the list and keeps the selected row in view.
     fn step(&mut self, step: isize, cx: &mut Context<Self>) {
-        let previous = self.explorer.selected().cloned();
         self.explorer.step(step);
-        self.drop_picker();
-        self.drop_outcome(previous);
         self.reveal_selected();
         cx.notify();
     }
 
-    /// Closes the detail pane, showing the draft workbench there again.
+    /// Closes the detail pane.
     pub fn close_entity(&mut self, cx: &mut Context<Self>) {
-        let previous = self.explorer.selected().cloned();
         self.explorer.deselect();
-        self.drop_outcome(previous);
-        if self.picker.take().is_some() {
-            self.focus_list = true;
-        }
         cx.notify();
     }
 
@@ -199,20 +188,11 @@ impl AxonApp {
                     .items_center()
                     .child(Input::new(&self.search).id("search").flex_1())
                     .child(
-                        Button::new("new-entity")
-                            .outline()
-                            .compact()
-                            .label("＋ 作成")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.new_entity(window, cx)),
-                            ),
-                    )
-                    .child(
                         Button::new("reload-list")
                             .outline()
                             .compact()
                             .label("再読み込み")
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                            .on_click(cx.listener(|this, _, _, cx| this.reload_selected(cx))),
                     ),
             )
             .child(
@@ -370,7 +350,7 @@ impl AxonApp {
     }
 
     /// A clickable reference to another Entity, or its ID when the store does not hold it.
-    pub(super) fn render_link(&self, link: &Link, cx: &mut Context<Self>) -> AnyElement {
+    fn render_link(&self, link: &Link, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         match &link.known {
             Some(known) => {
@@ -490,14 +470,7 @@ impl AxonApp {
                     .text_xl()
                     .child(detail.title.clone())
                     .test_support(),
-            )
-            .child(self.render_actions(detail, cx))
-            .children(self.render_edit_blocked(detail, cx));
-        let editing = self.edit_draft();
-        match editing {
-            Some(draft) => pane = pane.child(self.render_edit(detail, draft, cx)),
-            None => pane = pane.children(self.render_outcome(detail, Section::Text, cx)),
-        }
+            );
 
         let mut state = format!(
             "{} {}",
@@ -518,9 +491,6 @@ impl AxonApp {
         pane = pane
             .child(div().id("detail-state").child(state))
             .child(belongs)
-            .child(self.render_progress(detail, cx))
-            // A creation found made after its publication stopped says so on its detail.
-            .children(self.render_outcome(detail, Section::Create, cx))
             .children(self.render_filtered_out(cx));
         if detail.heads > 0 {
             pane = pane.child(
@@ -529,7 +499,7 @@ impl AxonApp {
                     .text_sm()
                     .text_color(danger)
                     .child(format!(
-                        "衝突しています（head {} 件）。表示は最初の head の値です。解決は CLI の axon resolve で行います。",
+                        "衝突しています（head {} 件）。表示は最初の head の値です。",
                         detail.heads
                     )),
             );
@@ -590,11 +560,6 @@ impl AxonApp {
             pane = pane.child(waits);
         }
 
-        pane = pane
-            .child(self.render_structure(detail, cx))
-            .children(self.render_create_inside(detail, cx));
-
-        // Shown beside the edit form too: the recorded body is what a warning asks to check.
         pane = pane.child(
             div()
                 .id("detail-description")
@@ -647,14 +612,29 @@ impl AxonApp {
             }
             pane = pane.child(children);
         }
-        pane = pane
-            .child(self.render_dependencies(detail, cx))
-            .children(self.render_links(
-                "detail-dependents",
-                "この仕事に依存している",
-                &detail.dependents,
-                cx,
-            ));
+        let mut dependencies = div()
+            .id("detail-dependencies")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(section_heading("依存先".into()));
+        if detail.dependencies.is_empty() {
+            dependencies = dependencies.child(
+                div()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("依存先はありません。"),
+            );
+        }
+        for dependency in &detail.dependencies {
+            dependencies = dependencies.child(self.render_link(dependency, cx));
+        }
+        pane = pane.child(dependencies).children(self.render_links(
+            "detail-dependents",
+            "この仕事に依存している",
+            &detail.dependents,
+            cx,
+        ));
 
         let mut notes = div()
             .id("detail-notes")
@@ -663,8 +643,7 @@ impl AxonApp {
             .gap_2()
             .child(section_heading(
                 format!("Note（{} 件）", detail.notes.len()).into(),
-            ))
-            .child(self.render_note_form(detail, cx));
+            ));
         for (ix, note) in detail.notes.iter().enumerate() {
             let mut head = text::time(note.at);
             if let Some(actor) = &note.actor {
@@ -736,5 +715,35 @@ impl AxonApp {
             history = history.child(line);
         }
         pane.child(history).into_any_element()
+    }
+
+    /// Why the selected Entity is not among the matches, when it is not.
+    fn render_filtered_out(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let exclusions = self.explorer.selected_exclusions();
+        if exclusions.is_empty() {
+            return None;
+        }
+        let reasons: Vec<String> = exclusions.iter().map(exclusion).collect();
+        Some(
+            div()
+                .id("detail-filtered-out")
+                .text_sm()
+                .text_color(cx.theme().warning)
+                .child(format!(
+                    "現在の絞り込みに一致しないため、一覧には一致として表示されていません（{}）。",
+                    reasons.join("。")
+                ))
+                .test_support()
+                .into_any_element(),
+        )
+    }
+}
+
+fn exclusion(exclusion: &Exclusion) -> String {
+    match exclusion {
+        Exclusion::State(state) => format!("状態「{}」を選んでいません", text::state(*state)),
+        Exclusion::Kind(kind) => format!("種類「{}」を選んでいません", text::kind(*kind)),
+        Exclusion::Label(label) => format!("label「{}」を選んでいません", label.name()),
+        Exclusion::Query(query) => format!("タイトル・本文に「{query}」がありません"),
     }
 }

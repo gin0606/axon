@@ -1,59 +1,28 @@
-//! Reading and writing one project's store, and telling the results of earlier requests apart
-//! from the current one.
+//! Reading one project's store, and telling the results of earlier requests apart from the
+//! current one.
 
-use super::data::{Fault, FaultPoint};
 use super::registry::ProjectId;
 use axon::{
     Error,
     file::{HEADER_FILE, RECORDS_DIRECTORY, Store},
-    lifecycle::record::{self, Entry, Header},
+    lifecycle::record::{self, Header},
     location::Location,
 };
 use std::path::{Path, PathBuf};
 
-/// Access to the store of one project. Every request goes to the management root fixed at
-/// construction, so a request made before switching projects still reads or writes the project
-/// it was made for. The functions block; run them on the background executor.
+/// Read access to the store of one project. Every request goes to the management root fixed
+/// at construction, so a request made before switching projects still reads the project it was
+/// made for. Nothing here takes the store's lock or writes to it. The functions block; run them
+/// on the background executor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectConnection {
     project: ProjectId,
     root: PathBuf,
-    fault: Fault,
-}
-
-/// The result of a write, as the store reports it.
-#[derive(Debug)]
-pub enum WriteOutcome<T> {
-    /// Every record was published.
-    Applied(T),
-    /// Nothing was written: the change was refused, the store could not be read or locked, or
-    /// publication failed before the first record. The same input can be submitted again.
-    NotApplied(Error),
-    /// Publication stopped after some records were written. Read the store again and compare
-    /// before deciding to resubmit; never resubmit automatically.
-    PublicationUnknown(Error),
-}
-impl<T> From<axon::Result<T>> for WriteOutcome<T> {
-    fn from(result: axon::Result<T>) -> Self {
-        match result {
-            Ok(value) => Self::Applied(value),
-            Err(error @ Error::PublicationUnknown(_)) => Self::PublicationUnknown(error),
-            Err(error) => Self::NotApplied(error),
-        }
-    }
 }
 
 impl ProjectConnection {
     pub fn new(project: ProjectId, root: PathBuf) -> Self {
-        Self {
-            project,
-            root,
-            fault: Fault::default(),
-        }
-    }
-    pub(crate) fn with_fault(mut self, fault: Fault) -> Self {
-        self.fault = fault;
-        self
+        Self { project, root }
     }
     pub fn project(&self) -> &ProjectId {
         &self.project
@@ -110,43 +79,9 @@ impl ProjectConnection {
     pub fn load(&self) -> axon::Result<(Header, record::Store, record::View)> {
         self.open()?.read()
     }
-
-    /// Runs `change` under the store's write lock against its current records and publishes
-    /// the records it returns.
-    pub fn update<T>(
-        &self,
-        change: impl FnOnce(&Header, &record::Store, &record::View) -> axon::Result<(Vec<Entry>, T)>,
-    ) -> WriteOutcome<T> {
-        let unknown = |error: std::io::Error| Error::PublicationUnknown(error.to_string());
-        let fault = &self.fault;
-        let (mut injected, mut writes) = (None, false);
-        let result = self.open().and_then(|mut store| {
-            store.update(|header, records, view| {
-                let (entries, value) = change(header, records, view)?;
-                writes = !entries.is_empty();
-                if writes && let Err(error) = fault.inject(FaultPoint::BeforePublish) {
-                    injected = Some(error);
-                    return Err(Error::Invalid("injected".into()));
-                }
-                Ok((entries, value))
-            })
-        });
-        if let Some(error) = injected {
-            return WriteOutcome::PublicationUnknown(unknown(error));
-        }
-        result
-            .and_then(|value| match writes {
-                true => fault
-                    .inject(FaultPoint::AfterPublish)
-                    .map_err(unknown)
-                    .map(|()| value),
-                false => Ok(value),
-            })
-            .into()
-    }
 }
 
-/// Identifies one request, made for `key` (usually the [`ProjectId`] it reads or writes). A
+/// Identifies one request, made for `key` (usually the [`ProjectId`] it reads). A
 /// newer request for the same purpose makes it stale, so its result is dropped instead of being
 /// shown for another project.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -228,25 +163,5 @@ mod tests {
         let cancelled = requests.begin(b);
         requests.cancel();
         assert!(!requests.finish(&cancelled));
-    }
-
-    #[test]
-    fn write_results_are_classified_by_whether_anything_was_published() {
-        assert!(matches!(
-            WriteOutcome::from(Ok::<_, Error>(1)),
-            WriteOutcome::Applied(1)
-        ));
-        assert!(matches!(
-            WriteOutcome::<()>::from(Err(Error::PublicationUnknown("renamed".into()))),
-            WriteOutcome::PublicationUnknown(_)
-        ));
-        assert!(matches!(
-            WriteOutcome::<()>::from(Err(Error::Invalid("not applied".into()))),
-            WriteOutcome::NotApplied(_)
-        ));
-        assert!(matches!(
-            WriteOutcome::<()>::from(Err(Error::Io(std::io::Error::other("lock")))),
-            WriteOutcome::NotApplied(_)
-        ));
     }
 }

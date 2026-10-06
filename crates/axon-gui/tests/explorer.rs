@@ -5,11 +5,12 @@ use axon::lifecycle::{
     Context, EntityId, Kind, Label, Lifecycle, Operation,
     record::{Current, Entry, RecordId, new_entity_id},
 };
+use axon::location::Location;
 use axon_gui::{
     AxonApp, MIN_WINDOW_SIZE,
     app::{StoreState, entity_element},
     board::{Layout, State, WaitKind},
-    project::{AppData, ProjectConnection, ProjectId, WriteOutcome},
+    project::{AppData, ProjectId},
 };
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
@@ -27,25 +28,26 @@ fn data() -> (tempfile::TempDir, AppData) {
     (dir, data)
 }
 
-/// Writes records to one project as the CLI would, one update each.
-struct Seed(ProjectConnection);
+/// Writes records to one project through the core as the CLI would, one update each.
+struct Seed(Location);
 
 impl Seed {
     fn new(data: &AppData, name: &str) -> (ProjectId, Self) {
         let registry = data.create_project(name).unwrap();
         let project = registry.projects().last().unwrap().clone();
-        (project.id.clone(), Self(data.connect(&project)))
+        let location = Location::standalone(&data.project_root(&project.id)).unwrap();
+        (project.id.clone(), Self(location))
     }
 
     fn write(&self, entry: impl FnOnce(&axon::lifecycle::record::Store, &str) -> Entry) -> Entry {
-        let outcome = self.0.update(|header, records, _| {
-            let entry = entry(records, &header.prefix);
-            Ok((vec![entry.clone()], entry))
-        });
-        match outcome {
-            WriteOutcome::Applied(entry) => entry,
-            other => panic!("{other:?}"),
-        }
+        self.0
+            .open()
+            .unwrap()
+            .update(|header, records, _| {
+                let entry = entry(records, &header.prefix);
+                Ok((vec![entry.clone()], entry))
+            })
+            .unwrap()
     }
 
     fn create(
@@ -94,7 +96,7 @@ impl Seed {
     /// Makes `id` conflicted: a Start and a Cancel both recorded on the same head, as two
     /// branches merged by Git would leave them. Returns the head of the Start branch.
     fn fork(&self, id: &EntityId) -> RecordId {
-        let (_, stale, _) = self.0.load().unwrap();
+        let (_, stale, _) = self.0.open().unwrap().read().unwrap();
         let started = self.write(|records, _| {
             Entry::Record(records.perform(id, Operation::Start, None, now()).unwrap())
         });
@@ -113,6 +115,21 @@ impl Seed {
             Entry::Note(records.add_note(id, body.into(), None, now()).unwrap())
         });
     }
+}
+
+/// Every file and directory under `dir` with its length and modification time.
+fn snapshot(dir: &std::path::Path) -> Vec<(std::path::PathBuf, u64, std::time::SystemTime)> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        if metadata.is_dir() {
+            pending.extend(fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+        }
+        found.push((path, metadata.len(), metadata.modified().unwrap()));
+    }
+    found.sort();
+    found
 }
 
 fn now() -> Context {
@@ -350,8 +367,10 @@ fn clearing_every_state_matches_nothing(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_detail_shows_relations_waits_notes_and_history(cx: &mut TestAppContext) {
     let (_dir, data) = data();
-    let (_, seed) = Seed::new(&data, "読書会");
+    let (project, seed) = Seed::new(&data, "読書会");
     let plan = plan(&seed);
+    let store = data.project_root(&project).join(".axon");
+    let before = snapshot(&store);
     let (handle, app) = open(&data, cx);
 
     click_in(handle, "entity-list", entity_element(&plan.invite), cx);
@@ -374,6 +393,22 @@ fn the_detail_shows_relations_waits_notes_and_history(cx: &mut TestAppContext) {
         );
         assert!(explorer.selected_exclusions().is_empty());
     });
+
+    // Along the dependency and back from its dependents.
+    click_in(
+        handle,
+        "detail-dependencies",
+        entity_element(&plan.venue),
+        cx,
+    );
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("会場を決める"));
+    click_in(
+        handle,
+        "detail-dependents",
+        entity_element(&plan.invite),
+        cx,
+    );
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("案内を送る"));
 
     // To the dependency from the waiting reasons, then to the parent from where it belongs.
     click_in(handle, "detail-waits", entity_element(&plan.venue), cx);
@@ -405,6 +440,9 @@ fn the_detail_shows_relations_waits_notes_and_history(cx: &mut TestAppContext) {
     click(handle, "state-NotStarted", cx);
     assert_eq!(detail_title(&app, cx).as_deref(), Some("案内を送る"));
     cx.read(|cx| assert!(!app.read(cx).explorer().selected_exclusions().is_empty()));
+    with_window(handle, cx, |window, _| {
+        assert!(window.find("detail-filtered-out").visible())
+    });
     assert!(
         !rows(&app, cx)
             .iter()
@@ -413,6 +451,10 @@ fn the_detail_shows_relations_waits_notes_and_history(cx: &mut TestAppContext) {
 
     click(handle, "close-detail", cx);
     assert_eq!(detail_title(&app, cx), None);
+
+    // Browsing and reading again leave the store exactly as it was.
+    click(handle, "reload-list", cx);
+    assert_eq!(snapshot(&store), before);
 }
 
 #[gpui_kit::test]

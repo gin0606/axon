@@ -44,7 +44,7 @@ pub struct AppData {
     fault: Fault,
 }
 
-/// Where a test makes creating or finishing a project, or a write to a project's store, fail.
+/// Where a test makes creating or finishing a project fail.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FaultPoint {
@@ -52,20 +52,13 @@ pub enum FaultPoint {
     Before(Step),
     /// After the step replaced the registry file, before the replacement is made durable.
     Replaced(Step),
-    /// A write to a project's store has its records and has not published them; a failure
-    /// here is reported as a publication of unknown outcome with nothing written.
-    BeforePublish,
-    /// A write to a project's store has published its records; a failure here is reported as
-    /// a publication of unknown outcome with everything written.
-    AfterPublish,
 }
 
-/// A failure injected into creation or a write by a test of the window; the application never
-/// sets one.
+/// A failure injected into creation by a test of the window; the application never sets one.
 #[derive(Clone, Default)]
-pub(crate) struct Fault(Option<Arc<dyn Fn(FaultPoint) -> io::Result<()> + Send + Sync>>);
+struct Fault(Option<Arc<dyn Fn(FaultPoint) -> io::Result<()> + Send + Sync>>);
 impl Fault {
-    pub(crate) fn inject(&self, point: FaultPoint) -> io::Result<()> {
+    fn inject(&self, point: FaultPoint) -> io::Result<()> {
         match &self.0 {
             Some(fault) => fault(point),
             None => Ok(()),
@@ -251,7 +244,7 @@ impl AppData {
     }
 
     /// The same data with `fault` called at each [`FaultPoint`] of creating or finishing a
-    /// project and of writing to a project's store; an error it returns fails the step there.
+    /// project; an error it returns fails the step there.
     /// For tests only.
     #[doc(hidden)]
     pub fn with_fault(
@@ -294,7 +287,6 @@ impl AppData {
 
     pub fn connect(&self, project: &Project) -> ProjectConnection {
         ProjectConnection::new(project.id.clone(), self.project_root(&project.id))
-            .with_fault(self.fault.clone())
     }
 
     /// Takes the single-instance lock, creating the data directory if needed.

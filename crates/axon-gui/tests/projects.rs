@@ -337,18 +337,12 @@ fn an_unreadable_registry_is_not_an_empty_list(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn smallest_main_window_keeps_projects_and_workbench_usable(cx: &mut TestAppContext) {
+fn smallest_main_window_keeps_projects_and_the_list_usable(cx: &mut TestAppContext) {
     let (_dir, data) = data();
     data.create_project("とても長い名前のプロジェクトでも窓に収まる")
         .unwrap();
     cx.update(axon_gui::init);
-    let (handle, app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
-    let body = cx.read(|cx| {
-        ElementId::from((
-            "input",
-            app.read(cx).workbench().read(cx).body().entity_id(),
-        ))
-    });
+    let (handle, _app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
     click(handle, "new-project", cx);
     with_window(handle, cx, |window, _| {
         let viewport = window.viewport_size();
@@ -356,9 +350,9 @@ fn smallest_main_window_keeps_projects_and_workbench_usable(cx: &mut TestAppCont
             ElementId::from("project-switch"),
             "project-name".into(),
             "create-project".into(),
-            "title".into(),
-            "label".into(),
-            body,
+            "search".into(),
+            "reload-list".into(),
+            "detail-empty".into(),
         ] {
             let element = window.find(id.clone());
             assert!(element.visible(), "{id:?} is hidden");
@@ -481,22 +475,16 @@ fn a_retry_result_is_not_shown_on_another_project(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_long_name_and_an_error_leave_the_workbench_in_the_smallest_window(cx: &mut TestAppContext) {
+fn a_long_name_and_an_error_fit_in_the_smallest_window(cx: &mut TestAppContext) {
     let (_dir, data) = data();
     let registry = data.create_project(&"長".repeat(80)).unwrap();
     fs::remove_dir_all(data.project_root(&registry.projects()[0].id)).unwrap();
     cx.update(axon_gui::init);
     let (handle, app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
     assert!(matches!(store(&app, cx), StoreState::Failed(_)));
-    let body = cx.read(|cx| {
-        ElementId::from((
-            "input",
-            app.read(cx).workbench().read(cx).body().entity_id(),
-        ))
-    });
     with_window(handle, cx, |window, _| {
         let viewport = window.viewport_size();
-        for id in [ElementId::from("reload"), "title".into(), body] {
+        for id in [ElementId::from("reload"), "detail-empty".into()] {
             let bounds = window.find(id.clone()).bounds();
             assert!(
                 bounds.bottom_right().x <= viewport.width

@@ -155,6 +155,6 @@ impl Fixture {
     }
 
     pub fn board(&self) -> Board {
-        Board::new("axon", self.store.clone(), self.store.view().unwrap())
+        Board::new(self.store.clone(), self.store.view().unwrap())
     }
 }

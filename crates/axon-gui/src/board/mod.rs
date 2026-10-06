@@ -1,29 +1,19 @@
 //! The records of one project as values the window lists, filters and inspects.
 //!
 //! A [`Board`] owns one read of a store. [`filter`] decides which Entities match,
-//! [`listing`] lays them out as a tree or a flat list, [`detail`] gathers what the detail
-//! pane shows of one Entity, [`change`] names the changes the core makes, [`progress`] the
-//! transitions offered for an Entity and [`organize`] the choices of a structural change.
-//! Everything here is a pure derivation from the records: no GPUI, no disk access, and no
-//! condition command is ever run.
+//! [`listing`] lays them out as a tree or a flat list and [`detail`] gathers what the detail
+//! pane shows of one Entity. Everything here is a pure derivation from the records: no GPUI,
+//! no disk access, and no condition command is ever run.
 
-pub mod change;
 pub mod detail;
 pub mod explorer;
 pub mod filter;
 pub mod listing;
-pub mod organize;
-pub mod progress;
 
-pub use change::{Change, Edit, NewEntity, Rejection, Section};
-pub use detail::{
-    Difference, EntityDetail, HistoryEntry, Link, NoteEntry, Structure, Wait, WaitKind,
-};
+pub use detail::{Difference, EntityDetail, HistoryEntry, Link, NoteEntry, Wait, WaitKind};
 pub use explorer::Explorer;
 pub use filter::{Exclusion, Filter};
 pub use listing::{Layout, ListRow, Listing};
-pub use organize::Purpose;
-pub use progress::Step;
 
 use axon::lifecycle::{EntityId, Kind, Label, Lifecycle, record};
 use axon::read;
@@ -80,8 +70,6 @@ pub struct Item {
 
 /// One read of a project's store with the rows derived from it.
 pub struct Board {
-    /// The prefix of the store's Entity IDs.
-    prefix: String,
     records: record::Store,
     view: record::View,
     /// Every known Entity in creation order (ties by ID).
@@ -92,9 +80,8 @@ pub struct Board {
 }
 
 impl Board {
-    pub fn new(prefix: &str, records: record::Store, view: record::View) -> Self {
+    pub fn new(records: record::Store, view: record::View) -> Self {
         let mut board = Self {
-            prefix: prefix.to_owned(),
             records,
             view,
             items: Vec::new(),
@@ -171,29 +158,6 @@ impl Board {
             (Some(item), Some(presented)) => filter.exclusions(item, presented),
             _ => Vec::new(),
         }
-    }
-    /// An Entity ID for a new Entity: the first one `generate` makes for the store's prefix
-    /// that names no Entity of these records, not even one only a Note names. A creation
-    /// written later is checked again against the records under the lock.
-    pub fn fresh_id(
-        &self,
-        mut generate: impl FnMut(&str) -> axon::lifecycle::Result<EntityId>,
-    ) -> axon::lifecycle::Result<EntityId> {
-        for _ in 0..100 {
-            let id = generate(&self.prefix)?;
-            if !self.view.is_known(&id) && !self.view.noted_only().contains(&id) {
-                return Ok(id);
-            }
-        }
-        Err(axon::lifecycle::Error::new(
-            "could not allocate a unique Entity ID after 100 attempts",
-        ))
-    }
-    /// Whether the records hold a Note of `entity` with `nonce`.
-    pub fn has_note(&self, entity: &EntityId, nonce: &axon::lifecycle::Nonce) -> bool {
-        self.records
-            .notes()
-            .any(|(_, note)| &note.entity == entity && &note.nonce == nonce)
     }
     /// The detail of a known Entity, without running any condition.
     pub fn detail(&self, id: &EntityId) -> axon::lifecycle::Result<EntityDetail> {

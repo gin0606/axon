@@ -1,5 +1,4 @@
 use super::*;
-use crate::project::WriteOutcome;
 use axon::lifecycle::{
     Context, Kind, Label, Lifecycle,
     record::{Current, Entry, new_entity_id},
@@ -47,8 +46,12 @@ fn entities(connection: &ProjectConnection) -> usize {
     connection.read(|_, _, view| view.known().count()).unwrap()
 }
 
+/// Writes an Entity as the CLI would, through the core and not the window's connection.
 fn create_entity(connection: &ProjectConnection, title: &str) {
-    let outcome = connection.update(|header, records, _| {
+    let mut store = Location::standalone(connection.root())
+        .and_then(|location| location.open())
+        .unwrap();
+    let outcome = store.update(|header, records, _| {
         let id = new_entity_id(&header.prefix)?;
         let record = records.create(
             id,
@@ -70,7 +73,7 @@ fn create_entity(connection: &ProjectConnection, title: &str) {
         )?;
         Ok((vec![Entry::Record(record)], ()))
     });
-    assert!(matches!(outcome, WriteOutcome::Applied(())), "{outcome:?}");
+    assert!(outcome.is_ok(), "{outcome:?}");
 }
 
 #[test]
@@ -264,11 +267,6 @@ fn unreadable_data_is_an_error_not_an_empty_list() {
 
     fs::remove_dir_all(data.project_root(&project.id)).unwrap();
     assert!(data.connect(&project).read(|_, _, _| ()).is_err());
-    assert!(matches!(
-        data.connect(&project)
-            .update(|_, _, _| Ok((Vec::new(), ()))),
-        WriteOutcome::NotApplied(_)
-    ));
     assert!(
         !data.project_root(&project.id).exists(),
         "a read never initializes"
