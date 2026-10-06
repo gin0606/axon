@@ -136,6 +136,10 @@ impl<K: Clone + PartialEq> Requests<K> {
     pub fn pending(&self) -> Option<&Ticket<K>> {
         self.current.as_ref()
     }
+    /// How many requests have been started.
+    pub fn issued(&self) -> u64 {
+        self.issued
+    }
 }
 
 #[cfg(test)]

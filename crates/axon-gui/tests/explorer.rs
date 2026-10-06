@@ -8,14 +8,14 @@ use axon::lifecycle::{
 use axon::location::Location;
 use axon_gui::{
     AxonApp, MIN_WINDOW_SIZE,
-    app::{StoreState, entity_element},
+    app::{StoreState, Summary, entity_element},
     board::{Layout, State, WaitKind},
     project::{AppData, ProjectId},
 };
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
-    AppContext, Bounds, ElementId, Entity, Point, TestAppContext, WindowBounds, WindowHandle,
-    WindowOptions, base::Root, px, size,
+    AppContext, Bounds, ElementId, Entity, Point, TestAppContext, VisualTestContext, WindowBounds,
+    WindowHandle, WindowOptions, base::Root, px, size,
 };
 use std::collections::BTreeSet;
 use std::fs;
@@ -528,7 +528,7 @@ fn the_conflicted_state_is_offered_only_while_a_conflict_exists(cx: &mut TestApp
     assert!(rows(&app, cx).is_empty());
     // Reading the same project again keeps the choice offered and cleared throughout.
     cx.update(|cx| app.update(cx, |app, cx| app.reload_selected(cx)));
-    cx.read(|cx| assert_eq!(app.read(cx).store(), &StoreState::Loading));
+    cx.read(|cx| assert!(matches!(app.read(cx).store(), StoreState::Reloading(_))));
     // Checked before the window, whose frame lets the read finish.
     assert!(!chosen_states(&app, cx).contains(&State::Conflicted));
     assert!(offers_conflicted(handle, cx));
@@ -609,12 +609,13 @@ fn reloading_keeps_the_selection_and_shows_new_records(cx: &mut TestAppContext) 
     seed.note(&plan.invite, "返事が来た");
 
     cx.update(|cx| app.update(cx, |app, cx| app.reload_selected(cx)));
-    // While the store is read again, nothing of the earlier read is shown as current.
+    // While the store is read again, the earlier read stays on screen.
     cx.read(|cx| {
         let app = app.read(cx);
-        assert_eq!(app.store(), &StoreState::Loading);
-        assert!(app.explorer().board().is_none());
-        assert!(app.explorer().detail().is_none());
+        assert_eq!(app.store(), &StoreState::Reloading(Summary { entities: 4 }));
+        assert!(app.explorer().board().is_some());
+        let detail = app.explorer().detail().unwrap().as_ref().unwrap();
+        assert_eq!(detail.notes.len(), 1);
     });
     cx.run_until_parked();
     cx.read(|cx| {
@@ -809,4 +810,203 @@ fn the_list_builds_only_the_rows_in_view(cx: &mut TestAppContext) {
     });
     click_in(handle, "entity-list", entity_element(&ids[149]), cx);
     assert_eq!(detail_title(&app, cx).as_deref(), Some("仕事 149"));
+}
+
+/// Brings the window to the front, as coming back to the app does.
+fn activate(handle: Window, cx: &mut TestAppContext) {
+    cx.update_window(handle.into(), |_, window, _| window.activate_window())
+        .unwrap();
+    cx.run_until_parked();
+}
+
+/// Sends the window to the back, as switching to another app does.
+fn deactivate(handle: Window, cx: &mut TestAppContext) {
+    VisualTestContext::from_window(handle.into(), cx).deactivate_window();
+    cx.run_until_parked();
+}
+
+fn reads(app: &Entity<AxonApp>, cx: &mut TestAppContext) -> u64 {
+    cx.read(|cx| app.read(cx).reads_started())
+}
+
+#[gpui_kit::test]
+fn coming_back_to_the_window_reads_the_records_again(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    let (handle, app) = open(&data, cx);
+    activate(handle, cx);
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+
+    // Written while the app is in the back, as the CLI would.
+    let before = reads(&app, cx);
+    deactivate(handle, cx);
+    seed.note(&plan.invite, "返事が来た");
+    seed.create(
+        Kind::Issue,
+        Lifecycle::NotStarted,
+        "名札を作る",
+        Label::Chore,
+        None,
+    );
+    assert_eq!(reads(&app, cx), before, "leaving the window reads nothing");
+    assert_eq!(rows(&app, cx).len(), 3);
+
+    activate(handle, cx);
+    assert_eq!(reads(&app, cx), before + 1);
+    assert_eq!(titles(&rows(&app, cx)).last(), Some(&"名札を作る"));
+    cx.read(|cx| {
+        let detail = app.read(cx).explorer().detail().unwrap().as_ref().unwrap();
+        assert_eq!(detail.title, "案内を送る");
+        assert_eq!(detail.notes.len(), 2);
+        assert_eq!(detail.notes[1].body, "返事が来た");
+    });
+
+    // A store that can no longer be read shows no earlier list.
+    deactivate(handle, cx);
+    let root = cx.read(|cx| {
+        let app = app.read(cx);
+        app.data().project_root(&app.selected().unwrap().id)
+    });
+    fs::remove_dir_all(root.join(".axon/records")).unwrap();
+    activate(handle, cx);
+    cx.read(|cx| {
+        let app = app.read(cx);
+        assert!(matches!(app.store(), StoreState::Failed(_)));
+        assert!(app.explorer().board().is_none());
+        assert!(app.explorer().selected().is_none());
+    });
+    with_window(handle, cx, |window, _| {
+        assert!(window.try_find("entity-list").is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn reading_again_keeps_the_list_its_filter_selection_and_scroll(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let ids: Vec<_> = (0..40)
+        .map(|ix| {
+            seed.create(
+                Kind::Issue,
+                Lifecycle::Undecided,
+                &format!("仕事 {ix}"),
+                Label::Feat,
+                None,
+            )
+        })
+        .collect();
+    let (handle, app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
+    click(handle, "layout-flat", cx);
+    click(handle, "search", cx);
+    with_window(handle, cx, |window, cx| window.input("仕事", cx));
+    click_in(handle, "entity-list", entity_element(&ids[0]), cx);
+    for _ in 1..ids.len() {
+        press(handle, "down", cx);
+    }
+    seed.note(&ids[39], "書き足した");
+    let listed = rows(&app, cx);
+
+    let visible = |window: &mut gpui_kit::Window, id: &EntityId| {
+        window
+            .within("entity-list")
+            .try_find(entity_element(id))
+            .is_some_and(|row| row.visible())
+    };
+    cx.update(|cx| app.update(cx, |app, cx| app.reload_selected(cx)));
+    cx.read(|cx| assert!(matches!(app.read(cx).store(), StoreState::Reloading(_))));
+    assert_eq!(rows(&app, cx), listed);
+    with_window(handle, cx, |window, _| {
+        // Checked in the frame drawn while the read runs.
+        assert!(visible(window, &ids[39]));
+        assert!(!visible(window, &ids[0]));
+        assert!(window.try_find("detail-empty").is_none());
+    });
+    cx.run_until_parked();
+
+    cx.read(|cx| {
+        let app = app.read(cx);
+        assert!(matches!(app.store(), StoreState::Loaded(_)));
+        assert_eq!(app.explorer().layout(), Layout::Flat);
+        assert_eq!(app.explorer().filter().query, "仕事");
+        assert_eq!(app.explorer().selected(), Some(&ids[39]));
+        let detail = app.explorer().detail().unwrap().as_ref().unwrap();
+        assert_eq!(detail.notes.len(), 1);
+    });
+    assert_eq!(rows(&app, cx), listed);
+    with_window(handle, cx, |window, _| {
+        assert!(visible(window, &ids[39]));
+        assert!(!visible(window, &ids[0]));
+    });
+}
+
+#[gpui_kit::test]
+fn coming_back_while_a_read_runs_starts_no_other(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    plan(&seed);
+
+    // Brought to the front as it opens, while the registry is read: no read is stacked on it.
+    cx.update(axon_gui::init);
+    let (handle, app) = cx.update(|cx| {
+        let data = data.clone();
+        gpui_kit::open_window(axon_gui::main_window_options(cx), cx, |window, cx| {
+            window.activate_window();
+            cx.new(|cx| AxonApp::new(data, window, cx))
+        })
+        .unwrap()
+    });
+    let handle: Window = handle.downcast::<Root>().unwrap();
+    cx.run_until_parked();
+    cx.read(|cx| assert!(matches!(app.read(cx).store(), StoreState::Loaded(_))));
+    assert_eq!(reads(&app, cx), 2, "the registry and the store, once each");
+
+    // Brought to the front while the reload runs.
+    deactivate(handle, cx);
+    let before = reads(&app, cx);
+    cx.update(|cx| app.update(cx, |app, cx| app.reload_selected(cx)));
+    activate(handle, cx);
+    assert_eq!(reads(&app, cx), before + 1);
+    cx.read(|cx| assert!(matches!(app.read(cx).store(), StoreState::Loaded(_))));
+}
+
+#[gpui_kit::test]
+fn reading_again_keeps_the_detail_scrolled(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let id = seed.create(
+        Kind::Issue,
+        Lifecycle::Undecided,
+        "会場を決める",
+        Label::Feat,
+        None,
+    );
+    for ix in 0..30 {
+        seed.note(&id, &format!("Note {ix}: {}", "長い本文".repeat(40)));
+    }
+    let (handle, app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
+    click_in(handle, "entity-list", entity_element(&id), cx);
+    with_window(handle, cx, |window, cx| {
+        let delta = gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-1500.)));
+        window.scroll("detail-title", delta, cx);
+    });
+    let title_top = |window: &mut gpui_kit::Window| window.find("detail-title").bounds().origin.y;
+    let mut scrolled = px(0.);
+    with_window(handle, cx, |window, _| scrolled = title_top(window));
+    assert!(scrolled < px(0.), "the detail is scrolled: {scrolled:?}");
+
+    seed.note(&id, "書き足した");
+    cx.update(|cx| app.update(cx, |app, cx| app.reload_selected(cx)));
+    with_window(handle, cx, |window, _| {
+        // Checked in the frame drawn while the read runs.
+        assert_eq!(title_top(window), scrolled);
+    });
+    cx.run_until_parked();
+    cx.read(|cx| {
+        let detail = app.read(cx).explorer().detail().unwrap().as_ref().unwrap();
+        assert_eq!(detail.notes.len(), 31);
+    });
+    with_window(handle, cx, |window, _| {
+        assert_eq!(title_top(window), scrolled)
+    });
 }

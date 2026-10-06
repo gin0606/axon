@@ -61,8 +61,8 @@ impl Explorer {
         }
     }
 
-    /// Forgets the board while `project` is read (again). The selection survives a reload of
-    /// the same project and is dropped when the project changes.
+    /// Forgets the board while `project` is read, or when it could not be read. The selection
+    /// survives for the same project and is dropped when the project changes.
     pub fn unload(&mut self, project: Option<&ProjectId>) {
         if self.project.as_ref() != project {
             self.selected = None;

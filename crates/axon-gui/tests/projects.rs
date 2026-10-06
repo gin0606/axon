@@ -12,8 +12,8 @@ use axon_gui::{
 };
 use gpui_kit::test::{TestAppContextExt, TestWindowExt};
 use gpui_kit::{
-    AppContext, Bounds, ElementId, Entity, Point, TestAppContext, WindowBounds, WindowHandle,
-    WindowOptions, base::Root, px, size,
+    AppContext, Bounds, ElementId, Entity, Point, TestAppContext, VisualTestContext, WindowBounds,
+    WindowHandle, WindowOptions, base::Root, px, size,
 };
 use std::sync::{
     Arc,
@@ -683,4 +683,67 @@ fn a_retry_error_stays_with_its_project(cx: &mut TestAppContext) {
         panic!("{:?}", store(&app, cx));
     };
     assert!(error.contains("保存先を準備できませんでした"), "{error}");
+}
+
+/// Brings the window to the front, as coming back to the app does; the activation is
+/// delivered once the caller lets the window run.
+fn request_activation(handle: Window, cx: &mut TestAppContext) {
+    cx.update_window(handle.into(), |_, window, _| window.activate_window())
+        .unwrap();
+}
+
+fn reads(app: &Entity<AxonApp>, cx: &mut TestAppContext) -> u64 {
+    cx.read(|cx| app.read(cx).reads_started())
+}
+
+#[gpui_kit::test]
+fn coming_back_reads_an_unreadable_registry_again(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    fs::create_dir_all(data.dir()).unwrap();
+    let path = data.dir().join("projects.json");
+    fs::write(&path, "{ broken").unwrap();
+    let (handle, app) = start(&data, cx);
+    cx.read(|cx| assert!(matches!(app.read(cx).registry(), RegistryState::Failed(_))));
+
+    // Coming back while the registry is read again starts no other read.
+    let before = reads(&app, cx);
+    cx.update(|cx| app.update(cx, |app, cx| app.reload(cx)));
+    request_activation(handle, cx);
+    cx.run_until_parked();
+    assert_eq!(reads(&app, cx), before + 1);
+    cx.read(|cx| assert!(matches!(app.read(cx).registry(), RegistryState::Failed(_))));
+
+    // Coming back reads what the reload would: the registry, then the project it holds.
+    fs::write(&path, Registry::default().encode()).unwrap();
+    data.create_project("読書会").unwrap();
+    VisualTestContext::from_window(handle.into(), cx).deactivate_window();
+    request_activation(handle, cx);
+    cx.run_until_parked();
+    assert_eq!(selected(&app, cx), Some(("読書会".into(), Status::Ready)));
+    assert_eq!(store(&app, cx), EMPTY);
+}
+
+#[gpui_kit::test]
+fn coming_back_while_a_project_is_created_starts_no_read(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    data.create_project("読書会").unwrap();
+    let (handle, app) = start(&data, cx);
+    assert_eq!(store(&app, cx), EMPTY);
+    click(handle, "new-project", cx);
+    type_text(handle, "家計簿", cx);
+
+    let before = reads(&app, cx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        app.update(cx, |app, cx| app.submit(window, cx))
+    })
+    .unwrap();
+    request_activation(handle, cx);
+    cx.run_until_parked();
+    assert_eq!(selected(&app, cx), Some(("家計簿".into(), Status::Ready)));
+    assert_eq!(store(&app, cx), EMPTY);
+    assert_eq!(
+        reads(&app, cx),
+        before + 1,
+        "only the created project is read"
+    );
 }

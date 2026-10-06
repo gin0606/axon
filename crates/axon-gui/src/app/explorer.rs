@@ -150,7 +150,7 @@ impl AxonApp {
     /// The search, the layout switch and the rows, once the selected project has been read.
     pub(super) fn render_list(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let board = self.explorer.board()?;
-        if !matches!(self.store, StoreState::Loaded(_)) {
+        if !matches!(self.store, StoreState::Loaded(_) | StoreState::Reloading(_)) {
             return None;
         }
         let theme = cx.theme();

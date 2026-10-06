@@ -2,7 +2,7 @@
 //! the selected project in the middle, and the detail of the selected Entity on the right. The
 //! window only reads the records of a project and never changes them. Disk access runs on the
 //! background executor; each result is applied only while the request that produced it is
-//! still the current one.
+//! still the current one. Coming back to the window reads the records again, as the reload does.
 
 mod explorer;
 pub mod text;
@@ -56,6 +56,8 @@ pub enum StoreState {
     },
     Loading,
     Loaded(Summary),
+    /// The store is read again while what the last read gave stays on screen.
+    Reloading(Summary),
     /// The store could not be read. It is not shown as empty.
     Failed(String),
 }
@@ -114,6 +116,12 @@ impl AxonApp {
         Theme::sync_system_appearance(Some(window), cx);
         cx.observe_window_appearance(window, |_, window, cx| {
             Theme::sync_system_appearance(Some(window), cx)
+        })
+        .detach();
+        cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.reload_on_activation(cx);
+            }
         })
         .detach();
         let mut this = Self {
@@ -175,6 +183,10 @@ impl AxonApp {
     }
     pub fn search_input(&self) -> &Entity<InputState> {
         &self.search
+    }
+    /// How many reads of the registry and of stores the window has started.
+    pub fn reads_started(&self) -> u64 {
+        self.registry_loads.issued() + self.store_loads.issued()
     }
     /// The focus of the list, where the arrow keys move the selection.
     pub fn list_focus(&self) -> &FocusHandle {
@@ -242,17 +254,43 @@ impl AxonApp {
         self.show_selected(cx);
     }
 
+    /// Reads again what the reload would when the window comes back to the front. While a read
+    /// or a creation is already running, its result is shown instead and no read is stacked on
+    /// it; a change made after that read began shows on the next return or reload.
+    fn reload_on_activation(&mut self, cx: &mut Context<Self>) {
+        if self.busy
+            || self.registry_loads.pending().is_some()
+            || self.store_loads.pending().is_some()
+        {
+            return;
+        }
+        self.reload(cx);
+    }
+
     /// Shows the selected project, reading its store when it is ready. A read still running
-    /// for the previously selected project becomes stale.
+    /// for the previously selected project becomes stale. Reading the project on screen again
+    /// keeps its list and detail until the result replaces them.
     fn show_selected(&mut self, cx: &mut Context<Self>) {
         self.store_loads.cancel();
         let project = self.selected().cloned();
         let project_id = project.as_ref().map(|project| &project.id);
-        if self.explorer.project() != project_id {
+        let same = self.explorer.project() == project_id;
+        // Only a read of the same project keeps what is shown; a project whose creation has not
+        // finished is not read.
+        let read = project.as_ref().is_some_and(|p| p.status == Status::Ready);
+        let shown = match &self.store {
+            StoreState::Loaded(summary) | StoreState::Reloading(summary) if same && read => {
+                Some(*summary)
+            }
+            _ => None,
+        };
+        if !same {
             self.scroll_list_to_top();
             self.explorer.deselect();
         }
-        self.explorer.unload(project_id);
+        if shown.is_none() {
+            self.explorer.unload(project_id);
+        }
         self.store = match project {
             None => StoreState::None,
             Some(project) if project.status == Status::Creating => {
@@ -287,6 +325,7 @@ impl AxonApp {
                                 Err(error) => {
                                     // Nothing of the project is shown, so neither is a selection
                                     // that a later read would bring back unasked.
+                                    this.explorer.unload(Some(ticket.key()));
                                     this.explorer.deselect();
                                     StoreState::Failed(error.to_string())
                                 }
@@ -297,7 +336,10 @@ impl AxonApp {
                     .ok();
                 })
                 .detach();
-                StoreState::Loading
+                match shown {
+                    Some(summary) => StoreState::Reloading(summary),
+                    None => StoreState::Loading,
+                }
             }
         };
         cx.notify();
@@ -732,16 +774,19 @@ impl AxonApp {
             (_, Some(_), StoreState::Loading | StoreState::None) => {
                 (status.child(message("読み込み中…".into())), None)
             }
-            (_, Some(_), StoreState::Loaded(summary)) => (
-                status.child(message(
-                    if summary.entities == 0 {
-                        "Issue・Group はまだありません。".into()
-                    } else {
-                        format!("{} 件の Issue・Group があります。", summary.entities).into()
-                    },
-                )),
-                None,
-            ),
+            (_, Some(_), StoreState::Loaded(summary) | StoreState::Reloading(summary)) => {
+                let count = if summary.entities == 0 {
+                    "Issue・Group はまだありません。".to_string()
+                } else {
+                    format!("{} 件の Issue・Group があります。", summary.entities)
+                };
+                let text = if matches!(self.store, StoreState::Reloading(_)) {
+                    format!("{count}（読み直し中…）")
+                } else {
+                    count
+                };
+                (status.child(message(text.into())), None)
+            }
             (_, Some(_), StoreState::Failed(error)) => (
                 status
                     .child(message(
@@ -806,16 +851,6 @@ impl Render for AxonApp {
                         .on_click(cx.listener(|this, _, _, cx| this.close_entity(cx))),
                 )
                 .into_any_element(),
-            None if self.explorer.selected().is_some()
-                && matches!(self.store, StoreState::Loading) =>
-            {
-                div()
-                    .id("detail-loading")
-                    .p_4()
-                    .text_color(muted)
-                    .child("読み込み中…")
-                    .into_any_element()
-            }
             // Nothing is open: the column stays empty, and points at the list while it has rows.
             None => div()
                 .id("detail-empty")
