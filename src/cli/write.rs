@@ -72,8 +72,8 @@ pub(super) fn import(command: Import) -> Result<Output> {
             let bytes = std::fs::read(file)?;
             let input = std::str::from_utf8(&bytes)
                 .map_err(|e| axon::Error::Invalid(format!("Declaration schema: {e}")))?;
-            let mut declaration =
-                axon::declaration::parse(input).map_err(|e| axon::Error::Invalid(e.to_string()))?;
+            let mut declaration = axon::declaration::parse_unvalidated(input)
+                .map_err(|e| axon::Error::Invalid(e.to_string()))?;
             let publication = if matches!(&command, Import::Prepare { .. }) {
                 Publication::Declaration
             } else {

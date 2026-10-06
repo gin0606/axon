@@ -38,8 +38,8 @@ fn apply_with(
                 let before = crate::file::read_regular(path)?;
                 let input = std::str::from_utf8(&before)
                     .map_err(|e| invalid(format!("Declaration schema: {e}")))?;
-                let mut declaration =
-                    crate::declaration::parse(input).map_err(|e| invalid(e.to_string()))?;
+                let mut declaration = crate::declaration::parse_unvalidated(input)
+                    .map_err(|e| invalid(e.to_string()))?;
                 let checked = declaration
                     .check(input, records, context)
                     .map_err(|e| invalid(e.to_string()))?;

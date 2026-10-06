@@ -911,18 +911,287 @@ fn declaration_rejects_external_kind_changes_before_apply_and_on_retry() {
             for operation in ["check", "apply"] {
                 let error = failure(f.run(&["import", operation, path.to_str().unwrap()]));
                 assert!(
-                    error.contains("read-only:") && error.contains("kind is fixed"),
+                    error.contains(&format!("read-only: {external}: kind is fixed"))
+                        && error.contains("run axon import prepare FILE"),
                     "{error}"
                 );
                 assert_eq!(snapshot(&f), before);
                 assert_eq!(fs::read_to_string(&path).unwrap(), input);
             }
+            // The remedy the error names regenerates the stored kind.
+            f.ok(&["import", "prepare", path.to_str().unwrap()]);
+            let prepared = declaration::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(prepared.references[0].kind, external_kind);
+            f.ok(&["import", "check", path.to_str().unwrap()]);
+            assert_eq!(snapshot(&f), before);
             d.references[0].kind = external_kind.into();
             d.references[0].title = "Stale context".into();
             d.references[0].lifecycle = "cancelled".into();
             fs::write(&path, d.serialize(&view_of(&before)).unwrap()).unwrap();
             f.ok(&["import", "check", path.to_str().unwrap()]);
         }
+    }
+}
+
+/// Runs `check` and `apply` on `input` and returns the check error after confirming that both
+/// give the same reason and neither changes storage or the file.
+fn rejected(f: &Fixture, input: &str) -> String {
+    let path = f.0.join("plan.yaml");
+    let before = snapshot(f);
+    fs::write(&path, input).unwrap();
+    let error = failure(f.run(&["import", "check", path.to_str().unwrap()]));
+    let apply_error = failure(f.run(&["import", "apply", path.to_str().unwrap()]));
+    let reason = error.trim_end().trim_start_matches("Error: import: ");
+    assert!(
+        apply_error.contains("Not applied:") && apply_error.contains(reason),
+        "{apply_error}"
+    );
+    assert_eq!(snapshot(f), before);
+    assert_eq!(fs::read_to_string(&path).unwrap(), input);
+    error
+}
+
+#[test]
+fn declaration_lifecycle_rejection_names_the_command_for_the_transition() {
+    let f = Fixture::new();
+    f.ok(&["init", "demo"]);
+    let undecided = created(&f.ok(&["capture", "--label", "chore", "--title", "Undecided"]));
+    let accepted = f.accepted("Accepted");
+    let started = f.accepted("Started");
+    f.ok(&["start", &started]);
+    let completed = f.accepted("Completed");
+    f.ok(&["start", &completed]);
+    f.ok(&["complete", &completed]);
+    let cancelled = f.accepted("Cancelled");
+    f.ok(&["cancel", &cancelled]);
+    let group = created(&f.ok(&[
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Group",
+    ]));
+    let after =
+        |command: &str, id: &str| format!("run axon {command} {id} after axon import apply");
+    let first = |command: &str, id: &str| {
+        format!("run axon {command} {id} first, then run axon export again for {id}")
+    };
+    let cases = [
+        (
+            &undecided,
+            "undecided",
+            "not-started",
+            after("accept", &undecided),
+        ),
+        (
+            &accepted,
+            "not-started",
+            "undecided",
+            after("withdraw", &accepted),
+        ),
+        (
+            &accepted,
+            "not-started",
+            "in-progress",
+            after("start", &accepted),
+        ),
+        (
+            &started,
+            "in-progress",
+            "not-started",
+            after("release", &started),
+        ),
+        (
+            &started,
+            "in-progress",
+            "completed",
+            after("complete", &started),
+        ),
+        (
+            &accepted,
+            "not-started",
+            "cancelled",
+            after("cancel", &accepted),
+        ),
+        (
+            &cancelled,
+            "cancelled",
+            "undecided",
+            first("reconsider", &cancelled),
+        ),
+        (
+            &completed,
+            "completed",
+            "not-started",
+            first("reopen", &completed),
+        ),
+        (
+            &group,
+            "not-started",
+            "completed",
+            after("complete", &group),
+        ),
+        (
+            &undecided,
+            "undecided",
+            "completed",
+            "no single command moves it from undecided to completed".into(),
+        ),
+        (
+            &group,
+            "not-started",
+            "in-progress",
+            "a Group is never stored as in-progress".into(),
+        ),
+    ];
+    for (id, stored, declared, guidance) in cases {
+        let exported = f.ok(&["export", id]);
+        let input = exported.replace(
+            &format!("lifecycle: {stored}"),
+            &format!("lifecycle: {declared}"),
+        );
+        assert_ne!(input, exported);
+        let error = rejected(&f, &input);
+        assert!(
+            error.contains(&format!("read-only: {id}: lifecycle is fixed"))
+                && error.contains(&format!("restore lifecycle: {stored}"))
+                && error.contains(&guidance),
+            "{stored} -> {declared}: {error}"
+        );
+    }
+    // Every record with a changed lifecycle is reported at once.
+    let mut d = declaration::parse(&f.ok(&["export", &undecided, &accepted])).unwrap();
+    for r in &mut d.issues {
+        r.lifecycle = if r.id.as_ref() == Some(&undecided) {
+            "not-started"
+        } else {
+            "cancelled"
+        }
+        .into();
+    }
+    let error = rejected(&f, &d.serialize(&view_of(&snapshot(&f))).unwrap());
+    assert!(
+        error.contains(&after("accept", &undecided)) && error.contains(&after("cancel", &accepted)),
+        "{error}"
+    );
+}
+
+#[test]
+fn declaration_terminal_lifecycle_guidance_lets_the_edit_apply() {
+    let f = Fixture::new();
+    f.ok(&["init", "demo"]);
+    let id = f.accepted("Done");
+    f.ok(&["start", &id]);
+    f.ok(&["complete", &id]);
+    let exported = f.ok(&["export", &id]);
+    let edited = exported.replace("title: Done", "title: Redone");
+    let error = rejected(
+        &f,
+        &edited.replace("lifecycle: completed", "lifecycle: not-started"),
+    );
+    assert!(
+        error.contains(&format!("run axon reopen {id} first")),
+        "{error}"
+    );
+    // Restoring the lifecycle alone is not enough: the core keeps a terminal title fixed.
+    assert!(rejected(&f, &edited).contains("terminal text is fixed"));
+    f.ok(&["reopen", &id]);
+    let path = f.0.join("plan.yaml");
+    fs::write(
+        &path,
+        f.ok(&["export", &id])
+            .replace("title: Done", "title: Redone"),
+    )
+    .unwrap();
+    f.ok(&["import", "apply", path.to_str().unwrap()]);
+    assert!(f.ok(&["show", &id]).contains("Redone"));
+}
+
+#[test]
+fn declaration_base_mismatch_names_export_to_retake() {
+    let f = Fixture::new();
+    f.ok(&["init", "demo"]);
+    let kept = f.accepted("Kept");
+    let stale = f.accepted("Stale");
+    let edit = |yaml: &str| {
+        yaml.replace("title: Kept", "title: Kept edited")
+            .replace("title: Stale", "title: Stale edited")
+    };
+    let exported = f.ok(&["export", &kept, &stale]);
+    f.ok(&["label", "set", &stale, "bug"]);
+    let error = rejected(&f, &edit(&exported));
+    assert!(
+        error.contains(&format!("conflict: {stale}: base mismatch"))
+            && error.contains(&format!(
+                "run axon export again for {stale} and the other records of this file"
+            ))
+            && !error.contains(&format!("conflict: {kept}")),
+        "{error}"
+    );
+    // Prepare leaves the base as it is, so the conflict stays until the records are exported again.
+    let path = f.0.join("plan.yaml");
+    f.ok(&["import", "prepare", path.to_str().unwrap()]);
+    assert!(failure(f.run(&["import", "check", path.to_str().unwrap()])).contains("base mismatch"));
+    let retaken = f.0.join("retaken.yaml");
+    fs::write(&retaken, edit(&f.ok(&["export", &kept, &stale]))).unwrap();
+    f.ok(&["import", "apply", retaken.to_str().unwrap()]);
+    assert!(f.ok(&["show", &kept]).contains("Kept edited"));
+    assert!(f.ok(&["show", &stale]).contains("Stale edited"));
+}
+
+#[test]
+fn declaration_existing_kind_rejection_names_convert_and_export() {
+    let f = Fixture::new();
+    f.ok(&["init", "demo"]);
+    let moved = f.accepted("Moved");
+    let mut d = declaration::parse(&f.ok(&["export", &moved])).unwrap();
+    d.groups = std::mem::take(&mut d.issues);
+    let input = d.serialize(&view_of(&snapshot(&f))).unwrap();
+    let converted = f.accepted("Converted");
+    let exported = f.ok(&["export", &converted]);
+    f.ok(&["convert", &converted, "--kind", "group"]);
+    let path = f.0.join("plan.yaml");
+    let group = created(&f.ok(&[
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Parent",
+    ]));
+    f.ok(&[
+        "capture", "--label", "chore", "--title", "Child", "--parent", &group,
+    ]);
+    // Moving the Group record leaves its child's parent pointing at an Issue record; the move
+    // is still what gets reported.
+    let exported_group = f.ok(&["export", &group]);
+    let (head, rest) = exported_group.split_once("issues:\n").unwrap();
+    let (prefix, group_record) = head.split_once("groups:\n").unwrap();
+    let group_input = format!("{prefix}groups: []\nissues:\n{group_record}{rest}");
+    // A move that is not the only problem leaves the local error in place: here the Group
+    // record is copied into issues, not moved.
+    let duplicated = format!("{head}issues:\n{group_record}{rest}");
+    let error = rejected(&f, &duplicated);
+    assert!(
+        error.contains("identity/reference:") && !error.contains("kind is fixed"),
+        "{error}"
+    );
+    for (id, input, declared) in [
+        (&moved, input, "group"),
+        (&converted, exported, "issue"),
+        (&group, group_input, "issue"),
+    ] {
+        let error = rejected(&f, &input);
+        let stored = if declared == "group" {
+            "issues"
+        } else {
+            "groups"
+        };
+        assert!(
+            error.contains(&format!("read-only: {id}: kind is fixed"))
+                && error.contains(&format!("move it back to {stored}"))
+                && error.contains(&format!("run axon convert {id} --kind {declared}"))
+                && error.contains(&format!("run axon export again for {id}")),
+            "{error}"
+        );
+        let prepare_error = failure(f.run(&["import", "prepare", path.to_str().unwrap()]));
+        assert!(
+            prepare_error.contains(&format!("run axon convert {id} --kind {declared}"))
+                && prepare_error.contains(&format!("run axon export again for {id}")),
+            "{prepare_error}"
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), input);
     }
 }
 

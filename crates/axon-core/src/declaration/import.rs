@@ -1,7 +1,7 @@
 use super::*;
-use crate::lifecycle::Label;
 use crate::lifecycle::record::Record as StoreRecord;
 use crate::lifecycle::record::{Context, Entry, RecordKind, Store};
+use crate::lifecycle::{Label, Operation};
 
 fn id(value: &str) -> Result<EntityId> {
     value
@@ -14,6 +14,88 @@ fn record_id(record: &Record) -> Result<EntityId> {
         .id
         .as_deref()
         .ok_or_else(|| invalid("identity/reference: id: run axon import prepare FILE"))?)
+}
+fn list(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Issue => "issues",
+        Kind::Group => "groups",
+    }
+}
+fn article(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Issue => "an issue",
+        Kind::Group => "a group",
+    }
+}
+/// The rejection of a record moved between `issues` and `groups`. Moving the record and
+/// converting the stored Entity after the export look the same, so both remedies are named.
+fn kind_fixed(id: &EntityId, stored: Kind, declared: Kind) -> Error {
+    invalid(format!(
+        "read-only: {id}: kind is fixed: {id} is {} in storage but the record is under {}; \
+         a declaration does not convert kinds: if the record was moved, move it back to {}, \
+         or run axon convert {id} --kind {} to change the kind; after converting, or if {id} \
+         was converted after axon export, {}",
+        article(stored),
+        list(declared),
+        list(stored),
+        kind(declared),
+        export_again(id),
+    ))
+}
+/// The remedy for a record whose base no longer matches: the whole file was exported together,
+/// so its every record is exported again, not just the stale one.
+fn export_again(id: &EntityId) -> String {
+    format!(
+        "run axon export again for {id} and the other records of this file into a separate \
+         file and transfer your edits"
+    )
+}
+fn declared_lifecycle(value: &str) -> Result<Lifecycle> {
+    Ok(match value {
+        "undecided" => Lifecycle::Undecided,
+        "not-started" => Lifecycle::NotStarted,
+        "in-progress" => Lifecycle::InProgress,
+        "completed" => Lifecycle::Completed,
+        "cancelled" => Lifecycle::Cancelled,
+        _ => return Err(invalid("schema: lifecycle")),
+    })
+}
+/// The rejection of a lifecycle written into an existing record, with the one command that moves
+/// the stored lifecycle to the declared one when there is such a command.
+fn lifecycle_fixed(id: &EntityId, kind: Kind, stored: Lifecycle, declared: Lifecycle) -> String {
+    let restore = format!(
+        "read-only: {id}: lifecycle is fixed: a declaration does not change lifecycle; \
+         restore lifecycle: {}",
+        lifecycle(stored)
+    );
+    let command = Operation::ALL
+        .into_iter()
+        .find(|operation| operation.next_as(kind, stored) == Some(declared));
+    match command {
+        Some(operation) if stored.editable() => format!(
+            "{restore}, and to move it to {}, run axon {} {id} after axon import apply",
+            lifecycle(declared),
+            operation.name()
+        ),
+        // A terminal Entity keeps its title, description and label fixed, so a transition that
+        // makes them editable has to come first.
+        Some(operation) => format!(
+            "{restore}; to move it to {}, run axon {name} {id} first, then {}; \
+             if nothing else changed, restoring it and running axon {name} {id} is enough",
+            lifecycle(declared),
+            export_again(id),
+            name = operation.name()
+        ),
+        None if kind == Kind::Group && declared == Lifecycle::InProgress => format!(
+            "{restore}; a Group is never stored as in-progress: it is in-progress while a \
+             direct child is in-progress or completed"
+        ),
+        None => format!(
+            "{restore}; no single command moves it from {} to {}: see axon docs",
+            lifecycle(stored),
+            lifecycle(declared),
+        ),
+    }
 }
 /// The final value a declaration record asks for. The condition is the stored one, kept.
 struct Desired {
@@ -64,14 +146,7 @@ impl Declaration {
     fn desired(&self, kind: Kind, r: &Record) -> Result<Desired> {
         Ok(Desired {
             kind,
-            lifecycle: match r.lifecycle.as_str() {
-                "undecided" => Lifecycle::Undecided,
-                "not-started" => Lifecycle::NotStarted,
-                "in-progress" => Lifecycle::InProgress,
-                "completed" => Lifecycle::Completed,
-                "cancelled" => Lifecycle::Cancelled,
-                _ => return Err(invalid("schema: lifecycle")),
-            },
+            lifecycle: declared_lifecycle(&r.lifecycle)?,
             title: r.title.clone(),
             description: r.description.clone(),
             label: Label::from_name(&r.label)
@@ -84,12 +159,53 @@ impl Declaration {
                 .collect::<Result<_>>()?,
         })
     }
+    /// Local validation, except that a failure caused only by records moved between `issues` and
+    /// `groups` is reported as the move: moving a Group record breaks its children's parents
+    /// before the kind is checked. `prepare` and `check` start with it, so they accept an
+    /// unvalidated declaration.
+    fn validate_against(&self, store: &Store) -> Result<()> {
+        let error = match self.validate() {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        let Ok(view) = store.view() else {
+            return Err(error);
+        };
+        let mut restored = Declaration {
+            groups: Vec::new(),
+            issues: Vec::new(),
+            ..self.clone()
+        };
+        let mut moved = None;
+        for (kind, r) in self.typed_records() {
+            let stored = r
+                .base
+                .as_ref()
+                .and_then(|_| record_id(r).ok())
+                .and_then(|id| Some((view.current(&id)?.kind, id)));
+            let kind = match stored {
+                Some((stored, id)) if stored != kind => {
+                    moved.get_or_insert_with(|| kind_fixed(&id, stored, kind));
+                    stored
+                }
+                _ => kind,
+            };
+            match kind {
+                Kind::Group => restored.groups.push(r.clone()),
+                Kind::Issue => restored.issues.push(r.clone()),
+            }
+        }
+        match moved {
+            Some(moved) if restored.validate().is_ok() => Err(moved),
+            _ => Err(error),
+        }
+    }
     fn existing_identities(&self, view: &View) -> Result<()> {
         for (kind, r) in self.typed_records().filter(|(_, r)| r.base.is_some()) {
             let id = record_id(r)?;
             let current = settled(view, &id)?;
             if current.kind != kind {
-                return Err(invalid(format!("read-only: {id}: kind is fixed")));
+                return Err(kind_fixed(&id, current.kind, kind));
             }
         }
         Ok(())
@@ -108,7 +224,11 @@ impl Declaration {
             (Some(base), Some(current)) if *base == fingerprint(&id, current) => {
                 Ok(Applied::Pending)
             }
-            (Some(_), Some(_)) => Err(invalid(format!("conflict: {id}: base mismatch"))),
+            (Some(_), Some(_)) => Err(invalid(format!(
+                "conflict: {id}: base mismatch: the stored {id} no longer matches the base, \
+                 because it changed after axon export or the base was edited: {}",
+                export_again(&id)
+            ))),
             (Some(_), None) => Err(invalid(format!(
                 "identity/reference: {id}: ID does not exist in storage"
             ))),
@@ -219,7 +339,7 @@ impl Declaration {
         )))
     }
     pub fn prepare(&mut self, store: &Store, prefix: &str) -> Result<()> {
-        self.validate()?;
+        self.validate_against(store)?;
         let view = store.view().map_err(|e| invalid(e.to_string()))?;
         require_settled(&view)?;
         self.existing_identities(&view)?;
@@ -276,7 +396,7 @@ impl Declaration {
         Ok(())
     }
     pub fn check(&self, input: &str, store: &Store, context: Context) -> Result<Checked> {
-        self.validate()?;
+        self.validate_against(store)?;
         let view = store.view().map_err(|e| invalid(e.to_string()))?;
         require_settled(&view)?;
         self.existing_identities(&view)?;
@@ -292,7 +412,11 @@ impl Declaration {
             let id = id(&reference.id)?;
             let current = settled(&view, &id)?;
             if reference.kind != kind(current.kind) {
-                return Err(invalid(format!("read-only: {id}: kind is fixed")));
+                return Err(invalid(format!(
+                    "read-only: {id}: kind is fixed: the referenced {id} is {} in storage; \
+                     run axon import prepare FILE to regenerate references",
+                    article(current.kind)
+                )));
             }
         }
         let conflicts: Vec<_> = self
@@ -311,11 +435,17 @@ impl Declaration {
                 already_applied: true,
             });
         }
-        for (_, r) in self.typed_records().filter(|(_, r)| r.base.is_some()) {
+        let mut fixed = Vec::new();
+        for (kind, r) in self.typed_records().filter(|(_, r)| r.base.is_some()) {
             let id = record_id(r)?;
-            if lifecycle(view.current(&id).unwrap().lifecycle) != r.lifecycle {
-                return Err(invalid(format!("read-only: {id}: lifecycle is fixed")));
+            let stored = view.current(&id).unwrap().lifecycle;
+            let declared = declared_lifecycle(&r.lifecycle)?;
+            if stored != declared {
+                fixed.push(lifecycle_fixed(&id, kind, stored, declared));
             }
+        }
+        if !fixed.is_empty() {
+            return Err(invalid(fixed.join("; ")));
         }
         let external = self.external_ids()?;
         for id in &external {

@@ -130,6 +130,14 @@ fn valid_lifecycle(value: &str) -> bool {
 
 /// Parse syntax and file-local constraints. Storage identities are checked separately against the set of records read when the operation started.
 pub fn parse(input: &str) -> Result<Declaration> {
+    let value = parse_unvalidated(input)?;
+    value.validate()?;
+    Ok(value)
+}
+/// Parses the strict YAML without the local validation. Only `prepare` and `check` (which `apply`
+/// runs) may take the result: they validate it against the store first, so that a record moved
+/// between `issues` and `groups` is reported as such.
+pub fn parse_unvalidated(input: &str) -> Result<Declaration> {
     use granit_parser::{BufferedInput, Scanner, TokenType};
     for token in Scanner::new(BufferedInput::new(input.chars())) {
         match token
@@ -164,10 +172,7 @@ pub fn parse(input: &str) -> Result<Declaration> {
             probe.schema
         )));
     }
-    let value: Declaration = serde_saphyr::from_str_with_options(input, options)
-        .map_err(|e| invalid(format!("schema: {e}")))?;
-    value.validate()?;
-    Ok(value)
+    serde_saphyr::from_str_with_options(input, options).map_err(|e| invalid(format!("schema: {e}")))
 }
 impl Declaration {
     /// Assigned identities for records whose base has not yet been refreshed by apply.

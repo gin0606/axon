@@ -38,13 +38,26 @@ without writing.
 Apply validates everything, saves one stored record file per changed Entity and rewrites
 the declaration; a retry finishes an interrupted save per Entity. Check again
 to confirm that no differences remain. Apply also prints key -> full ID for records
-whose base was null before the rewrite. An outdated base stops the whole apply.
+whose base was null before the rewrite. An outdated base stops the whole apply
+as a conflict: base mismatch; prepare does not refresh it, so export every
+record of the file again into a separate file with axon export and transfer
+your edits.
 
 Entities not listed in groups or issues are untouched. Removing a record from
 the file does not delete or cancel it, detach it from its parent, or remove its
 dependencies. To detach an Entity from a Group, write parent: null in its record.
 Use needs: [] for no outgoing dependencies. Use the ordinary cancel command to
-cancel work; declarations do not transition existing lifecycles.
+cancel work; declarations do not transition existing lifecycles. A changed
+lifecycle is rejected as read-only: restore the stored value and run the
+command the error names, such as axon accept, after axon import apply. To edit
+the text or label of a Completed or Cancelled record, run axon reopen or axon
+reconsider first, then export the file's records again.
+Declarations do not convert kinds either: a record moved between issues and
+groups is rejected as read-only. Move it back, or run axon convert and then
+export the file's records again; an Entity converted in storage after export
+needs only the new export. Export again into a separate file and transfer your
+edits. A reference whose kind differs from storage is rejected until axon
+import prepare regenerates the references.
 
 Export never changes storage or runs resurfacing conditions. This explanation
 and --example do not open storage.

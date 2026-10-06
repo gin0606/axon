@@ -92,6 +92,29 @@ pub enum Operation {
     Reopen,
 }
 impl Operation {
+    pub const ALL: [Operation; 8] = [
+        Operation::Accept,
+        Operation::Withdraw,
+        Operation::Start,
+        Operation::Release,
+        Operation::Complete,
+        Operation::Cancel,
+        Operation::Reconsider,
+        Operation::Reopen,
+    ];
+    /// The one spelling records and the CLI use.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Accept => "accept",
+            Self::Withdraw => "withdraw",
+            Self::Start => "start",
+            Self::Release => "release",
+            Self::Complete => "complete",
+            Self::Cancel => "cancel",
+            Self::Reconsider => "reconsider",
+            Self::Reopen => "reopen",
+        }
+    }
     pub(crate) fn next_as(self, kind: Kind, before: Lifecycle) -> Option<Lifecycle> {
         use Lifecycle::*;
         match (kind, self, before) {

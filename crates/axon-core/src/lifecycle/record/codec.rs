@@ -31,18 +31,6 @@ fn lifecycle_from(name: &str) -> Result<Lifecycle> {
     .find(|lifecycle| lifecycle_name(*lifecycle) == name)
     .ok_or_else(|| invalid(format!("unknown lifecycle {name:?}")))
 }
-fn operation_name(operation: Operation) -> &'static str {
-    match operation {
-        Operation::Accept => "accept",
-        Operation::Withdraw => "withdraw",
-        Operation::Start => "start",
-        Operation::Release => "release",
-        Operation::Complete => "complete",
-        Operation::Cancel => "cancel",
-        Operation::Reconsider => "reconsider",
-        Operation::Reopen => "reopen",
-    }
-}
 fn operation_from(name: &str) -> Result<Operation> {
     match name {
         "accept" => Ok(Operation::Accept),
@@ -143,7 +131,7 @@ impl Serialize for CanonicalEntry<'_> {
                 row.serialize_field("entity", &record.entity)?;
                 row.serialize_field("record", record.kind.name())?;
                 if let RecordKind::Transition(operation) = record.kind {
-                    row.serialize_field("operation", operation_name(operation))?;
+                    row.serialize_field("operation", operation.name())?;
                 }
                 row.serialize_field("parents", &record.parents)?;
                 if let RecordKind::Resolve { chosen } = &record.kind {
