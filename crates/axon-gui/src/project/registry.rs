@@ -219,20 +219,21 @@ impl Registry {
     }
 
     /// The name a project would be stored under: `raw` without surrounding whitespace, when it
-    /// is not empty, fits [`NAME_LIMIT`], has no control characters and no other project has
-    /// it.
+    /// is not blank, fits [`NAME_LIMIT`], has no control characters and no other project has
+    /// it. A name made only of whitespace, joiners, tag characters and variation selectors is
+    /// blank.
     pub fn check_name(&self, raw: &str) -> Result<String, NameError> {
         let name = raw.trim();
-        // Joiners, tag characters and variation selectors are allowed only beside something
-        // visible.
+        // Line breaks and other control whitespace are left to the control-character check.
         if name.chars().all(|c| {
-            matches!(
-                c,
-                '\u{200C}'..='\u{200D}'
-                    | '\u{E0020}'..='\u{E007F}'
-                    | '\u{FE00}'..='\u{FE0F}'
-                    | '\u{E0100}'..='\u{E01EF}'
-            )
+            (c.is_whitespace() && !invisible(c))
+                || matches!(
+                    c,
+                    '\u{200C}'..='\u{200D}'
+                        | '\u{E0020}'..='\u{E007F}'
+                        | '\u{FE00}'..='\u{FE0F}'
+                        | '\u{E0100}'..='\u{E01EF}'
+                )
         }) {
             return Err(NameError::Empty);
         }
@@ -308,7 +309,15 @@ mod tests {
     fn names_are_trimmed_bounded_and_unique() {
         let registry = Registry::default();
         assert_eq!(registry.check_name("  読書会 "), Ok("読書会".into()));
-        for blank in [" \t", "\u{200D}", "\u{E0061}\u{FE0F}"] {
+        for blank in [
+            " \t",
+            "\u{200D}",
+            "\u{E0061}\u{FE0F}",
+            "\u{200D} \u{200D}",
+            "\u{200C}\u{3000}\u{E0100}",
+            "\u{FE0F}\u{00A0}\u{E0061}",
+            "\u{E0020}\u{E007F} \u{FE00}\u{E01EF}",
+        ] {
             assert_eq!(
                 registry.check_name(blank),
                 Err(NameError::Empty),
@@ -322,6 +331,8 @@ mod tests {
             "名\u{202E}前",
             "読書会\u{E0001}",
             "\u{3164}",
+            "\u{200D}\n\u{200D}",
+            "\u{200D}\u{2028}\u{200D}",
         ] {
             assert_eq!(
                 registry.check_name(name),
