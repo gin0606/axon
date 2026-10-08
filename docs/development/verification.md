@@ -10,6 +10,8 @@ MSRVを変更するときは、`Cargo.toml`、[導入ガイド](../guide/getting
 
 full verificationの正本は [scripts/full-verification](../../scripts/full-verification) にある。pull requestとmainへのpushでは、GitHub Actionsがrepositoryの `rust-toolchain.toml` を使ってこのscriptを実行する。ローカルでも `scripts/full-verification` で同じ検証を実行できる。
 
+mainへのpushでは、Lefthookのpre-push（[.lefthook/pre-push/verify-main-push](../../.lefthook/pre-push/verify-main-push)）がpushするcommitを一時worktreeに取り出し、そのcommitのscriptと `rust-toolchain.toml` で検証して、失敗したらpushを拒否する。検証するsource codeに作業ツリーの未commitの変更は含まれない。hook自体、Lefthook・miseの設定は、pushを実行したcheckoutのものを使う。main以外へのpushでは実行しない。この検証はclient側のhookなので、`--no-verify` やhookを導入していないcloneからのpushでは実行されない。その場合もpush後のCIが失敗を検出する。
+
 CIのcacheはCargo dependencyとbuild artifactだけに使い、成功済みのtest結果を根拠にfull verificationを省略しない。
 
 ## Fast pre-commit gate

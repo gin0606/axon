@@ -1,0 +1,33 @@
+#!/bin/sh
+set -eu
+
+# git pre-push は push する ref ごとに "<local ref> <local sha> <remote ref> <remote sha>" を stdin へ渡す。
+target=
+while read -r _local_ref local_sha remote_ref _remote_sha; do
+  [ "$remote_ref" = refs/heads/main ] || continue
+  case "$local_sha" in
+    *[!0]*) target="$local_sha" ;;
+  esac
+done
+[ -n "$target" ] || exit 0
+
+# 作業ツリーの編集や未追跡ファイルに左右されないよう、push する commit を一時 worktree に取り出して検証する。
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+repo="$(git rev-parse --show-toplevel)"
+# linked worktree から push しても build cache を共有できるよう、main worktree の target に置く。
+main_worktree="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+worktree="$(mktemp -d "${TMPDIR:-/tmp}/axon-main-push.XXXXXX")"
+if ! LEFTHOOK=0 git -C "$repo" worktree add --quiet --detach "$worktree" "$target"; then
+  rm -rf "$worktree"
+  exit 1
+fi
+trap 'git -C "$repo" worktree remove --force "$worktree" || echo "一時 worktree を削除できませんでした: $worktree" >&2' EXIT
+# dash は signal による終了で EXIT trap を実行しないため、明示的に exit させる。
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# mise の設定と trust は本体の checkout のものを使い、build cache は通常の target と分ける。
+# mise が本体の rust-toolchain.toml から設定する RUSTUP_TOOLCHAIN は外し、push する commit の指定で検証する。
+CARGO_TARGET_DIR="$main_worktree/target/main-push" mise exec -C "$repo" -- \
+  env -u RUSTUP_TOOLCHAIN sh "$worktree/scripts/full-verification"

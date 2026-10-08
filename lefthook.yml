@@ -32,3 +32,11 @@ post-rewrite:
   jobs:
     - name: release-build
       run: ./scripts/build-canonical-axon
+
+pre-push:
+  follow: true
+  jobs:
+    - name: verify-main-push
+      script: verify-main-push
+      runner: sh
+      use_stdin: true
