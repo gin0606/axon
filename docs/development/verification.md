@@ -10,13 +10,15 @@ full verificationの正本は [scripts/full-verification](../../scripts/full-ver
 
 mainへのpushでは、Lefthookのpre-push（[.lefthook/pre-push/verify-main-push](../../.lefthook/pre-push/verify-main-push)）がpushするcommitを一時worktreeに取り出し、そのcommitのscriptと `rust-toolchain.toml` で検証して、失敗したらpushを拒否する。検証するsource codeに作業ツリーの未commitの変更は含まれない。hook自体、Lefthook・miseの設定は、pushを実行したcheckoutのものを使う。main以外へのpushでは実行しない。この検証はclient側のhookなので、`--no-verify` やhookを導入していないcloneからのpushでは実行されない。その場合もpush後のCIが失敗を検出する。
 
+full verificationはデスクトップアプリ（`crates/axon-gui`）も対象にする。UIテストはGPUIのtest platform上のheadless windowで動き、ディスプレイやGPUを使わない。LinuxのCIはGPUIのビルドに要るsystem packageを導入してから実行する。GUIと同じbuildでは依存のfeatureが統合され、CLIとコアのserde_jsonにもGPUIが要求する `preserve_order` が入る。配布するCLIはこれを含まない構成でbuildするため、`default-members` だけを対象にしたtestも同じscriptで実行する。
+
 CIのcacheはCargo dependencyとbuild artifactだけに使い、成功済みのtest結果を根拠にfull verificationを省略しない。
 
 ## Fast pre-commit gate
 
 Rust fileがstagedされているcommitでは、Lefthookが [lefthook.yml](../../lefthook.yml) の高速な検査を実行する。この gate は全 test target を対象にしないため、full verification を代替しない。
 
-リリース前には通常 toolchain の全検証に加え、`scripts/check-msrv` で MSRV での検査を実行する。
+リリース前には通常 toolchain の全検証に加え、`scripts/check-msrv` で MSRV での検査を実行する。GUI は依存の要求で workspace の MSRV より新しい版を自身の `rust-version` に宣言し、`scripts/check-msrv` はその版でも GUI を検査する。
 
 ### Plugin version
 

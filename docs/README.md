@@ -23,6 +23,7 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 | [CLI入出力](reference/cli.md) | ID・引数・一覧と詳細・英語表示・装飾・保存結果 |
 | [保存と統合](reference/storage.md) | 記録と現在値の導出、衝突・違反・gap、保存先の探索と初期化、Git統合の範囲 |
 | [一括declaration](reference/declaration.md) | 計画全体の取得と一括編集のfile形式、`axon export`・`axon import` |
+| [デスクトップアプリ](reference/gui.md) | 閲覧専用アプリの登録の一覧、操作、`axon gui` からのリンクの扱い |
 
 ## 開発者向け
 
@@ -31,6 +32,7 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 | [モデル](../spec/README.md) | Quintモデルの対象範囲、検証する性質、再現手順 |
 | [層の依存方向](development/architecture.md) | 層の責務の境界と依存方向の規則 |
 | [検証方針](development/verification.md) | CI、独立fixture、モデル検証の分担 |
+| [デスクトップアプリの開発](development/gui.md) | ビルドの要件、採用依存の固定、`.app` の作成、確認結果 |
 | [リリース](development/releasing.md) | タグ起点の公開、Homebrew配布、tap更新失敗時の復旧 |
 | [設計判断](design/decisions.md) | 現在の契約がその形になっている理由と、採らなかった案 |
 

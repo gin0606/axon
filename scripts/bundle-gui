@@ -1,0 +1,8 @@
+#!/bin/sh
+# GUI を macOS のアプリ（target/release/bundle/osx/Axon.app）にまとめる。
+# cargo-bundle はアイコンのパスを起動ディレクトリから解決し、見つからなくてもアイコンなしで
+# 作るため、crate のディレクトリで実行する。
+set -eu
+
+cd "$(dirname "$0")/../crates/axon-gui"
+cargo bundle --release --format osx
