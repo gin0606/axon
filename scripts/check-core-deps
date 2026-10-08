@@ -1,0 +1,25 @@
+#!/bin/sh
+# axon-core が保存 adapter・CLI・記録者取得から独立していることを crate の依存で検査する。
+# 理由は docs/development/architecture.md の「依存方向の規則」にある。
+set -eu
+
+cd "$(dirname "$0")/.."
+
+status=0
+
+# 既定で dev-dependencies も含む。対象 platform を限らず全 target の依存を見る。
+tree=$(cargo tree --locked -p axon-core --target all --prefix none --format '{p}')
+forbidden=$(printf '%s\n' "$tree" | grep -E '^(axon|axon-recorder|clap) ' | sort -u || true)
+if [ -n "$forbidden" ]; then
+	printf 'axon-core must not depend on these crates (including dev-dependencies):\n%s\n' "$forbidden" >&2
+	status=1
+fi
+
+direct=$(cargo tree --locked -p axon-core --target all --depth 1 --prefix none --format '{p}')
+direct_libc=$(printf '%s\n' "$direct" | grep -E '^libc ' || true)
+if [ -n "$direct_libc" ]; then
+	printf 'axon-core must not depend on libc directly:\n%s\n' "$direct_libc" >&2
+	status=1
+fi
+
+exit "$status"

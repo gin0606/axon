@@ -46,12 +46,7 @@ axon binary: src/main.rs → src/cli/
 - コアは `libc` を直接依存に持たない。既存の ID 生成は `rand` を使い、`rand → getrandom` 経由の OS 乱数・間接 `libc` 依存を許容する。「保存から独立」は環境入力がすべて注入済みであることを意味しない。
 - root library はコアと保存に必要な filesystem・Git 呼出しの I/O に依存してよいが、binary 専用の `cli` module には依存しない。描画と条件 process は CLI 側に置く。CLI の module 間参照は必要な名前を明示し、glob import で親 module の名前空間を共有しない。
 
-Cargo の crate 境界を次で確認する。既定の出力は dev-dependencies も含む。最初のツリーで上記の禁止 crate がないこと、深さ 1 の出力で直接の `libc` がないことを検査する。root crate 内の module 間境界はコードレビューで確認する。
-
-```sh
-cargo tree -p axon-core
-cargo tree -p axon-core --depth 1
-```
+`axon-core` の禁止 crate と直接の `libc` は、full verification の [scripts/check-core-deps](../../scripts/check-core-deps) が検査する。root crate 内の module 間境界はコードレビューで確認する。
 
 ## 各層の検証入口
 
