@@ -19,7 +19,7 @@ brew upgrade gin0606/tap/axon
 
 ### 開発者向けのソースビルド
 
-最低Rust versionは1.89、開発toolchainは [検証方針](../development/verification.md) を参照してください。
+最低Rust versionはrootの `Cargo.toml` の `rust-version`、開発toolchainは [検証方針](../development/verification.md) を参照してください。
 
 ```sh
 git clone https://github.com/gin0606/axon.git

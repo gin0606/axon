@@ -42,9 +42,7 @@ jobs:
       - name: Run full verification
         run: scripts/full-verification
       - name: Check MSRV
-        run: |
-          rustup toolchain install 1.89.0 --profile minimal
-          cargo +1.89.0 check --locked --all-targets --all-features
+        run: scripts/check-msrv
 
   build:
     needs: validate

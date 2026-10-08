@@ -49,7 +49,7 @@ brew update
 brew upgrade gin0606/tap/axon
 ```
 
-Rust is not required. For development or building from source (Rust 1.89 or later), see [Getting started](docs/guide/getting-started.md#開発者向けのソースビルド). Linux and WSL2 remain unverified, best-effort environments; native Windows is not supported.
+Rust is not required. For the Rust version required for development or building from source, see [Getting started](docs/guide/getting-started.md#開発者向けのソースビルド). Linux and WSL2 remain unverified, best-effort environments; native Windows is not supported.
 
 ## Quick start
 

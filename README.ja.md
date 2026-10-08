@@ -49,7 +49,7 @@ brew update
 brew upgrade gin0606/tap/axon
 ```
 
-Rust の導入は不要です。開発やソースからのビルド（Rust 1.89 以上）は [導入ガイド](docs/guide/getting-started.md#開発者向けのソースビルド) を参照してください。Linux と WSL2 は未検証のベストエフォート、ネイティブ Windows は非対応です。
+Rust の導入は不要です。開発やソースからのビルドに必要な Rust の version は [導入ガイド](docs/guide/getting-started.md#開発者向けのソースビルド) を参照してください。Linux と WSL2 は未検証のベストエフォート、ネイティブ Windows は非対応です。
 
 ## 使い始める
 

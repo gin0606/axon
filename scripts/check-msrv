@@ -1,0 +1,10 @@
+#!/bin/sh
+# Cargo.toml の workspace.package.rust-version に宣言した最低 Rust version で全 target を検査する。
+set -eu
+
+cd "$(dirname "$0")/.."
+
+msrv=$(cargo metadata --locked --no-deps --format-version 1 |
+	python3 -c 'import json, sys; print(next(p["rust_version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "axon"))')
+rustup toolchain install "$msrv" --profile minimal
+cargo +"$msrv" check --locked --all-targets --all-features

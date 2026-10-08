@@ -2,9 +2,7 @@
 
 ## Rust toolchain
 
-通常の開発と検証には `rust-toolchain.toml` で固定した Rust を使う。mise を使う場合も Rust の idiomatic version file としてこの指定を読み込む。ソースからのビルドに必要な最低 Rust version（MSRV）は、`Cargo.toml` の `rust-version` を正本とする。
-
-MSRVを変更するときは、`Cargo.toml`、[導入ガイド](../guide/getting-started.md#インストールと対応環境)、以下の検証コマンドを同じ変更で更新する。
+通常の開発と検証には `rust-toolchain.toml` で固定した Rust を使う。mise を使う場合も Rust の idiomatic version file としてこの指定を読み込む。ソースからのビルドに必要な最低 Rust version（MSRV）は、root の `Cargo.toml` の `workspace.package.rust-version` を正本とし、各 crate はこれを継承する。
 
 ## Full verification
 
@@ -24,10 +22,10 @@ cargo test --workspace --lib --bin axon --test smoke
 
 対象ごとの責務と fixture の入口は [各層の検証入口](architecture.md#各層の検証入口) を参照する。この gate は全 test target を対象にしないため、full verification を代替しない。Lefthook は各 job の失敗時に commit を拒否し、staged Rust file がなければ Rust 検証を省略する。設定は [lefthook.yml](../../lefthook.yml) にある。
 
-リリース前には通常 toolchain の全検証に加え、MSRVで次を実行する。
+リリース前には通常 toolchain の全検証に加え、MSRV での検査を次で実行する。MSRV は `Cargo.toml` から読む。
 
 ```sh
-cargo +1.89.0 check --locked --all-targets --all-features
+scripts/check-msrv
 ```
 
 ### Plugin version
