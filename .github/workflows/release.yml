@@ -36,20 +36,11 @@ jobs:
           owner: gin0606
           repositories: homebrew-tap
           permission-contents: write
-      - name: Check plugin versions
-        run: python3 scripts/update-plugin-versions.py --check
-      - name: Test plugin version generation
-        run: python3 scripts/test-plugin-versions.py
-      - name: Test release guards
-        run: python3 scripts/test-release.py
       - name: Install pinned Rust toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
-      - run: cargo fmt --check
-      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --locked --workspace
-      - name: Check this repository's Axon store
-        run: cargo run --locked --quiet -- storage check
+      - name: Run full verification
+        run: scripts/full-verification
       - name: Check MSRV
         run: |
           rustup toolchain install 1.89.0 --profile minimal

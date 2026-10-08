@@ -17,21 +17,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Check plugin versions
-        run: python3 scripts/update-plugin-versions.py --check
-      - name: Test plugin version generation
-        run: python3 scripts/test-plugin-versions.py
-      - name: Test release guards
-        run: python3 scripts/test-release.py
       - name: Install pinned Rust toolchain
         run: rustup toolchain install
       - name: Restore Cargo cache
         uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
-      - name: Check formatting
-        run: cargo fmt --check
-      - name: Run Clippy
-        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      - name: Run tests
-        run: cargo test --locked --workspace
-      - name: Check this repository's Axon store
-        run: cargo run --locked --quiet -- storage check
+      - name: Run full verification
+        run: scripts/full-verification

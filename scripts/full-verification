@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")/.."
+
+python3 scripts/update-plugin-versions.py --check
+python3 scripts/test-plugin-versions.py
+python3 scripts/test-release.py
+cargo fmt --check
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace
+cargo run --locked --quiet -- storage check

@@ -8,13 +8,7 @@ MSRVを変更するときは、`Cargo.toml`、[導入ガイド](../guide/getting
 
 ## Full verification
 
-pull requestとmainへのpushでは、GitHub Actionsがrepositoryの `rust-toolchain.toml` を使って次のfull verificationを個別のstepとして実行する。ローカルでも同じcommandを順に実行する。
-
-```sh
-cargo fmt --check
-cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-cargo test --locked --workspace
-```
+full verificationの正本は [scripts/full-verification](../../scripts/full-verification) にある。pull requestとmainへのpushでは、GitHub Actionsがrepositoryの `rust-toolchain.toml` を使ってこのscriptを実行する。ローカルでも `scripts/full-verification` で同じ検証を実行できる。
 
 CIのcacheはCargo dependencyとbuild artifactだけに使い、成功済みのtest結果を根拠にfull verificationを省略しない。
 

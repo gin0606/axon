@@ -5,3 +5,4 @@
 *.itf.json
 !/.gw/
 !/.gw/**
+__pycache__/
