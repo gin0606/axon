@@ -1,8 +1,8 @@
 //! The filters, the shared list and the detail pane of the selected project.
 
-use super::{AxonApp, StoreState, text};
+use super::{AxonApp, Columns, StoreState, style::Palette, text};
 use crate::board::{EntityDetail, Exclusion, Filter, Layout, Link, State, WaitKind};
-use crate::{SelectNextEntity, SelectPreviousEntity};
+use crate::{OpenSelectedEntity, SelectNextEntity, SelectPreviousEntity};
 use axon::lifecycle::{EntityId, Kind, Label};
 use gpui_kit::component::{
     ActiveTheme,
@@ -12,12 +12,18 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, Context, ElementId, Hsla, IntoElement, ScrollStrategy, SharedString, Window,
-    base::TestSupportExt, div, prelude::*, px, uniform_list,
+    base::{StyledExt, TestSupportExt},
+    div,
+    prelude::*,
+    px, uniform_list,
 };
 use std::ops::Range;
 
 /// The deepest level that still indents further in the list.
 const MAX_INDENT: usize = 8;
+/// The room left of a top-level row's state mark, and the indent of each level below it.
+const ROW_INSET: f32 = 8.;
+const INDENT: f32 = 16.;
 
 /// Key context of the list, where the arrow keys move the selection.
 pub const LIST_CONTEXT: &str = "AxonList";
@@ -50,6 +56,7 @@ impl AxonApp {
 
     /// Opens a known Entity in the detail pane.
     pub fn open_entity(&mut self, id: EntityId, cx: &mut Context<Self>) {
+        self.detail_shown = true;
         self.explorer.select(id);
         self.reveal_selected();
         cx.notify();
@@ -85,6 +92,49 @@ impl AxonApp {
         cx.notify();
     }
 
+    /// In one column, shows the selected Entity's detail in place of the list.
+    fn open_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.explorer.selected().is_some() {
+            self.detail_shown = true;
+            self.keep_focus(window, cx);
+            cx.notify();
+        }
+    }
+
+    /// In one column the detail replaces the focused list, so the focus moves to the window,
+    /// where Escape still goes back.
+    fn keep_focus(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.columns == Columns::One {
+            window.focus(&self.app_focus, cx);
+        }
+    }
+
+    /// In one column, goes back from the detail to the list, which keeps the selected row in
+    /// view and takes the focus so the arrow keys go on from it.
+    pub fn show_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.detail_shown = false;
+        self.reveal_selected();
+        window.focus(&self.list_focus, cx);
+        cx.notify();
+    }
+
+    /// Closes the detail; in one column it goes back to the list instead, keeping the
+    /// selection.
+    pub(super) fn close_detail_button(&self, cx: &mut Context<Self>) -> Button {
+        let one = self.columns == Columns::One;
+        Button::new("close-detail")
+            .ghost()
+            .compact()
+            .label(if one { "一覧に戻る" } else { "閉じる" })
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if one {
+                    this.show_list(window, cx)
+                } else {
+                    this.close_entity(cx)
+                }
+            }))
+    }
+
     pub fn reset_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search
             .update(cx, |search, cx| search.set_value("", window, cx));
@@ -92,10 +142,17 @@ impl AxonApp {
     }
 
     pub(super) fn render_filters(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+        let palette = Palette::of(cx);
         let filter = self.explorer.filter();
-        let heading = |text: &'static str| div().pt_2().text_xs().text_color(muted).child(text);
+        let heading = |text: &'static str| {
+            div()
+                .px_1()
+                .pt_4()
+                .pb_1()
+                .text_xs()
+                .text_color(palette.muted)
+                .child(text)
+        };
         let mut filters = div()
             .id("filters")
             .flex()
@@ -104,42 +161,61 @@ impl AxonApp {
             .child(heading("状態"));
         for state in self.explorer.offered_states() {
             filters = filters.child(
-                Checkbox::new(named(format!("state-{state:?}")))
-                    .label(text::state(state))
-                    .checked(filter.states.contains(&state))
-                    .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                        this.update_filter(|f| f.toggle_state(state, *checked), cx)
-                    })),
+                div()
+                    .px_1()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        Checkbox::new(named(format!("state-{state:?}")))
+                            .label(text::state(state))
+                            .checked(filter.states.contains(&state))
+                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                                this.update_filter(|f| f.toggle_state(state, *checked), cx)
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(palette.state(state))
+                            .child(text::state_icon(state)),
+                    ),
             );
         }
         filters = filters.child(heading("種類"));
         for kind in [Kind::Issue, Kind::Group] {
             filters = filters.child(
-                Checkbox::new(named(format!("kind-{kind:?}")))
-                    .label(text::kind(kind))
-                    .checked(filter.kinds.contains(&kind))
-                    .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                        this.update_filter(|f| f.toggle_kind(kind, *checked), cx)
-                    })),
+                div().px_1().child(
+                    Checkbox::new(named(format!("kind-{kind:?}")))
+                        .label(text::kind(kind))
+                        .checked(filter.kinds.contains(&kind))
+                        .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                            this.update_filter(|f| f.toggle_kind(kind, *checked), cx)
+                        })),
+                ),
             );
         }
         filters = filters.child(heading("label"));
         for label in Label::ALL {
             filters = filters.child(
-                Checkbox::new(named(format!("label-{}", label.name())))
-                    .label(label.name())
-                    .checked(filter.labels.contains(&label))
-                    .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                        this.update_filter(|f| f.toggle_label(label, *checked), cx)
-                    })),
+                div().px_1().child(
+                    Checkbox::new(named(format!("label-{}", label.name())))
+                        .label(label.name())
+                        .checked(filter.labels.contains(&label))
+                        .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                            this.update_filter(|f| f.toggle_label(label, *checked), cx)
+                        })),
+                ),
             );
         }
         filters
             .child(
-                div().pt_2().child(
+                div().pt_4().child(
                     Button::new("reset-filter")
                         .ghost()
                         .compact()
+                        .w_full()
                         .label("絞り込みを初期値に戻す")
                         .on_click(cx.listener(|this, _, window, cx| this.reset_filter(window, cx))),
                 ),
@@ -153,8 +229,7 @@ impl AxonApp {
         if !matches!(self.store, StoreState::Loaded(_) | StoreState::Reloading(_)) {
             return None;
         }
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+        let palette = Palette::of(cx);
         let listing = self.explorer.listing();
         let layout = self.explorer.layout();
         let layout_button = |id: &'static str, label: &'static str, value: Layout| {
@@ -165,7 +240,7 @@ impl AxonApp {
             if layout == value {
                 button.primary()
             } else {
-                button.outline()
+                button.ghost()
             }
         };
         let count = if listing.context > 0 {
@@ -177,6 +252,7 @@ impl AxonApp {
             format!("{} 件が一致", listing.matched)
         };
         let header = div()
+            .px_1()
             .flex()
             .flex_col()
             .gap_2()
@@ -200,33 +276,39 @@ impl AxonApp {
                     .flex()
                     .flex_row()
                     .flex_wrap()
-                    .gap_2()
+                    .gap_1()
                     .items_center()
                     .child(layout_button("layout-tree", "階層", Layout::Tree))
                     .child(layout_button("layout-flat", "フラット", Layout::Flat))
                     .child(
                         div()
                             .id("list-count")
+                            .pl_2()
                             .text_xs()
-                            .text_color(muted)
+                            .text_color(palette.muted)
                             .child(count),
                     ),
             );
         let body: AnyElement = if board.is_empty() {
             div()
                 .id("list-empty")
+                .px_1()
+                .pt_4()
                 .text_sm()
-                .text_color(muted)
+                .text_color(palette.muted)
                 .child("このリポジトリにはまだ Issue・Group がありません。")
                 .into_any_element()
         } else if listing.rows.is_empty() {
             div()
                 .id("list-empty")
+                .px_1()
+                .pt_4()
                 .flex()
                 .flex_col()
+                .items_start()
                 .gap_2()
                 .text_sm()
-                .text_color(muted)
+                .text_color(palette.muted)
                 .child("絞り込みに一致する Issue・Group はありません。")
                 .child(
                     Button::new("reset-filter-empty")
@@ -252,13 +334,17 @@ impl AxonApp {
                 .key_context(LIST_CONTEXT)
                 .on_action(cx.listener(|this, _: &SelectNextEntity, _, cx| this.step(1, cx)))
                 .on_action(cx.listener(|this, _: &SelectPreviousEntity, _, cx| this.step(-1, cx)))
+                .on_action(cx.listener(|this, _: &OpenSelectedEntity, window, cx| {
+                    this.open_selected(window, cx)
+                }))
                 .rounded_md()
                 .border_1()
                 .border_color(gpui_kit::transparent_black())
-                .focus(|style| style.border_color(theme.ring))
+                .focus(|style| style.border_color(palette.signal))
                 .flex_1()
                 .min_h_0()
                 .child(rows)
+                .test_support()
                 .into_any_element()
         };
         Some(
@@ -276,13 +362,13 @@ impl AxonApp {
     }
 
     /// The list rows in `range` of the listing. Both lines of a row are truncated, so every
-    /// row has the height the list measures on the first.
+    /// row has the height the list measures on the first. In the tree, a thin guide runs down
+    /// each level of containment, so the rows of one Group read as one block.
     fn render_rows(&self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let Some(board) = self.explorer.board() else {
             return Vec::new();
         };
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+        let palette = Palette::of(cx);
         let selected = self.explorer.selected();
         let rows = self.explorer.listing().rows.get(range).unwrap_or_default();
         rows.iter()
@@ -292,39 +378,81 @@ impl AxonApp {
                     .expect("a listed Entity is on the board");
                 let meta = text::row_meta(item, row.matched);
                 let id = row.id.clone();
-                let color: Hsla = if row.matched { theme.foreground } else { muted };
+                let is_selected = selected == Some(&row.id);
+                let depth = row.depth.min(MAX_INDENT);
+                let title_color = if row.matched {
+                    palette.ink
+                } else {
+                    palette.muted
+                };
                 let mut line = div()
                     .id(entity_element(&row.id))
+                    .relative()
                     .flex()
                     .flex_row()
                     .gap_2()
-                    .py_1()
+                    .py(px(5.))
                     .pr_2()
                     // Deep trees stop indenting so the title keeps its room.
-                    .pl(px(8. + 16. * row.depth.min(MAX_INDENT) as f32))
-                    .rounded_md()
+                    .pl(px(ROW_INSET + INDENT * depth as f32))
+                    .rounded(px(4.))
                     .cursor_pointer()
-                    .text_color(color)
-                    .hover(|style| style.bg(theme.list_hover))
+                    .hover(|style| style.bg(palette.hover))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         window.focus(&this.list_focus, cx);
-                        this.open_entity(id.clone(), cx)
+                        this.open_entity(id.clone(), cx);
+                        this.keep_focus(window, cx);
+                    }))
+                    .children((0..depth).map(|level| {
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom(px(-1.))
+                            .left(px(ROW_INSET + INDENT * level as f32 + 6.))
+                            .w(px(1.))
+                            .bg(palette.rule)
                     }))
                     .child(
                         div()
                             .flex_none()
-                            .w(px(16.))
+                            .w(px(14.))
+                            .text_color(if row.matched {
+                                palette.state(item.state)
+                            } else {
+                                palette.state(item.state).opacity(0.55)
+                            })
                             .child(text::state_icon(item.state)),
                     )
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(div().truncate().child(item.title.clone()))
-                            .child(div().text_xs().text_color(muted).truncate().child(meta)),
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_color(title_color)
+                                    .when(item.kind == Kind::Group, |title| title.font_medium())
+                                    .child(item.title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(palette.muted)
+                                    .truncate()
+                                    .child(meta),
+                            ),
                     );
-                if selected == Some(&row.id) {
-                    line = line.bg(theme.list_active);
+                if is_selected {
+                    line = line.bg(palette.signal_wash).child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top(px(4.))
+                            .bottom(px(4.))
+                            .w(px(2.))
+                            .rounded_full()
+                            .bg(palette.signal),
+                    );
                 }
                 // The gap between rows, inside each row so the heights stay equal.
                 div().pb_px().child(line.test_support()).into_any_element()
@@ -334,28 +462,45 @@ impl AxonApp {
 
     /// A clickable reference to another Entity, or its ID when the store does not hold it.
     fn render_link(&self, link: &Link, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
+        let palette = Palette::of(cx);
         match &link.known {
             Some(known) => {
                 let id = link.id.clone();
                 div()
                     .id(entity_element(&link.id))
+                    .flex()
+                    .flex_row()
+                    .gap_1p5()
+                    .min_w_0()
                     .cursor_pointer()
-                    .text_color(theme.link)
-                    .hover(|style| style.text_color(theme.link_hover))
+                    .text_sm()
+                    .hover(|style| style.text_color(palette.ink))
+                    .text_color(palette.signal)
                     .on_click(cx.listener(move |this, _, _, cx| this.open_entity(id.clone(), cx)))
-                    .child(format!(
-                        "{} {}（{} · {}）",
-                        text::state_icon(known.state),
-                        known.title,
-                        text::kind(known.kind),
-                        text::state(known.state)
-                    ))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(palette.state(known.state))
+                            .child(text::state_icon(known.state)),
+                    )
+                    .child(div().min_w_0().child(known.title.clone()))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(palette.muted)
+                            .child(format!(
+                                "{}・{}",
+                                text::kind(known.kind),
+                                text::state(known.state)
+                            )),
+                    )
                     .test_support()
                     .into_any_element()
             }
             None => div()
-                .text_color(theme.muted_foreground)
+                .text_sm()
+                .text_color(palette.muted)
                 .child(format!("{}（記録にない ID）", link.id))
                 .into_any_element(),
         }
@@ -371,13 +516,7 @@ impl AxonApp {
         if links.is_empty() {
             return None;
         }
-        let muted = cx.theme().muted_foreground;
-        let mut section = div()
-            .id(id)
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(div().text_xs().text_color(muted).child(heading));
+        let mut section = section(id, heading.into(), Palette::of(cx));
         for link in links {
             section = section.child(self.render_link(link, cx));
         }
@@ -389,14 +528,8 @@ impl AxonApp {
         detail: &EntityDetail,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = cx.theme();
-        let (muted, danger, warning, border) = (
-            theme.muted_foreground,
-            theme.danger,
-            theme.warning,
-            theme.border,
-        );
-        let section_heading = |text: SharedString| div().text_xs().text_color(muted).child(text);
+        let palette = Palette::of(cx);
+        let mono = cx.theme().mono_font_family.clone();
         // Scoped to the Entity, so another one opens scrolled to its top.
         let mut pane = div()
             .id(named(format!("detail-{}", detail.id)))
@@ -404,20 +537,88 @@ impl AxonApp {
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .gap_3()
-            .p_4();
+            .gap_5()
+            .px_6()
+            .pt_4()
+            .pb_8();
 
-        // Where it belongs, then what it is.
+        // What it is, then where it belongs.
+        let mut head = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_between()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(palette.muted)
+                            .child(text::kind(detail.kind))
+                            .child(detail.label.name())
+                            .child(
+                                div()
+                                    .font_family(mono)
+                                    .text_color(palette.ink)
+                                    .truncate()
+                                    .child(detail.id.to_string()),
+                            ),
+                    )
+                    .child(self.close_detail_button(cx)),
+            )
+            .child(
+                div()
+                    .id("detail-title")
+                    .text_size(px(22.))
+                    .line_height(px(30.))
+                    .font_semibold()
+                    .child(detail.title.clone())
+                    .test_support(),
+            )
+            .child(lifecycle_track(detail.state, palette));
+
+        let mut state = String::new();
+        if let Some(situation) = text::situation(detail.status) {
+            state.push_str(situation);
+        }
+        if let Some(stored) = detail.stored
+            && State::of(Some(stored)) != detail.state
+        {
+            state.push_str(&format!(
+                "（子の進行から導出。保存値は{}）",
+                text::lifecycle(stored)
+            ));
+        }
+        if !state.is_empty() {
+            head = head.child(
+                div()
+                    .id("detail-state")
+                    .text_sm()
+                    .text_color(palette.muted)
+                    .child(state),
+            );
+        }
         let mut belongs = div()
             .id("detail-ancestors")
             .flex()
             .flex_row()
             .flex_wrap()
+            .items_center()
             .gap_1()
-            .text_xs()
-            .text_color(muted);
+            .text_sm()
+            .text_color(palette.muted)
+            .child(div().text_xs().pr_1().child("所属"));
         if detail.ancestors.is_empty() {
-            belongs = belongs.child("所属なし");
+            belongs = belongs.child("なし");
         } else {
             for (ix, ancestor) in detail.ancestors.iter().enumerate() {
                 if ix > 0 {
@@ -427,74 +628,16 @@ impl AxonApp {
             }
         }
         pane = pane
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .justify_between()
-                    .items_center()
-                    .child(div().text_xs().text_color(muted).child(format!(
-                        "{} · {} · {}",
-                        text::kind(detail.kind),
-                        detail.label.name(),
-                        detail.id
-                    )))
-                    .child(
-                        Button::new("close-detail")
-                            .ghost()
-                            .compact()
-                            .label("閉じる")
-                            .on_click(cx.listener(|this, _, _, cx| this.close_entity(cx))),
-                    ),
-            )
-            .child(
-                div()
-                    .id("detail-title")
-                    .text_xl()
-                    .child(detail.title.clone())
-                    .test_support(),
-            );
-
-        let mut state = format!(
-            "{} {}",
-            text::state_icon(detail.state),
-            text::state(detail.state)
-        );
-        if let Some(stored) = detail.stored
-            && State::of(Some(stored)) != detail.state
-        {
-            state.push_str(&format!(
-                "（子の進行から導出。保存値は{}）",
-                text::lifecycle(stored)
-            ));
-        }
-        if let Some(situation) = text::situation(detail.status) {
-            state.push_str(&format!(" · {situation}"));
-        }
-        pane = pane
-            .child(div().id("detail-state").child(state))
-            .child(belongs)
+            .child(head.child(belongs))
             .children(self.render_filtered_out(cx));
         if detail.heads > 0 {
-            pane = pane.child(
-                div()
-                    .id("detail-conflict")
-                    .text_sm()
-                    .text_color(danger)
-                    .child(format!(
-                        "衝突しています（head {} 件）。表示は最初の head の値です。",
-                        detail.heads
-                    )),
-            );
+            pane = pane.child(callout("detail-conflict", palette.danger).child(format!(
+                "衝突しています（head {} 件）。表示は最初の head の値です。",
+                detail.heads
+            )));
         }
         if !detail.violations.is_empty() {
-            let mut violations = div()
-                .id("detail-violations")
-                .flex()
-                .flex_col()
-                .gap_1()
-                .text_sm()
-                .text_color(danger);
+            let mut violations = callout("detail-violations", palette.danger).gap_1();
             for (ix, (kind, links)) in detail.violations.iter().enumerate() {
                 let mut line = div()
                     .id(("violation", ix))
@@ -511,101 +654,90 @@ impl AxonApp {
             pane = pane.child(violations);
         }
         if !detail.waits.is_empty() {
-            let mut waits = div()
-                .id("detail-waits")
-                .flex()
-                .flex_col()
-                .gap_1()
-                .p_2()
-                .rounded_md()
-                .border_1()
-                .border_color(warning)
-                .child(div().text_sm().child(text::waiting_for(detail.waiting_for)));
+            let mut waits = callout("detail-waits", palette.caution).gap_1().child(
+                div()
+                    .text_color(palette.caution)
+                    .font_medium()
+                    .child(text::waiting_for(detail.waiting_for)),
+            );
             for (ix, wait) in detail.waits.iter().enumerate() {
                 let mut line = div()
                     .id(("wait", ix))
                     .flex()
                     .flex_row()
                     .flex_wrap()
-                    .gap_1()
-                    .text_sm()
+                    .items_center()
+                    .gap_x_2()
                     .child(
                         div()
-                            .text_color(muted)
-                            .child(format!("{}:", text::wait(wait.kind))),
+                            .text_xs()
+                            .text_color(palette.muted)
+                            .child(text::wait(wait.kind)),
                     )
                     .child(self.render_link(&wait.entity, cx));
                 if let (WaitKind::DescendantDependency, Some(via)) = (wait.kind, &wait.via) {
-                    line = line.child("→").child(self.render_link(via, cx));
+                    line = line
+                        .child(div().text_color(palette.muted).child("→"))
+                        .child(self.render_link(via, cx));
                 }
                 waits = waits.child(line);
             }
             pane = pane.child(waits);
         }
 
-        pane = pane.child(
-            div()
-                .id("detail-description")
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(section_heading("本文".into()))
-                .child(if detail.description.is_empty() {
-                    div()
-                        .text_sm()
-                        .text_color(muted)
-                        .child("本文はありません。")
-                } else {
-                    div().text_sm().child(detail.description.clone())
-                }),
-        );
+        pane = pane.child(section("detail-description", "本文".into(), palette).child(
+            if detail.description.is_empty() {
+                div()
+                    .text_sm()
+                    .text_color(palette.muted)
+                    .child("本文はありません。")
+            } else {
+                div()
+                    .text_sm()
+                    .line_height(px(22.))
+                    .max_w(px(MEASURE))
+                    .child(detail.description.clone())
+            },
+        ));
         if let Some(condition) = &detail.condition {
             pane = pane.child(
-                div()
-                    .id("detail-condition")
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(section_heading(
-                        "再浮上条件（アプリは実行しません。満たしているものとして表示しています）"
-                            .into(),
-                    ))
-                    .child(div().text_sm().child(condition.clone())),
+                section(
+                    "detail-condition",
+                    "再浮上条件（アプリは実行しません。満たしているものとして表示しています）"
+                        .into(),
+                    palette,
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .font_family(cx.theme().mono_font_family.clone())
+                        .child(condition.clone()),
+                ),
             );
         }
         if detail.descendants.is_some() || !detail.children.is_empty() {
             let mut summary = format!("子 {} 件", detail.children.len());
             if let Some(descendants) = &detail.descendants {
                 summary.push_str(&format!(
-                    " · 衝突していない子孫 {} 件（完了 {} · 取りやめ {}）",
+                    "、衝突していない子孫 {} 件（完了 {}、取りやめ {}）",
                     descendants.total, descendants.completed, descendants.cancelled
                 ));
                 if descendants.awaiting_confirmation {
-                    summary.push_str(" · 完了確認待ち");
+                    summary.push_str("、完了確認待ち");
                 }
             }
-            let mut children = div()
-                .id("detail-children")
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(section_heading(summary.into()));
+            let mut children = section("detail-children", summary.into(), palette);
             for child in &detail.children {
                 children = children.child(self.render_link(child, cx));
             }
             pane = pane.child(children);
         }
-        let mut dependencies = div()
-            .id("detail-dependencies")
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(section_heading("依存先".into()));
+        let mut dependencies = section("detail-dependencies", "依存先".into(), palette);
         if detail.dependencies.is_empty() {
             dependencies = dependencies.child(
                 div()
                     .text_sm()
-                    .text_color(muted)
+                    .text_color(palette.muted)
                     .child("依存先はありません。"),
             );
         }
@@ -619,85 +751,140 @@ impl AxonApp {
             cx,
         ));
 
-        let mut notes = div()
-            .id("detail-notes")
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(section_heading(
-                format!("Note（{} 件）", detail.notes.len()).into(),
-            ));
+        let mut notes = section(
+            "detail-notes",
+            format!("Note（{} 件）", detail.notes.len()).into(),
+            palette,
+        )
+        .gap_3();
         for (ix, note) in detail.notes.iter().enumerate() {
             let mut head = text::time(note.at);
             if let Some(actor) = &note.actor {
-                head.push_str(&format!(" · {actor}"));
+                head.push_str(&format!("　{actor}"));
             }
             let mut entry = div()
                 .id(("note", ix))
                 .flex()
                 .flex_col()
                 .gap_1()
-                .p_2()
-                .rounded_md()
-                .border_1()
-                .border_color(border)
-                .child(div().text_xs().text_color(muted).child(head));
+                .pl_3()
+                .border_l_2()
+                .border_color(palette.rule)
+                .child(div().text_xs().text_color(palette.muted).child(head));
             if let Some(reason) = &note.reason {
                 entry = entry.child(
                     div()
                         .text_xs()
-                        .text_color(muted)
+                        .text_color(palette.muted)
                         .child(format!("理由: {reason}")),
                 );
             }
-            notes = notes.child(entry.child(div().text_sm().child(note.body.clone())));
+            notes = notes.child(
+                entry.child(
+                    div()
+                        .text_sm()
+                        .line_height(px(22.))
+                        .max_w(px(MEASURE))
+                        .child(note.body.clone()),
+                ),
+            );
         }
         pane = pane.child(notes);
 
-        let mut history = div()
-            .id("detail-history")
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(section_heading("履歴".into()));
+        // A timeline: a dot per record on one thread, oldest first.
+        let mut history = div().flex().flex_col();
+        let last = detail.history.len().saturating_sub(1);
         for (ix, entry) in detail.history.iter().enumerate() {
-            let mut head = format!("{} {}", text::time(entry.at), text::record(&entry.kind));
+            let mut head = div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap_x_2()
+                .child(div().text_sm().child(text::record(&entry.kind)))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(palette.muted)
+                        .child(text::time(entry.at)),
+                );
             if let Some(actor) = &entry.actor {
-                head.push_str(&format!(" · {actor}"));
+                head = head.child(
+                    div()
+                        .text_xs()
+                        .text_color(palette.muted)
+                        .child(actor.clone()),
+                );
             }
             if entry.concurrent_with_previous {
-                head.push_str(" · 直前の記録と並行");
+                head = head.child(
+                    div()
+                        .text_xs()
+                        .text_color(palette.caution)
+                        .child("直前の記録と並行"),
+                );
             }
             if entry.parent_missing {
-                head.push_str(" · 前の記録が見つかりません");
+                head = head.child(
+                    div()
+                        .text_xs()
+                        .text_color(palette.danger)
+                        .child("前の記録が見つかりません"),
+                );
             }
             let mut line = div()
                 .id(("history", ix))
+                .relative()
                 .flex()
                 .flex_col()
-                .text_sm()
+                .gap_0p5()
+                .pl_5()
+                .pb_3()
+                // The thread, which stops at the last record.
+                .when(ix < last, |line| {
+                    line.child(
+                        div()
+                            .absolute()
+                            .left(px(3.))
+                            .top(px(12.))
+                            .bottom_0()
+                            .w(px(1.))
+                            .bg(palette.rule),
+                    )
+                })
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top(px(6.))
+                        .size(px(7.))
+                        .rounded_full()
+                        .bg(palette.muted),
+                )
                 .child(head);
             for change in &entry.changes {
                 line = line.child(
                     div()
-                        .pl_4()
                         .text_xs()
-                        .text_color(muted)
+                        .text_color(palette.muted)
                         .child(text::difference(change)),
                 );
             }
             if let Some(reason) = &entry.reason {
                 line = line.child(
                     div()
-                        .pl_4()
                         .text_xs()
-                        .text_color(muted)
+                        .text_color(palette.muted)
                         .child(format!("理由: {reason}")),
                 );
             }
             history = history.child(line);
         }
-        pane.child(history).into_any_element()
+        pane.child(
+            section("detail-history", "履歴".into(), palette)
+                .gap_2()
+                .child(history),
+        )
+        .into_any_element()
     }
 
     /// Why the selected Entity is not among the matches, when it is not.
@@ -710,8 +897,11 @@ impl AxonApp {
         Some(
             div()
                 .id("detail-filtered-out")
+                .pl_3()
+                .border_l_2()
+                .border_color(Palette::of(cx).caution)
                 .text_sm()
-                .text_color(cx.theme().warning)
+                .text_color(Palette::of(cx).caution)
                 .child(format!(
                     "現在の絞り込みに一致しないため、一覧には一致として表示されていません（{}）。",
                     reasons.join("。")
@@ -729,4 +919,103 @@ fn exclusion(exclusion: &Exclusion) -> String {
         Exclusion::Label(label) => format!("label「{}」を選んでいません", label.name()),
         Exclusion::Query(query) => format!("タイトル・本文・ID に「{query}」がありません"),
     }
+}
+
+/// The longest a line of prose gets in the detail pane.
+const MEASURE: f32 = 620.;
+
+/// A titled block of the detail pane.
+fn section(
+    id: &'static str,
+    heading: SharedString,
+    palette: Palette,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    div().id(id).flex().flex_col().gap_1p5().child(
+        div()
+            .text_xs()
+            .font_medium()
+            .text_color(palette.muted)
+            .child(heading),
+    )
+}
+
+/// A block that needs attention: a colored rule down its left.
+fn callout(id: &'static str, color: Hsla) -> gpui_kit::Stateful<gpui_kit::Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .pl_3()
+        .py_1()
+        .border_l_2()
+        .border_color(color)
+        .text_sm()
+        .text_color(color)
+}
+
+/// The lifecycle an Issue or a Group walks, with where this one stands lit in its state's
+/// color. Cancelled and conflicted leave the track, which then dims and shows the state apart.
+fn lifecycle_track(current: State, palette: Palette) -> AnyElement {
+    const TRACK: [State; 4] = [
+        State::Undecided,
+        State::NotStarted,
+        State::InProgress,
+        State::Completed,
+    ];
+    let reached = TRACK.iter().position(|state| *state == current);
+    let mut track = div()
+        .id("detail-lifecycle")
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .pt_1()
+        .text_sm();
+    for (ix, state) in TRACK.iter().enumerate() {
+        if ix > 0 {
+            let passed = reached.is_some_and(|r| ix <= r);
+            track = track.child(
+                div()
+                    .flex_1()
+                    .max_w(px(48.))
+                    .min_w(px(8.))
+                    .h(px(1.))
+                    .bg(if passed { palette.muted } else { palette.rule }),
+            );
+        }
+        let (color, weight) = match reached {
+            Some(r) if r == ix => (palette.state(*state), gpui_kit::FontWeight::SEMIBOLD),
+            Some(r) if ix < r => (palette.muted, gpui_kit::FontWeight::NORMAL),
+            _ => (palette.rule, gpui_kit::FontWeight::NORMAL),
+        };
+        let stop = div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .gap_1()
+            .text_color(color)
+            .font_weight(weight)
+            .child(text::state_icon(*state));
+        // Only the stop it stands on is named, so the track stays short in a narrow pane.
+        track = track.child(if reached == Some(ix) {
+            stop.child(text::state(*state))
+        } else {
+            stop
+        });
+    }
+    if reached.is_none() {
+        track = track.child(
+            div()
+                .flex_none()
+                .ml_2()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .font_semibold()
+                .text_color(palette.state(current))
+                .child(text::state_icon(current))
+                .child(text::state(current)),
+        );
+    }
+    track.into_any_element()
 }

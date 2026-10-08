@@ -8,7 +8,10 @@ use axon::lifecycle::{
 use axon::location::Location;
 use axon_gui::{
     AxonApp, MIN_WINDOW_SIZE,
-    app::{StoreState, Summary, entity_element, text},
+    app::{
+        Columns, StoreState, Summary, THREE_COLUMNS_MIN_WIDTH, TWO_COLUMNS_MIN_WIDTH,
+        entity_element, text,
+    },
     board::{Layout, State, WaitKind},
     project::{AppData, InstanceLock, ProjectRoot},
 };
@@ -721,6 +724,148 @@ fn switching_projects_never_mixes_their_records(cx: &mut TestAppContext) {
     }
 }
 
+/// Asserts that each element is drawn, large enough to use and inside the window.
+fn usable(window: &mut gpui_kit::Window, ids: &[&'static str]) {
+    let viewport = window.viewport_size();
+    for id in ids {
+        let element = window.find(*id);
+        assert!(element.visible(), "{id:?} is hidden");
+        let bounds = element.bounds();
+        assert!(
+            bounds.size.width >= px(20.) && bounds.size.height >= px(14.),
+            "{id:?} is too small to use: {bounds:?}"
+        );
+        assert!(
+            bounds.bottom_right().x <= viewport.width && bounds.bottom_right().y <= viewport.height,
+            "{id:?} overflows the window: {bounds:?}"
+        );
+    }
+}
+
+/// The smallest window that shows the list and the detail side by side.
+const TWO_COLUMNS: (f32, f32) = (TWO_COLUMNS_MIN_WIDTH, MIN_WINDOW_SIZE.1);
+
+fn columns(app: &Entity<AxonApp>, cx: &mut TestAppContext) -> Columns {
+    cx.read(|cx| app.read(cx).columns())
+}
+
+#[gpui_kit::test]
+fn the_window_width_decides_the_columns(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    plan(&seed);
+    for (width, expected) in [
+        (THREE_COLUMNS_MIN_WIDTH, Columns::Three),
+        (THREE_COLUMNS_MIN_WIDTH - 1., Columns::Two),
+        (TWO_COLUMNS_MIN_WIDTH, Columns::Two),
+        (TWO_COLUMNS_MIN_WIDTH - 1., Columns::One),
+    ] {
+        let (handle, app) = open_sized(&data, width, 600., cx);
+        assert_eq!(columns(&app, cx), expected, "{width}");
+        with_window(handle, cx, |window, _| {
+            assert_eq!(
+                window.try_find("sidebar").is_some(),
+                expected == Columns::Three
+            );
+            assert_eq!(
+                window.try_find("open-panel").is_some(),
+                expected != Columns::Three
+            );
+            assert_eq!(
+                window.try_find("detail-empty").is_some(),
+                expected != Columns::One
+            );
+        });
+        cx.update_window(handle.into(), |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+    }
+}
+
+#[gpui_kit::test]
+fn a_narrow_window_opens_the_roots_and_the_filters_as_a_panel(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    plan(&seed);
+    let (handle, app) = open_sized(&data, TWO_COLUMNS.0, TWO_COLUMNS.1, cx);
+    click(handle, "open-panel", cx);
+    with_window(handle, cx, |window, _| {
+        usable(
+            window,
+            &[
+                "project-switch",
+                "add-root",
+                "state-Undecided",
+                "close-panel",
+            ],
+        );
+    });
+
+    // The filters change the list behind the panel, which stays open for the next one.
+    click(handle, "kind-Issue", cx);
+    click(handle, "kind-Group", cx);
+    assert!(rows(&app, cx).is_empty());
+    cx.read(|cx| assert!(app.read(cx).is_panel_open()));
+
+    // The strip of window beside the panel, the close button and Escape all close it.
+    click(handle, "panel-scrim", cx);
+    cx.read(|cx| assert!(!app.read(cx).is_panel_open()));
+    click(handle, "open-panel", cx);
+    click(handle, "close-panel", cx);
+    cx.read(|cx| assert!(!app.read(cx).is_panel_open()));
+    click(handle, "open-panel", cx);
+    press(handle, "escape", cx);
+    cx.read(|cx| assert!(!app.read(cx).is_panel_open()));
+    with_window(handle, cx, |window, _| {
+        assert!(window.try_find("sidebar").is_none())
+    });
+}
+
+#[gpui_kit::test]
+fn one_column_shows_the_detail_in_place_of_the_list(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    let (handle, app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
+    assert_eq!(columns(&app, cx), Columns::One);
+
+    // A click opens the detail over the whole window.
+    click_in(handle, "entity-list", entity_element(&plan.venue), cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("会場を決める"));
+    with_window(handle, cx, |window, _| {
+        assert!(window.try_find("entity-list").is_none());
+        usable(window, &["close-detail", "detail-title"]);
+    });
+
+    // Going back keeps the selection, and the arrow keys go on from it without leaving the
+    // list.
+    click(handle, "close-detail", cx);
+    with_window(handle, cx, |window, _| {
+        assert!(window.try_find("detail-pane").is_none());
+        assert!(
+            window
+                .within("entity-list")
+                .find(entity_element(&plan.venue))
+                .visible()
+        );
+    });
+    press(handle, "down", cx);
+    assert_ne!(detail_title(&app, cx).as_deref(), Some("会場を決める"));
+    with_window(handle, cx, |window, _| {
+        assert!(window.try_find("entity-list").is_some())
+    });
+
+    // Enter opens the selected row, and Escape goes back.
+    press(handle, "enter", cx);
+    with_window(handle, cx, |window, _| {
+        assert!(window.try_find("detail-title").is_some())
+    });
+    press(handle, "escape", cx);
+    with_window(handle, cx, |window, _| {
+        assert!(window.try_find("entity-list").is_some())
+    });
+}
+
 #[gpui_kit::test]
 fn the_smallest_window_keeps_the_list_and_a_long_detail_usable(cx: &mut TestAppContext) {
     let (_dir, data) = data();
@@ -730,37 +875,36 @@ fn the_smallest_window_keeps_the_list_and_a_long_detail_usable(cx: &mut TestAppC
     for ix in 0..30 {
         seed.note(&id, &format!("Note {ix}: {}", "長い本文".repeat(40)));
     }
-    let (handle, app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
-    click_in(handle, "entity-list", entity_element(&id), cx);
-    assert_eq!(detail_title(&app, cx).as_deref(), Some(long.as_str()));
-    with_window(handle, cx, |window, _| {
-        let viewport = window.viewport_size();
-        for id in [
-            ElementId::from("search"),
-            "layout-tree".into(),
-            "layout-flat".into(),
-            "reload-list".into(),
-            "close-detail".into(),
-            "state-Undecided".into(),
-            "project-switch".into(),
-        ] {
-            let element = window.find(id.clone());
-            assert!(element.visible(), "{id:?} is hidden");
-            let bounds = element.bounds();
-            assert!(
-                bounds.size.width >= px(20.) && bounds.size.height >= px(14.),
-                "{id:?} is too small to use: {bounds:?}"
-            );
-            assert!(
-                bounds.bottom_right().x <= viewport.width
-                    && bounds.bottom_right().y <= viewport.height,
-                "{id:?} overflows the window: {bounds:?}"
-            );
+    let list = [
+        "search",
+        "layout-tree",
+        "layout-flat",
+        "reload-list",
+        "open-panel",
+    ];
+    let panel = ["project-switch", "state-Undecided", "close-panel"];
+    for size in [MIN_WINDOW_SIZE, TWO_COLUMNS] {
+        let (handle, app) = open_sized(&data, size.0, size.1, cx);
+        with_window(handle, cx, |window, _| {
+            usable(window, &list);
+            let row = window.within("entity-list").find(entity_element(&id));
+            assert!(row.visible());
+            assert!(row.bounds().bottom_right().x <= window.viewport_size().width);
+        });
+        click_in(handle, "entity-list", entity_element(&id), cx);
+        assert_eq!(detail_title(&app, cx).as_deref(), Some(long.as_str()));
+        with_window(handle, cx, |window, _| usable(window, &["close-detail"]));
+        if size == TWO_COLUMNS {
+            with_window(handle, cx, |window, _| usable(window, &list));
+        } else {
+            click(handle, "close-detail", cx);
         }
-        let row = window.within("entity-list").find(entity_element(&id));
-        assert!(row.visible());
-        assert!(row.bounds().bottom_right().x <= viewport.width);
-    });
+        click(handle, "open-panel", cx);
+        with_window(handle, cx, |window, _| usable(window, &panel));
+        cx.update_window(handle.into(), |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+    }
 }
 
 #[gpui_kit::test]
@@ -778,7 +922,7 @@ fn the_row_chosen_with_the_keyboard_stays_in_view(cx: &mut TestAppContext) {
             )
         })
         .collect();
-    let (handle, app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
+    let (handle, app) = open_sized(&data, TWO_COLUMNS.0, TWO_COLUMNS.1, cx);
     click_in(handle, "entity-list", entity_element(&ids[0]), cx);
     for _ in 1..ids.len() {
         press(handle, "down", cx);
@@ -925,7 +1069,7 @@ fn reading_again_keeps_the_list_its_filter_selection_and_scroll(cx: &mut TestApp
             )
         })
         .collect();
-    let (handle, app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
+    let (handle, app) = open_sized(&data, TWO_COLUMNS.0, TWO_COLUMNS.1, cx);
     click(handle, "layout-flat", cx);
     click(handle, "search", cx);
     with_window(handle, cx, |window, cx| window.input("仕事", cx));

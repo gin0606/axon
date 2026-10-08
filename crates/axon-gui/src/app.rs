@@ -6,28 +6,43 @@
 //! still the current one. Coming back to the window reads the records again, as the reload does.
 
 mod explorer;
+pub mod style;
 pub mod text;
 
 pub use explorer::{LIST_CONTEXT, entity_element};
 
+/// Key context of the whole window, where Escape steps back.
+pub const APP_CONTEXT: &str = "AxonApp";
+
 use crate::{
+    Dismiss,
     board::{Board, Explorer},
     project::{InstanceLock, ProjectConnection, ProjectRoot, Registry, Requests, UpdateError},
 };
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Theme,
+    ActiveTheme, Disableable,
     button::{Button, ButtonVariants},
     input::{InputEvent, InputState},
     menu::{DropdownMenu, PopupMenuItem},
 };
 use gpui_kit::{
     AnyElement, AppContext, Context, Entity, FocusHandle, IntoElement, PathPromptOptions, Render,
-    SharedString, UniformListScrollHandle, Window, base::TestSupportExt, div, prelude::*, px,
+    SharedString, UniformListScrollHandle, Window,
+    base::{StyledExt, TestSupportExt},
+    div,
+    prelude::*,
+    px,
 };
 use std::sync::Arc;
+use style::Palette;
 
-/// The width of the left column.
+/// The width of the left column, and the widest it gets as a panel over a narrow window.
 pub const SIDEBAR_WIDTH: f32 = 200.;
+pub const SIDEBAR_PANEL_WIDTH: f32 = 272.;
+/// The narrowest window that shows the list and the detail side by side, and the one that
+/// adds the left column to them.
+pub const TWO_COLUMNS_MIN_WIDTH: f32 = 700.;
+pub const THREE_COLUMNS_MIN_WIDTH: f32 = 980.;
 /// The narrowest the list and the detail pane get.
 pub const LIST_MIN_WIDTH: f32 = 300.;
 pub const DETAIL_MIN_WIDTH: f32 = 360.;
@@ -56,6 +71,28 @@ pub enum StoreState {
     Failed(String),
 }
 
+/// How many columns the window lays side by side, which its width decides.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Columns {
+    /// The list or the detail. The roots and the filters open as a panel over them.
+    One,
+    /// The list and the detail. The roots and the filters open as a panel over them.
+    Two,
+    /// The roots and the filters, the list and the detail.
+    Three,
+}
+impl Columns {
+    pub fn for_width(width: f32) -> Self {
+        if width >= THREE_COLUMNS_MIN_WIDTH {
+            Self::Three
+        } else if width >= TWO_COLUMNS_MIN_WIDTH {
+            Self::Two
+        } else {
+            Self::One
+        }
+    }
+}
+
 /// What the main pane shows of a readable store.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Summary {
@@ -81,7 +118,16 @@ pub struct AxonApp {
     explorer: Explorer,
     search: Entity<InputState>,
     list_focus: FocusHandle,
+    /// The window's own focus, which Escape reaches when the focused list leaves the screen.
+    app_focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
+    /// The layout of the last frame.
+    columns: Columns,
+    /// The roots and the filters are open as a panel over a window too narrow for their column.
+    panel_open: bool,
+    /// In one column, the detail of the selected Entity is shown instead of the list. Moving
+    /// the selection with the arrow keys leaves the list on screen.
+    detail_shown: bool,
 }
 
 impl AxonApp {
@@ -99,11 +145,9 @@ impl AxonApp {
             },
         )
         .detach();
-        Theme::sync_system_appearance(Some(window), cx);
-        cx.observe_window_appearance(window, |_, window, cx| {
-            Theme::sync_system_appearance(Some(window), cx)
-        })
-        .detach();
+        style::sync_appearance(window, cx);
+        cx.observe_window_appearance(window, |_, window, cx| style::sync_appearance(window, cx))
+            .detach();
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 this.reload_on_activation(cx);
@@ -124,7 +168,11 @@ impl AxonApp {
             search,
             // A tab stop, so the arrow keys are reachable from the keyboard alone.
             list_focus: cx.focus_handle().tab_stop(true),
+            app_focus: cx.focus_handle(),
             list_scroll: UniformListScrollHandle::new(),
+            columns: Columns::Three,
+            panel_open: false,
+            detail_shown: false,
         };
         this.reload_registry(cx);
         this
@@ -161,6 +209,37 @@ impl AxonApp {
     pub fn reads_started(&self) -> u64 {
         self.registry_loads.issued() + self.store_loads.issued()
     }
+    pub fn columns(&self) -> Columns {
+        self.columns
+    }
+    /// Whether the roots and the filters are open as a panel over the list.
+    pub fn is_panel_open(&self) -> bool {
+        self.panel_open && self.columns != Columns::Three
+    }
+    /// Opens the panel and takes the focus off the list behind it, so the arrow keys leave
+    /// it alone and Escape closes the panel.
+    pub fn open_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.panel_open = true;
+        window.focus(&self.app_focus, cx);
+        cx.notify();
+    }
+    pub fn close_panel(&mut self, cx: &mut Context<Self>) {
+        self.panel_open = false;
+        cx.notify();
+    }
+    /// Whether one column shows the detail rather than the list.
+    pub fn is_detail_shown(&self) -> bool {
+        self.detail_shown && self.explorer.detail().is_some()
+    }
+    /// Steps back: closes the panel, or in one column goes from the detail to the list.
+    pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_panel_open() {
+            self.close_panel(cx);
+        } else if self.columns == Columns::One && self.is_detail_shown() {
+            self.show_list(window, cx);
+        }
+    }
+
     /// The focus of the list, where the arrow keys move the selection.
     pub fn list_focus(&self) -> &FocusHandle {
         &self.list_focus
@@ -217,6 +296,8 @@ impl AxonApp {
         if !matches!(&self.registry, RegistryState::Loaded(registry) if registry.contains(&root)) {
             return;
         }
+        // The list of the chosen root is what the user wants to see next.
+        self.panel_open = false;
         if self.selected.as_ref() != Some(&root) {
             self.switches += 1;
             // The outcome of the last change was about the window as it was before.
@@ -429,8 +510,10 @@ impl AxonApp {
         }
     }
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
+    /// The roots and the filters: the left column, or with `panel` the panel over a narrower
+    /// window, which also offers to close.
+    fn render_sidebar(&self, panel: Option<f32>, cx: &mut Context<Self>) -> AnyElement {
+        let palette = Palette::of(cx);
         let app = cx.entity().downgrade();
         let roots: Vec<ProjectRoot> = match &self.registry {
             RegistryState::Loaded(registry) => registry.roots().to_vec(),
@@ -444,26 +527,45 @@ impl AxonApp {
         let loaded = matches!(self.registry, RegistryState::Loaded(_));
         let mut sidebar = div()
             .id("sidebar")
-            .w(px(SIDEBAR_WIDTH))
+            .w(px(panel.unwrap_or(SIDEBAR_WIDTH)))
             .flex_none()
             .h_full()
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .gap_2()
-            .p_3()
+            .gap_1()
+            .px_3()
+            .pt_4()
+            .pb_3()
+            .bg(palette.desk)
             .border_r_1()
-            .border_color(theme.border)
+            .border_color(palette.rule)
             .child(
                 div()
+                    .px_1()
+                    .pb_1()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
                     .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("リポジトリ"),
+                    .text_color(palette.muted)
+                    .child("リポジトリ")
+                    .when(panel.is_some(), |heading| {
+                        heading.child(
+                            Button::new("close-panel")
+                                .ghost()
+                                .compact()
+                                .label("閉じる")
+                                .on_click(cx.listener(|this, _, _, cx| this.close_panel(cx))),
+                        )
+                    }),
             )
             .child(
                 Button::new("project-switch")
                     .outline()
                     .w_full()
+                    .font_semibold()
                     .label(switch_label)
                     .disabled(roots.is_empty())
                     .dropdown_menu(move |menu, _, _| {
@@ -490,36 +592,25 @@ impl AxonApp {
                     .disabled(self.busy || !loaded)
                     .on_click(cx.listener(|this, _, _, cx| this.add_root(cx))),
             );
-        if let Some(notice) = &self.notice {
-            sidebar = sidebar.child(
-                div()
-                    .id("notice")
-                    .text_sm()
-                    .text_color(theme.danger)
-                    .child(notice.clone())
-                    .test_support(),
-            );
-        }
         if loaded {
             sidebar = sidebar.child(self.render_filters(cx));
         }
-        sidebar.into_any_element()
+        sidebar.test_support().into_any_element()
     }
 
     /// What the selected root's store looks like, and the actions that state offers (kept
     /// apart so a long message never scrolls them out of reach).
     fn render_status(&self, cx: &mut Context<Self>) -> (AnyElement, Option<AnyElement>) {
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
-        let danger = theme.danger;
-        let message = |text: SharedString| div().id("project-status").child(text);
+        let palette = Palette::of(cx);
+        let (muted, danger) = (palette.muted, palette.danger);
+        let message = |text: SharedString| div().id("project-status").text_sm().child(text);
         let reload = || {
             Button::new("reload")
                 .outline()
                 .label("再読み込み")
                 .on_click(cx.listener(|this, _, _, cx| this.reload(cx)))
         };
-        let status = div().flex().flex_col().gap_2();
+        let status = div().flex().flex_col().gap_1();
         let (status, reloadable) = match (&self.registry, self.selected(), &self.store) {
             (RegistryState::Loading, _, _) => (
                 status.child(message("登録したリポジトリの一覧を読み込み中…".into())),
@@ -530,7 +621,7 @@ impl AxonApp {
                     .child(message(
                         "登録したリポジトリの一覧を読み込めませんでした。空の一覧として扱わず、書き換えもしません。".into(),
                     ))
-                    .child(div().text_sm().text_color(danger).child(error.clone())),
+                    .child(div().text_xs().text_color(danger).child(error.clone())),
                 true,
             ),
             (RegistryState::Loaded(_), None, _) => (
@@ -560,7 +651,7 @@ impl AxonApp {
                     .child(message(
                         "このリポジトリの記録を読み込めませんでした。空のリポジトリとしては扱いません。他のリポジトリには左のメニューから切り替えられます。".into(),
                     ))
-                    .child(div().text_sm().text_color(danger).child(error.clone())),
+                    .child(div().text_xs().text_color(danger).child(error.clone())),
                 true,
             ),
         };
@@ -575,6 +666,7 @@ impl AxonApp {
         let unregister = self.selected().is_some().then(|| {
             Button::new("remove-root")
                 .ghost()
+                .compact()
                 .label("登録を解除")
                 .disabled(self.busy)
                 .on_click(cx.listener(|this, _, _, cx| this.remove_selected(cx)))
@@ -583,7 +675,7 @@ impl AxonApp {
             div()
                 .flex()
                 .flex_row()
-                .gap_2()
+                .gap_1()
                 .when(reloadable, |row| row.child(reload()))
                 .children(unregister)
                 .into_any_element()
@@ -618,104 +710,216 @@ fn reread_after<T>(
 }
 
 impl Render for AxonApp {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let (background, foreground, border, muted, danger) = (
-            theme.background,
-            theme.foreground,
-            theme.border,
-            theme.muted_foreground,
-            theme.danger,
-        );
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = Palette::of(cx);
+        let width: f32 = window.viewport_size().width.into();
+        let columns = Columns::for_width(width);
+        self.columns = columns;
+        if self.explorer.detail().is_none() {
+            // A later selection by the arrow keys leaves one column on the list.
+            self.detail_shown = false;
+        }
+        let one_detail = columns == Columns::One && self.is_detail_shown();
+        let panel = self.is_panel_open().then(|| {
+            // The panel leaves a strip of the window to click back to it.
+            let width = SIDEBAR_PANEL_WIDTH.min(width - 56.);
+            self.render_sidebar(Some(width), cx)
+        });
+        let sidebar = (columns == Columns::Three).then(|| self.render_sidebar(None, cx));
+        let detail = (columns != Columns::One || one_detail).then(|| {
+            div()
+                .id("detail-pane")
+                .flex_1()
+                .when(columns != Columns::One, |pane| {
+                    pane.min_w(px(DETAIL_MIN_WIDTH))
+                        .border_l_1()
+                        .border_color(palette.rule)
+                })
+                .min_w_0()
+                .h_full()
+                .bg(palette.sheet)
+                .child(self.render_detail_pane(cx))
+                .test_support()
+        });
+        let project = (!one_detail).then(|| self.render_project(columns, cx));
+        div()
+            .id("axon-app")
+            .key_context(APP_CONTEXT)
+            .track_focus(&self.app_focus)
+            .on_action(cx.listener(|this, _: &Dismiss, window, cx| this.dismiss(window, cx)))
+            .relative()
+            .size_full()
+            .flex()
+            .flex_row()
+            .bg(palette.paper)
+            .text_color(palette.ink)
+            .children(sidebar)
+            .children(project)
+            .children(detail)
+            .children(panel.map(|panel| {
+                div()
+                    .id("panel-layer")
+                    .absolute()
+                    .inset_0()
+                    .occlude()
+                    .flex()
+                    .flex_row()
+                    .child(panel)
+                    .child(
+                        div()
+                            .id("panel-scrim")
+                            .flex_1()
+                            .h_full()
+                            .bg(gpui_kit::black().opacity(if cx.theme().is_dark() {
+                                0.5
+                            } else {
+                                0.28
+                            }))
+                            .on_click(cx.listener(|this, _, _, cx| this.close_panel(cx)))
+                            .test_support(),
+                    )
+            }))
+    }
+}
+
+impl AxonApp {
+    /// The selected root's name, state and list.
+    fn render_project(&self, columns: Columns, cx: &mut Context<Self>) -> AnyElement {
+        let palette = Palette::of(cx);
         let title = self
             .selected()
             .map(ProjectRoot::name)
             .unwrap_or_else(|| "Axon".into());
-        let sidebar = self.render_sidebar(cx);
         let (status, action) = self.render_status(cx);
         let list = self.render_list(cx);
-        let detail: AnyElement = match self.explorer.detail() {
-            Some(Ok(detail)) => self.render_detail(detail, cx),
-            Some(Err(error)) => div()
-                .id("detail-error")
-                .p_4()
+        // Without the left column, the panel holds the roots and the filters. It tells whether
+        // the filters differ from the defaults, since the list then hides some Entities.
+        let open_panel = (columns != Columns::Three).then(|| {
+            let filtered = self.explorer.filter() != &crate::board::Filter::default();
+            div()
+                .flex_none()
                 .flex()
-                .flex_col()
-                .gap_2()
+                .flex_row()
+                .items_center()
+                .gap_1()
                 .child(
-                    div()
-                        .text_color(danger)
-                        .child(format!("詳細を表示できません: {error}")),
-                )
-                .child(
-                    Button::new("close-detail")
-                        .ghost()
+                    Button::new("open-panel")
+                        .outline()
                         .compact()
-                        .label("閉じる")
-                        .on_click(cx.listener(|this, _, _, cx| this.close_entity(cx))),
+                        .label(if filtered {
+                            "リポジトリと絞り込み（変更あり）"
+                        } else {
+                            "リポジトリと絞り込み"
+                        })
+                        .on_click(cx.listener(|this, _, window, cx| this.open_panel(window, cx))),
                 )
-                .into_any_element(),
-            // Nothing is open: the column stays empty, and points at the list while it has rows.
-            None => div()
-                .id("detail-empty")
-                .size_full()
-                .p_4()
+        });
+        let notice = self.notice.as_ref().map(|notice| {
+            div()
+                .id("notice")
+                .pl_2()
+                .border_l_2()
+                .border_color(palette.danger)
                 .text_sm()
-                .text_color(muted)
-                .when(self.explorer.listing().matched > 0, |empty| {
-                    empty.child("一覧から Issue・Group を選ぶと、ここに詳細を表示します。")
-                })
+                .text_color(palette.danger)
+                .child(notice.clone())
                 .test_support()
-                .into_any_element(),
-        };
+        });
         div()
-            .id("axon-app")
-            .size_full()
+            .id("project-pane")
+            .flex_1()
+            .when(columns != Columns::One, |pane| {
+                pane.min_w(px(LIST_MIN_WIDTH))
+            })
+            .min_w_0()
+            .h_full()
             .flex()
-            .flex_row()
-            .bg(background)
-            .text_color(foreground)
-            .child(sidebar)
+            .flex_col()
+            .gap_3()
+            .pt_4()
+            .px_3()
+            .pb_2()
             .child(
                 div()
-                    .id("project-pane")
-                    .flex_1()
-                    .min_w(px(LIST_MIN_WIDTH))
-                    .h_full()
+                    .px_1()
                     .flex()
                     .flex_col()
-                    .gap_2()
-                    .p_4()
+                    .gap_1()
                     .child(
                         div()
-                            .id("project-title")
-                            .text_xl()
-                            .min_w_0()
-                            .truncate()
-                            .child(title),
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("project-title")
+                                    .flex_1()
+                                    .text_size(px(20.))
+                                    .line_height(px(26.))
+                                    .font_semibold()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(title),
+                            )
+                            .children(open_panel),
                     )
-                    // Long errors scroll here instead of pushing the list out of a small window.
+                    // Long errors scroll here instead of pushing the list out of a small
+                    // window.
                     .child(
                         div()
                             .id("project-status-area")
                             .flex_none()
                             .max_h(px(STATUS_MAX_HEIGHT))
                             .overflow_y_scroll()
+                            .text_color(palette.muted)
                             .child(status),
                     )
-                    .children(action)
-                    .children(list),
+                    .children(notice)
+                    .children(action),
             )
-            .child(
-                div()
-                    .id("detail-pane")
-                    .flex_1()
-                    .min_w(px(DETAIL_MIN_WIDTH))
-                    .h_full()
-                    .border_l_1()
-                    .border_color(border)
-                    .child(detail),
-            )
+            .children(list)
+            .test_support()
+            .into_any_element()
+    }
+
+    /// The detail of the selected Entity, why it cannot be shown, or the empty column.
+    fn render_detail_pane(&self, cx: &mut Context<Self>) -> AnyElement {
+        let palette = Palette::of(cx);
+        match self.explorer.detail() {
+            Some(Ok(detail)) => self.render_detail(detail, cx),
+            Some(Err(error)) => div()
+                .id("detail-error")
+                .px_6()
+                .py_5()
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap_2()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(palette.danger)
+                        .child(format!("詳細を表示できません: {error}")),
+                )
+                .child(self.close_detail_button(cx))
+                .into_any_element(),
+            // Nothing is open: the column stays empty, and points at the list while it has rows.
+            None => div()
+                .id("detail-empty")
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p_6()
+                .text_sm()
+                .text_color(palette.muted)
+                .when(self.explorer.listing().matched > 0, |empty| {
+                    empty.child("一覧から Issue・Group を選ぶと、ここに詳細を表示します。")
+                })
+                .test_support()
+                .into_any_element(),
+        }
     }
 }
 

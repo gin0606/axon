@@ -101,7 +101,7 @@ fn open_sized(
 }
 
 fn open(lock: &Arc<InstanceLock>, cx: &mut TestAppContext) -> (Window, Entity<AxonApp>) {
-    open_sized(lock, 920., 600., cx)
+    open_sized(lock, 1200., 600., cx)
 }
 
 /// Initializes the app once, as `main` does, and opens its window.
@@ -434,15 +434,37 @@ fn smallest_main_window_keeps_the_roots_and_the_list_usable(cx: &mut TestAppCont
     lock.register(&root(dir.path(), &long, &[])).unwrap();
     cx.update(axon_gui::init);
     let (handle, _app) = open_sized(&lock, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
+    // The roots are switched and registered from the panel a narrow window opens.
+    with_window(handle, cx, |window, cx| window.click("open-panel", cx));
     with_window(handle, cx, |window, _| {
         let viewport = window.viewport_size();
         for id in [
             ElementId::from("project-switch"),
             "add-root".into(),
+            "close-panel".into(),
+        ] {
+            let element = window.find(id.clone());
+            assert!(element.visible(), "{id:?} is hidden");
+            let bounds = element.bounds();
+            assert!(
+                bounds.size.width >= px(30.) && bounds.size.height >= px(20.),
+                "{id:?} is too small to use: {bounds:?}"
+            );
+            assert!(
+                bounds.bottom_right().x <= viewport.width
+                    && bounds.bottom_right().y <= viewport.height,
+                "{id:?} overflows the window: {bounds:?}"
+            );
+        }
+    });
+    with_window(handle, cx, |window, cx| window.click("close-panel", cx));
+    with_window(handle, cx, |window, _| {
+        let viewport = window.viewport_size();
+        for id in [
+            ElementId::from("open-panel"),
             "remove-root".into(),
             "search".into(),
             "reload-list".into(),
-            "detail-empty".into(),
         ] {
             let element = window.find(id.clone());
             assert!(element.visible(), "{id:?} is hidden");
@@ -474,7 +496,7 @@ fn a_long_name_and_an_error_fit_in_the_smallest_window(cx: &mut TestAppContext) 
         for id in [
             ElementId::from("reload"),
             "remove-root".into(),
-            "detail-empty".into(),
+            "open-panel".into(),
         ] {
             let bounds = window.find(id.clone()).bounds();
             assert!(

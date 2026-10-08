@@ -11,7 +11,7 @@ pub mod project;
 
 pub use app::AxonApp;
 
-use gpui_kit::component::{ActiveTheme, Theme, button::Button};
+use gpui_kit::component::{ActiveTheme, button::Button};
 use gpui_kit::{
     App, AppContext, Bounds, Context, Entity, KeyBinding, Menu, MenuItem, OsAction, Render,
     SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions, actions,
@@ -20,11 +20,20 @@ use gpui_kit::{
 use project::{AppData, InstanceError, InstanceLock, data::LocateError};
 use std::sync::Arc;
 
-actions!(axon_gui, [Quit, SelectNextEntity, SelectPreviousEntity]);
+actions!(
+    axon_gui,
+    [
+        Quit,
+        SelectNextEntity,
+        SelectPreviousEntity,
+        OpenSelectedEntity,
+        Dismiss
+    ]
+);
 
-/// Smallest window that still shows the left column, the list and the detail pane side by
-/// side.
-pub const MIN_WINDOW_SIZE: (f32, f32) = (880., 520.);
+/// Smallest window. It shows one column at a time; wider windows show more side by side (see
+/// [`app::Columns`]).
+pub const MIN_WINDOW_SIZE: (f32, f32) = (380., 460.);
 
 /// Registers the components, key bindings and application menus. Call once before opening
 /// windows.
@@ -34,6 +43,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("down", SelectNextEntity, Some(app::LIST_CONTEXT)),
         KeyBinding::new("up", SelectPreviousEntity, Some(app::LIST_CONTEXT)),
+        KeyBinding::new("enter", OpenSelectedEntity, Some(app::LIST_CONTEXT)),
+        KeyBinding::new("escape", Dismiss, Some(app::APP_CONTEXT)),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.set_menus(menus());
@@ -167,7 +178,7 @@ pub fn open_notice_window(message: String, cx: &mut App) -> gpui_kit::Result<Ent
         ..Default::default()
     };
     let (_, notice) = gpui_kit::open_window(options, cx, |window, cx| {
-        Theme::sync_system_appearance(Some(window), cx);
+        app::style::sync_appearance(window, cx);
         cx.new(|_| Notice {
             message: message.into(),
         })
