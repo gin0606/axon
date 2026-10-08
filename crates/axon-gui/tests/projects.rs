@@ -76,12 +76,15 @@ fn write_issue(root: &Path, title: &str) {
         .unwrap();
 }
 
+/// Opens the window with the system's reduced motion on.
 fn open_sized(
     lock: &Arc<InstanceLock>,
     width: f32,
     height: f32,
     cx: &mut TestAppContext,
 ) -> (Window, Entity<AxonApp>) {
+    // Every frame lays out where the panel ends up rather than where it slides.
+    cx.update(|cx| cx.set_reduce_motion(true));
     let lock = lock.clone();
     let (window, app) = cx.update(|cx| {
         let options = WindowOptions {
@@ -441,6 +444,7 @@ fn smallest_main_window_keeps_the_roots_and_the_list_usable(cx: &mut TestAppCont
         for id in [
             ElementId::from("project-switch"),
             "add-root".into(),
+            "remove-root".into(),
             "close-panel".into(),
         ] {
             let element = window.find(id.clone());
@@ -462,7 +466,6 @@ fn smallest_main_window_keeps_the_roots_and_the_list_usable(cx: &mut TestAppCont
         let viewport = window.viewport_size();
         for id in [
             ElementId::from("open-panel"),
-            "remove-root".into(),
             "search".into(),
             "reload-list".into(),
         ] {
@@ -493,11 +496,7 @@ fn a_long_name_and_an_error_fit_in_the_smallest_window(cx: &mut TestAppContext) 
     assert!(matches!(store(&app, cx), StoreState::Failed(_)));
     with_window(handle, cx, |window, _| {
         let viewport = window.viewport_size();
-        for id in [
-            ElementId::from("reload"),
-            "remove-root".into(),
-            "open-panel".into(),
-        ] {
+        for id in [ElementId::from("reload"), "open-panel".into()] {
             let bounds = window.find(id.clone()).bounds();
             assert!(
                 bounds.bottom_right().x <= viewport.width

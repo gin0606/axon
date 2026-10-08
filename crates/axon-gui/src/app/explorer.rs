@@ -1,6 +1,6 @@
 //! The filters, the shared list and the detail pane of the selected project.
 
-use super::{AxonApp, Columns, StoreState, style::Palette, text};
+use super::{AxonApp, StoreState, style::Palette, text};
 use crate::board::{EntityDetail, Exclusion, Filter, Layout, Link, State, WaitKind};
 use crate::{OpenSelectedEntity, SelectNextEntity, SelectPreviousEntity};
 use axon::lifecycle::{EntityId, Kind, Label};
@@ -54,21 +54,13 @@ impl AxonApp {
         cx.notify();
     }
 
-    /// Opens a known Entity in the detail pane.
-    pub fn open_entity(&mut self, id: EntityId, cx: &mut Context<Self>) {
-        self.detail_shown = true;
-        self.explorer.select(id);
-        self.reveal_selected();
-        cx.notify();
-    }
-
     /// Scrolls the list back to its first row.
     pub(super) fn scroll_list_to_top(&self) {
         self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
     }
 
     /// Scrolls the list to the selected row, when the list shows it.
-    fn reveal_selected(&self) {
+    pub(super) fn reveal_selected(&self) {
         let listing = self.explorer.listing();
         if let Some(ix) = self
             .explorer
@@ -84,55 +76,6 @@ impl AxonApp {
         self.explorer.step(step);
         self.reveal_selected();
         cx.notify();
-    }
-
-    /// Closes the detail pane.
-    pub fn close_entity(&mut self, cx: &mut Context<Self>) {
-        self.explorer.deselect();
-        cx.notify();
-    }
-
-    /// In one column, shows the selected Entity's detail in place of the list.
-    fn open_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.explorer.selected().is_some() {
-            self.detail_shown = true;
-            self.keep_focus(window, cx);
-            cx.notify();
-        }
-    }
-
-    /// In one column the detail replaces the focused list, so the focus moves to the window,
-    /// where Escape still goes back.
-    fn keep_focus(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.columns == Columns::One {
-            window.focus(&self.app_focus, cx);
-        }
-    }
-
-    /// In one column, goes back from the detail to the list, which keeps the selected row in
-    /// view and takes the focus so the arrow keys go on from it.
-    pub fn show_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.detail_shown = false;
-        self.reveal_selected();
-        window.focus(&self.list_focus, cx);
-        cx.notify();
-    }
-
-    /// Closes the detail; in one column it goes back to the list instead, keeping the
-    /// selection.
-    pub(super) fn close_detail_button(&self, cx: &mut Context<Self>) -> Button {
-        let one = self.columns == Columns::One;
-        Button::new("close-detail")
-            .ghost()
-            .compact()
-            .label(if one { "一覧に戻る" } else { "閉じる" })
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if one {
-                    this.show_list(window, cx)
-                } else {
-                    this.close_entity(cx)
-                }
-            }))
     }
 
     pub fn reset_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -476,7 +419,7 @@ impl AxonApp {
                     .text_sm()
                     .hover(|style| style.text_color(palette.ink))
                     .text_color(palette.signal)
-                    .on_click(cx.listener(move |this, _, _, cx| this.open_entity(id.clone(), cx)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.follow_link(id.clone(), cx)))
                     .child(
                         div()
                             .flex_none()
@@ -529,7 +472,6 @@ impl AxonApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = Palette::of(cx);
-        let mono = cx.theme().mono_font_family.clone();
         // Scoped to the Entity, so another one opens scrolled to its top.
         let mut pane = div()
             .id(named(format!("detail-{}", detail.id)))
@@ -539,42 +481,15 @@ impl AxonApp {
             .flex_col()
             .gap_5()
             .px_6()
-            .pt_4()
+            .pt_5()
             .pb_8();
 
-        // What it is, then where it belongs.
+        // What it is, then where it belongs. The kind, the label and the ID head the column's
+        // bar.
         let mut head = div()
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .justify_between()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_2()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(palette.muted)
-                            .child(text::kind(detail.kind))
-                            .child(detail.label.name())
-                            .child(
-                                div()
-                                    .font_family(mono)
-                                    .text_color(palette.ink)
-                                    .truncate()
-                                    .child(detail.id.to_string()),
-                            ),
-                    )
-                    .child(self.close_detail_button(cx)),
-            )
             .child(
                 div()
                     .id("detail-title")

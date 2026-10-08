@@ -151,6 +151,8 @@ fn now() -> Context {
     }
 }
 
+/// Opens the window with the system's reduced motion on, so every frame lays out where the
+/// screens end up rather than where a transition is.
 fn open_sized(
     data: &Arc<InstanceLock>,
     width: f32,
@@ -158,6 +160,7 @@ fn open_sized(
     cx: &mut TestAppContext,
 ) -> (Window, Entity<AxonApp>) {
     cx.update(axon_gui::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
     let data = data.clone();
     let (window, app) = cx.update(|cx| {
         let options = WindowOptions {
@@ -487,7 +490,12 @@ fn the_detail_shows_relations_waits_notes_and_history(cx: &mut TestAppContext) {
             .any(|(title, _, matched)| title == "案内を送る" && *matched)
     );
 
+    // The step back returns along the links followed, then closes the detail.
     click(handle, "close-detail", cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("読書会の準備"));
+    click(handle, "close-detail", cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("会場を決める"));
+    cx.update(|cx| app.update(cx, |app, cx| app.close_entity(cx)));
     assert_eq!(detail_title(&app, cx), None);
 
     // Browsing and reading again leave the store exactly as it was.
@@ -794,6 +802,7 @@ fn a_narrow_window_opens_the_roots_and_the_filters_as_a_panel(cx: &mut TestAppCo
             window,
             &[
                 "project-switch",
+                "project-path",
                 "add-root",
                 "state-Undecided",
                 "close-panel",
@@ -829,28 +838,45 @@ fn one_column_shows_the_detail_in_place_of_the_list(cx: &mut TestAppContext) {
     let (handle, app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
     assert_eq!(columns(&app, cx), Columns::One);
 
-    // A click opens the detail over the whole window.
-    click_in(handle, "entity-list", entity_element(&plan.venue), cx);
-    assert_eq!(detail_title(&app, cx).as_deref(), Some("会場を決める"));
+    // A click opens the detail over the whole window, under a bar that goes back.
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("案内を送る"));
     with_window(handle, cx, |window, _| {
         assert!(window.try_find("entity-list").is_none());
-        usable(window, &["close-detail", "detail-title"]);
+        usable(window, &["detail-bar", "close-detail", "detail-title"]);
+        // The back button stands at the top left.
+        let back = window.find("close-detail").bounds();
+        assert!(
+            back.origin.x < px(40.) && back.origin.y < px(60.),
+            "{back:?}"
+        );
     });
 
-    // Going back keeps the selection, and the arrow keys go on from it without leaving the
-    // list.
+    // A link is pushed over the detail, and going back returns to it before the list.
+    click_in(
+        handle,
+        "detail-dependencies",
+        entity_element(&plan.venue),
+        cx,
+    );
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("会場を決める"));
+    click(handle, "close-detail", cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("案内を送る"));
+
+    // Going back to the list keeps the selection, and the arrow keys go on from it without
+    // leaving the list.
     click(handle, "close-detail", cx);
     with_window(handle, cx, |window, _| {
         assert!(window.try_find("detail-pane").is_none());
         assert!(
             window
                 .within("entity-list")
-                .find(entity_element(&plan.venue))
+                .find(entity_element(&plan.invite))
                 .visible()
         );
     });
-    press(handle, "down", cx);
-    assert_ne!(detail_title(&app, cx).as_deref(), Some("会場を決める"));
+    press(handle, "up", cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("会場を決める"));
     with_window(handle, cx, |window, _| {
         assert!(window.try_find("entity-list").is_some())
     });
@@ -864,6 +890,45 @@ fn one_column_shows_the_detail_in_place_of_the_list(cx: &mut TestAppContext) {
     with_window(handle, cx, |window, _| {
         assert!(window.try_find("entity-list").is_some())
     });
+}
+
+#[gpui_kit::test]
+fn a_detail_slides_in_from_the_side_it_comes_from(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    let (handle, _app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    // Where the title starts on the first frame after a move, and where it settles.
+    let moved = |cx: &mut TestAppContext| {
+        let title_left =
+            |window: &mut gpui_kit::Window| window.find("detail-title").bounds().origin.x;
+        let mut start = px(0.);
+        with_window(handle, cx, |window, _| start = title_left(window));
+        // Animations run on the wall clock, not the test scheduler's.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let mut end = px(0.);
+        with_window(handle, cx, |window, _| end = title_left(window));
+        (start, end)
+    };
+
+    // Forward from the list, and along a link: from the right.
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    let (start, end) = moved(cx);
+    assert!(start > end + px(10.), "{start:?} {end:?}");
+    click_in(
+        handle,
+        "detail-dependencies",
+        entity_element(&plan.venue),
+        cx,
+    );
+    let (start, end) = moved(cx);
+    assert!(start > end + px(10.), "{start:?} {end:?}");
+
+    // Back: from the left.
+    click(handle, "close-detail", cx);
+    let (start, end) = moved(cx);
+    assert!(start < end - px(10.), "{start:?} {end:?}");
 }
 
 #[gpui_kit::test]
