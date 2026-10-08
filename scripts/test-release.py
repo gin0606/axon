@@ -31,16 +31,28 @@ class ReleaseTests(unittest.TestCase):
         git("init", "-b", "main")
         git("config", "user.name", "Release test")
         git("config", "user.email", "release@example.invalid")
-        (self.root / "Cargo.toml").write_text('[package]\nname = "axon"\nversion = "0.1.0"\n')
-        git("add", "Cargo.toml")
-        git("commit", "-m", "Initial manifest")
-        git("update-ref", "refs/remotes/origin/main", "HEAD")
 
         def validate(tag):
             return subprocess.run(
                 ["python3", str(SCRIPTS / "release.py"), "validate-tag", tag],
                 cwd=self.root, env=env, capture_output=True, text=True,
             )
+
+        gui = self.root / "crates/axon-gui/Cargo.toml"
+        gui.parent.mkdir(parents=True)
+
+        def manifests(cli, gui_version):
+            (self.root / "Cargo.toml").write_text(f'[package]\nname = "axon"\nversion = "{cli}"\n')
+            gui.write_text(f'[package]\nname = "axon-gui"\nversion = "{gui_version}"\n')
+            git("add", "Cargo.toml", "crates/axon-gui/Cargo.toml")
+            git("commit", "-m", "Manifests")
+
+        manifests("0.1.0", "0.2.0")
+        git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.assertNotEqual(validate("v0.1.0").returncode, 0)
+        self.assertNotEqual(validate("v0.2.0").returncode, 0)
+        manifests("0.1.0", "0.1.0")
+        git("update-ref", "refs/remotes/origin/main", "HEAD")
 
         self.assertEqual(validate("v0.1.0").stdout.strip(), "0.1.0")
         self.assertEqual(validate("v0.1.0").returncode, 0)
@@ -69,6 +81,25 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             release.check_formula_version("0.2.0", formula)
 
+    def test_cask_checksums_per_cpu_and_rollback_guard(self):
+        cask = self.root / "Casks/axon-gui.rb"
+        for cpu in ("aarch64", "x86_64"):
+            (self.root / f"axon-gui-v0.2.0-{cpu}-apple-darwin.zip").write_bytes(cpu.encode())
+        release.write_cask("0.2.0", self.root, cask)
+        text = cask.read_text()
+        self.assertIn(f'arm:   "{hashlib.sha256(b"aarch64").hexdigest()}"', text)
+        self.assertIn(f'intel: "{hashlib.sha256(b"x86_64").hexdigest()}"', text)
+        self.assertIn('version "0.2.0"', text)
+        self.assertIn('app "Axon.app"', text)
+        self.assertIn("depends_on macos: :sequoia", text)
+        with self.assertRaises(ValueError):
+            release.write_cask("0.1.9", self.root, cask)
+        self.assertEqual(cask.read_text(), text)
+        (self.root / "axon-gui-v0.3.0-aarch64-apple-darwin.zip").write_bytes(b"")
+        (self.root / "axon-gui-v0.3.0-x86_64-apple-darwin.zip").write_bytes(b"x")
+        with self.assertRaises(ValueError):
+            release.write_cask("0.3.0", self.root, cask)
+
     def publish(self, state, fail=""):
         gh = self.root / "gh"
         gh.write_text('''#!/usr/bin/env python3
@@ -90,6 +121,7 @@ elif args[:2] == ["release", "download"]:
         artifacts.mkdir()
         for cpu in ("aarch64", "x86_64"):
             (artifacts / f"axon-v0.1.0-{cpu}-apple-darwin.tar.gz").write_bytes(b"rebuilt bytes")
+            (artifacts / f"axon-gui-v0.1.0-{cpu}-apple-darwin.zip").write_bytes(b"rebuilt bytes")
         result = subprocess.run(
             ["bash", str(SCRIPTS / "publish-release.sh")], cwd=self.root,
             env={**os.environ, "PATH": f"{self.root}:{os.environ['PATH']}",
@@ -103,9 +135,11 @@ elif args[:2] == ["release", "download"]:
     def test_published_assets_are_only_downloaded_on_retry(self):
         result, calls = self.publish("published")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual([call[:2] for call in calls[1:]], [["release", "download"]] * 2)
+        self.assertEqual([call[:2] for call in calls[1:]], [["release", "download"]] * 4)
         release.write_formula("0.1.0", self.root / "published", self.root / "axon.rb")
         self.assertIn(hashlib.sha256(b"published bytes").hexdigest(), (self.root / "axon.rb").read_text())
+        release.write_cask("0.1.0", self.root / "published", self.root / "axon-gui.rb")
+        self.assertIn(hashlib.sha256(b"published bytes").hexdigest(), (self.root / "axon-gui.rb").read_text())
 
     def test_api_failure_does_not_create_release(self):
         result, calls = self.publish("", "api repos/gin0606/axon/releases")
@@ -122,8 +156,8 @@ elif args[:2] == ["release", "download"]:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([call[:2] for call in calls[1:]], [
             ["release", "create"], ["run", "download"], ["run", "download"],
-            ["release", "upload"], ["release", "upload"],
-            ["release", "edit"], ["release", "download"], ["release", "download"],
+            *[["release", "upload"]] * 4,
+            ["release", "edit"], *[["release", "download"]] * 4,
         ])
 
 

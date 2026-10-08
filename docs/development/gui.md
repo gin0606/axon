@@ -6,7 +6,7 @@
 
 workspace の `default-members` に GUI を含めないため、root の `cargo build`・`cargo run` は CLI だけを対象にし、GUI は package（`axon-gui`）を指定して起動・検証する。
 
-macOS で、アイコンと名前を持つアプリ（`Axon.app`）として使うときは [scripts/bundle-gui](../../scripts/bundle-gui) で作る。[cargo-bundle](https://github.com/burtonageo/cargo-bundle) の版は `mise.toml` で固定し、設定とアイコンの元は `crates/axon-gui/Cargo.toml` の `[package.metadata.bundle]` にある。macOS は、作った `.app` を一度開いたときに `axon gui` のリンクの宛先として認識する。Windows と Linux のアイコン（実行ファイルへの埋め込み、`.desktop` とアイコンの配置）は、GUI を配布するときに足す。
+macOS で、アイコンと名前を持つアプリ（`Axon.app`）として使うときは [scripts/bundle-gui](../../scripts/bundle-gui) で作る。[cargo-bundle](https://github.com/burtonageo/cargo-bundle) の版は `mise.toml` で固定し、設定とアイコンの元は `crates/axon-gui/Cargo.toml` の `[package.metadata.bundle]` にある。macOS は、作った `.app` を一度開いたときに `axon gui` のリンクの宛先として認識する。macOS 版は [リリース](releasing.md) で CLI と同じタグから作り、Developer ID で署名・公証して cask で配布する。Windows と Linux は配布しておらず、アイコン（実行ファイルへの埋め込み、`.desktop` とアイコンの配置）は配布するときに足す。
 
 `axon gui` を試すときは、普段の登録の一覧に触れないよう `open -a <Axon.app のパス> --env AXON_GUI_DATA_DIR=<絶対パス>` で起動してから、管理 root で `axon gui` を実行する。起動していない `.app` をリンクで起動すると、この環境変数は渡らず普段の保存場所を使う。
 

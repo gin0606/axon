@@ -179,7 +179,7 @@ Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへ
 
 ## デスクトップアプリで開く
 
-`axon gui` は他のcommandと同じ探索で管理rootを決め、保存先を開けることを確かめてから、macOSの `open` にbundle identifier（`me.gin0606.axon`）と `me.gin0606.axon://open?root=<percent-encodeした絶対path>`（symlinkを解決したpath）を渡してデスクトップアプリ（`Axon.app`）にその管理rootを渡す。schemeはアプリのbundle identifierと同じ文字列にし、ほかのアプリと重ならないようにする（macOSはほかのアプリが同じschemeを宣言することを禁じないため、`open` にはbundle identifierも渡し、`Axon.app` 以外に渡さない）。アプリが起動中ならそのアプリが、起動していなければmacOSが起動したアプリが受け取り、未登録の管理rootは、登録してよいかをアプリが確かめてから登録して開く。`axon gui` はアプリ側の結果を待たず、成功時は渡した管理rootのpathを `Sent` で示す。開けなかった理由はアプリのウィンドウに出る。保存先へは書き込まない。macOS以外では保存先を探す前にError: を示して終了1。保存先が見つからない・開けない場合と、macOSが `Axon.app` を知らない場合（一度も開いていない場合）も同じ。アプリ側の振る舞いは [デスクトップアプリ](gui.md#cli-から開く)、`Axon.app` の作り方は [デスクトップアプリの開発](../development/gui.md#起動とアプリの作成) にある。
+`axon gui` は他のcommandと同じ探索で管理rootを決め、保存先を開けることを確かめてから、macOSの `open` にbundle identifier（`me.gin0606.axon`）と `me.gin0606.axon://open?root=<percent-encodeした絶対path>`（symlinkを解決したpath）を渡してデスクトップアプリ（`Axon.app`）にその管理rootを渡す。schemeはアプリのbundle identifierと同じ文字列にし、ほかのアプリと重ならないようにする（macOSはほかのアプリが同じschemeを宣言することを禁じないため、`open` にはbundle identifierも渡し、`Axon.app` 以外に渡さない）。アプリが起動中ならそのアプリが、起動していなければmacOSが起動したアプリが受け取り、未登録の管理rootは、登録してよいかをアプリが確かめてから登録して開く。`axon gui` はアプリ側の結果を待たず、成功時は渡した管理rootのpathを `Sent` で示す。開けなかった理由はアプリのウィンドウに出る。保存先へは書き込まない。macOS以外では保存先を探す前にError: を示して終了1。保存先が見つからない・開けない場合と、macOSが `Axon.app` を知らない場合（一度も開いていない場合）も同じ。アプリ側の振る舞いは [デスクトップアプリ](gui.md#cli-から開く)、`Axon.app` はHomebrewのcask `gin0606/tap/axon-gui` で導入でき、ソースからの作り方は [デスクトップアプリの開発](../development/gui.md#起動とアプリの作成) にある。
 
 ## 表示とstream
 

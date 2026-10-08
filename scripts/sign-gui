@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# 配布する Axon.app を Developer ID で署名し、Apple の公証を受けて結果を bundle に添付する。
+# 証明書は使い捨ての keychain に取り込み、終了時に消す。
+set -euo pipefail
+
+: "${MACOS_CERT_P12_BASE64:?}" "${MACOS_CERT_PASSWORD:?}"
+: "${NOTARY_KEY_P8_BASE64:?}" "${NOTARY_KEY_ID:?}" "${NOTARY_ISSUER_ID:?}"
+app=${1:?usage: sign-gui <Axon.app>}
+
+work=$(mktemp -d)
+keychain="$work/signing.keychain-db"
+trap 'security delete-keychain "$keychain" 2>/dev/null || true; rm -rf "$work"' EXIT
+
+keychain_password=$(openssl rand -base64 24)
+printf '%s' "$MACOS_CERT_P12_BASE64" | base64 --decode > "$work/developer_id.p12"
+security create-keychain -p "$keychain_password" "$keychain"
+security set-keychain-settings -lut 21600 "$keychain"
+security unlock-keychain -p "$keychain_password" "$keychain"
+security import "$work/developer_id.p12" -k "$keychain" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" > /dev/null
+# codesign は検索リストにある keychain の鍵しか使えない。
+read -r -a keychains <<< "$(security list-keychains -d user | tr -d '"' | tr '\n' ' ')"
+security list-keychains -d user -s "$keychain" "${keychains[@]}"
+
+codesign --force --options runtime --timestamp --keychain "$keychain" \
+  --sign "Developer ID Application" "$app"
+codesign --verify --strict --verbose=2 "$app"
+
+printf '%s' "$NOTARY_KEY_P8_BASE64" | base64 --decode > "$work/notary.p8"
+ditto -c -k --keepParent "$app" "$work/notarize.zip"
+xcrun notarytool submit "$work/notarize.zip" \
+  --key "$work/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" \
+  --wait --timeout 30m --output-format json > "$work/submission.json"
+# 公証に通らなくても submit 自体は成功しうるため、結果の status で判定する。
+read -r id status < <(python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); print(r["id"], r["status"])' "$work/submission.json")
+if [ "$status" != Accepted ]; then
+  echo "notarization $id finished with status $status" >&2
+  xcrun notarytool log "$id" --key "$work/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" >&2 || true
+  exit 1
+fi
+
+xcrun stapler staple "$app"
+spctl --assess --type execute --verbose=2 "$app"

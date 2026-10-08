@@ -36,6 +36,20 @@ jobs:
           owner: gin0606
           repositories: homebrew-tap
           permission-contents: write
+      - name: Check signing credentials
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          for name in MACOS_CERT_P12_BASE64 MACOS_CERT_PASSWORD NOTARY_KEY_P8_BASE64 NOTARY_KEY_ID NOTARY_ISSUER_ID; do
+            if [ -z "${!name}" ]; then
+              echo "missing Actions secret: $name" >&2
+              exit 1
+            fi
+          done
       - name: Install GUI build dependencies
         run: |
           sudo apt-get update
@@ -83,10 +97,32 @@ jobs:
           mkdir "$directory"
           cp "target/$TARGET/release/axon" LICENSE "$directory/"
           tar -czf "$directory.tar.gz" "$directory"
+      - name: Install cargo-bundle
+        run: |
+          version=$(sed -n 's/^"cargo:cargo-bundle" = "\(.*\)"$/\1/p' mise.toml)
+          cargo install cargo-bundle --locked --version "$version"
+      - name: Build and check the desktop app
+        run: |
+          scripts/bundle-gui --target "$TARGET"
+          app="target/$TARGET/release/bundle/osx/Axon.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$VERSION"
+          test -f "$app/Contents/Resources/Axon.icns"
+      - name: Sign and notarize the desktop app
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: scripts/sign-gui "target/$TARGET/release/bundle/osx/Axon.app"
+      - name: Package the desktop app
+        run: ditto -c -k --keepParent "target/$TARGET/release/bundle/osx/Axon.app" "axon-gui-v${VERSION}-${TARGET}.zip"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: axon-${{ matrix.target }}
-          path: axon-v${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+          path: |
+            axon-v${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+            axon-gui-v${{ env.VERSION }}-${{ matrix.target }}.zip
           if-no-files-found: error
 
   publish:
@@ -115,27 +151,31 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           path: tap
       - name: Refuse to roll back the tap
-        run: python3 scripts/release.py check-formula-version "$VERSION" tap/axon.rb
+        run: |
+          python3 scripts/release.py check-formula-version "$VERSION" tap/axon.rb
+          python3 scripts/release.py check-formula-version "$VERSION" tap/Casks/axon-gui.rb
       - name: Publish or reuse release assets
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: bash scripts/publish-release.sh
-      - name: Generate the Homebrew formula from published archives
+      - name: Generate the Homebrew formula and cask from published archives
         run: |
           python3 scripts/release.py formula "$VERSION" published tap/axon.rb
           ruby -c tap/axon.rb
-      - name: Push the Homebrew formula
+          python3 scripts/release.py cask "$VERSION" published tap/Casks/axon-gui.rb
+          ruby -c tap/Casks/axon-gui.rb
+      - name: Push the Homebrew formula and cask
         working-directory: tap
         run: |
-          git add axon.rb
+          git add axon.rb Casks/axon-gui.rb
           if git diff --cached --quiet; then
             echo "The tap already points at this release"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "Update axon formula to v$VERSION" -m "Install the published macOS binaries without requiring Rust."
+          git commit -m "Update the axon formula and axon-gui cask to v$VERSION" -m "Install the published macOS binaries and the signed desktop app without requiring Rust."
           git push
 
   verify-homebrew:
@@ -148,6 +188,13 @@ jobs:
     env:
       VERSION: ${{ needs.validate.outputs.version }}
     steps:
+      - name: Install and check the published cask
+        run: |
+          brew install --cask gin0606/tap/axon-gui
+          app=/Applications/Axon.app
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$VERSION"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
       - name: Install and test the published formula
         run: |
           brew install gin0606/tap/axon

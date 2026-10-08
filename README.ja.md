@@ -49,6 +49,12 @@ brew update
 brew upgrade gin0606/tap/axon
 ```
 
+記録を閲覧するデスクトップアプリ（`Axon.app`、`axon gui` で開く）は別の cask で導入します。
+
+```sh
+brew install --cask gin0606/tap/axon-gui
+```
+
 Rust の導入は不要です。開発やソースからのビルドに必要な Rust の version は [導入ガイド](docs/guide/getting-started.md#開発者向けのソースビルド) を参照してください。Linux と WSL2 は未検証のベストエフォート、ネイティブ Windows は非対応です。
 
 ## 使い始める

@@ -6,6 +6,8 @@ tag="v${VERSION}"
 expected=(
   "axon-${tag}-aarch64-apple-darwin.tar.gz"
   "axon-${tag}-x86_64-apple-darwin.tar.gz"
+  "axon-gui-${tag}-aarch64-apple-darwin.zip"
+  "axon-gui-${tag}-x86_64-apple-darwin.zip"
 )
 
 # A failed API request must not be mistaken for an absent release.

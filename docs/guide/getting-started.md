@@ -17,6 +17,12 @@ brew update
 brew upgrade gin0606/tap/axon
 ```
 
+記録を閲覧するデスクトップアプリ（`Axon.app`）は別のcaskで、`/Applications` に入ります。Developer IDで署名・公証してあるため、初回起動で許可の操作は要りません。CLIと同じversionで公開され、`brew upgrade` で一緒に更新されます。
+
+```sh
+brew install --cask gin0606/tap/axon-gui
+```
+
 ### 開発者向けのソースビルド
 
 最低Rust versionはrootの `Cargo.toml` の `rust-version`、開発toolchainは [検証方針](../development/verification.md) を参照してください。
