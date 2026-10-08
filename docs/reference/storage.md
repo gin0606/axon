@@ -96,7 +96,7 @@ Git は untracked な file を checkout・merge の上書きから保護する�
 
 追跡する運用での統合は、ローカルの Git 操作（merge・rebase・cherry-pick・revert・squash）に対する契約である。両側が記録を追加した branch は、記録が別 file なので merge の属性や Git の設定なしで衝突せず統合される。記録 ID は内容の hash なので、同名の file は同じ内容であり、両側が同じ file を追加しても衝突しない。同じ Entity への両側の操作は Git 上では衝突せず、次の読取で Axon の衝突として見える。cherry-pick と revert の効果は [記録の欠け](#記録の欠けgap) に定める。
 
-ホスティングサービスの web 上の merge はこの契約の外にある。GitHub の merge button と Update branch が、この形式では merge の属性なしで両側の記録を取り込むことを 2026-09-25 に確認している（[設計判断](../design/decisions.md#記録-1-件-1-file-にした理由)）。
+ホスティングサービスの web 上の merge はこの契約の外にある。GitHub 上の merge で確かめた結果は [設計判断](../design/decisions.md#記録-1-件-1-file-にした理由) にある。
 
 Git の revert で Axon の状態を取り消さない。revert は記録 file を消すだけで、後続の記録があれば gap と偽の衝突になり、状態は戻らない。Axon の状態の取り消しは `Reopen`・`Release`・`Reconsider` などの lifecycle 操作で行う。
 
