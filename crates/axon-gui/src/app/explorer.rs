@@ -290,18 +290,7 @@ impl AxonApp {
                 let item = board
                     .item(&row.id)
                     .expect("a listed Entity is on the board");
-                let mut meta = vec![
-                    text::kind(item.kind).to_string(),
-                    text::state(item.state).to_string(),
-                ];
-                meta.extend(text::situation(item.status).map(str::to_string));
-                meta.push(item.label.name().to_string());
-                if item.invalid {
-                    meta.push("構造の違反".into());
-                }
-                if !row.matched {
-                    meta.push("参考表示（絞り込みに一致しない親）".into());
-                }
+                let meta = text::row_meta(item, row.matched);
                 let id = row.id.clone();
                 let color: Hsla = if row.matched { theme.foreground } else { muted };
                 let mut line = div()
@@ -332,13 +321,7 @@ impl AxonApp {
                             .flex_1()
                             .min_w_0()
                             .child(div().truncate().child(item.title.clone()))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .truncate()
-                                    .child(meta.join(" · ")),
-                            ),
+                            .child(div().text_xs().text_color(muted).truncate().child(meta)),
                     );
                 if selected == Some(&row.id) {
                     line = line.bg(theme.list_active);
@@ -744,6 +727,6 @@ fn exclusion(exclusion: &Exclusion) -> String {
         Exclusion::State(state) => format!("状態「{}」を選んでいません", text::state(*state)),
         Exclusion::Kind(kind) => format!("種類「{}」を選んでいません", text::kind(*kind)),
         Exclusion::Label(label) => format!("label「{}」を選んでいません", label.name()),
-        Exclusion::Query(query) => format!("タイトル・本文に「{query}」がありません"),
+        Exclusion::Query(query) => format!("タイトル・本文・ID に「{query}」がありません"),
     }
 }

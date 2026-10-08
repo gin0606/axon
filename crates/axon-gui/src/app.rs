@@ -86,7 +86,8 @@ pub struct AxonApp {
 
 impl AxonApp {
     pub fn new(lock: Arc<InstanceLock>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("タイトル・本文を検索"));
+        let search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("タイトル・本文・ID を検索"));
         cx.subscribe_in(
             &search,
             window,

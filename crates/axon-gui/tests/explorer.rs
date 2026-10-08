@@ -8,7 +8,7 @@ use axon::lifecycle::{
 use axon::location::Location;
 use axon_gui::{
     AxonApp, MIN_WINDOW_SIZE,
-    app::{StoreState, Summary, entity_element},
+    app::{StoreState, Summary, entity_element, text},
     board::{Layout, State, WaitKind},
     project::{AppData, InstanceLock, ProjectRoot},
 };
@@ -356,6 +356,32 @@ fn the_list_filters_and_switches_between_tree_and_flat(cx: &mut TestAppContext) 
     click(handle, "reset-filter-empty", cx);
     assert_eq!(rows(&app, cx).len(), 3);
     cx.read(|cx| assert_eq!(app.read(cx).search_input().read(cx).value(), ""));
+}
+
+#[gpui_kit::test]
+fn an_id_from_the_cli_finds_its_row_which_starts_with_the_id(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    let (handle, app) = open(&data, cx);
+
+    // Every row's second line starts with the ID, ahead of what a narrow list truncates.
+    cx.read(|cx| {
+        let explorer = app.read(cx).explorer();
+        let board = explorer.board().unwrap();
+        assert_eq!(explorer.listing().rows.len(), 3);
+        for row in &explorer.listing().rows {
+            let meta = text::row_meta(board.item(&row.id).unwrap(), row.matched);
+            assert!(meta.starts_with(&format!("{} · ", row.id)), "{meta}");
+        }
+    });
+
+    // The suffix the CLI accepts finds the Entity although its title and text do not hold it.
+    let suffix = plan.invite.as_ref().rsplit_once('-').unwrap().1.to_owned();
+    click(handle, "search", cx);
+    with_window(handle, cx, |window, cx| window.input(&suffix, cx));
+    click(handle, "layout-flat", cx);
+    assert_eq!(rows(&app, cx), [("案内を送る".into(), 0, true)]);
 }
 
 #[gpui_kit::test]

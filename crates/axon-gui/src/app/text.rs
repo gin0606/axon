@@ -1,7 +1,7 @@
 //! Display text for the core's values. The spelling of labels stays the one records and the
 //! CLI use; states, situations and record kinds are shown in Japanese.
 
-use crate::board::{Difference, State, WaitKind};
+use crate::board::{Difference, Item, State, WaitKind};
 use axon::lifecycle::{Kind, Lifecycle, Operation, record::RecordKind, record::ViolationKind};
 use axon::read::{PrerequisiteOperation, Status};
 use chrono::{DateTime, Local, Utc};
@@ -37,6 +37,25 @@ pub fn kind(kind: Kind) -> &'static str {
         Kind::Issue => "Issue",
         Kind::Group => "Group",
     }
+}
+
+/// The second line of a list row. The ID comes first so it stays visible when a narrow list
+/// truncates the line.
+pub fn row_meta(item: &Item, matched: bool) -> String {
+    let mut meta = vec![
+        item.id.to_string(),
+        kind(item.kind).to_string(),
+        state(item.state).to_string(),
+    ];
+    meta.extend(situation(item.status).map(str::to_string));
+    meta.push(item.label.name().to_string());
+    if item.invalid {
+        meta.push("構造の違反".into());
+    }
+    if !matched {
+        meta.push("参考表示（絞り込みに一致しない親）".into());
+    }
+    meta.join(" · ")
 }
 
 /// What the situation adds to the state, when it adds anything. Conditions are taken as

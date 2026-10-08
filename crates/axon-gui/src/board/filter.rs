@@ -1,5 +1,5 @@
 //! The shared filter of the list: states, kinds and labels chosen by checkboxes, and a literal
-//! search in the title and the description.
+//! search in the title, the description and the ID.
 
 use super::{Item, State};
 use axon::lifecycle::{Kind, Label, record::Current};
@@ -13,7 +13,9 @@ pub struct Filter {
     pub states: BTreeSet<State>,
     pub kinds: BTreeSet<Kind>,
     pub labels: BTreeSet<Label>,
-    /// Literal, case-sensitive text in the title or the description, as `axon list --search`.
+    /// Literal, case-sensitive text in the title, the description or the ID. Unlike
+    /// `axon list --search`, the ID is searched too, so an ID seen in the CLI's output finds its
+    /// Entity whole, by the suffix the CLI accepts or by any other part.
     pub query: String,
 }
 
@@ -35,7 +37,7 @@ impl Default for Filter {
 }
 
 /// Why the filter leaves an Entity out: its value in a facet with that value not chosen, or a
-/// search its title and description do not contain.
+/// search its title, description and ID do not contain.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Exclusion {
     State(State),
@@ -51,7 +53,7 @@ impl Filter {
         self.states.contains(&item.state)
             && self.kinds.contains(&item.kind)
             && self.labels.contains(&item.label)
-            && (self.query.is_empty() || !read::matches_in(presented, &self.query).is_empty())
+            && self.searched(item, presented)
     }
 
     /// Each facet that leaves the Entity out, in the order the filter shows them; empty
@@ -67,10 +69,16 @@ impl Filter {
         if !self.labels.contains(&item.label) {
             found.push(Exclusion::Label(item.label));
         }
-        if !self.query.is_empty() && read::matches_in(presented, &self.query).is_empty() {
+        if !self.searched(item, presented) {
             found.push(Exclusion::Query(self.query.clone()));
         }
         found
+    }
+
+    fn searched(&self, item: &Item, presented: &Current) -> bool {
+        self.query.is_empty()
+            || item.id.as_ref().contains(self.query.as_str())
+            || !read::matches_in(presented, &self.query).is_empty()
     }
 
     pub fn toggle_state(&mut self, state: State, on: bool) {

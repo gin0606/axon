@@ -89,6 +89,56 @@ fn search_is_literal_in_title_and_description() {
 }
 
 #[test]
+fn search_finds_an_entity_by_any_part_of_its_id() {
+    let mut f = Fixture::new();
+    let first = f.issue("会場", None);
+    let second = f.issue("案内", None);
+    f.describe(&second, "会場の返事を待つ");
+    let done = f.issue("前回", None);
+    f.perform(&done, Operation::Start);
+    f.perform(&done, Operation::Complete);
+    let conflicted = f.issue("競合", None);
+    let fork = f.store.clone();
+    let started = f.perform_in(&fork, &conflicted, Operation::Start);
+    let cancelled = f.perform_in(&fork, &conflicted, Operation::Cancel);
+    f.insert_entry(started);
+    f.insert_entry(cancelled);
+    let board = f.board();
+    assert_eq!(first.as_ref(), "axon-0001");
+    assert_eq!(done.as_ref(), "axon-0003");
+
+    let mut filter = Filter::default();
+    for (query, expected) in [
+        ("axon-0002", vec![second.clone()]),
+        ("0001", vec![first.clone()]),
+        (
+            "on-00",
+            vec![first.clone(), second.clone(), conflicted.clone()],
+        ),
+        ("会場", vec![first.clone(), second.clone()]),
+        // A conflicted Entity is found by its ID like any other.
+        ("0004", vec![conflicted.clone()]),
+        // An ID match still has to pass the facets: the default leaves Completed out.
+        ("0003", vec![]),
+    ] {
+        filter.query = query.into();
+        assert_eq!(matching(&board, &filter), expected, "{query}");
+    }
+    filter.query = "AXON".into();
+    assert!(matching(&board, &filter).is_empty(), "case-sensitive");
+    filter.query = "0003".into();
+    assert_eq!(
+        board.exclusions(&filter, &first),
+        [Exclusion::Query("0003".into())]
+    );
+    assert_eq!(
+        board.exclusions(&filter, &done),
+        [Exclusion::State(State::Completed)],
+        "the ID holds the search, so only the state leaves it out"
+    );
+}
+
+#[test]
 fn a_group_is_filtered_by_its_effective_state() {
     let mut f = Fixture::new();
     let working = f.group("進行中の Group", None);
