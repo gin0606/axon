@@ -22,6 +22,9 @@ fn detect_with(mut read: impl FnMut(&str) -> Option<String>) -> Option<Recorder>
     } else if get("CODEX_SANDBOX").is_some() {
         ("codex".into(), None)
     } else if get("CLAUDECODE").is_some() || get("CLAUDE_CODE").is_some() {
+        // CLAUDE_CODE_SESSION_ID is not in Claude Code's published environment variable list.
+        // It matched the session ID in the Bash tool environment of Claude Code 2.1.274
+        // (checked 2026-09-18), so it is read only alongside the markers above.
         ("claude-code".into(), get("CLAUDE_CODE_SESSION_ID"))
     } else if let Some(actor) = get("AI_AGENT") {
         (actor, None)

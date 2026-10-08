@@ -16,7 +16,7 @@
 | 6 | `USER` | 指定値 | 空 object |
 | なし | 上記の情報なし | 記録者を省略 | — |
 
-これらはこの連携の入力契約で、すべての agent 環境で設定される保証ではない。明示 actor を優先した場合は別 agent の session を混ぜない。通常の Codex 呼出しは継承した thread ID を自動取得し、操作のたびの flag 指定は不要。`CLAUDE_CODE_SESSION_ID` は Claude Code 2.1.274 の Bash tool の環境で session ID と一致することを確認した値で、Claude Code の公開する環境変数一覧には記載がない（2026-09-18 確認）。取得できなければ actor のみを残し、この値だけでは Claude Code と判定しない。いずれの値も継承された環境をそのまま読むため、agent が起動して残った shell や tmux からの後日の操作にも同じ actor と session が付く。取得不能は操作の失敗理由にしない。環境全体、資格情報、ログファイル、プロセス一覧、ネットワークを探索しない。
+これらはこの連携の入力契約で、すべての agent 環境で設定される保証ではない。明示 actor を優先した場合は別 agent の session を混ぜない。通常の Codex 呼出しは継承した thread ID を自動取得し、操作のたびの flag 指定は不要。`CLAUDE_CODE_SESSION_ID` は Claude Code の公開する環境変数一覧にない値で、取得できなければ actor のみを残し、この値だけでは Claude Code と判定しない。いずれの値も継承された環境をそのまま読むため、agent が起動して残った shell や tmux からの後日の操作にも同じ actor と session が付く。取得不能は操作の失敗理由にしない。環境全体、資格情報、ログファイル、プロセス一覧、ネットワークを探索しない。
 
 ## 詳細を読む
 
