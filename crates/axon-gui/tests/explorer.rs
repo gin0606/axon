@@ -897,58 +897,29 @@ fn a_detail_slides_in_from_the_side_it_comes_from(cx: &mut TestAppContext) {
     let (_dir, data) = data();
     let (_, seed) = Seed::new(&data, "読書会");
     let plan = plan(&seed);
-    let (handle, _app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
-    cx.update(|cx| cx.set_reduce_motion(false));
-    let title_left = |cx: &mut TestAppContext| {
-        let mut left = px(0.);
-        with_window(handle, cx, |window, _| {
-            left = window.find("detail-title").bounds().origin.x
-        });
-        left
-    };
-    // Where the title starts on the first frame after `step` and where it settles. Animations
-    // run on the wall clock, not the test scheduler's, so a first frame that a loaded machine
-    // drew after most of the slide is not used: `undo` puts the screen back and `step` is
-    // tried again.
-    let moved = |cx: &mut TestAppContext,
-                 step: &dyn Fn(&mut TestAppContext),
-                 undo: &dyn Fn(&mut TestAppContext)| {
-        for _ in 0..10 {
-            let began = std::time::Instant::now();
-            step(cx);
-            let start = title_left(cx);
-            let in_time = began.elapsed() < std::time::Duration::from_millis(90);
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            let end = title_left(cx);
-            if in_time {
-                return (start, end);
-            }
-            undo(cx);
-            std::thread::sleep(std::time::Duration::from_millis(300));
-        }
-        panic!("no first frame was drawn soon enough to see the slide");
-    };
-    let open_invite =
-        |cx: &mut TestAppContext| click_in(handle, "entity-list", entity_element(&plan.invite), cx);
-    let follow_link = |cx: &mut TestAppContext| {
-        click_in(
-            handle,
-            "detail-dependencies",
-            entity_element(&plan.venue),
-            cx,
-        )
-    };
-    let back = |cx: &mut TestAppContext| click(handle, "close-detail", cx);
+    let (handle, app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
+    // Where the incoming side starts, not a drawn frame: the slide runs on the wall clock, and
+    // a slow machine draws its first frame after the slide has mostly played.
+    let slide = |cx: &mut TestAppContext| cx.read(|cx| app.read(cx).slide_offset());
+    assert_eq!(slide(cx), None);
 
     // Forward from the list, and along a link: from the right.
-    let (start, end) = moved(cx, &open_invite, &back);
-    assert!(start > end + px(10.), "{start:?} {end:?}");
-    let (start, end) = moved(cx, &follow_link, &back);
-    assert!(start > end + px(10.), "{start:?} {end:?}");
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("案内を送る"));
+    assert!(slide(cx).is_some_and(|from| from > 0.), "{:?}", slide(cx));
+    click_in(
+        handle,
+        "detail-dependencies",
+        entity_element(&plan.venue),
+        cx,
+    );
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("会場を決める"));
+    assert!(slide(cx).is_some_and(|from| from > 0.), "{:?}", slide(cx));
 
     // Back: from the left.
-    let (start, end) = moved(cx, &back, &follow_link);
-    assert!(start < end - px(10.), "{start:?} {end:?}");
+    click(handle, "close-detail", cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("案内を送る"));
+    assert!(slide(cx).is_some_and(|from| from < 0.), "{:?}", slide(cx));
 }
 
 #[gpui_kit::test]

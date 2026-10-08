@@ -114,6 +114,17 @@ struct Motion {
     scope: Scope,
     ix: u64,
 }
+impl Motion {
+    /// How far right of its place the incoming detail or screen starts: from the right going
+    /// forward, from the left going back.
+    fn offset(self) -> Option<f32> {
+        match self.direction {
+            Direction::None => None,
+            Direction::Forward => Some(SHIFT),
+            Direction::Back => Some(-SHIFT),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum Direction {
@@ -144,6 +155,11 @@ impl AxonApp {
     /// Whether one column shows the detail rather than the list.
     pub fn is_detail_shown(&self) -> bool {
         self.layout.detail_shown && self.explorer.detail().is_some()
+    }
+    /// How far right of its place the detail or screen of the last move starts sliding in,
+    /// or `None` before any move.
+    pub fn slide_offset(&self) -> Option<f32> {
+        self.layout.motion.offset()
     }
 
     /// Opens the panel and takes the focus off the list behind it, so the arrow keys leave
@@ -303,11 +319,8 @@ impl AxonApp {
     /// setting shows the end at once.
     fn moving(&self, scope: Scope, element: AnyElement) -> AnyElement {
         let motion = self.layout.motion;
-        let from = match motion.direction {
-            _ if motion.scope != scope => return element,
-            Direction::None => return element,
-            Direction::Forward => SHIFT,
-            Direction::Back => -SHIFT,
+        let Some(from) = motion.offset().filter(|_| motion.scope == scope) else {
+            return element;
         };
         div()
             .id(ElementId::NamedInteger("moving".into(), motion.ix))
