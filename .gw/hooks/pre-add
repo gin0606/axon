@@ -3,14 +3,32 @@
 # 環境変数: GW_REPO_ROOT / GW_WORKTREE_PATH / GW_BRANCH
 set -eu
 
-# 新規ブランチの起点になる origin/<default> とローカルの
-# default branch を同期する
+# 新規ブランチの起点になる origin/<default> を更新し、main worktree が
+# default branch にいればローカルの default branch も同期する
 default_branch="$(git rev-parse --abbrev-ref origin/HEAD | sed 's|^origin/||')"
-if ! git pull --rebase origin "$default_branch"; then
+current_branch="$(git symbolic-ref --quiet --short HEAD || true)"
+fetch_default() {
   git fetch origin "refs/heads/$default_branch:refs/remotes/origin/$default_branch"
-  exit 0
+}
+if [ "$current_branch" != "$default_branch" ]; then
+  fetch_default
+elif ! git pull --rebase origin "$default_branch"; then
+  if [ -d "$(git rev-parse --git-path rebase-merge)" ] \
+    || [ -d "$(git rev-parse --git-path rebase-apply)" ]; then
+    git rebase --abort
+  fi
+  fetch_default
+fi
+
+# gw は新規ブランチを origin/<default> から作るため、未 push の commit が
+# あると古い起点の worktree ができる。push は検証を伴うので自動では行わない
+if [ -n "${GW_BRANCH:-}" ] && ! git show-ref --verify --quiet "refs/heads/$GW_BRANCH"; then
+  ahead="$(git rev-list --count "origin/$default_branch..refs/heads/$default_branch")"
+  if [ "$ahead" -gt 0 ]; then
+    echo "$default_branch に origin へ未 push の commit が $ahead 件あります。git push origin $default_branch してから再実行してください。" >&2
+    exit 1
+  fi
 fi
 
 # worktree から共有 DB を操作する canonical binary を、同期後の main から作る
 ./scripts/build-canonical-axon
-git push origin "$default_branch"
