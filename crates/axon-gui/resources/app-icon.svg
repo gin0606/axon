@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Placeholder app icon. The body follows the macOS icon grid: an 824 px rounded square
+     centered on a 1024 px canvas, leaving room for the system shadow. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#18232F"/>
+  <g fill="none" stroke="#5B6977" stroke-width="20" stroke-linecap="round">
+    <path d="M300 380 V640 H400"/>
+    <path d="M300 510 H400"/>
+  </g>
+  <circle cx="300" cy="330" r="46" fill="#7F64AE"/>
+  <rect x="380" y="306" width="344" height="48" rx="24" fill="#DCE3EA"/>
+  <circle cx="450" cy="510" r="40" fill="#C27410"/>
+  <rect x="520" y="488" width="204" height="44" rx="22" fill="#8693A1"/>
+  <circle cx="450" cy="640" r="40" fill="#3B8551"/>
+  <rect x="520" y="618" width="164" height="44" rx="22" fill="#8693A1"/>
+</svg>

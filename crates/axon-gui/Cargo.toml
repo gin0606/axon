@@ -7,6 +7,12 @@ description = "Desktop application for Axon built with GPUI"
 license = "MIT"
 publish = false
 
+[package.metadata.bundle]
+name = "Axon"
+identifier = "me.gin0606.axon"
+icon = ["resources/app-icon.svg"]
+category = "public.app-category.productivity"
+
 [dependencies]
 axon = { path = "../.." }
 chrono = "0.4.45"

@@ -19,6 +19,15 @@ cargo test --locked -p axon-gui
 
 普段の登録の一覧に触れずに試すときは、環境変数 `AXON_GUI_DATA_DIR` に絶対パスを指定してデータの保存場所を置き換える（例: `AXON_GUI_DATA_DIR=/tmp/axon-try cargo run -p axon-gui`）。相対パスは起動場所に依存するため拒否する。
 
+macOS では、`cargo run` で起動した実行ファイルは Dock とメニューバーに汎用のアイコンと `axon-gui` の名前で出る。アプリとしてのアイコンと名前で使うときは、[cargo-bundle](https://github.com/burtonageo/cargo-bundle)（`mise.toml` で版を固定）で `.app` を作る。設定は `crates/axon-gui/Cargo.toml` の `[package.metadata.bundle]` にあり、アイコンは `crates/axon-gui/resources/app-icon.svg` から作る。cargo-bundle はアイコンのパスを起動ディレクトリから解決し、見つからなくてもアイコンなしの `.app` を作るため、crate のディレクトリで実行する。
+
+```sh
+cd crates/axon-gui
+cargo bundle --release --format osx   # target/release/bundle/osx/Axon.app
+```
+
+Windows と Linux のアイコン（実行ファイルへの埋め込み、`.desktop` とアイコンの配置）は、GUI を配布するときに足す。
+
 UI テストは GPUI の test platform 上の headless window で動き、ディスプレイや GPU を使わない。`--workspace` を付けた full verification は GUI も対象に含める。手順は [検証方針](verification.md) にある。
 
 ## 採用した依存

@@ -2,6 +2,7 @@
 lefthook = "2.1.12"
 "aqua:taiki-e/cargo-llvm-cov" = "0.9.0"
 "cargo:cargo-mutants" = "27.1.0"
+"cargo:cargo-bundle" = "0.12.0"
 
 [hooks]
 postinstall = "lefthook install"
