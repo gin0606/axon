@@ -98,7 +98,7 @@ Groupは自身と終了済みを含む全子孫、Issueは単体を取得しま�
 
 無視する運用では全worktreeがmain worktreeの保存先を共有するため、同じ未着手Entityへの並行`axon start`は一つだけ成功します。失敗側は`axon show ID --skip-conditions`・`axon log`で現在値を読み、実行中のworkerと調整してください。記録者情報を所有権として扱わず、作業終了を確認してから継続・`axon release`を判断します。
 
-追跡する運用ではworktreeごとに保存先が分かれるため、同じEntityに対してそれぞれ`axon start`を実行できます。Gitで取り込むまで互いの作業は見えません。取り込んだ後、同じEntityへの両側の操作は衝突として `Conflicted` に見え、解決するまで `axon resolve` と `axon note add` 以外の変更は拒否されます。`axon resolve ID` でheadを読み、`axon resolve ID --head RECORD_ID` で片方の現在値を選びます。両側のNoteと記録は残ります。統合が生んだ構造の違反（完了したGroupへの子の流入など）は `axon show` の `Invalid` と `axon storage check` で読み、`axon reopen` などの通常操作で直します。同じworktreeでGit更新とAxon書込みを並行しないでください。手順は [Git統合と検査](../development/lifecycle-file.md#git-統合と検査) にあります。
+追跡する運用ではworktreeごとに保存先が分かれるため、同じEntityに対してそれぞれ`axon start`を実行できます。Gitで取り込むまで互いの作業は見えません。取り込んだ後、同じEntityへの両側の操作は衝突として `Conflicted` に見え、解決するまで `axon resolve` と `axon note add` 以外の変更は拒否されます。`axon resolve ID` でheadを読み、`axon resolve ID --head RECORD_ID` で片方の現在値を選びます。両側のNoteと記録は残ります。統合が生んだ構造の違反（完了したGroupへの子の流入など）は `axon show` の `Invalid` と `axon storage check` で読み、`axon reopen` などの通常操作で直します。同じworktreeでGit更新とAxon書込みを並行しないでください。検査と解決の契約は [保存と統合の契約](../reference/storage.md#検査と解決の入口) にあります。
 
 ## 再浮上
 

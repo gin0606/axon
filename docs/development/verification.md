@@ -14,32 +14,13 @@ CIのcacheはCargo dependencyとbuild artifactだけに使い、成功済みのt
 
 ## Fast pre-commit gate
 
-Rust fileがstagedされているcommitでは、Lefthookがrustfmt、全target・全featureのClippyと、次の高速test集合を並列に実行する。
+Rust fileがstagedされているcommitでは、Lefthookが [lefthook.yml](../../lefthook.yml) の高速な検査を実行する。この gate は全 test target を対象にしないため、full verification を代替しない。
 
-```sh
-cargo test --workspace --lib --bin axon --test smoke
-```
-
-対象ごとの責務と fixture の入口は [各層の検証入口](architecture.md#各層の検証入口) を参照する。この gate は全 test target を対象にしないため、full verification を代替しない。Lefthook は各 job の失敗時に commit を拒否し、staged Rust file がなければ Rust 検証を省略する。設定は [lefthook.yml](../../lefthook.yml) にある。
-
-リリース前には通常 toolchain の全検証に加え、MSRV での検査を次で実行する。MSRV は `Cargo.toml` から読む。
-
-```sh
-scripts/check-msrv
-```
+リリース前には通常 toolchain の全検証に加え、`scripts/check-msrv` で MSRV での検査を実行する。
 
 ### Plugin version
 
-Python 3 を使い、Lefthook は各 commit で `python3 scripts/update-plugin-versions.py` を実行する。対象は `plugins/` 配下の各 plugin と `examples/agent-workflow`。stage 済みのファイルの内容・パス・Git mode からハッシュを生成し、Claude と Codex の manifest に同じ `<base>+plugin.<hash>` を設定する。base は manifest の `version` の `+` より前の値を使い、変更するときは両方を揃えて stage する。ハッシュ計算からは両 manifest の `version` を除外する。
-
-生成が必要な場合は manifest を更新して commit を止める。表示された manifest を stage して再実行する。index は変更せず、manifest に未 stage の編集があれば上書きせずに止まる。plugin 外の変更や未追跡ファイルは version に影響しない。
-
-CI は書き換えなしの検査と独立した Git fixture による生成処理の検証を行う。ローカルでも次のコマンドで確認できる。`--check` は stage 済みの内容を検査する。
-
-```sh
-python3 scripts/update-plugin-versions.py --check
-python3 scripts/test-plugin-versions.py
-```
+`plugins/` 配下の各 plugin と `examples/agent-workflow` は、内容が変わるたびに Claude と Codex の manifest の version を変える。Lefthook が各 commit で [scripts/update-plugin-versions.py](../../scripts/update-plugin-versions.py) を実行し、stage 済みの内容から両 manifest に同じ version を生成する。manifest を更新したときは commit を止めるので、表示された manifest を stage して再実行する。CI は `--check` による検査と `scripts/test-plugin-versions.py` を実行する。
 
 ## Rust coverage
 
@@ -57,28 +38,15 @@ cargo llvm-cov --locked --all-targets --all-features --summary-only
 
 各モデルはそれぞれの検証範囲を持ち、変更に関係のある検査を選んで実行します。モデルの新設や検証範囲の拡張は一律に必須とせず、設計上の不確実性に応じて判断します。検査の実行条件とその結果は [モデル](../../spec/README.md) に置き、backend・sample数・stepsを変えた検査はその実行条件も結果とともに記録します。seedは固定せず、実行ごとに異なる経路を探索させます。同じseedを使い続けても、モデルが変わらない限り同じ経路をなぞるだけで新しい情報は得られません。`quint run` は bounded random simulation であり、反例が見つからなかったことは全状態についての証明ではありません。検査の成功はexit statusだけではなく、列挙した全invariantに反例がなく、列挙した全witnessがいずれかの探索で1 trace以上観測されたことを確認します。通常探索で観測率の低いwitnessは `lifecycle_reachability` の入口、`candidate_evaluation` の補助入口、`record_integration_paths` の入口が担保するため、それぞれ通常探索と合わせて1つの検査として扱います。反例が出た場合は、quintが出力する再現用のseedを結果に添えます。
 
-Rust の結合テストは独立 fixture と実 Git worktree を使い、公開 CLI、保存・統合、探索と初期化を検証する。テスト対象はこの checkout の binary を絶対パスで指定し、Git 環境を隔離する。実管理データや PATH 上の binary は切り替えない。対象別の入口は [各層の検証入口](architecture.md#各層の検証入口) を参照する。
+Rust の結合テストは独立 fixture と実 Git worktree を使い、公開 CLI、保存・統合、探索と初期化を検証する。テスト対象はこの checkout の binary を絶対パスで指定し、Git 環境を隔離する。実管理データや PATH 上の binary は切り替えない。
 
 ### 候補と外部条件
 
 [候補と外部条件](../reference/candidates.md) の候補集合と評価順・共有は、[候補選択](../../crates/axon-core/src/lifecycle/candidates.rs) の単体テストで boolean oracle と比較する。外部コマンドの起動・タイムアウト・中断・出力上限は、実プロセスを使う独立 fixture で検証する。
 
-### Declaration の独立fixture
+### Declaration と記録者情報
 
-[一括 declaration](../reference/declaration.md) は通常操作の意味を変えないため、形式や I/O の検証のためだけに Quint の状態や action を追加しない。Rust では次の境界を検証する。
-
-| 対象 | 検証する性質 | 入口 |
-| --- | --- | --- |
-| コア | strict YAML、canonical 往復、競合判定、通常操作の制約、入力順によらない適用結果 | [declaration](../../crates/axon-core/src/declaration.rs) と [適用処理](../../crates/axon-core/src/declaration/import.rs) |
-| 保存 adapter | 保存と書戻しの失敗を区別し、公開途中の process 喪失後も同じ file の再試行で収束すること | [declaration_file](../../src/declaration_file.rs) と [関係変更のテスト](../../src/declaration_file/relationship_tests.rs) |
-| 公開 CLI | 取得から一括編集・再試行までの接続、拒否時の保存先と入力の保持 | [独立 fixture](../../tests/lifecycle/declaration.rs) |
-
-```sh
-cargo test --locked --workspace --lib declaration
-cargo test --locked --test smoke declaration
-```
-
-対象の検証後も、必要な full verification は共通入口で行う。
+[一括 declaration](../reference/declaration.md) と記録者情報は通常操作の意味を変えないため、形式や I/O の検証のためだけに Quint の状態や action を追加しない。declaration は Rust で、コアでは strict YAML・canonical 往復・競合判定・入力順によらない適用結果を、保存 adapter では保存と書戻しの失敗の区別と、公開途中の process 喪失後に同じ file の再試行で収束することを、公開 CLI では拒否時に保存先と入力を保持することを検証する。
 
 ## 設計変更の進め方
 

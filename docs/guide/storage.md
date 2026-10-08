@@ -10,7 +10,7 @@ Gitが保存先を無視するか追跡するかにAxonは関与しません。`
 
 無視する運用は、`.git/info/exclude`（そのrepositoryだけ）やglobalのignore fileに `.axon/` の行を書いて、利用者がGitに無視させて選びます。linked worktreeには `.axon` が現れないため、下の探索順によって全worktreeがmain worktreeの保存先を共有します。worktreeごとに `axon init` を繰り返す必要はありません。
 
-追跡する運用は、`git add .axon` で記録、header、`.axon/.gitignore`、`.axon/.gitattributes` をstageしてcommitして選びます。`.axon/.gitignore` がlockと一時fileを除き、`.axon/.gitattributes` が記録fileを改行変換から外すので、ほかに設定は要りません。各worktreeはcheckoutした自分の保存先を持ち、変更はGitで取り込むまで他のworktreeから見えないため、同じIssueに別々に着手できます。両側が記録を追加したbranchは、記録が別fileなのでmergeの属性やGitの設定なしにそのまま統合できます。Axonが契約として扱うのはローカルのGit操作（merge・rebase・cherry-pick・revert・squash）で、ホスティングサービスのweb上のmergeは契約の外です（GitHub上で確かめた結果は [設計判断](../design/decisions.md#記録-1-件-1-file-にした理由)）。同じEntityへの両側の操作はGit上では衝突せず、次の `axon` の読取で衝突として見えます。統合後は `axon storage check` で衝突・違反・記録の欠けを確認し、`axon resolve` と通常操作で直します。手順は [file保存とGit統合](../development/lifecycle-file.md#git-統合と検査) にあります。
+追跡する運用は、`git add .axon` で記録、header、`.axon/.gitignore`、`.axon/.gitattributes` をstageしてcommitして選びます。`.axon/.gitignore` がlockと一時fileを除き、`.axon/.gitattributes` が記録fileを改行変換から外すので、ほかに設定は要りません。各worktreeはcheckoutした自分の保存先を持ち、変更はGitで取り込むまで他のworktreeから見えないため、同じIssueに別々に着手できます。両側が記録を追加したbranchは、記録が別fileなのでmergeの属性やGitの設定なしにそのまま統合できます。Axonが契約として扱うのはローカルのGit操作（merge・rebase・cherry-pick・revert・squash）で、ホスティングサービスのweb上のmergeは契約の外です（GitHub上で確かめた結果は [設計判断](../design/decisions.md#記録-1-件-1-file-にした理由)）。同じEntityへの両側の操作はGit上では衝突せず、次の `axon` の読取で衝突として見えます。統合後は `axon storage check` で衝突・違反・記録の欠けを確認し、`axon resolve` と通常操作で直します。検査と解決の契約は [保存と統合の契約](../reference/storage.md#検査と解決の入口) にあります。
 
 Axonの状態の取り消しは `axon reopen`・`axon release`・`axon reconsider` などのlifecycle操作で行い、Gitのrevertに頼らないでください。revertは記録fileを消すだけで、その後に記録が続いていれば親の欠けた記録が残り、状態は戻らずに偽の衝突として見えます。
 
@@ -55,6 +55,6 @@ Git内では現在のrepositoryの中だけを探し、次の順で保存先を�
 
 linked worktreeでの `axon init` は、main worktreeに保存先が既にあれば拒否します。無視する運用では手前に作られた保存先へ読み書きが気づかないまま切り替わり、追跡する運用では別のstoreができて後から統合できなくなるためです。main worktreeに保存先がなければ作成し、他のworktreeからは見えないことを表示します。ただしmain worktreeのGit indexで `.axon/` の下がunmergedなら拒否します。
 
-試用には既存の保存先の外にある独立directoryを使ってください。初期化・writerの失敗境界・統合の検査と解決の手順は [file保存とGit統合](../development/lifecycle-file.md)、保存先の判別と統合の契約は [保存と統合の契約](../reference/storage.md) を参照してください。
+試用には既存の保存先の外にある独立directoryを使ってください。初期化・writerの失敗境界・保存先の判別と統合の契約は [保存と統合の契約](../reference/storage.md) を参照してください。
 
 試用手順は [使い始める](getting-started.md) を参照してください。

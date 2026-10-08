@@ -6,7 +6,7 @@ Axon 操作には、このリポジトリの協業方針として [`axon:convent
 
 ## 作業時の参照先
 
-振る舞いの契約は [docs/reference](docs/reference/lifecycle.md) の各文書、状態と遷移の Quint モデルは [spec](spec/README.md) にある。実装を読む入口は [層構造の地図](docs/development/architecture.md)。crate・module の配置、依存方向、各層のテスト入口と、共通コア・保存 adapter の詳細契約への参照をまとめています。
+振る舞いの契約は [docs/reference](docs/reference/lifecycle.md) の各文書、状態と遷移の Quint モデルは [spec](spec/README.md) にある。層の境界と依存方向の規則は [層の依存方向](docs/development/architecture.md) にある。
 
 変更対象の契約は [docs/README.md](docs/README.md) から確認し、設計変更とモデル検証は [検証方針](docs/development/verification.md) に従ってください。契約がその形になっている理由は [設計判断](docs/design/decisions.md) にあります。
 

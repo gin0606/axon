@@ -75,7 +75,7 @@ git init
 
 追跡する運用は、`git add .axon` で記録、header、`.axon/.gitignore`、`.axon/.gitattributes` をstageしてcommitして選びます。`axon init` が作った `.axon/.gitignore` がlockと一時fileを除き、`.axon/.gitattributes` が記録fileをcheckout時の改行変換から外すので、ほかにGitの設定は要りません（属性の適用範囲と改行変換が起きた場合の対処は [保存先とworktree](storage.md#改行変換と-axongitattributes)）。各worktreeが自分の保存先を持ち、branchごとに分岐した計画と記録をGitで取り込めます。両側が記録を追加したbranchは、記録が別fileなのでmergeの属性やGitの設定なしでそのままmergeできます（契約の範囲はローカルのGit操作です。[保存先とworktree](storage.md)）。統合後は `axon storage check` で衝突・違反・記録の欠けを確認し、`axon resolve` と通常操作で直します。Axonの状態の取り消しはlifecycle操作（`axon reopen` など）で行い、Gitのrevertに頼らないでください。`axon init` は `.axon/` の外については手順を表示するだけで、repository rootの `.gitignore`、`.gitattributes`、Git configを作成も編集もしません。
 
-通常操作はどちらの運用でも同じです。統合の検査と解決は [file保存とGit統合](../development/lifecycle-file.md#git-統合と検査)、保存先の選ばれ方は [保存先とworktree](storage.md) を参照してください。
+通常操作はどちらの運用でも同じです。統合の検査と解決は [保存と統合の契約](../reference/storage.md#検査と解決の入口)、保存先の選ばれ方は [保存先とworktree](storage.md) を参照してください。
 
 ## Agent向けskill
 

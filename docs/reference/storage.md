@@ -1,6 +1,6 @@
 # 保存と統合の契約
 
-保存先は不変な記録の集合とし、記録 1 件を管理 root の `.axon/records/` の下の 1 file として保存する。現在値は保存せず、読取のたびに記録から導出する。Git の merge・rebase・cherry-pick・revert は記録 file の集合を変えるだけで、Axon は Git の統合時に呼ばれない。統合が生んだ衝突・構造の違反・記録の欠けは次の読取と `axon storage check` が検出し、衝突は `axon resolve`、違反は通常操作で直し、記録の欠けは情報として残る。実装の手順と失敗境界は [file 保存と Git 統合](../development/lifecycle-file.md) と [CLI と保存の接続](../development/lifecycle-cli.md)、対応するモデルは [`spec/record_integration.qnt`](../../spec/record_integration.qnt)（[モデルの読み方](../../spec/README.md#統合モデルが表す規則)）、この形にした理由は [設計判断](../design/decisions.md#保存層を記録の集合にしgit-統合を読取時の検出に委ねる理由) にある。
+保存先は不変な記録の集合とし、記録 1 件を管理 root の `.axon/records/` の下の 1 file として保存する。現在値は保存せず、読取のたびに記録から導出する。Git の merge・rebase・cherry-pick・revert は記録 file の集合を変えるだけで、Axon は Git の統合時に呼ばれない。統合が生んだ衝突・構造の違反・記録の欠けは次の読取と `axon storage check` が検出し、衝突は `axon resolve`、違反は通常操作で直し、記録の欠けは情報として残る。対応するモデルは [`spec/record_integration.qnt`](../../spec/record_integration.qnt)（[モデルの読み方](../../spec/README.md#統合モデルが表す規則)）、この形にした理由は [設計判断](../design/decisions.md#保存層を記録の集合にしgit-統合を読取時の検出に委ねる理由) にある。
 
 ## 記録
 
@@ -129,7 +129,7 @@ Git 外では最寄りの header file を持つ祖先を管理 root とし、中
 
 書込は記録 file の作成だけで行う。既存の記録 file を書き直す、置き換える、削除する機構は持たない。writer は保存先の OS lock を取り、記録の集合を読み、通常操作の前提を検査し、新しい記録を目的の subdirectory に一時 file `<記録 ID>.tmp` として書いて sync し、記録 ID へ rename して directory を sync する。一つの操作が作る記録は一つで、Note の追加も同じ境界で直列化する。例外は `axon import apply` で、一回の lock の下で検証済みの複数の記録（Entity ごとに一つ）を、新規 Entity の登録を親と依存先が先になる順に、次いで既存 Entity の変更の順に公開する（[Declaration](declaration.md#preparecheckapply)）。
 
-lock は `.axon/write.lock` で、writer は置換・削除しない。Git や editor は OS lock に従わないため、同じ worktree で checkout・merge・editor 保存と Axon の書込を並行しない。
+lock は `.axon/write.lock` で、writer は置換・削除しない。Git や editor は OS lock に従わないため、同じ worktree で checkout・merge・editor 保存と Axon の書込を並行しない。最終 sync 直後の非協調な書込や、network filesystem での透過的な保証は対象外とする。
 
 ## 検査と解決の入口
 

@@ -1,6 +1,6 @@
 # ドキュメント
 
-Axon の振る舞いの契約は `reference/` の各文書、状態と遷移のモデルは [spec](../spec/README.md)、実装を読む入口は [層構造の地図](development/architecture.md) です。
+Axon の振る舞いの契約は `reference/` の各文書、状態と遷移のモデルは [spec](../spec/README.md)、層の境界と依存方向は [層の依存方向](development/architecture.md) です。
 
 利用は [使い始める](guide/getting-started.md) から確認してください。
 
@@ -13,7 +13,6 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 | [状態と用語](guide/concepts.md) | lifecycle、label、関係 |
 | [保存先とworktree](guide/storage.md) | 無視する運用と追跡する運用、探索・初期化の境界 |
 | [Agentからのアクセス](guide/codex.md) | ホスト権限と保存先 |
-| [記録者連携](development/lifecycle-recorder.md) | 自動取得と詳細参照 |
 
 ## 契約
 
@@ -30,23 +29,18 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 | 文書 | 定義する範囲 |
 | --- | --- |
 | [モデル](../spec/README.md) | Quintモデルの対象範囲、検証する性質、再現手順 |
-| [層構造の地図](development/architecture.md) | crate・module の配置、依存方向、各層のテスト入口 |
-| [共通コア](development/lifecycle-core.md) | 操作・記録間の検査と codec の責務 |
-| [Declaration](development/lifecycle-declaration.md) | 適用候補の検査、保存と file 書戻しの境界 |
-| [CLIと保存の接続](development/lifecycle-cli.md) | 独立した試用、保存と出力の境界、内部 Git 呼出し |
-| [file保存とGit統合](development/lifecycle-file.md) | 保存形式、公開の順序と失敗境界、統合の検査手順 |
-| [記録者連携](development/lifecycle-recorder.md) | 自動取得と保存済み詳細 |
-| [検証方針](development/verification.md) | CI、declarationを含む独立fixture、モデル検証の分担 |
+| [層の依存方向](development/architecture.md) | 層の責務の境界と依存方向の規則 |
+| [検証方針](development/verification.md) | CI、独立fixture、モデル検証の分担 |
 | [リリース](development/releasing.md) | タグ起点の公開、Homebrew配布、tap更新失敗時の復旧 |
 | [設計判断](design/decisions.md) | 現在の契約がその形になっている理由と、採らなかった案 |
 
-保存形式は [file adapter](../src/file.rs)、保存先の探索と初期化は [location](../src/location.rs)、Usageは [Clap定義](../src/cli/args.rs) を確認します。
+記録 file の形式は [codec](../crates/axon-core/src/lifecycle/record/codec.rs)、公開の順序は [file adapter](../src/file.rs)、保存先の探索と初期化は [location](../src/location.rs)、Usageは [Clap定義](../src/cli/args.rs) を正本とします。
 
 ## 更新するとき
 
 - 現在のルールは担当する契約文書で定義する。別の文書で説明するときは要約とリンクにする。
 - 契約は現在形で書く。理解に必要な短い理由は契約の近くに残し、長い比較や判断の背景は design に置く。
-- development は責務と依存方向、変更時に守る不変条件、検証の入口を示す。関数の処理順や個々のテストケースは列挙せず、コードへリンクする。互換性を定める保存形式や、保証を成立させる処理順は残す。
+- development は、コードからは読み取れない層の境界・依存方向と検証の方針だけを示す。module の配置、保存形式の項目、関数の処理順、テストの入口やコマンドなど、コード・設定・script を読めば分かる内容は書かず、必要ならリンクする。実装に固有の不変条件はその処理の隣のコメントに置き、振る舞いとして保証するものは reference に置く。
 - 検証方法は development、検証結果には実施時点と対象・条件を記す。
 - 未決事項の採否や作業状況は Axon で管理し、docs に現況一覧を複製しない。
 - 文書を移動・分割したら、README、AGENTS.md、モデル冒頭などの参照元も更新する。

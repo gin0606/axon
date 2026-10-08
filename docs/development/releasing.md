@@ -1,6 +1,6 @@
 # リリース
 
-正式版の `vX.Y.Z` タグをpushすると、[Release workflow](../../.github/workflows/release.yml) が検証、macOS向けバイナリの公開、[Homebrew tap](https://github.com/gin0606/homebrew-tap) の `axon.rb` 更新、両CPUでのHomebrew導入検証を行います。配布はApple SiliconとIntelのmacOS 15（Sequoia）以上が対象です。各macOS 15 runnerで `MACOSX_DEPLOYMENT_TARGET=15.0` を指定してビルドし、それより古いOSでの動作は保証しません。
+正式版の `vX.Y.Z` タグをpushすると、[Release workflow](../../.github/workflows/release.yml) が検証、macOS向けバイナリの公開、[Homebrew tap](https://github.com/gin0606/homebrew-tap) の `axon.rb` 更新、両CPUでのHomebrew導入検証を行います。配布はApple SiliconとIntelのmacOS 15（Sequoia）以上が対象で、それより古いOSでの動作は保証しません。
 
 ## 公開する
 
@@ -18,9 +18,7 @@
    git push origin v0.1.0
    ```
 
-4. GitHub ActionsのRelease実行で、`validate`、両CPUの `build`、`publish`、両CPUの `verify-homebrew` が成功したことを確認します。GitHub ReleaseにはCLIとLICENSEを含む2つのarchiveが載り、Formulaは公開URLとそのbytesのSHA-256を参照します。
-
-workflowは固定Rust toolchainとlockfileを使用します。タグの形式・Cargo versionとの一致・mainへの包含、通常CIと同じ検証、MSRV検査が通らなければビルドへ進まず、両CPUのビルドと起動確認が通らなければ公開しません。公開後のHomebrew検証はbrew prefix内の実行ファイルを使い、独立した一時ディレクトリで `axon init`・`axon capture`・`axon storage check` を実行します。
+4. GitHub ActionsのRelease実行で、`validate`、両CPUの `build`、`publish`、両CPUの `verify-homebrew` が成功したことを確認します。
 
 tapの認証にはActions secretsの `APP_ID` と `APP_PRIVATE_KEY` を使います。Appに `gin0606/homebrew-tap` のContents書込権限を与えてください。発行するtokenの対象はこのtapだけです。
 
@@ -32,6 +30,6 @@ Releaseが公開済みでも、tapへのpushが失敗すればworkflowは失敗�
 gh run rerun RUN_ID --failed --repo gin0606/axon
 ```
 
-`publish` はtapを取り直し、公開済みarchiveをダウンロードしてFormulaを生成し直します。ビルドや公開済みassetの置換は行わず、ビルドartifactが期限切れでも復旧できます。公開前のdraftだけはassetを置換できます。tapに新しいversionがあれば古い実行は失敗し、巻き戻しません。同時更新でpushが拒否された場合も失敗として扱い、強制pushや自動的な競合解消は行いません。
+`publish` は公開済みarchiveからFormulaを生成し直すため、ビルドartifactが期限切れでも再実行で復旧できます。tapに新しいversionがあれば古い実行は失敗し、巻き戻しません。同時更新でpushが拒否された場合も、強制pushせず失敗として扱います。
 
 Homebrew検証だけが失敗した場合も、原因を確認したうえで同じコマンドで失敗jobを再実行します。公開済みバイナリの修正が必要なら、新しいversionをmainへ統合して新しいタグで公開します。
