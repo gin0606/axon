@@ -134,9 +134,3 @@ Group の行の状況は配下から導出し、次の表を上から順に見�
 `axon proposals|tasks|show` の `--trace-conditions` では、実際に評価した正常終了の外部コマンドごとに Entity、作業ディレクトリ、成立可否、終了コード、stdout・stderr を stderr へ評価順に表示する。共有済みの評価結果を再利用しただけなら再表示せず、判定失敗は失敗診断だけを出す。空の出力は `(empty)` と表示する。trace の書き込み・flush が失敗した場合も、一覧取得をエラーにする。trace のための追加実行は行わず、条件編集や明示的な lifecycle 操作に評価を持ち込まない。
 
 出力の保持・表示は次の境界とする。stdout・stderr を並行して読み取り、保持上限を超えても読み捨てて pipe の詰まりを防ぐ。保持量は stream ごとに最大64 KiBで、超過時は先頭32 KiBと末尾32 KiBを残し、その間の省略byte数を示す。失敗診断と trace に同じ上限を使う。非 UTF-8 byte は置換表示し、端末制御文字は可視 escape にする。これは秘密情報の自動除去を保証するものではない。
-
-## 実装と検証
-
-`crates/axon-core/src/lifecycle/candidates.rs` が保存から独立した候補選択と評価順・共有を担い、`src/cli/condition.rs` が外部プロセスの起動と監督を担う。
-
-検証は `cargo test`。library では候補集合と評価順・共有を boolean oracle と比較し、`axon show` の評価範囲と `Unsurfaced`・理由の導出を `crates/axon-core/src/read.rs` の単体テストで検査する。独立 fixture の smoke では集合、修復、非実行、worktree・管理ルート、実プロセスの終了コード、タイムアウト・Ctrl-C と子プロセスの終了、出力上限、trace の書込失敗と、`axon show` の評価・`--skip-conditions`・判定失敗の診断を検査する。binary test は30秒の既定値を引数の解析で検査し、起動失敗と trace の flush 失敗を実プロセスで検査する。

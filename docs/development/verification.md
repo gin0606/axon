@@ -59,6 +59,10 @@ cargo llvm-cov --locked --all-targets --all-features --summary-only
 
 Rust の結合テストは独立 fixture と実 Git worktree を使い、公開 CLI、保存・統合、探索と初期化を検証する。テスト対象はこの checkout の binary を絶対パスで指定し、Git 環境を隔離する。実管理データや PATH 上の binary は切り替えない。対象別の入口は [各層の検証入口](architecture.md#各層の検証入口) を参照する。
 
+### 候補と外部条件
+
+[候補と外部条件](../reference/candidates.md) の候補集合と評価順・共有は、[候補選択](../../crates/axon-core/src/lifecycle/candidates.rs) の単体テストで boolean oracle と比較する。外部コマンドの起動・タイムアウト・中断・出力上限は、実プロセスを使う独立 fixture で検証する。
+
 ### Declaration の独立fixture
 
 [一括 declaration](../reference/declaration.md) は通常操作の意味を変えないため、形式や I/O の検証のためだけに Quint の状態や action を追加しない。Rust では次の境界を検証する。
