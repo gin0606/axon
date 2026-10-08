@@ -698,3 +698,566 @@ fn a_refused_change_shows_the_list_on_disk(cx: &mut TestAppContext) {
     assert!(refused.contains("すでに登録"), "{refused}");
     assert_eq!(registered(&app, cx), [second, first]);
 }
+
+/// Answers the question whether to register the root a link names with "register".
+fn confirm(cx: &mut TestAppContext) {
+    assert!(cx.has_pending_prompt(), "no confirmation");
+    cx.simulate_prompt_answer(axon_gui::app::REGISTER_ANSWER);
+    cx.run_until_parked();
+}
+
+/// The link `axon gui` sends for `path`, which it has resolved.
+fn link(path: &Path) -> String {
+    axon::app_link::open_link(&fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
+        .unwrap()
+}
+
+/// Hands `path` to the app as `axon gui` does, through the link the app receives.
+fn open_link(app: &Entity<AxonApp>, path: &Path, cx: &mut TestAppContext) {
+    let link = link(path);
+    cx.update(|cx| axon_gui::open_links(&app.downgrade(), vec![link], cx));
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn a_link_that_starts_the_app_registers_and_opens_its_root(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &["本を選ぶ"]);
+    let budget = root(dir.path(), "家計簿", &["予算を決める"]);
+    lock.register(&reading).unwrap();
+    cx.update(axon_gui::init);
+    // The link arrives before the window has read the registry.
+    let link = link(&budget);
+    let app = cx.update(|cx| {
+        let lock = lock.clone();
+        let (_, app) =
+            gpui_kit::open_window(axon_gui::main_window_options(cx), cx, |window, cx| {
+                cx.new(|cx| AxonApp::new(lock, window, cx))
+            })
+            .unwrap();
+        axon_gui::open_links(
+            &app.downgrade(),
+            vec!["https://example.com".into(), link],
+            cx,
+        );
+        app
+    });
+    cx.run_until_parked();
+    confirm(cx);
+    assert_eq!(
+        registered(&app, cx),
+        [canonical(&reading), canonical(&budget)]
+    );
+    assert_eq!(selected(&app, cx).as_deref(), Some("家計簿"));
+    assert_eq!(titles(&app, cx), ["予算を決める"]);
+    assert_eq!(notice(&app, cx), None);
+}
+
+#[gpui_kit::test]
+fn a_link_to_a_registered_root_switches_to_it_without_a_notice(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &["本を選ぶ"]);
+    let budget = root(dir.path(), "家計簿", &[]);
+    let (handle, app) = start(&lock, cx);
+    add(handle, Some(&reading), cx);
+    add(handle, Some(&budget), cx);
+    let saved = fs::read(lock.data().dir().join(REGISTRY_FILE)).unwrap();
+
+    open_link(&app, &reading, cx);
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+    assert_eq!(titles(&app, cx), ["本を選ぶ"]);
+    assert_eq!(notice(&app, cx), None);
+    cx.read(|cx| assert!(!app.read(cx).is_busy()));
+    assert_eq!(
+        fs::read(lock.data().dir().join(REGISTRY_FILE)).unwrap(),
+        saved
+    );
+}
+
+#[gpui_kit::test]
+fn a_link_to_a_folder_without_a_store_is_refused(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &[]);
+    let plain = dir.path().join("plain");
+    fs::create_dir(&plain).unwrap();
+    let (handle, app) = start(&lock, cx);
+    add(handle, Some(&reading), cx);
+
+    open_link(&app, &plain, cx);
+    confirm(cx);
+    let refused = notice(&app, cx).expect("a notice");
+    assert!(refused.contains(".axon"), "{refused}");
+    assert_eq!(registered(&app, cx), [canonical(&reading)]);
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+}
+
+#[gpui_kit::test]
+fn a_link_waits_for_the_folder_dialog(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &[]);
+    let budget = root(dir.path(), "家計簿", &[]);
+    let (handle, app) = start(&lock, cx);
+    click(handle, "add-root", cx);
+    assert!(cx.did_prompt_for_paths(), "no folder dialog");
+    open_link(&app, &budget, cx);
+    assert!(registered(&app, cx).is_empty());
+
+    cx.simulate_path_prompt_response(|_| Some(vec![reading.clone()]));
+    cx.run_until_parked();
+    confirm(cx);
+    assert_eq!(
+        registered(&app, cx),
+        [canonical(&reading), canonical(&budget)]
+    );
+    assert_eq!(selected(&app, cx).as_deref(), Some("家計簿"));
+    cx.read(|cx| assert!(!app.read(cx).is_busy()));
+}
+
+#[gpui_kit::test]
+fn a_link_waits_for_an_unregistration(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &[]);
+    let budget = root(dir.path(), "家計簿", &[]);
+    let (handle, app) = start(&lock, cx);
+    add(handle, Some(&reading), cx);
+    let link = link(&budget);
+    cx.update(|cx| {
+        app.update(cx, |app, cx| app.remove_selected(cx));
+        axon_gui::open_links(&app.downgrade(), vec![link], cx);
+    });
+    cx.run_until_parked();
+    confirm(cx);
+    assert_eq!(registered(&app, cx), [canonical(&budget)]);
+    assert_eq!(selected(&app, cx).as_deref(), Some("家計簿"));
+    cx.read(|cx| assert!(!app.read(cx).is_busy()));
+}
+
+#[gpui_kit::test]
+fn a_link_reads_an_unreadable_registry_again(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &[]);
+    let path = lock.data().dir().join(REGISTRY_FILE);
+    fs::write(&path, "{ broken").unwrap();
+    let (_, app) = start(&lock, cx);
+
+    // Still unreadable: nothing is registered and the link says why.
+    open_link(&app, &reading, cx);
+    cx.read(|cx| assert!(matches!(app.read(cx).registry(), RegistryState::Failed(_))));
+    let refused = notice(&app, cx).expect("a notice");
+    assert!(refused.contains("読書会"), "{refused}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "{ broken");
+
+    // Repaired meanwhile: the link alone reads it and opens the root.
+    fs::write(&path, Registry::default().encode()).unwrap();
+    open_link(&app, &reading, cx);
+    confirm(cx);
+    assert_eq!(registered(&app, cx), [canonical(&reading)]);
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+    assert_eq!(notice(&app, cx), None);
+}
+
+#[gpui_kit::test]
+fn a_failed_waiting_link_adds_its_reason_to_the_one_shown(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let gone = root(dir.path(), "旅行", &[]);
+    let plain = dir.path().join("plain");
+    fs::create_dir(&plain).unwrap();
+    let (handle, app) = start(&lock, cx);
+    click(handle, "add-root", cx);
+    open_link(&app, &gone, cx);
+    fs::remove_dir_all(&gone).unwrap();
+
+    cx.simulate_path_prompt_response(|_| Some(vec![plain.clone()]));
+    cx.run_until_parked();
+    confirm(cx);
+    assert!(registered(&app, cx).is_empty());
+    let shown = notice(&app, cx).expect("a notice");
+    assert!(shown.contains("plain"), "{shown}");
+    assert!(shown.contains("旅行"), "{shown}");
+}
+
+#[gpui_kit::test]
+async fn a_root_chosen_after_the_link_arrived_stays_selected(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &[]);
+    let budget = root(dir.path(), "家計簿", &[]);
+    let trip = root(dir.path(), "旅行", &[]);
+    let (handle, app) = start(&lock, cx);
+    add(handle, Some(&reading), cx);
+    add(handle, Some(&budget), cx);
+    click(handle, "add-root", cx);
+    open_link(&app, &trip, cx);
+    switch_to(handle, 0, cx).await;
+
+    cx.simulate_path_prompt_response(|_| None);
+    cx.run_until_parked();
+    confirm(cx);
+    assert_eq!(
+        registered(&app, cx),
+        [canonical(&reading), canonical(&budget), canonical(&trip)]
+    );
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+}
+
+#[gpui_kit::test]
+fn only_the_last_waiting_link_is_opened(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &[]);
+    let budget = root(dir.path(), "家計簿", &[]);
+    let trip = root(dir.path(), "旅行", &[]);
+    let (handle, app) = start(&lock, cx);
+    click(handle, "add-root", cx);
+    assert!(cx.did_prompt_for_paths(), "no folder dialog");
+    open_link(&app, &reading, cx);
+    let links = [&budget, &trip].map(|path| link(path));
+    cx.update(|cx| axon_gui::open_links(&app.downgrade(), links.to_vec(), cx));
+
+    cx.simulate_path_prompt_response(|_| None);
+    cx.run_until_parked();
+    confirm(cx);
+    assert_eq!(registered(&app, cx), [canonical(&trip)]);
+    assert_eq!(selected(&app, cx).as_deref(), Some("旅行"));
+}
+
+#[gpui_kit::test]
+fn a_waiting_link_keeps_the_reason_a_registration_failed(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &[]);
+    let plain = dir.path().join("plain");
+    fs::create_dir(&plain).unwrap();
+    let (handle, app) = start(&lock, cx);
+    click(handle, "add-root", cx);
+    open_link(&app, &reading, cx);
+
+    cx.simulate_path_prompt_response(|_| Some(vec![plain.clone()]));
+    cx.run_until_parked();
+    confirm(cx);
+    assert_eq!(registered(&app, cx), [canonical(&reading)]);
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+    let refused = notice(&app, cx).expect("a notice");
+    assert!(refused.contains(".axon"), "{refused}");
+}
+
+fn active(handle: Window, cx: &mut TestAppContext) -> bool {
+    cx.update(|cx| cx.active_window() == Some(handle.into()))
+}
+
+fn deactivate(handle: Window, cx: &mut TestAppContext) {
+    VisualTestContext::from_window(handle.into(), cx).deactivate_window();
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn a_link_brings_the_window_forward_unless_a_folder_dialog_waits(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &[]);
+    let budget = root(dir.path(), "家計簿", &[]);
+    let (handle, app) = start(&lock, cx);
+    add(handle, Some(&reading), cx);
+
+    deactivate(handle, cx);
+    open_link(&app, &reading, cx);
+    assert!(active(handle, cx));
+
+    // A change other than the dialog does not keep the window back.
+    deactivate(handle, cx);
+    let link = link(&budget);
+    cx.update(|cx| {
+        app.update(cx, |app, cx| app.remove_selected(cx));
+        axon_gui::open_links(&app.downgrade(), vec![link], cx);
+    });
+    cx.run_until_parked();
+    confirm(cx);
+    assert!(active(handle, cx));
+
+    // The folder dialog the link waits for stays in front.
+    click(handle, "add-root", cx);
+    deactivate(handle, cx);
+    open_link(&app, &reading, cx);
+    assert!(!active(handle, cx));
+    cx.simulate_path_prompt_response(|_| None);
+    cx.run_until_parked();
+    confirm(cx);
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+    cx.read(|cx| assert!(!app.read(cx).is_choosing_folder()));
+
+    // Once the dialog is closed, a link brings the window forward again.
+    deactivate(handle, cx);
+    open_link(&app, &budget, cx);
+    assert!(active(handle, cx));
+}
+
+#[gpui_kit::test]
+fn a_failed_link_leaves_a_detail_that_hides_its_reason(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &["本を選ぶ"]);
+    let plain = dir.path().join("plain");
+    fs::create_dir(&plain).unwrap();
+    lock.register(&reading).unwrap();
+    cx.update(axon_gui::init);
+    let (handle, app) = open_sized(&lock, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
+    let id = cx.read(|cx| {
+        app.read(cx).explorer().board().unwrap().items()[0]
+            .id
+            .clone()
+    });
+    cx.update(|cx| app.update(cx, |app, cx| app.open_entity(id, cx)));
+    cx.run_until_parked();
+    cx.read(|cx| assert!(app.read(cx).is_detail_shown()));
+
+    open_link(&app, &plain, cx);
+    confirm(cx);
+    cx.read(|cx| assert!(!app.read(cx).is_detail_shown()));
+    with_window(handle, cx, |window, _| {
+        assert!(window.find("notice").visible())
+    });
+}
+
+#[gpui_kit::test]
+fn a_failed_link_keeps_a_detail_beside_the_list(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &["本を選ぶ"]);
+    let plain = dir.path().join("plain");
+    fs::create_dir(&plain).unwrap();
+    lock.register(&reading).unwrap();
+    cx.update(axon_gui::init);
+    let (handle, app) = open_sized(&lock, 1200., 600., cx);
+    let id = cx.read(|cx| {
+        app.read(cx).explorer().board().unwrap().items()[0]
+            .id
+            .clone()
+    });
+    cx.update(|cx| app.update(cx, |app, cx| app.open_entity(id, cx)));
+    cx.run_until_parked();
+
+    open_link(&app, &plain, cx);
+    confirm(cx);
+    cx.read(|cx| assert!(app.read(cx).explorer().detail().is_some()));
+    with_window(handle, cx, |window, _| {
+        assert!(window.find("notice").visible());
+        assert!(window.try_find("detail-pane").is_some());
+    });
+}
+
+#[gpui_kit::test]
+fn a_link_registers_a_new_root_only_when_the_user_agrees(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &["本を選ぶ"]);
+    let budget = root(dir.path(), "家計簿", &[]);
+    let (handle, app) = start(&lock, cx);
+    add(handle, Some(&reading), cx);
+
+    open_link(&app, &budget, cx);
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("キャンセル");
+    cx.run_until_parked();
+    assert_eq!(registered(&app, cx), [canonical(&reading)]);
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+    assert!(
+        !lock
+            .data()
+            .load_registry()
+            .unwrap()
+            .contains(&canonical(&budget))
+    );
+    cx.read(|cx| assert!(!app.read(cx).is_busy()));
+
+    // A root already registered opens without asking.
+    open_link(&app, &budget, cx);
+    confirm(cx);
+    open_link(&app, &reading, cx);
+    assert!(!cx.has_pending_prompt());
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+}
+
+/// The detail of the confirmation on screen.
+fn asked(cx: &mut TestAppContext) -> String {
+    cx.pending_prompt().expect("a confirmation").1
+}
+
+#[gpui_kit::test]
+fn a_link_that_starts_the_app_opens_a_registered_root_without_asking(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &["本を選ぶ"]);
+    let budget = root(dir.path(), "家計簿", &[]);
+    lock.register(&reading).unwrap();
+    lock.register(&budget).unwrap();
+    cx.update(axon_gui::init);
+    let link = link(&budget);
+    let app = cx.update(|cx| {
+        let lock = lock.clone();
+        let (_, app) =
+            gpui_kit::open_window(axon_gui::main_window_options(cx), cx, |window, cx| {
+                cx.new(|cx| AxonApp::new(lock, window, cx))
+            })
+            .unwrap();
+        axon_gui::open_links(&app.downgrade(), vec![link], cx);
+        app
+    });
+    cx.run_until_parked();
+    assert!(!cx.has_pending_prompt());
+    assert_eq!(selected(&app, cx).as_deref(), Some("家計簿"));
+    assert_eq!(notice(&app, cx), None);
+    cx.read(|cx| assert!(!app.read(cx).is_busy()));
+}
+
+#[gpui_kit::test]
+fn the_confirmation_shows_the_path_it_registers_and_a_link_waits_for_it(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &[]);
+    let budget = root(dir.path(), "家計簿", &[]);
+    let (_, app) = start(&lock, cx);
+
+    open_link(&app, &reading, cx);
+    assert!(asked(cx).starts_with(&canonical(&reading).to_string()));
+    // A second link waits behind the question instead of asking at once.
+    open_link(&app, &budget, cx);
+    assert!(asked(cx).starts_with(&canonical(&reading).to_string()));
+    cx.simulate_prompt_answer(axon_gui::app::CANCEL_ANSWER);
+    cx.run_until_parked();
+    assert!(asked(cx).starts_with(&canonical(&budget).to_string()));
+    confirm(cx);
+    assert_eq!(registered(&app, cx), [canonical(&budget)]);
+    assert_eq!(selected(&app, cx).as_deref(), Some("家計簿"));
+}
+
+#[cfg(unix)]
+#[gpui_kit::test]
+fn a_path_that_resolves_elsewhere_is_not_registered(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &[]);
+    let alias = fs::canonicalize(dir.path()).unwrap().join("alias");
+    std::os::unix::fs::symlink(&reading, &alias).unwrap();
+    let (_, app) = start(&lock, cx);
+
+    // The question names the path the link gave, and that path alone is registered.
+    let link = axon::app_link::open_link(&alias).unwrap();
+    cx.update(|cx| axon_gui::open_links(&app.downgrade(), vec![link], cx));
+    cx.run_until_parked();
+    assert!(asked(cx).starts_with(&alias.display().to_string()));
+    confirm(cx);
+    assert!(registered(&app, cx).is_empty());
+    let refused = notice(&app, cx).expect("a notice");
+    assert!(refused.contains("指している"), "{refused}");
+}
+
+#[cfg(unix)]
+#[gpui_kit::test]
+fn the_confirmation_escapes_what_could_pass_for_other_text(cx: &mut TestAppContext) {
+    let (_dir, lock) = data();
+    let (_, app) = start(&lock, cx);
+    let link = axon::app_link::open_link(Path::new(
+        "/tmp/a\n\nもう安全です\u{202e}\u{2028}\u{200b}\\b",
+    ))
+    .unwrap();
+    cx.update(|cx| axon_gui::open_links(&app.downgrade(), vec![link], cx));
+    cx.run_until_parked();
+    let shown = asked(cx);
+    let first = shown.lines().next().unwrap();
+    assert_eq!(
+        first,
+        "/tmp/a\\n\\nもう安全です\\u{202e}\\u{2028}\\u{200b}\\\\b"
+    );
+    cx.simulate_prompt_answer(axon_gui::app::CANCEL_ANSWER);
+    cx.run_until_parked();
+    assert!(registered(&app, cx).is_empty());
+}
+
+#[gpui_kit::test]
+fn a_root_waiting_for_the_answer_is_not_read(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &["本を選ぶ"]);
+    let budget = root(dir.path(), "家計簿", &["予算を決める"]);
+    let (handle, app) = start(&lock, cx);
+    add(handle, Some(&reading), cx);
+
+    open_link(&app, &budget, cx);
+    assert!(cx.has_pending_prompt());
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+    assert_eq!(titles(&app, cx), ["本を選ぶ"]);
+    cx.simulate_prompt_answer(axon_gui::app::CANCEL_ANSWER);
+    cx.run_until_parked();
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+    assert_eq!(titles(&app, cx), ["本を選ぶ"]);
+}
+
+#[gpui_kit::test]
+async fn a_root_chosen_after_a_link_to_a_registered_root_stays_selected(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &[]);
+    let budget = root(dir.path(), "家計簿", &[]);
+    let (handle, app) = start(&lock, cx);
+    add(handle, Some(&reading), cx);
+    add(handle, Some(&budget), cx);
+    click(handle, "add-root", cx);
+    open_link(&app, &budget, cx);
+    switch_to(handle, 0, cx).await;
+
+    cx.simulate_path_prompt_response(|_| None);
+    cx.run_until_parked();
+    assert!(!cx.has_pending_prompt());
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+    assert_eq!(notice(&app, cx), None);
+    cx.read(|cx| assert!(!app.read(cx).is_busy()));
+}
+
+#[gpui_kit::test]
+fn a_notice_escapes_the_path_a_link_gave(cx: &mut TestAppContext) {
+    let (_dir, lock) = data();
+    fs::write(lock.data().dir().join(REGISTRY_FILE), "{ broken").unwrap();
+    let (_, app) = start(&lock, cx);
+    let link = axon::app_link::open_link(Path::new("/x\n\n偽の案内\u{202e}\\y")).unwrap();
+    cx.update(|cx| axon_gui::open_links(&app.downgrade(), vec![link], cx));
+    cx.run_until_parked();
+    let shown = notice(&app, cx).expect("a notice");
+    assert!(shown.contains("/x\\n\\n偽の案内\\u{202e}\\\\y"), "{shown}");
+    assert!(
+        !shown.contains('\n') && !shown.contains('\u{202e}'),
+        "{shown}"
+    );
+}
+
+#[cfg(unix)]
+#[gpui_kit::test]
+fn whether_a_root_is_registered_is_decided_by_its_path_alone(cx: &mut TestAppContext) {
+    let (dir, lock) = data();
+    let reading = root(dir.path(), "読書会", &[]);
+    let budget = root(dir.path(), "家計簿", &[]);
+    let alias = fs::canonicalize(dir.path()).unwrap().join("alias");
+    std::os::unix::fs::symlink(&reading, &alias).unwrap();
+    let (handle, app) = start(&lock, cx);
+    add(handle, Some(&reading), cx);
+    add(handle, Some(&budget), cx);
+
+    // Another name for a registered root is asked about like any other path.
+    let link = axon::app_link::open_link(&alias).unwrap();
+    cx.update(|cx| axon_gui::open_links(&app.downgrade(), vec![link], cx));
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer(axon_gui::app::CANCEL_ANSWER);
+    cx.run_until_parked();
+    assert_eq!(selected(&app, cx).as_deref(), Some("家計簿"));
+
+    // A registered root that is gone for now is selected without asking, and shows why it
+    // cannot be read.
+    let gone = link_target(&reading);
+    fs::remove_dir_all(&reading).unwrap();
+    let link = axon::app_link::open_link(&gone).unwrap();
+    cx.update(|cx| axon_gui::open_links(&app.downgrade(), vec![link], cx));
+    cx.run_until_parked();
+    assert!(!cx.has_pending_prompt());
+    assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
+    assert!(matches!(store(&app, cx), StoreState::Failed(_)));
+    assert_eq!(
+        registered(&app, cx),
+        [canonical_path(&gone), canonical(&budget)]
+    );
+}
+
+fn link_target(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap()
+}
+
+fn canonical_path(path: &Path) -> ProjectRoot {
+    ProjectRoot::new(path.to_path_buf()).unwrap()
+}

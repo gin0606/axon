@@ -108,6 +108,11 @@ pub enum UpdateError {
     /// The path cannot be written to the registry file, which holds UTF-8.
     Unrepresentable(PathBuf),
     Duplicate(ProjectRoot),
+    /// The root a link asked for resolves to another directory now.
+    Elsewhere {
+        asked: ProjectRoot,
+        resolved: PathBuf,
+    },
     /// The root to unregister is not registered.
     Unknown(ProjectRoot),
     /// The registry could not be read, so nothing was written.
@@ -123,6 +128,9 @@ impl fmt::Display for UpdateError {
             Self::NotAStore(header) => write!(f, "{} does not exist", header.display()),
             Self::Unrepresentable(path) => write!(f, "{} is not valid UTF-8", path.display()),
             Self::Duplicate(root) => write!(f, "{root} is already registered"),
+            Self::Elsewhere { asked, resolved } => {
+                write!(f, "{asked} resolves to {}", resolved.display())
+            }
             Self::Unknown(root) => write!(f, "{root} is not registered"),
             Self::Read(error) => write!(f, "cannot read {REGISTRY_FILE}: {error}"),
             Self::Save(error) => write!(f, "cannot write {REGISTRY_FILE}: {error}"),
@@ -274,7 +282,34 @@ impl InstanceLock {
     /// the root it registered. The registry is read again first, so the change is made to the
     /// file, not to what a window holds.
     pub fn register(&self, path: &Path) -> Result<(Registry, ProjectRoot), UpdateError> {
-        let root = management_root(path)?;
+        self.add(management_root(path)?)
+    }
+
+    /// [`register`](Self::register) for a root the user confirmed by its path: refused unless
+    /// that path still resolves to itself, so what is registered is what the user saw.
+    pub fn register_exact(
+        &self,
+        root: &ProjectRoot,
+    ) -> Result<(Registry, ProjectRoot), UpdateError> {
+        if let Ok(resolved) = fs::canonicalize(root.path())
+            && resolved.as_os_str() != root.path().as_os_str()
+        {
+            return Err(UpdateError::Elsewhere {
+                asked: root.clone(),
+                resolved,
+            });
+        }
+        let resolved = management_root(root.path())?;
+        if resolved.path().as_os_str() != root.path().as_os_str() {
+            return Err(UpdateError::Elsewhere {
+                asked: root.clone(),
+                resolved: resolved.path().to_path_buf(),
+            });
+        }
+        self.add(resolved)
+    }
+
+    fn add(&self, root: ProjectRoot) -> Result<(Registry, ProjectRoot), UpdateError> {
         let _changing = self.changing.lock().unwrap_or_else(|e| e.into_inner());
         let registry = self.data.load_registry().map_err(UpdateError::Read)?;
         let next = registry

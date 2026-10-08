@@ -157,6 +157,15 @@ impl AxonApp {
         cx.notify();
     }
 
+    /// Leaves a detail that fills the only column for the list, whose top shows the notice.
+    pub(super) fn reveal_notice(&mut self) {
+        if self.columns() == Columns::One && self.is_detail_shown() {
+            self.layout.detail_shown = false;
+            self.moved(Direction::Back, Scope::Screen);
+            self.reveal_selected();
+        }
+    }
+
     /// Closes the panel, which slides out unless the system asks for reduced motion.
     pub fn close_panel(&mut self, cx: &mut Context<Self>) {
         if !self.layout.panel.open {

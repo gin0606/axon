@@ -5,6 +5,7 @@ use crate::board::{Difference, Item, State, WaitKind};
 use axon::lifecycle::{Kind, Lifecycle, Operation, record::RecordKind, record::ViolationKind};
 use axon::read::{PrerequisiteOperation, Status};
 use chrono::{DateTime, Local, Utc};
+use std::fmt;
 
 pub fn state(state: State) -> &'static str {
     match state {
@@ -167,4 +168,67 @@ pub fn time(at: DateTime<Utc>) -> String {
     at.with_timezone(&Local)
         .format("%Y-%m-%d %H:%M")
         .to_string()
+}
+
+/// A path as one line that shows what it holds: backslashes, control characters, line and
+/// paragraph separators, and invisible formatting characters (zero-width and the ones that
+/// reorder text) are escaped, so a path from a link cannot pass for other text.
+pub fn path(path: impl fmt::Display) -> String {
+    let mut shown = String::new();
+    for c in path.to_string().chars() {
+        match c {
+            '\\' => shown.push_str("\\\\"),
+            '\n' => shown.push_str("\\n"),
+            '\t' => shown.push_str("\\t"),
+            '\r' => shown.push_str("\\r"),
+            c if c.is_control() || invisible(c) => {
+                shown.push_str(&format!("\\u{{{:x}}}", c as u32))
+            }
+            c => shown.push(c),
+        }
+    }
+    shown
+}
+
+/// Characters that take no visible place of their own, look like other whitespace or reorder
+/// the text around them: the Unicode format characters (Cf), the line and paragraph
+/// separators, whitespace other than the space, fillers and variation selectors.
+fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{a0}'
+            | '\u{34f}'
+            | '\u{115f}'..='\u{1160}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200a}'
+            | '\u{202f}'
+            | '\u{205f}'
+            | '\u{2800}'
+            | '\u{3000}'
+            | '\u{3164}'
+            | '\u{fe00}'..='\u{fe0f}'
+            | '\u{ffa0}'
+            | '\u{e0100}'..='\u{e01ef}'
+            | '\u{ad}'
+            | '\u{600}'..='\u{605}'
+            | '\u{61c}'
+            | '\u{6dd}'
+            | '\u{70f}'
+            | '\u{890}'..='\u{891}'
+            | '\u{8e2}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{2028}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206f}'
+            | '\u{feff}'
+            | '\u{fff9}'..='\u{fffb}'
+            | '\u{110bd}'
+            | '\u{110cd}'
+            | '\u{13430}'..='\u{1343f}'
+            | '\u{1bca0}'..='\u{1bca3}'
+            | '\u{1d173}'..='\u{1d17a}'
+            | '\u{e0001}'
+            | '\u{e0020}'..='\u{e007f}'
+    )
 }

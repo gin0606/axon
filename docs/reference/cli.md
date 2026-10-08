@@ -177,6 +177,10 @@ Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへ
 
 保存成功後のFILE更新失敗は、保存先のAppliedとdeclarationのNot appliedまたはResult unknownを分けて表示する。rename直前に元bytesを再照合し、編集されていればそのfileを保持する。同じFILEを再度`axon import apply`すると、Entityごとに最終値に一致するものを適用済み、`base` に一致するものを未適用として残りを反映し、全件が適用済みなら保存先はno-opでrewriteだけを完了する。どちらにも一致しないEntityがあれば競合。記録fileのrename後のsync失敗は保存先のResult unknownで、declarationは更新しない。
 
+## デスクトップアプリで開く
+
+`axon gui` は他のcommandと同じ探索で管理rootを決め、保存先を開けることを確かめてから、macOSの `open` にbundle identifier（`me.gin0606.axon`）と `me.gin0606.axon://open?root=<percent-encodeした絶対path>`（symlinkを解決したpath）を渡してデスクトップアプリ（`Axon.app`）にその管理rootを渡す。schemeはアプリのbundle identifierと同じ文字列にし、ほかのアプリと重ならないようにする（macOSはほかのアプリが同じschemeを宣言することを禁じないため、`open` にはbundle identifierも渡し、`Axon.app` 以外に渡さない）。アプリが起動中ならそのアプリが、起動していなければmacOSが起動したアプリが受け取り、未登録の管理rootは、登録してよいかをアプリが確かめてから登録して開く。`axon gui` はアプリ側の結果を待たず、成功時は渡した管理rootのpathを `Sent` で示す。開けなかった理由はアプリのウィンドウに出る。保存先へは書き込まない。macOS以外では保存先を探す前にError: を示して終了1。保存先が見つからない・開けない場合と、macOSが `Axon.app` を知らない場合（一度も開いていない場合）も同じ。アプリ側の振る舞いは [デスクトップアプリ](../development/gui.md#cli-から開く)、`Axon.app` の作り方は [起動と検証](../development/gui.md#起動と検証) にある。
+
 ## 表示とstream
 
 CLIが生成するhelp・ラベル・診断は英語。利用者のタイトル・本文・Note・理由は原文を保持する。human時刻はlocal時刻と数値UTC offset。C0/C1/ESC、tab、CRは可視escapeし、表示順を入れ替える双方向制御文字（U+061C、U+200E–U+200F、U+202A–U+202E、U+2066–U+2069）は `\u{202e}` のような小文字の `\u{...}` で表示する。この規則はタイトル・本文・Note・理由・記録者・path・条件のコマンドと出力・診断に、TTYかどうかを問わず同じ文字表現で適用し、保存値・`axon export`・declarationの値は変えない。本文のその他のUnicodeと改行は保持する。

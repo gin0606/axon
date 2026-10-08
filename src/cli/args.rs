@@ -43,6 +43,11 @@ pub(super) enum Command {
     },
     /// Show the optional recorder actor detected in the current environment
     Actor,
+    /// Open the current management root in the Axon desktop app (macOS)
+    #[command(
+        after_help = "Gui finds the management root as other commands do and hands it to Axon.app through a me.gin0606.axon:// link: a running app takes it, otherwise macOS starts the app. Gui does not wait for the app; the app asks before registering a root it does not know, and reports a root it cannot open in its window.\nAxon.app must have been opened once so that macOS knows it. How to build it: https://github.com/gin0606/axon/blob/main/docs/development/gui.md\nThe store is not changed. Only on macOS."
+    )]
+    Gui,
     /// Write an unstyled shell completion script to stdout
     Completion { shell: clap_complete::Shell },
     /// Check the store for corrupt files, conflicts, violations and missing records
@@ -591,6 +596,7 @@ pub fn operation_label(command: &Command) -> String {
         Command::Import { .. } => ("import", None),
         Command::Export { .. } => ("export", None),
         Command::Actor => ("actor", None),
+        Command::Gui => ("gui", None),
         Command::Note {
             command: Notes::Search { .. },
         } => ("note search", None),

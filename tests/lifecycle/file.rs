@@ -493,6 +493,23 @@ fn storage_check_treats_initialization_residue_as_uninitialized() {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
+fn gui_hands_over_only_an_initialized_management_root() {
+    // A store is required before the app is asked, so this never starts an application.
+    let f = Fixture::new();
+    let error = failure(f.run(&["gui"]));
+    assert!(error.contains("gui: not initialized"), "{error}");
+}
+
+#[test]
+#[cfg(not(target_os = "macos"))]
+fn gui_fails_outside_macos_before_looking_for_a_store() {
+    let f = Fixture::new();
+    let error = failure(f.run(&["gui"]));
+    assert!(error.contains("gui: supported only on macOS"), "{error}");
+}
+
+#[test]
 fn storage_check_reports_a_missing_header_outside_git_without_a_root_argument() {
     let f = Fixture::new();
     f.init();

@@ -40,6 +40,7 @@ pub(super) fn output(text: String, saved: bool) -> Output {
 fn run(command: Command) -> Result<Output> {
     match command {
         Command::Actor => setup::actor(),
+        Command::Gui => setup::gui(),
         Command::Docs { command } => setup::docs(command),
         Command::Completion { shell } => setup::completion(shell),
         Command::Init { prefix } => setup::init(prefix),

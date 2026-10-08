@@ -11,6 +11,44 @@ use clap::CommandFactory;
 pub(super) fn actor() -> Result<Output> {
     Ok(output(format!("{}\n", actor_text(&context())), false))
 }
+/// `axon gui`: hands the discovered management root to the desktop app, which registers it if
+/// needed and shows it. Only a store that opens here is handed over; what the app then does is
+/// not reported back.
+#[cfg(target_os = "macos")]
+pub(super) fn gui() -> Result<Output> {
+    let (location, _) = super::store::open()?;
+    let link = axon::app_link::open_link(&location.root)?;
+    // `-b` hands the link to Axon.app alone, even if another app claims the scheme; `-u`
+    // keeps a file that happens to share the link's name from being opened instead.
+    let sent = std::process::Command::new("/usr/bin/open")
+        .args(["-b", axon::app_link::BUNDLE_ID, "-u", &link])
+        .output()
+        .map_err(|error| axon::Error::Invalid(format!("cannot run /usr/bin/open: {error}")))?;
+    if !sent.status.success() {
+        let stderr = String::from_utf8_lossy(&sent.stderr);
+        // `open` names the function that found no app with the bundle identifier.
+        if stderr.contains("LSCopyApplicationURLsForBundleIdentifier") {
+            return Err(axon::Error::Invalid(
+                "macOS does not know Axon.app; open it once so that macOS registers it".into(),
+            ));
+        }
+        return Err(axon::Error::Invalid(format!(
+            "/usr/bin/open did not hand the link to the Axon app: {}",
+            stderr.lines().next().unwrap_or("no message").trim()
+        )));
+    }
+    Ok(output(
+        format!(
+            "Sent {} to the Axon app\n",
+            display::line(location.root.display())
+        ),
+        false,
+    ))
+}
+#[cfg(not(target_os = "macos"))]
+pub(super) fn gui() -> Result<Output> {
+    Err(axon::Error::Invalid("supported only on macOS".into()))
+}
 pub(super) fn docs(command: Option<Docs>) -> Result<Output> {
     let text = match command {
         None => include_str!("../docs/lifecycle.txt").into(),

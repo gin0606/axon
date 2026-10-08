@@ -456,7 +456,15 @@ fn help_sections_and_file_flags_work_without_discovery() {
         ),
         (
             "Setup & utilities",
-            &["init", "storage", "resolve", "completion", "docs", "help"],
+            &[
+                "init",
+                "storage",
+                "resolve",
+                "gui",
+                "completion",
+                "docs",
+                "help",
+            ],
         ),
     ];
     let mut previous = 0;

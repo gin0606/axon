@@ -847,7 +847,15 @@ pub fn render_root_help() -> String {
         ),
         (
             "Setup & utilities",
-            &["init", "storage", "resolve", "completion", "docs", "help"],
+            &[
+                "init",
+                "storage",
+                "resolve",
+                "gui",
+                "completion",
+                "docs",
+                "help",
+            ],
         ),
     ];
     let mut text = format!(

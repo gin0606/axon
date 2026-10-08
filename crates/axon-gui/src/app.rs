@@ -26,14 +26,35 @@ use gpui_kit::component::{
     input::{InputEvent, InputState},
 };
 use gpui_kit::{
-    AnyElement, AppContext, Context, Entity, FocusHandle, IntoElement, PathPromptOptions,
-    SharedString, UniformListScrollHandle, Window, div, prelude::*,
+    AnyElement, AnyWindowHandle, AppContext, Context, Entity, FocusHandle, IntoElement,
+    PathPromptOptions, PromptButton, PromptLevel, SharedString, UniformListScrollHandle, Window,
+    div, prelude::*,
 };
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 use style::Palette;
+
+/// The button that confirms registering the root a link names.
+pub const REGISTER_ANSWER: &str = "登録して開く";
+/// The button that declines it.
+pub const CANCEL_ANSWER: &str = "キャンセル";
 
 /// The tallest the status of the selected root grows before it scrolls.
 pub const STATUS_MAX_HEIGHT: f32 = 120.;
+
+/// A root to open that a link asked for, and how many switches the user had made by then.
+struct Request {
+    path: PathBuf,
+    switches: u64,
+    /// The registry was read again for it after a read had failed.
+    reread: bool,
+}
+
+/// What a registration adds: a folder the user chose, or the root a link named and the user
+/// confirmed.
+enum Target {
+    Folder(PathBuf),
+    Link(ProjectRoot),
+}
 
 /// The registry as last read from disk.
 #[derive(Debug)]
@@ -74,10 +95,17 @@ pub struct AxonApp {
     /// A folder is being chosen or the registry is being changed; another change is not
     /// started meanwhile.
     busy: bool,
+    /// The folder dialog is open.
+    choosing_folder: bool,
+    /// The main window, where a link's registration is confirmed.
+    window: AnyWindowHandle,
     /// The outcome of the last registration or unregistration that the screen does not
     /// otherwise show.
     notice: Option<String>,
-    /// Counts the user's switches, so a result can tell whether one happened meanwhile.
+    /// A root `axon gui` asked to open, waiting for the registry to settle.
+    requested: Option<Request>,
+    /// Counts the switches of root, the user's and those a link makes, so a result can tell
+    /// whether one happened meanwhile.
     switches: u64,
     explorer: Explorer,
     search: Entity<InputState>,
@@ -121,7 +149,10 @@ impl AxonApp {
             store_loads: Requests::default(),
             store: StoreState::None,
             busy: false,
+            choosing_folder: false,
+            window: window.window_handle(),
             notice: None,
+            requested: None,
             switches: 0,
             explorer: Explorer::default(),
             search,
@@ -152,6 +183,9 @@ impl AxonApp {
     }
     pub fn is_busy(&self) -> bool {
         self.busy
+    }
+    pub fn is_choosing_folder(&self) -> bool {
+        self.choosing_folder
     }
     pub fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
@@ -184,6 +218,7 @@ impl AxonApp {
                 if this.registry_loads.finish(&ticket) {
                     let keep = this.selected.clone();
                     this.apply_registry(result, keep, cx);
+                    this.open_requested(cx);
                 }
             })
             .ok();
@@ -243,10 +278,7 @@ impl AxonApp {
     /// is shown instead and no read is stacked on it; a change made after that read began shows
     /// on the next return or reload.
     fn reload_on_activation(&mut self, cx: &mut Context<Self>) {
-        if self.busy
-            || self.registry_loads.pending().is_some()
-            || self.store_loads.pending().is_some()
-        {
+        if self.registry_busy() || self.store_loads.pending().is_some() {
             return;
         }
         self.reload(cx);
@@ -328,7 +360,7 @@ impl AxonApp {
         self.notice = None;
         // A switch from here on, while the dialog is open too, keeps the user's choice.
         let switches = self.switches;
-        let lock = self.lock.clone();
+        self.choosing_folder = true;
         let chosen = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -342,22 +374,191 @@ impl AxonApp {
                 Ok(Ok(None)) | Err(_) => (None, None),
                 Ok(Err(error)) => (None, Some(error)),
             };
-            let Some(path) = path else {
-                this.update(cx, |this, cx| {
-                    this.busy = false;
-                    this.notice =
-                        failure.map(|error| format!("フォルダを選べませんでした。（{error}）"));
-                    // Coming back from the dialog read nothing while it was open.
-                    this.reload(cx);
-                })
-                .ok();
+            this.update(cx, |this, cx| {
+                this.choosing_folder = false;
+                match path {
+                    Some(path) => this.register(Target::Folder(path), switches, cx),
+                    None => {
+                        this.notice =
+                            failure.map(|error| format!("フォルダを選べませんでした。（{error}）"));
+                        // Coming back from the dialog read nothing while it was open.
+                        this.reload(cx);
+                        this.finish_change(cx);
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Opens the management root at `path`, registering it first when it is not registered,
+    /// as `axon gui` asks. A request that arrives while the registry is being read or changed
+    /// waits for that; a later request replaces one still waiting. A registry that could not be
+    /// read is read again first. The outcome of a change that finishes meanwhile stays on screen,
+    /// and a root the user switches to meanwhile stays selected.
+    pub fn open_root(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        // Only the outcome of a change still running, or one a waiting link took over, is kept
+        // for the link to add to.
+        if !self.busy && self.requested.is_none() {
+            self.notice = None;
+        }
+        self.requested = Some(Request {
+            path,
+            switches: self.switches,
+            reread: false,
+        });
+        self.open_requested(cx);
+    }
+
+    /// Whether the registry is being read or changed.
+    fn registry_busy(&self) -> bool {
+        self.busy || self.registry_loads.pending().is_some()
+    }
+
+    /// Shows `message` after the outcome already on screen, which another change left there.
+    fn add_notice(&mut self, message: String) {
+        self.notice = Some(match self.notice.take() {
+            Some(shown) => format!("{shown}\n{message}"),
+            None => message,
+        });
+        self.reveal_notice();
+    }
+
+    /// Ends a change of the registry and carries out an [`open_root`](Self::open_root) request
+    /// that waited for it. Every change that set `busy` ends here.
+    fn finish_change(&mut self, cx: &mut Context<Self>) {
+        self.busy = false;
+        self.open_requested(cx);
+        cx.notify();
+    }
+
+    /// Carries out the waiting [`open_root`](Self::open_root) request once the registry is
+    /// neither being read nor changed. A registry that still cannot be read is not changed.
+    fn open_requested(&mut self, cx: &mut Context<Self>) {
+        if self.registry_busy() {
+            return;
+        }
+        let Some(mut request) = self.requested.take() else {
+            return;
+        };
+        if let RegistryState::Failed(_) = self.registry {
+            if !request.reread {
+                request.reread = true;
+                self.requested = Some(request);
+                self.reload_registry(cx);
                 return;
-            };
+            }
+            self.add_notice(format!(
+                "{} を開けませんでした。登録したリポジトリの一覧を読み込めません。",
+                text::path(request.path.display())
+            ));
+            cx.notify();
+            return;
+        }
+        self.busy = true;
+        let switches = if self.switches == request.switches {
+            self.close_panel(cx);
+            self.switches += 1;
+            self.switches
+        } else {
+            // The user chose a root after the link arrived: the link registers but keeps it.
+            request.switches
+        };
+        self.confirm_then_register(request.path, switches, cx);
+    }
+
+    /// Opens the root a link names. A root already registered is selected; any other is
+    /// registered only once the user confirms its path: a link can come from anything that
+    /// opens URLs, and reading a root runs Git in it. Nothing on disk is looked at before that,
+    /// and only the confirmed path itself is registered, never what it resolves to by then
+    /// (`axon gui` sends a resolved path). The caller has set `busy`.
+    fn confirm_then_register(&mut self, path: PathBuf, switches: u64, cx: &mut Context<Self>) {
+        let root = match ProjectRoot::new(path) {
+            Ok(root) => root,
+            Err(error) => {
+                self.add_notice(format!(
+                    "リンクのフォルダを開けませんでした。（{}）",
+                    text::path(error)
+                ));
+                self.finish_change(cx);
+                return;
+            }
+        };
+        let registered = match &self.registry {
+            RegistryState::Loaded(registry) => registry
+                .roots()
+                .iter()
+                .find(|registered| registered.path().as_os_str() == root.path().as_os_str())
+                .cloned(),
+            _ => None,
+        };
+        if let Some(registered) = registered {
+            if self.switches == switches {
+                self.selected = Some(registered);
+                self.show_selected(cx);
+            }
+            self.finish_change(cx);
+            return;
+        }
+        let detail = format!(
+            "{}\n\nリンクでこのフォルダを開くよう求められました。リンクは axon gui のほか、Web ページやほかのアプリからも送れます。心当たりがなければ登録しないでください。登録すると、記録を読むためにこのフォルダで Git を実行します。",
+            text::path(&root)
+        );
+        let asked = self.window.update(cx, |_, window, cx| {
+            window.prompt(
+                PromptLevel::Warning,
+                "このフォルダを登録して開きますか？",
+                Some(&detail),
+                // Return does not register: Escape cancels and nothing is the default.
+                &[
+                    PromptButton::Cancel(CANCEL_ANSWER.into()),
+                    PromptButton::new(REGISTER_ANSWER),
+                ],
+                cx,
+            )
+        });
+        let Ok(answer) = asked else {
+            self.add_notice(format!(
+                "{} を登録してよいかを確かめられないため、登録しませんでした。",
+                text::path(&root)
+            ));
+            self.finish_change(cx);
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let register = matches!(answer.await, Ok(1));
+            this.update(cx, |this, cx| {
+                if register {
+                    this.register(Target::Link(root), switches, cx);
+                } else {
+                    // Coming to the front read nothing while the link was being handled.
+                    this.reload(cx);
+                    this.finish_change(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Registers `target` and selects the root it is, unless the user switched since `switches`.
+    /// The caller has set `busy`. For a link, a root already registered is selected without a
+    /// notice, since opening it is what was asked.
+    fn register(&mut self, target: Target, switches: u64, cx: &mut Context<Self>) {
+        let lock = self.lock.clone();
+        let open = matches!(target, Target::Link(_));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
             let outcome = cx
-                .background_spawn(async move { reread_after(&lock, |lock| lock.register(&path)) })
+                .background_spawn(async move {
+                    reread_after(&lock, |lock| match &target {
+                        Target::Folder(path) => lock.register(path),
+                        Target::Link(root) => lock.register_exact(root),
+                    })
+                })
                 .await;
             this.update(cx, |this, cx| {
-                this.busy = false;
                 let keep = this.selected.clone();
                 match outcome {
                     Ok((registry, root)) => {
@@ -369,7 +570,11 @@ impl AxonApp {
                         this.apply_registry(Ok(registry), select, cx);
                     }
                     Err((error, reloaded)) => {
-                        this.notice = Some(update_message(&error));
+                        match (&error, open) {
+                            (UpdateError::Duplicate(_), true) => {}
+                            (_, true) => this.add_notice(update_message(&error)),
+                            (_, false) => this.notice = Some(update_message(&error)),
+                        }
                         // A folder already registered is shown, unless the user switched.
                         let select = match &error {
                             UpdateError::Duplicate(root) if this.switches == switches => {
@@ -379,12 +584,12 @@ impl AxonApp {
                         };
                         match reloaded {
                             Some(reloaded) => this.apply_registry(reloaded, select, cx),
-                            // Coming back from the dialog read nothing while it was open.
+                            // The selected root was not read while the change ran.
                             None => this.reload(cx),
                         }
                     }
                 }
-                cx.notify();
+                this.finish_change(cx);
             })
             .ok();
         })
@@ -411,7 +616,6 @@ impl AxonApp {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                this.busy = false;
                 let keep = this.selected.clone().filter(|selected| selected != &root);
                 match outcome {
                     Ok(registry) => this.apply_registry(Ok(registry), keep, cx),
@@ -422,7 +626,7 @@ impl AxonApp {
                         }
                     }
                 }
-                cx.notify();
+                this.finish_change(cx);
             })
             .ok();
         })
@@ -531,23 +735,28 @@ fn root_label(root: &ProjectRoot) -> String {
 fn update_message(error: &UpdateError) -> String {
     match error {
         UpdateError::Unreachable { path, error } => format!(
-            "選んだフォルダを開けないため登録しませんでした。（{}: {error}）",
-            path.display()
+            "フォルダを開けないため登録しませんでした。（{}: {error}）",
+            text::path(path.display())
         ),
         UpdateError::NotADirectory(path) => format!(
             "フォルダではないため登録しませんでした。（{}）",
-            path.display()
+            text::path(path.display())
         ),
         UpdateError::NotAStore(header) => format!(
             "Axon の保存先（.axon の header）がないフォルダは登録できません。.axon を持つ管理 root を選んでください。（{} がありません）",
-            header.display()
+            text::path(header.display())
         ),
         UpdateError::Unrepresentable(path) => format!(
             "パスに UTF-8 で表せない文字を含むフォルダは登録できません。（{}）",
-            path.display()
+            text::path(path.display())
         ),
-        UpdateError::Duplicate(root) => format!("{root} はすでに登録しています。"),
-        UpdateError::Unknown(root) => format!("{root} は登録されていません。"),
+        UpdateError::Duplicate(root) => format!("{} はすでに登録しています。", text::path(root)),
+        UpdateError::Elsewhere { asked, resolved } => format!(
+            "{} は今は {} を指しているため登録しませんでした。登録したいフォルダで axon gui を実行し直してください。",
+            text::path(asked),
+            text::path(resolved.display())
+        ),
+        UpdateError::Unknown(root) => format!("{} は登録されていません。", text::path(root)),
         UpdateError::Read(error) => {
             format!("登録したリポジトリの一覧を読み込めないため、変更しませんでした。（{error}）")
         }

@@ -14,7 +14,7 @@ pub use app::AxonApp;
 use gpui_kit::component::{ActiveTheme, button::Button};
 use gpui_kit::{
     App, AppContext, Bounds, Context, Entity, KeyBinding, Menu, MenuItem, OsAction, Render,
-    SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions, actions,
+    SharedString, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, actions,
     base::input as edit, div, prelude::*, px, size,
 };
 use project::{AppData, InstanceError, InstanceLock, data::LocateError};
@@ -115,11 +115,44 @@ pub fn startup_on(data: Result<AppData, LocateError>) -> Startup {
     }
 }
 
-/// Opens the window [`startup`] calls for: the main window holding the lock, or a notice.
-pub fn open_startup_window(startup: Startup, cx: &mut App) -> gpui_kit::Result<()> {
+/// Opens the window [`startup`] calls for: the main window holding the lock, which it returns,
+/// or a notice.
+pub fn open_startup_window(
+    startup: Startup,
+    cx: &mut App,
+) -> gpui_kit::Result<Option<Entity<AxonApp>>> {
     match startup {
-        Startup::Ready(lock) => open_main_window(Arc::new(lock), cx).map(|_| ()),
-        Startup::Refused(message) => open_notice_window(message, cx).map(|_| ()),
+        Startup::Ready(lock) => open_main_window(Arc::new(lock), cx).map(Some),
+        Startup::Refused(message) => open_notice_window(message, cx).map(|_| None),
+    }
+}
+
+/// Opens in `app` the management root that the last of `links` from `axon gui` names, and
+/// brings the application to the front. Other links are ignored.
+pub fn open_links(app: &WeakEntity<AxonApp>, links: Vec<String>, cx: &mut App) {
+    // Each request replaces the one before, so only the last one matters.
+    let Some(root) = links
+        .iter()
+        .filter_map(|link| axon::app_link::parse_open_link(link))
+        .next_back()
+    else {
+        return;
+    };
+    let Ok(choosing) = app.update(cx, |app, cx| {
+        app.open_root(root, cx);
+        app.is_choosing_folder()
+    }) else {
+        return;
+    };
+    cx.activate(true);
+    // A folder dialog that the link waits for stays in front of the window.
+    if choosing {
+        return;
+    }
+    for window in cx.windows() {
+        window
+            .update(cx, |_, window, _| window.activate_window())
+            .ok();
     }
 }
 
