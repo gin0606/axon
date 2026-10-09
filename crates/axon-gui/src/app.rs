@@ -2,9 +2,11 @@
 //! selected root, and the detail of the selected Entity, side by side as far as the width allows
 //! (see [`layout`]).
 //! The window only reads the records of a root and never changes them; what it changes is the
-//! list of registered roots in the application data directory. Disk access runs on the
-//! background executor; each result is applied only while the request that produced it is
-//! still the current one. Coming back to the window reads the records again, as the reload does.
+//! list of registered roots in the application data directory, and the session the next start
+//! restores ([`crate::session`]). Disk access runs on the background executor, except for
+//! reading the session as the window opens and its last save as the window closes; each
+//! result is applied only while the request that produced it is still the current one. Coming
+//! back to the window reads the records again, as the reload does.
 
 mod explorer;
 mod layout;
@@ -21,17 +23,18 @@ pub use layout::{
 use crate::{
     board::{Board, Explorer},
     project::{InstanceLock, ProjectConnection, ProjectRoot, Registry, Requests, UpdateError},
+    session::{Placement, Session, SessionFile},
 };
 use gpui_kit::component::{
     button::Button,
     input::{InputEvent, InputState},
 };
 use gpui_kit::{
-    AnyElement, AnyWindowHandle, AppContext, Context, Entity, FocusHandle, IntoElement,
-    PathPromptOptions, PromptButton, PromptLevel, SharedString, UniformListScrollHandle, Window,
-    div, prelude::*,
+    AnyElement, AnyWindowHandle, App, AppContext, Context, Entity, FocusHandle, IntoElement,
+    PathPromptOptions, PromptButton, PromptLevel, SharedString, Task, UniformListScrollHandle,
+    Window, div, prelude::*,
 };
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use style::Palette;
 
 /// The button that confirms registering the root a link names.
@@ -41,6 +44,9 @@ pub const CANCEL_ANSWER: &str = "キャンセル";
 
 /// The tallest the status of the selected root grows before it scrolls.
 pub const STATUS_MAX_HEIGHT: f32 = 120.;
+
+/// How long the window must stay where it is before its place is saved.
+pub const WINDOW_SETTLE: Duration = Duration::from_millis(500);
 
 /// A root to open that a link asked for, and how many switches the user had made by then.
 struct Request {
@@ -120,10 +126,41 @@ pub struct AxonApp {
     prepared: markdown::Prepared,
     /// Which columns are shown, which panel is open and how the detail was reached.
     layout: layout::State,
+    /// Where the session is saved for the next start.
+    session_file: Arc<SessionFile>,
+    /// The session last asked to be saved, or the one restored.
+    session: Session,
+    /// The generation of the last save asked for.
+    session_saves: u64,
+    /// Where the window settled last.
+    placement: Option<Placement>,
+    /// Where the window is while it is still being moved or resized.
+    moving: Option<Placement>,
+    /// The wait for the window to settle, which a later move replaces and so cancels.
+    settle: Option<Task<()>>,
+    /// No registry has been read yet, so the root restored has not been settled.
+    restoring: bool,
 }
 
 impl AxonApp {
+    /// The window as the session saved in `lock`'s data directory left it, except for the
+    /// window's own bounds, which the caller opened it with.
     pub fn new(lock: Arc<InstanceLock>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let file = Arc::new(SessionFile::new(lock.data().clone()));
+        let session = file.load();
+        Self::restore(lock, file, session, window, cx)
+    }
+
+    /// The window with the root, the filter and the layout of `session`, saving each change of
+    /// them and of the window's place to `file`. A root no longer registered opens the first
+    /// registered one.
+    pub fn restore(
+        lock: Arc<InstanceLock>,
+        file: Arc<SessionFile>,
+        session: Session,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let search =
             cx.new(|cx| InputState::new(window, cx).placeholder("タイトル・本文・ID を検索"));
         cx.subscribe_in(
@@ -146,11 +183,25 @@ impl AxonApp {
             }
         })
         .detach();
+        cx.observe_window_bounds(window, |this, window, cx| this.window_moved(window, cx))
+            .detach();
+        // Every change the session keeps notifies the window.
+        cx.observe_self(|this, cx| this.remember(cx)).detach();
+        // A place still settling is saved before the application ends.
+        cx.on_app_quit(|this, _| {
+            this.save_now();
+            async {}
+        })
+        .detach();
+        cx.on_release(|this, _| this.save_now()).detach();
+        let mut explorer = Explorer::default();
+        explorer.update_filter(|filter| *filter = session.filter());
+        explorer.set_layout(session.layout);
         let mut this = Self {
             lock,
             registry: RegistryState::Loading,
             registry_loads: Requests::default(),
-            selected: None,
+            selected: session.root.clone(),
             store_loads: Requests::default(),
             store: StoreState::None,
             busy: false,
@@ -159,7 +210,7 @@ impl AxonApp {
             notice: None,
             requested: None,
             switches: 0,
-            explorer: Explorer::default(),
+            explorer,
             search,
             // A tab stop, so the arrow keys are reachable from the keyboard alone.
             list_focus: cx.focus_handle().tab_stop(true),
@@ -168,9 +219,116 @@ impl AxonApp {
             detail_focus: cx.focus_handle(),
             prepared: markdown::Prepared::default(),
             layout: layout::State::default(),
+            session_file: file,
+            session,
+            session_saves: 0,
+            placement: None,
+            moving: None,
+            settle: None,
+            restoring: true,
         };
+        // A window restored maximized is zoomed only after this, so it is taken as restored.
+        this.placement = match &this.session.placement {
+            Some(restored) if restored.maximized => Some(restored.clone()),
+            _ => this.observed_placement(window, cx),
+        };
+        // Only a change made from here on is saved: a start alone, even from a file this build
+        // cannot read, writes nothing.
+        this.session = this.current_session();
         this.reload_registry(cx);
         this
+    }
+
+    /// Takes the root the first readable registry selects in place of the one restored, which
+    /// the start chose rather than the user, so it is not saved by itself.
+    fn settle_restored_root(&mut self) {
+        if self.restoring && matches!(self.registry, RegistryState::Loaded(_)) {
+            self.restoring = false;
+            self.session.root = self.selected().cloned();
+        }
+    }
+
+    /// Where the window is now, as the session keeps it. A maximized window keeps the place it
+    /// had before, and a full screen one keeps everything it had before.
+    fn observed_placement(&self, window: &Window, cx: &App) -> Option<Placement> {
+        // The settled place, since the frames of the animation into it are not the place before.
+        let known = self.placement.as_ref();
+        if window.is_fullscreen() {
+            return known.cloned();
+        }
+        if window.is_maximized() {
+            let mut placement = known
+                .cloned()
+                .unwrap_or_else(|| crate::windowed_placement(window, cx));
+            placement.maximized = true;
+            return Some(placement);
+        }
+        Some(crate::windowed_placement(window, cx))
+    }
+
+    /// What the next start restores of the window as it is now. Until the registry is read,
+    /// the root restored is kept.
+    fn current_session(&self) -> Session {
+        let root = match &self.registry {
+            RegistryState::Loaded(_) => self.selected().cloned(),
+            _ => self.session.root.clone(),
+        };
+        Session::of(
+            self.placement.clone(),
+            root,
+            self.explorer.filter(),
+            self.explorer.layout(),
+        )
+    }
+
+    /// Saves the session on the background executor when it changed.
+    fn remember(&mut self, cx: &mut Context<Self>) {
+        let session = self.current_session();
+        if session == self.session {
+            return;
+        }
+        self.session = session.clone();
+        self.session_saves += 1;
+        let generation = self.session_saves;
+        let file = self.session_file.clone();
+        // The session is a convenience: a failed save is not shown, and the next start begins
+        // from what was saved before, or from the defaults.
+        cx.background_spawn(async move { file.save(generation, &session).ok() })
+            .detach();
+    }
+
+    /// Saves the session now, with the window's place even when it has not settled, as the
+    /// application ends. Background saves may not finish by then.
+    fn save_now(&mut self) {
+        if let Some(placement) = self.moving.take() {
+            self.placement = Some(placement);
+        }
+        let session = self.current_session();
+        // What the file already holds is not written again; a save still waiting in the
+        // background may not finish, so it is written here.
+        if session == self.session && self.session_file.written() >= self.session_saves {
+            return;
+        }
+        self.session = session;
+        self.session_saves += 1;
+        self.session_file
+            .save(self.session_saves, &self.session)
+            .ok();
+    }
+
+    /// Saves the window's place once it has stayed there for [`WINDOW_SETTLE`].
+    fn window_moved(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.moving = self.observed_placement(window, cx);
+        self.settle = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(WINDOW_SETTLE).await;
+            this.update(cx, |this, cx| {
+                if let Some(placement) = this.moving.take() {
+                    this.placement = Some(placement);
+                    this.remember(cx);
+                }
+            })
+            .ok();
+        }));
     }
 
     pub fn registry(&self) -> &RegistryState {
@@ -225,6 +383,7 @@ impl AxonApp {
                 if this.registry_loads.finish(&ticket) {
                     let keep = this.selected.clone();
                     this.apply_registry(result, keep, cx);
+                    this.settle_restored_root();
                     this.open_requested(cx);
                 }
             })
@@ -252,7 +411,10 @@ impl AxonApp {
             }
             Err(error) => {
                 self.registry = RegistryState::Failed(error);
-                self.selected = None;
+                // The root restored at the start is selected once a later read succeeds.
+                if !self.restoring {
+                    self.selected = None;
+                }
             }
         }
         self.show_selected(cx);

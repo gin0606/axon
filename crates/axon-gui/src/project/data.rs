@@ -1,12 +1,17 @@
 //! The application data directory: the single-instance lock and the file listing the
 //! registered management roots. Every function here blocks on the filesystem; the window calls
-//! them on the background executor.
+//! them on the background executor, except for reading and last writing the session file
+//! ([`crate::session`]) as the window opens and closes.
 //!
 //! ```text
 //! <data directory>/
 //!     instance.lock   held while the application runs
 //!     roots.json      the registry: the registered management roots
+//!     session.json    where the last run left the window, the root, the filter and the layout
 //! ```
+//!
+//! The session file is written by [`crate::session`]; unlike the registry, losing it costs
+//! nothing, so a file that cannot be read starts from the defaults.
 //!
 //! `projects.json` and `projects/`, which earlier builds kept their own stores in, are neither
 //! read nor removed.
@@ -31,6 +36,7 @@ pub const APP_DIRECTORY: &str = "Axon";
 pub const APP_DIRECTORY: &str = "axon";
 pub const INSTANCE_LOCK: &str = "instance.lock";
 pub const REGISTRY_FILE: &str = "roots.json";
+pub const SESSION_FILE: &str = "session.json";
 
 /// The location of the application's data.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -215,8 +221,14 @@ impl AppData {
 
     /// Replaces the registry file atomically: a reader sees the old file or the new one.
     fn save_registry(&self, registry: &Registry) -> io::Result<()> {
-        let path = self.dir.join(REGISTRY_FILE);
-        let temp = self.dir.join(format!("{REGISTRY_FILE}.tmp"));
+        self.replace(REGISTRY_FILE, &registry.encode())
+    }
+
+    /// Replaces the file `name` in the data directory atomically with `bytes`: a reader sees
+    /// the old file or the new one. Callers in one process never replace the same file at once.
+    pub(crate) fn replace(&self, name: &str, bytes: &[u8]) -> io::Result<()> {
+        let path = self.dir.join(name);
+        let temp = self.dir.join(format!("{name}.tmp"));
         let written = (|| {
             // Whatever is at the temporary name is removed rather than opened, which would
             // follow a symlink and truncate its target.
@@ -229,7 +241,7 @@ impl AppData {
                 .write(true)
                 .create_new(true)
                 .open(&temp)?;
-            file.write_all(&registry.encode())?;
+            file.write_all(bytes)?;
             file.sync_all()?;
             fs::rename(&temp, &path)
         })();
