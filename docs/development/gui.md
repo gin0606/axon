@@ -16,7 +16,7 @@ macOS で、アイコンと名前を持つアプリ（`Axon.app`）として使�
 | --- | --- | --- |
 | `gpui-kit` | `=0.7.1` | GPUI、GPUI Base、GPUI Component と既定 asset の facade。アプリは GPUI を `gpui_kit` 経由で使う |
 | `gpui-pre` | `gpui-kit` が `=0.3.8` に固定 | Zed の GPUI の snapshot。直接は依存しない |
-| `markdown` | `=1.0.0`（GPUI Base が使う版） | 本文と Note を描画する前に、GPUI Base と同じ構文の設定で構文木を得て、段落の中の改行を書き換える。画像を代替テキストで描く GPUI Base の Markdown の plugin も、この構文木の節を受け取る |
+| `markdown` | `=1.0.0`（GPUI Base が使う版） | 本文と Note を描画する前に、GPUI Base と同じ構文の設定で構文木を得て、段落の中の改行を書き換える。画像を代替テキストで描く GPUI Base の Markdown の plugin も、この構文木の節を受け取る。HTML の `<img>` の代替テキストの文字参照も、この crate の HTML5 の名前付き文字参照の表で読む |
 
 版は exact 指定と `Cargo.lock` で固定し、開発ブランチや Git 依存には追従しない。更新するときは版を上げる変更として、要件と確認結果も見直す。一次資料は [GPUI Kit の導入手順](https://gpui-kit.com/docs/installation/) と [v0.7.1 の Cargo.toml](https://github.com/longbridge/gpui-kit/blob/v0.7.1/Cargo.toml)。
 
