@@ -17,8 +17,9 @@ use axon_gui::{
 };
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
-    AppContext, Bounds, ClipboardItem, ElementId, Entity, Point, TestAppContext, VisualTestContext,
-    WindowBounds, WindowHandle, WindowOptions,
+    AppContext, Bounds, ClipboardItem, ElementId, Entity, InputEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Point, TestAppContext, VisualTestContext, WindowBounds,
+    WindowHandle, WindowOptions,
     base::{Root, input as edit},
     px, size,
 };
@@ -568,6 +569,392 @@ fn rows_and_links_copy_the_id_and_the_title_from_their_context_menu(cx: &mut Tes
     press(handle, "escape", cx);
     assert_eq!(detail_title(&app, cx), None);
     assert_eq!(snapshot(&store), before);
+}
+
+/// Opens the context menu of `target`, inside the element `scope`, and leaves it open.
+fn open_menu(handle: Window, scope: &'static str, target: ElementId, cx: &mut TestAppContext) {
+    with_window(handle, cx, |window, cx| {
+        window.within(scope).right_click(target, cx)
+    });
+    next_frames(handle, cx);
+    with_window(handle, cx, |window, _| {
+        assert!(window.find("popup-menu").visible())
+    });
+}
+
+/// No menu is drawn and `focus` has the focus of the window.
+fn no_menu_and_focused(
+    handle: Window,
+    app: &Entity<AxonApp>,
+    focus: fn(&AxonApp) -> &gpui_kit::FocusHandle,
+    cx: &mut TestAppContext,
+) {
+    with_window(handle, cx, |window, cx| {
+        assert!(window.try_find("popup-menu").is_none());
+        assert!(focus(app.read(cx)).is_focused(window));
+    });
+}
+
+/// Where `target`, inside the element `scope`, is drawn.
+fn bounds_of(
+    handle: Window,
+    scope: &'static str,
+    target: ElementId,
+    cx: &mut TestAppContext,
+) -> Bounds<gpui_kit::Pixels> {
+    let mut bounds = None;
+    with_window(handle, cx, |window, _| {
+        bounds = Some(window.within(scope).find(target).bounds())
+    });
+    bounds.unwrap()
+}
+
+// A menu is drawn only while its row or link is where it was right-clicked; a read again, as
+// coming back to the window does, can move them while the menu is open.
+#[gpui_kit::test]
+fn a_read_that_moves_a_row_under_its_menu_leaves_the_keys_on_the_list(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    let last = seed.create(
+        Kind::Issue,
+        Lifecycle::NotStarted,
+        "片付ける",
+        Label::Chore,
+        None,
+    );
+    let (handle, app) = open(&data, cx);
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    let clicked = bounds_of(handle, "entity-list", entity_element(&last), cx);
+    open_menu(handle, "entity-list", entity_element(&last), cx);
+
+    // A row added above moves the one under the menu down.
+    seed.create(
+        Kind::Issue,
+        Lifecycle::NotStarted,
+        "名札を作る",
+        Label::Chore,
+        Some(&plan.group),
+    );
+    reload(&app, cx);
+    no_menu_and_focused(handle, &app, AxonApp::list_focus, cx);
+    let invite = Some(plan.invite.to_string());
+    assert_eq!(copied(handle, cx), [invite.clone(), invite]);
+
+    // Back where it was right-clicked, the row brings no menu with it.
+    cx.update(|cx| app.update(cx, |app, cx| app.set_layout(Layout::Flat, cx)));
+    assert_eq!(
+        bounds_of(handle, "entity-list", entity_element(&last), cx),
+        clicked
+    );
+    no_menu_and_focused(handle, &app, AxonApp::list_focus, cx);
+    press(handle, "down", cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("片付ける"));
+    press(handle, "escape", cx);
+    assert_eq!(detail_title(&app, cx), None);
+
+    // A menu closed as usual takes nothing back when the focus is lost later.
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    open_menu(handle, "entity-list", entity_element(&last), cx);
+    VisualTestContext::from_window(handle.into(), cx).simulate_keystrokes("escape");
+    cx.run_until_parked();
+    with_window(handle, cx, |window, cx| {
+        assert!(window.try_find("popup-menu").is_none());
+        assert!(app.read(cx).list_focus().is_focused(window));
+        window.blur(cx);
+    });
+    with_window(handle, cx, |window, cx| {
+        assert!(!app.read(cx).list_focus().is_focused(window));
+        assert!(!app.read(cx).detail_focus().is_focused(window));
+    });
+    let unchanged = Some("（前の内容）".to_string());
+    assert_eq!(copied(handle, cx), [unchanged.clone(), unchanged]);
+}
+
+#[gpui_kit::test]
+fn a_read_that_moves_a_row_under_its_menu_out_of_view_leaves_the_keys_on_the_list(
+    cx: &mut TestAppContext,
+) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let group = seed.create(
+        Kind::Group,
+        Lifecycle::NotStarted,
+        "まとめ",
+        Label::Feat,
+        None,
+    );
+    let ids: Vec<_> = (0..20)
+        .map(|ix| {
+            seed.create(
+                Kind::Issue,
+                Lifecycle::NotStarted,
+                &format!("仕事 {ix}"),
+                Label::Feat,
+                None,
+            )
+        })
+        .collect();
+    let (handle, app) = open(&data, cx);
+    click_in(handle, "entity-list", entity_element(&group), cx);
+    let clicked = bounds_of(handle, "entity-list", entity_element(&ids[5]), cx);
+    open_menu(handle, "entity-list", entity_element(&ids[5]), cx);
+
+    for ix in 0..40 {
+        seed.create(
+            Kind::Issue,
+            Lifecycle::NotStarted,
+            &format!("下の仕事 {ix}"),
+            Label::Feat,
+            Some(&group),
+        );
+    }
+    reload(&app, cx);
+    with_window(handle, cx, |window, _| {
+        assert!(
+            window
+                .within("entity-list")
+                .try_find(entity_element(&ids[5]))
+                .is_none()
+        )
+    });
+    no_menu_and_focused(handle, &app, AxonApp::list_focus, cx);
+    let selected = Some(group.to_string());
+    assert_eq!(copied(handle, cx), [selected.clone(), selected]);
+
+    cx.update(|cx| app.update(cx, |app, cx| app.set_layout(Layout::Flat, cx)));
+    assert_eq!(
+        bounds_of(handle, "entity-list", entity_element(&ids[5]), cx),
+        clicked
+    );
+    no_menu_and_focused(handle, &app, AxonApp::list_focus, cx);
+    cx.update(|cx| app.update(cx, |app, cx| app.set_layout(Layout::Tree, cx)));
+    press(handle, "down", cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("下の仕事 0"));
+    press(handle, "escape", cx);
+    assert_eq!(detail_title(&app, cx), None);
+}
+
+#[gpui_kit::test]
+fn a_read_that_moves_a_link_under_its_menu_leaves_the_keys_on_the_detail(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    let (handle, app) = open(&data, cx);
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    let link = || entity_element(&plan.venue);
+    let clicked = bounds_of(handle, "detail-dependencies", link(), cx);
+    open_menu(handle, "detail-dependencies", link(), cx);
+
+    // A second wait moves the dependencies down.
+    let badge = seed.create(
+        Kind::Issue,
+        Lifecycle::NotStarted,
+        "名札を作る",
+        Label::Chore,
+        None,
+    );
+    seed.needs(&plan.invite, &badge);
+    reload(&app, cx);
+    no_menu_and_focused(handle, &app, AxonApp::detail_focus, cx);
+    // The detail copies no row.
+    let unchanged = Some("（前の内容）".to_string());
+    assert_eq!(copied(handle, cx), [unchanged.clone(), unchanged]);
+
+    // Back where it was right-clicked, the link brings no menu with it.
+    seed.write(|records, _| {
+        Entry::Record(
+            records
+                .remove_dependency(&plan.invite, &badge, None, now())
+                .unwrap()
+                .unwrap(),
+        )
+    });
+    reload(&app, cx);
+    assert_eq!(
+        bounds_of(handle, "detail-dependencies", link(), cx),
+        clicked
+    );
+    no_menu_and_focused(handle, &app, AxonApp::detail_focus, cx);
+    press(handle, "escape", cx);
+    assert_eq!(detail_title(&app, cx), None);
+}
+
+/// Lets the window draw two more frames, as the platform would after an event, with the work
+/// the window asked to do at each.
+fn next_frames(handle: Window, cx: &mut TestAppContext) {
+    for _ in 0..2 {
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.simulate_next_frame(cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+}
+
+/// Right-clicks `last` and, before the window draws again, switches the list to flat, where
+/// `last` is one row higher; then switches back, where `last` is under the point clicked
+/// again. The list has the focus before the click when `focused` holds, and nothing has it
+/// otherwise.
+fn move_a_row_before_its_menu_is_drawn(focused: bool, cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    let last = seed.create(
+        Kind::Issue,
+        Lifecycle::NotStarted,
+        "片付ける",
+        Label::Chore,
+        None,
+    );
+    // In the tree this child comes before the last row, in the flat list after it.
+    seed.create(
+        Kind::Issue,
+        Lifecycle::NotStarted,
+        "名札を作る",
+        Label::Chore,
+        Some(&plan.group),
+    );
+    let (handle, app) = open(&data, cx);
+    if focused {
+        click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    }
+    let clicked = bounds_of(handle, "entity-list", entity_element(&last), cx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        let at = clicked.center();
+        window.dispatch_event(
+            MouseMoveEvent {
+                position: at,
+                pressed_button: None,
+                modifiers: Default::default(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        assert_eq!(window.focused(cx).is_some(), focused);
+        // As the platform delivers them: no frame between the press and the menu being built,
+        // and the read that moves the row applied right after.
+        for event in [
+            MouseDownEvent {
+                button: MouseButton::Right,
+                position: at,
+                modifiers: Default::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            MouseUpEvent {
+                button: MouseButton::Right,
+                position: at,
+                modifiers: Default::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+        ] {
+            window.dispatch_event(event, cx);
+        }
+        let app = app.clone();
+        cx.defer(move |cx| app.update(cx, |app, cx| app.set_layout(Layout::Flat, cx)));
+    })
+    .unwrap();
+    cx.run_until_parked();
+    next_frames(handle, cx);
+    no_menu_and_focused(handle, &app, AxonApp::list_focus, cx);
+
+    cx.update(|cx| app.update(cx, |app, cx| app.set_layout(Layout::Tree, cx)));
+    assert_eq!(
+        bounds_of(handle, "entity-list", entity_element(&last), cx),
+        clicked
+    );
+    next_frames(handle, cx);
+    no_menu_and_focused(handle, &app, AxonApp::list_focus, cx);
+    if focused {
+        let invite = Some(plan.invite.to_string());
+        assert_eq!(copied(handle, cx), [invite.clone(), invite]);
+    }
+    // The arrow keys move the selection, from the first row when none was selected.
+    press(handle, "down", cx);
+    let expected = if focused {
+        "名札を作る"
+    } else {
+        "読書会の準備"
+    };
+    assert_eq!(detail_title(&app, cx).as_deref(), Some(expected));
+    press(handle, "escape", cx);
+    assert_eq!(detail_title(&app, cx), None);
+}
+
+#[gpui_kit::test]
+fn a_row_moved_before_its_menu_is_drawn_leaves_no_menu_behind(cx: &mut TestAppContext) {
+    move_a_row_before_its_menu_is_drawn(true, cx);
+}
+
+#[gpui_kit::test]
+fn a_row_moved_before_its_menu_is_drawn_leaves_no_menu_behind_when_nothing_was_focused(
+    cx: &mut TestAppContext,
+) {
+    move_a_row_before_its_menu_is_drawn(false, cx);
+}
+
+#[gpui_kit::test]
+fn resizing_the_window_under_a_link_menu_leaves_the_keys_on_the_detail(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    let (handle, app) = open_sized(&data, THREE_COLUMNS_MIN_WIDTH, 760., cx);
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    let link = || entity_element(&plan.venue);
+    let clicked = bounds_of(handle, "detail-dependencies", link(), cx);
+    open_menu(handle, "detail-dependencies", link(), cx);
+
+    // Two columns: the sidebar goes and the link moves left.
+    cx.simulate_window_resize(handle.into(), size(px(TWO_COLUMNS_MIN_WIDTH), px(760.)));
+    cx.run_until_parked();
+    assert_eq!(columns(&app, cx), Columns::Two);
+    assert_ne!(
+        bounds_of(handle, "detail-dependencies", link(), cx).origin,
+        clicked.origin
+    );
+    no_menu_and_focused(handle, &app, AxonApp::detail_focus, cx);
+    press(handle, "escape", cx);
+    assert_eq!(detail_title(&app, cx), None);
+}
+
+#[gpui_kit::test]
+fn a_read_that_empties_the_list_under_a_menu_leaves_the_keys_on_the_window(
+    cx: &mut TestAppContext,
+) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let only = seed.create(
+        Kind::Issue,
+        Lifecycle::NotStarted,
+        "会場を決める",
+        Label::Chore,
+        None,
+    );
+    let (handle, app) = open(&data, cx);
+    click_in(handle, "entity-list", entity_element(&only), cx);
+    open_menu(handle, "entity-list", entity_element(&only), cx);
+
+    // Completed elsewhere, the only row leaves the list while its detail stays open.
+    seed.perform(&only, Operation::Start);
+    seed.perform(&only, Operation::Complete);
+    reload(&app, cx);
+    with_window(handle, cx, |window, cx| {
+        assert!(window.try_find("entity-list").is_none());
+        assert!(window.try_find("popup-menu").is_none());
+        // The window, not the detail column, which the menu was not opened from.
+        let app = app.read(cx);
+        assert!(window.focused(cx).is_some());
+        assert!(!app.list_focus().is_focused(window));
+        assert!(!app.detail_focus().is_focused(window));
+    });
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("会場を決める"));
+    press(handle, "escape", cx);
+    assert_eq!(detail_title(&app, cx), None);
 }
 
 #[gpui_kit::test]

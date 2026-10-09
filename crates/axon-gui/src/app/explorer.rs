@@ -12,8 +12,9 @@ use gpui_kit::component::{
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
 };
 use gpui_kit::{
-    AnyElement, App, ClipboardItem, Context, ElementId, FocusHandle, HighlightStyle, Hsla,
-    IntoElement, MouseButton, MouseDownEvent, ScrollStrategy, SharedString, Window,
+    AnyElement, App, ClipboardItem, Context, DismissEvent, ElementId, FocusHandle, Focusable,
+    HighlightStyle, Hsla, IntoElement, MouseButton, MouseDownEvent, ScrollStrategy, SharedString,
+    WeakEntity, Window,
     base::{
         SelectableText, StyledExt, TestSupportExt, TextSelection, input as edit,
         text::{SelectionFormat, TextView, TextViewStyle},
@@ -422,10 +423,12 @@ impl AxonApp {
                     );
                 }
                 // The gap between rows, inside each row so the heights stay equal.
-                with_copy_menu(
+                Self::with_copy_menu(
                     div().pb_px().child(line.test_support()),
                     &row.id,
                     Some(&item.title),
+                    MenuOrigin::List,
+                    cx,
                 )
             })
             .collect()
@@ -435,10 +438,13 @@ impl AxonApp {
     /// context menu copies the ID and the title.
     fn render_link(&self, link: &Link, cx: &mut Context<Self>) -> AnyElement {
         let title = link.known.as_ref().map(|known| known.title.as_str());
-        with_copy_menu(
-            div().min_w_0().child(self.render_link_target(link, cx)),
+        let target = self.render_link_target(link, cx);
+        Self::with_copy_menu(
+            div().min_w_0().child(target),
             &link.id,
             title,
+            MenuOrigin::Detail,
+            cx,
         )
     }
 
@@ -897,6 +903,101 @@ impl AxonApp {
             .into_any_element()
     }
 
+    /// `trigger`, a wrapper of a row or a link inside `origin`, with a context menu that copies
+    /// `id` and its title when there is one. The menu goes on a wrapper because a row or link
+    /// observed for the tests cannot take one itself.
+    fn with_copy_menu(
+        trigger: gpui_kit::Div,
+        id: &EntityId,
+        title: Option<&str>,
+        origin: MenuOrigin,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let id = id.clone();
+        let title = title.map(str::to_owned);
+        let app = cx.weak_entity();
+        trigger
+            .id(named(format!("copy-menu-{id}")))
+            .context_menu(move |menu, window, cx| {
+                // The menu takes the focus as it is built rather than when it is first drawn,
+                // so a menu its row moved away from before then holds the focus too. Losing the
+                // focus is not seen when nothing had it in the frame before, so the frame after
+                // the first one the menu could be drawn in is checked as well.
+                let focus = menu.focus_handle(cx);
+                window.focus(&focus, cx);
+                let opened = CopyMenu {
+                    menu: cx.weak_entity(),
+                    focus: focus.clone(),
+                    origin,
+                };
+                app.update(cx, |app, cx| app.record_copy_menu(opened, cx))
+                    .ok();
+                let app = app.clone();
+                window.on_next_frame(move |window, _| {
+                    window.on_next_frame(move |window, cx| {
+                        // Only this menu: another may have been opened since.
+                        app.update(cx, |app, cx| {
+                            app.recover_from_hidden_menu(Some(&focus), window, cx)
+                        })
+                        .ok();
+                    })
+                });
+                copy_menu(menu, &id, title.as_deref())
+            })
+            .into_any_element()
+    }
+
+    /// Records `opened` as the last context menu. The one recorded before is closed, as it is
+    /// either closed already or hidden still waiting to be closed, which no one would do once
+    /// it is no longer recorded.
+    fn record_copy_menu(&mut self, opened: CopyMenu, cx: &mut Context<Self>) {
+        if let Some(menu) = self
+            .copy_menu
+            .replace(opened)
+            .and_then(|before| before.menu.upgrade())
+        {
+            menu.update(cx, |_, cx| cx.emit(DismissEvent));
+        }
+    }
+
+    /// Closes the last context menu and gives the focus back to where it was opened from,
+    /// when the menu holds the focus but was not drawn. A menu is drawn only while its row or
+    /// link is under the point right-clicked, so a read that moves them, or scrolls a row out
+    /// of the list, hides it with the focus, and the keys would reach nothing. Closed, it does
+    /// not come back and take the focus when the row returns to that place. When the focus
+    /// cannot go back to the list or the detail it was opened from, since that is not shown,
+    /// the window takes it.
+    /// Only the menu with the focus `only` is closed, when it is given.
+    pub(super) fn recover_from_hidden_menu(
+        &mut self,
+        only: Option<&FocusHandle>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(opened) = self.copy_menu.take_if(|opened| {
+            only.is_none_or(|only| *only == opened.focus)
+                && opened.focus.is_focused(window)
+                && !self.app_focus.contains(&opened.focus, window)
+        }) else {
+            return;
+        };
+        if let Some(menu) = opened.menu.upgrade() {
+            menu.update(cx, |_, cx| cx.emit(DismissEvent));
+        }
+        let origin = match opened.origin {
+            MenuOrigin::List => &self.list_focus,
+            MenuOrigin::Detail => &self.detail_focus,
+        };
+        let target = if self.app_focus.contains(origin, window) {
+            origin
+        } else {
+            &self.app_focus
+        };
+        window.focus(target, cx);
+        // A focus moved while the window draws does not draw the window again by itself.
+        window.on_next_frame(|window, _| window.refresh());
+    }
+
     /// Why the selected Entity is not among the matches, when it is not.
     fn render_filtered_out(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let exclusions = self.explorer.selected_exclusions();
@@ -935,16 +1036,20 @@ pub(super) fn focus_before_menu(
     }
 }
 
-/// `trigger`, a wrapper of a row or a link, with a context menu that copies `id` and its title
-/// when there is one. The menu goes on a wrapper because a row or link observed for the tests
-/// cannot take one itself.
-fn with_copy_menu(trigger: gpui_kit::Div, id: &EntityId, title: Option<&str>) -> AnyElement {
-    let id = id.clone();
-    let title = title.map(str::to_owned);
-    trigger
-        .id(named(format!("copy-menu-{id}")))
-        .context_menu(move |menu, _, _| copy_menu(menu, &id, title.as_deref()))
-        .into_any_element()
+/// A context menu opened over a row or a link.
+pub(super) struct CopyMenu {
+    menu: WeakEntity<PopupMenu>,
+    /// The menu's focus, held so the menu is still known to have it once a read drops the menu
+    /// with its row.
+    focus: FocusHandle,
+    origin: MenuOrigin,
+}
+
+/// The list or the detail column a context menu was opened from.
+#[derive(Clone, Copy)]
+enum MenuOrigin {
+    List,
+    Detail,
 }
 
 /// The items that copy the ID, the title, and both as `ID title`, as `axon list` lines them up.
