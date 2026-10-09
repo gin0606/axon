@@ -17,8 +17,10 @@ use axon_gui::{
 };
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
-    AppContext, Bounds, ElementId, Entity, Point, TestAppContext, VisualTestContext, WindowBounds,
-    WindowHandle, WindowOptions, base::Root, px, size,
+    AppContext, Bounds, ClipboardItem, ElementId, Entity, Point, TestAppContext, VisualTestContext,
+    WindowBounds, WindowHandle, WindowOptions,
+    base::{Root, input as edit},
+    px, size,
 };
 use std::collections::BTreeSet;
 use std::fs;
@@ -70,19 +72,22 @@ impl Seed {
         label: Label,
         parent: Option<&EntityId>,
     ) -> EntityId {
+        self.create_with(Current {
+            kind,
+            lifecycle,
+            owner: None,
+            title: title.into(),
+            description: String::new(),
+            label,
+            condition: None,
+            parent: parent.cloned(),
+            needs: BTreeSet::new(),
+        })
+    }
+
+    fn create_with(&self, current: Current) -> EntityId {
         let entry = self.write(|records, prefix| {
             let id = new_entity_id(prefix).unwrap();
-            let current = Current {
-                kind,
-                lifecycle,
-                owner: None,
-                title: title.into(),
-                description: String::new(),
-                label,
-                condition: None,
-                parent: parent.cloned(),
-                needs: BTreeSet::new(),
-            };
             Entry::Record(records.create(id, current, now()).unwrap())
         });
         entry.entity().clone()
@@ -408,6 +413,145 @@ fn the_detail_bar_copies_the_whole_id_even_when_it_is_truncated(cx: &mut TestApp
         Some(plan.invite.to_string())
     );
     assert_eq!(snapshot(&store), before);
+}
+
+/// Selects the text of the element `id` by dragging across it, from just inside its left edge
+/// `top` below its top, to just inside its right edge as far above its bottom; `None` drags
+/// across its middle.
+fn select_across(
+    handle: Window,
+    id: impl Into<ElementId>,
+    top: Option<f32>,
+    cx: &mut TestAppContext,
+) {
+    let id = id.into();
+    with_window(handle, cx, |window, cx| {
+        let bounds = window.find(id).bounds();
+        let top = top.unwrap_or(f32::from(bounds.size.height) / 2.);
+        let from = bounds.origin + gpui_kit::point(px(1.), px(top));
+        let to = bounds.bottom_right() - gpui_kit::point(px(1.), px(top));
+        window.drag(from, to, cx);
+    });
+}
+
+/// What the edit menu's Copy and Command-C each put on the clipboard.
+fn copied(handle: Window, cx: &mut TestAppContext) -> [Option<String>; 2] {
+    let mut copy = |copy: &dyn Fn(&mut gpui_kit::Window, &mut gpui_kit::App)| {
+        cx.write_to_clipboard(ClipboardItem::new_string("（前の内容）".into()));
+        with_window(handle, cx, |window, cx| copy(window, cx));
+        cx.read_from_clipboard().and_then(|item| item.text())
+    };
+    [
+        copy(&|window, cx| window.dispatch_action(Box::new(edit::Copy), cx)),
+        copy(&|window, cx| window.press("cmd-c", cx)),
+    ]
+}
+
+#[gpui_kit::test]
+fn the_text_of_the_detail_is_selected_and_copied_as_shown(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (project, seed) = Seed::new(&data, "読書会");
+    let id = seed.create_with(Current {
+        kind: Kind::Issue,
+        lifecycle: Lifecycle::NotStarted,
+        owner: None,
+        title: "会場を決める".into(),
+        description: "**候補**は[公民館](https://example.com)と\n`図書館` ![地図](https://example.com/map.png)".into(),
+        label: Label::Feat,
+        condition: Some("test -f 予約済み".into()),
+        parent: None,
+        needs: BTreeSet::new(),
+    });
+    seed.note(&id, "返事は *金曜* まで");
+    let store = project.path().join(".axon");
+    let before = snapshot(&store);
+    let (handle, app) = open(&data, cx);
+    click_in(handle, "entity-list", entity_element(&id), cx);
+
+    // The condition is a code block, whose one line lies in the middle of its padding.
+    let shown = [
+        (ElementId::from("detail-title"), Some(2.), "会場を決める"),
+        (
+            "detail-description-body".into(),
+            Some(2.),
+            "候補は公民館と\n図書館 地図",
+        ),
+        ("detail-condition-text".into(), None, "test -f 予約済み"),
+        (("note-body", 0usize).into(), Some(2.), "返事は 金曜 まで"),
+    ];
+    for (id, top, text) in shown {
+        // Starting a selection takes the focus from the search field, so the selection is
+        // what gets copied.
+        with_window(handle, cx, |window, cx| {
+            let search = app.read(cx).search_input().clone();
+            search.update(cx, |search, cx| search.focus(window, cx));
+        });
+        select_across(handle, id.clone(), top, cx);
+        assert_eq!(
+            copied(handle, cx),
+            [Some(text.into()), Some(text.into())],
+            "{id:?}"
+        );
+    }
+
+    // A selection across the title, the description and the condition runs in their order.
+    with_window(handle, cx, |window, cx| {
+        let from = window.find("detail-title").bounds().origin + gpui_kit::point(px(1.), px(2.));
+        let to = window.find("detail-condition-text").bounds().bottom_right()
+            - gpui_kit::point(px(1.), px(2.));
+        window.drag(from, to, cx);
+    });
+    let [menu, key] = copied(handle, cx);
+    assert_eq!(menu, key);
+    let across = menu.unwrap();
+    let positions: Vec<_> = ["会場を決める", "候補は公民館", "test -f 予約済み"]
+        .iter()
+        .map(|text| across.find(text))
+        .collect();
+    assert!(positions.iter().all(Option::is_some), "{across:?}");
+    assert!(positions.is_sorted(), "{across:?}");
+    assert_eq!(snapshot(&store), before);
+}
+
+#[gpui_kit::test]
+fn escape_still_steps_back_after_selecting_text_of_the_detail(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let described = |title: &str| Current {
+        kind: Kind::Issue,
+        lifecycle: Lifecycle::NotStarted,
+        owner: None,
+        title: title.into(),
+        description: format!("{title}の本文"),
+        label: Label::Feat,
+        condition: None,
+        parent: None,
+        needs: BTreeSet::new(),
+    };
+    let venue = seed.create_with(described("会場を決める"));
+    let invite = seed.create_with(described("案内を送る"));
+    seed.needs(&invite, &venue);
+    let (handle, app) = open(&data, cx);
+
+    click_in(handle, "entity-list", entity_element(&invite), cx);
+    select_across(handle, "detail-description-body", Some(2.), cx);
+    click_in(handle, "detail-dependencies", entity_element(&venue), cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("会場を決める"));
+    // Following the link took the focus from the text it left.
+    press(handle, "escape", cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("案内を送る"));
+    press(handle, "escape", cx);
+    assert_eq!(detail_title(&app, cx), None);
+
+    // The selected text goes away with each step back.
+    click_in(handle, "entity-list", entity_element(&invite), cx);
+    click_in(handle, "detail-dependencies", entity_element(&venue), cx);
+    select_across(handle, "detail-description-body", Some(2.), cx);
+    press(handle, "escape", cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("案内を送る"));
+    select_across(handle, "detail-description-body", Some(2.), cx);
+    press(handle, "escape", cx);
+    assert_eq!(detail_title(&app, cx), None);
 }
 
 #[gpui_kit::test]
@@ -1223,13 +1367,22 @@ fn coming_back_while_a_read_runs_starts_no_other(cx: &mut TestAppContext) {
 fn reading_again_keeps_the_detail_scrolled(cx: &mut TestAppContext) {
     let (_dir, data) = data();
     let (_, seed) = Seed::new(&data, "読書会");
-    let id = seed.create(
-        Kind::Issue,
-        Lifecycle::Undecided,
-        "会場を決める",
-        Label::Feat,
-        None,
-    );
+    // A description longer than the text view parses on the UI thread (4 KB).
+    let description: String = (0..60)
+        .map(|ix| format!("段落 {ix}: {}\n\n", "長い本文".repeat(10)))
+        .collect();
+    assert!(description.len() > 4096);
+    let id = seed.create_with(Current {
+        kind: Kind::Issue,
+        lifecycle: Lifecycle::Undecided,
+        owner: None,
+        title: "会場を決める".into(),
+        description,
+        label: Label::Feat,
+        condition: None,
+        parent: None,
+        needs: BTreeSet::new(),
+    });
     for ix in 0..30 {
         seed.note(&id, &format!("Note {ix}: {}", "長い本文".repeat(40)));
     }
