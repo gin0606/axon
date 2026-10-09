@@ -13,26 +13,6 @@ pre-commit:
       glob: "*.rs"
       run: mise exec -- cargo test --workspace --exclude axon-gui --lib --bin axon --test smoke
 
-post-checkout:
-  jobs:
-    - name: release-build
-      run: test "{3}" != "1" || ./scripts/build-canonical-axon
-
-post-commit:
-  jobs:
-    - name: release-build
-      run: ./scripts/build-canonical-axon
-
-post-merge:
-  jobs:
-    - name: release-build
-      run: ./scripts/build-canonical-axon
-
-post-rewrite:
-  jobs:
-    - name: release-build
-      run: ./scripts/build-canonical-axon
-
 pre-push:
   follow: true
   jobs:

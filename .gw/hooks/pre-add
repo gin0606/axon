@@ -29,6 +29,3 @@ if [ -n "${GW_BRANCH:-}" ] && ! git show-ref --verify --quiet "refs/heads/$GW_BR
     exit 1
   fi
 fi
-
-# worktree から共有 DB を操作する canonical binary を、同期後の main から作る
-./scripts/build-canonical-axon

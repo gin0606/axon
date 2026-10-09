@@ -3,8 +3,7 @@
 # 環境変数: GW_REPO_ROOT / GW_WORKTREE_PATH / GW_BRANCH
 set -eu
 
-# git 管理外のローカル設定を main repo から引き継ぐ。mise.local.toml は
-# main repo の target/release を PATH に通す。
+# git 管理外のローカル設定を main repo から引き継ぐ。
 for f in mise.local.toml CLAUDE.local.md .claude/settings.local.json; do
   src="$GW_REPO_ROOT/$f"
   dst="$GW_WORKTREE_PATH/$f"
