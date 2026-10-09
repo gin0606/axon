@@ -3,21 +3,24 @@
 //! The GUI depends on the `axon` library (storage adapters and the re-exported core) and
 //! converts core values into display text and GPUI elements here. Nothing from GPUI flows back
 //! into the core crates. [`project`] holds the registered management roots and [`board`] the
-//! records of one as values, both without GPUI; [`app`] is the window.
+//! records of one as values, both without GPUI; [`session`] keeps where the last run left off
+//! for the next start; [`app`] is the window.
 
 pub mod app;
 pub mod board;
 pub mod project;
+pub mod session;
 
 pub use app::AxonApp;
 
 use gpui_kit::component::{ActiveTheme, button::Button};
 use gpui_kit::{
-    App, AppContext, Bounds, Context, Entity, KeyBinding, Menu, MenuItem, OsAction, Render,
-    SharedString, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, actions,
-    base::input as edit, div, prelude::*, px, size,
+    App, AppContext, Bounds, Context, DisplayId, Entity, KeyBinding, Menu, MenuItem, OsAction,
+    Pixels, Render, SharedString, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions,
+    actions, base::input as edit, div, point, prelude::*, px, size,
 };
 use project::{AppData, InstanceError, InstanceLock, data::LocateError};
+use session::{Placement, SessionFile};
 use std::sync::Arc;
 
 actions!(
@@ -67,17 +70,128 @@ pub fn menus() -> Vec<Menu> {
     ]
 }
 
+/// The size the main window first opens with.
+pub const WINDOW_SIZE: (f32, f32) = (1120., 700.);
+
+/// How much of a restored window's title bar must lie on one display for the window to open
+/// where it was: its height, and this width or the whole bar when narrower.
+pub const TITLE_BAR_GRIP: (f32, f32) = (80., 28.);
+
+/// The room a restored window leaves for the title bar its frame adds above the content.
+pub const TITLE_BAR_HEIGHT: f32 = 28.;
+
 /// Options of the main window: centered, titled, and never smaller than [`MIN_WINDOW_SIZE`].
 pub fn main_window_options(cx: &App) -> WindowOptions {
-    let bounds = Bounds::centered(None, size(px(1120.), px(700.)), cx);
+    restored_window_options(None, cx)
+}
+
+/// [`main_window_options`] with the window where `placement` left it (see [`restored_bounds`]).
+pub fn restored_window_options(placement: Option<&Placement>, cx: &App) -> WindowOptions {
+    let (bounds, display_id) = restored_bounds(placement, cx);
     WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_bounds: Some(bounds),
+        display_id,
         window_min_size: Some(size(px(MIN_WINDOW_SIZE.0), px(MIN_WINDOW_SIZE.1))),
         titlebar: Some(TitlebarOptions {
             title: Some("Axon".into()),
             ..Default::default()
         }),
         ..Default::default()
+    }
+}
+
+/// The bounds and the display to open the main window with: the saved place on the saved
+/// display (the primary one when the platform named none), maximized when it was, or the first
+/// size centered on the primary display. A saved window on a display not connected now is
+/// centered on the primary display, and one whose title bar is not on the visible part of its
+/// display is centered on it; both keep their saved size, which never exceeds the display.
+pub fn restored_bounds(
+    placement: Option<&Placement>,
+    cx: &App,
+) -> (WindowBounds, Option<DisplayId>) {
+    let Some(placement) = placement else {
+        let first = size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1));
+        return (
+            WindowBounds::Windowed(Bounds::centered(None, first, cx)),
+            None,
+        );
+    };
+    let display = match placement.display.as_deref() {
+        Some(saved) => cx.displays().into_iter().find(|display| {
+            display
+                .uuid()
+                .is_ok_and(|uuid| uuid.to_string().eq_ignore_ascii_case(saved))
+        }),
+        None => cx.primary_display(),
+    };
+    let mut width = px(placement.width);
+    let mut height = px(placement.height);
+    // The display it opens on: the saved one, or the primary one it is centered on.
+    if let Some(target) = display.clone().or_else(|| cx.primary_display()) {
+        // The window's frame adds a title bar to the content; the menu bar and the Dock are
+        // outside the visible bounds.
+        let shown = target.visible_bounds().size;
+        width = width.min(shown.width);
+        height = height.min(shown.height - px(TITLE_BAR_HEIGHT));
+    }
+    let saved = Bounds {
+        origin: point(px(placement.x), px(placement.y)),
+        size: size(
+            width.max(px(MIN_WINDOW_SIZE.0)),
+            height.max(px(MIN_WINDOW_SIZE.1)),
+        ),
+    };
+    let display_id = display.as_ref().map(|display| display.id());
+    let bounds = match &display {
+        Some(display) if reachable(saved, display.visible_bounds()) => saved,
+        _ => {
+            // The frame, title bar included, is what is centered; the window opens with the
+            // content size at the frame's top left corner.
+            let bar = px(TITLE_BAR_HEIGHT);
+            let frame = size(saved.size.width, saved.size.height + bar);
+            let frame = Bounds::centered(display_id, frame, cx);
+            Bounds {
+                origin: frame.origin,
+                size: size(frame.size.width, frame.size.height - bar),
+            }
+        }
+    };
+    let bounds = if placement.maximized {
+        WindowBounds::Maximized(bounds)
+    } else {
+        WindowBounds::Windowed(bounds)
+    };
+    (bounds, display_id)
+}
+
+/// Whether the title bar of a window at `bounds` can be grabbed on `display`, the visible part
+/// of a display in the same coordinates (see [`TITLE_BAR_GRIP`]).
+pub fn reachable(bounds: Bounds<Pixels>, display: Bounds<Pixels>) -> bool {
+    let bar = Bounds {
+        origin: bounds.origin,
+        size: size(bounds.size.width, px(TITLE_BAR_GRIP.1)),
+    };
+    let shown = bar.intersect(&display);
+    shown.size.width >= bar.size.width.min(px(TITLE_BAR_GRIP.0))
+        && shown.size.height >= bar.size.height
+}
+
+/// Where `window` is as a plain window: the top left corner of its frame, the size of its
+/// content, which is what a window opens with, and its display. Whether it is maximized is
+/// left to the caller.
+pub fn windowed_placement(window: &Window, cx: &App) -> Placement {
+    let origin = window.bounds().origin;
+    let content = window.viewport_size();
+    Placement {
+        x: origin.x.into(),
+        y: origin.y.into(),
+        width: content.width.into(),
+        height: content.height.into(),
+        display: window
+            .display(cx)
+            .and_then(|display| display.uuid().ok())
+            .map(|uuid| uuid.to_string()),
+        maximized: false,
     }
 }
 
@@ -156,15 +270,17 @@ pub fn open_links(app: &WeakEntity<AxonApp>, links: Vec<String>, cx: &mut App) {
     }
 }
 
-/// Opens the main window, which keeps `lock` for as long as it is open. Closing the window
-/// ends the application.
+/// Opens the main window, which keeps `lock` for as long as it is open, as the last run left it.
+/// Closing the window ends the application.
 pub fn open_main_window(
     lock: Arc<InstanceLock>,
     cx: &mut App,
 ) -> gpui_kit::Result<Entity<AxonApp>> {
-    let options = main_window_options(cx);
+    let file = Arc::new(SessionFile::new(lock.data().clone()));
+    let session = file.load();
+    let options = restored_window_options(session.placement.as_ref(), cx);
     let (_, app) = gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| AxonApp::new(lock, window, cx))
+        cx.new(|cx| AxonApp::restore(lock, file, session, window, cx))
     })?;
     Ok(app)
 }
