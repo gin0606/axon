@@ -9,12 +9,13 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
     input::Input,
+    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
 };
 use gpui_kit::{
-    AnyElement, Context, ElementId, HighlightStyle, Hsla, IntoElement, ScrollStrategy,
-    SharedString, Window,
+    AnyElement, App, ClipboardItem, Context, ElementId, FocusHandle, HighlightStyle, Hsla,
+    IntoElement, MouseButton, MouseDownEvent, ScrollStrategy, SharedString, Window,
     base::{
-        SelectableText, StyledExt, TestSupportExt,
+        SelectableText, StyledExt, TestSupportExt, TextSelection, input as edit,
         text::{SelectionFormat, TextView, TextViewStyle},
     },
     div,
@@ -72,6 +73,19 @@ impl AxonApp {
             .and_then(|id| listing.rows.iter().position(|row| &row.id == id))
         {
             self.list_scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
+        }
+    }
+
+    /// Copies the ID of the selected row, as the copy button of the detail does, while the list
+    /// itself has the focus and no text in the window is selected; selected text is left to the
+    /// window, which copies it. A context menu open over the list has the focus, so this does
+    /// not copy past it.
+    fn copy_selected_id(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let applies = self.list_focus.is_focused(window)
+            && TextSelection::selected_text(window, cx).trim().is_empty();
+        match self.explorer.selected() {
+            Some(id) if applies => cx.write_to_clipboard(ClipboardItem::new_string(id.to_string())),
+            _ => cx.propagate(),
         }
     }
 
@@ -278,12 +292,18 @@ impl AxonApp {
             div()
                 .id("entity-list")
                 .track_focus(&self.list_focus)
+                .capture_any_mouse_down(focus_before_menu(self.list_focus.clone()))
                 .key_context(LIST_CONTEXT)
                 .on_action(cx.listener(|this, _: &SelectNextEntity, _, cx| this.step(1, cx)))
                 .on_action(cx.listener(|this, _: &SelectPreviousEntity, _, cx| this.step(-1, cx)))
                 .on_action(cx.listener(|this, _: &OpenSelectedEntity, window, cx| {
                     this.open_selected(window, cx)
                 }))
+                .on_action(
+                    cx.listener(|this, _: &edit::Copy, window, cx| {
+                        this.copy_selected_id(window, cx)
+                    }),
+                )
                 .rounded_md()
                 .border_1()
                 .border_color(gpui_kit::transparent_black())
@@ -402,13 +422,27 @@ impl AxonApp {
                     );
                 }
                 // The gap between rows, inside each row so the heights stay equal.
-                div().pb_px().child(line.test_support()).into_any_element()
+                with_copy_menu(
+                    div().pb_px().child(line.test_support()),
+                    &row.id,
+                    Some(&item.title),
+                )
             })
             .collect()
     }
 
-    /// A clickable reference to another Entity, or its ID when the store does not hold it.
+    /// A clickable reference to another Entity, or its ID when the store does not hold it, whose
+    /// context menu copies the ID and the title.
     fn render_link(&self, link: &Link, cx: &mut Context<Self>) -> AnyElement {
+        let title = link.known.as_ref().map(|known| known.title.as_str());
+        with_copy_menu(
+            div().min_w_0().child(self.render_link_target(link, cx)),
+            &link.id,
+            title,
+        )
+    }
+
+    fn render_link_target(&self, link: &Link, cx: &mut Context<Self>) -> AnyElement {
         let palette = Palette::of(cx);
         match &link.known {
             Some(known) => {
@@ -446,9 +480,11 @@ impl AxonApp {
                     .into_any_element()
             }
             None => div()
+                .id(entity_element(&link.id))
                 .text_sm()
                 .text_color(palette.muted)
                 .child(format!("{}（記録にない ID）", link.id))
+                .test_support()
                 .into_any_element(),
         }
     }
@@ -883,6 +919,47 @@ impl AxonApp {
                 .test_support()
                 .into_any_element(),
         )
+    }
+}
+
+/// Focuses `focus` on a right-click inside it, before a context menu there records the focus
+/// to return to, as a left click would. Without this, closing a menu opened while nothing had
+/// the focus would leave the keys reaching nothing.
+pub(super) fn focus_before_menu(
+    focus: FocusHandle,
+) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
+    move |event, window, cx| {
+        if event.button == MouseButton::Right && !focus.contains_focused(window, cx) {
+            window.focus(&focus, cx);
+        }
+    }
+}
+
+/// `trigger`, a wrapper of a row or a link, with a context menu that copies `id` and its title
+/// when there is one. The menu goes on a wrapper because a row or link observed for the tests
+/// cannot take one itself.
+fn with_copy_menu(trigger: gpui_kit::Div, id: &EntityId, title: Option<&str>) -> AnyElement {
+    let id = id.clone();
+    let title = title.map(str::to_owned);
+    trigger
+        .id(named(format!("copy-menu-{id}")))
+        .context_menu(move |menu, _, _| copy_menu(menu, &id, title.as_deref()))
+        .into_any_element()
+}
+
+/// The items that copy the ID, the title, and both as `ID title`, as `axon list` lines them up.
+fn copy_menu(menu: PopupMenu, id: &EntityId, title: Option<&str>) -> PopupMenu {
+    let copy = |label: &'static str, text: String| {
+        PopupMenuItem::new(label).on_click(move |_, _, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+        })
+    };
+    let menu = menu.item(copy("ID をコピー", id.to_string()));
+    match title {
+        Some(title) => menu
+            .item(copy("タイトルをコピー", title.to_owned()))
+            .item(copy("ID とタイトルをコピー", format!("{id} {title}"))),
+        None => menu,
     }
 }
 
