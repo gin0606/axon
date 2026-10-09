@@ -140,6 +140,8 @@ pub struct AxonApp {
     settle: Option<Task<()>>,
     /// No registry has been read yet, so the root restored has not been settled.
     restoring: bool,
+    /// The context menu last opened over a row or a link, until it is found hidden and closed.
+    copy_menu: Option<explorer::CopyMenu>,
 }
 
 impl AxonApp {
@@ -185,6 +187,10 @@ impl AxonApp {
         .detach();
         cx.observe_window_bounds(window, |this, window, cx| this.window_moved(window, cx))
             .detach();
+        cx.on_focus_lost(window, |this, window, cx| {
+            this.recover_from_hidden_menu(None, window, cx)
+        })
+        .detach();
         // Every change the session keeps notifies the window.
         cx.observe_self(|this, cx| this.remember(cx)).detach();
         // A place still settling is saved before the application ends.
@@ -226,6 +232,7 @@ impl AxonApp {
             moving: None,
             settle: None,
             restoring: true,
+            copy_menu: None,
         };
         // A window restored maximized is zoomed only after this, so it is taken as restored.
         this.placement = match &this.session.placement {
@@ -368,6 +375,10 @@ impl AxonApp {
     /// The focus of the list, where the arrow keys move the selection.
     pub fn list_focus(&self) -> &FocusHandle {
         &self.list_focus
+    }
+    /// The focus of the detail column.
+    pub fn detail_focus(&self) -> &FocusHandle {
+        &self.detail_focus
     }
 
     /// Reads the registry again, keeping the selection when it is still registered.
