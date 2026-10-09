@@ -146,6 +146,8 @@ Group の `InProgress` は、実効 lifecycle と同じく「配下の仕事が�
 
 Group を見出しにした木の一覧は採らなかった。表示の改善として導出の規則と独立に扱える。
 
+浮上していなくても `axon tasks` に出す Group は、`InProgress` の Issue を子孫に持つものに限る。この例外は着手中の仕事を見失わないために置いた規則で、以前は実効値が `InProgress` の Group 全般を対象にしていた。Group の実効値は完了済みの子があるだけで `InProgress` になるため、着手中の Issue がなく、残りが浮上していない Issue や `Undecided` の Issue だけの Group も、再浮上条件を付けて沈めたまま一覧に残っていた。このような Group は手元で進んでいる仕事を持たず、例外の根拠が当たらない。実効 lifecycle の定義と状況欄の `InProgress` は変えず、行に出すかだけを絞った。この結果、詰まっている行は自身と全祖先が浮上しており、浮上していない祖先と自身の再浮上条件が未成立という理由は行に出ない詰まっている Group について `axon show` が示す。沈めた `Confirmable` の Group も行に出なくなるが、利用者が条件で沈めたものであり、`axon show` の状況から次の一手が分かるため理由は足さない。Group 自体を判断候補として `axon proposals` に出す案と、判断待ち・浮上待ちの子孫だけを持つ Group を浮上していても `axon tasks` から外す案は、この変更の使い勝手を見てから必要なら別に検討するため採らなかった。
+
 ## `axon show` で再浮上条件を評価する理由
 
 `axon show ID` は既定で、対象が `axon tasks` の行になる場合にその行が必要とする範囲の再浮上条件を評価し、`axon tasks` と同じ導出で状況と詰まっている理由を示す。評価しない表示は `--skip-conditions` で残す。契約は [評価契約](../reference/candidates.md#評価契約) と [`axon show` と待ち理由](../reference/cli.md#axon-show-と待ち理由) にある。
@@ -158,7 +160,7 @@ Group を見出しにした木の一覧は採らなかった。表示の改善�
 
 Issue の状況欄には `Unsurfaced` を足し、`Start` の前提の充足・不足より優先する。候補にならないという事実のほうが、前提を満たしても一覧に出ないことを正しく伝えるためである。`Blocked` との複合表示は、Issue の `InProgress+Blocked` と違って二つの条件が独立に解けるわけではなく、浮上すれば前提の充足・不足がそのまま表示に戻るので設けない。語は help が使う surfaced と文書の「浮上」に対応させた。`Hidden` は理由が読めず、`Deferred` は日付以外の条件に合わない。理由の label は既存の `Undecided child:`・`Undecided ancestor:` と同形の `Unsurfaced candidate:`・`Unsurfaced ancestor:` にした。`Undecided` の Entity の状況欄は `Undecided` のままにし、浮上の有無を足さない。判断候補に出るかは `axon proposals` が示す。
 
-祖先の条件が未成立の未着手の対象は、実効値が `InProgress` の Group を除いて `axon tasks` の行に出ないが、`axon show` では対象について何かを示す必要がある。祖先の条件も評価し、Issue には `Required to start` の `Unsurfaced ancestor:`、Group には六つ目の詰まっている理由として示す。祖先は上から評価して未成立の祖先より下は評価しないため、示す祖先は一つになる。判定失敗は `axon tasks` と同じく表示全体を失敗させる。行ごとに失敗の印を付けて続ける案は、部分結果の規則が増えるため採らなかった。失敗の診断に `--skip-conditions` を示すので、壊れた条件でも保存情報は読め、`axon condition set|unset` で修復できる。
+祖先の条件が未成立の未着手の対象は、`InProgress` の Issue を子孫に持つ Group を除いて `axon tasks` の行に出ないが、`axon show` では対象について何かを示す必要がある。祖先の条件も評価し、Issue には `Required to start` の `Unsurfaced ancestor:`、Group には六つ目の詰まっている理由として示す。祖先は上から評価して未成立の祖先より下は評価しないため、示す祖先は一つになる。判定失敗は `axon tasks` と同じく表示全体を失敗させる。行ごとに失敗の印を付けて続ける案は、部分結果の規則が増えるため採らなかった。失敗の診断に `--skip-conditions` を示すので、壊れた条件でも保存情報は読め、`axon condition set|unset` で修復できる。
 
 Group 自身の条件が未成立の場合も、Issue の状況欄の `Unsurfaced` に当たる表示が Group にはなく、`axon tasks` に出ない原因を `axon show` だけでは読めなかった。配下に着手可能な Issue があれば `Unsurfaced candidate:` から、その Issue の `axon show` の `Unsurfaced ancestor:` を辿って初めて分かり、`Undecided` の子しかない Group には手掛かりがなかった。`axon show` は対象自身の条件を既に評価しているので、その結果を七つ目の詰まっている理由 `Own condition unsatisfied:`（行は当の Group 自身）として `Stalled` に示す。Group の状況欄に `Unsurfaced` を設ける案は、`Empty`・`Blocked` など配下から導出した状況を状況欄から失い、Group の状況欄に `Unsurfaced` を設けない判断を覆すため採らなかった。状況欄とも `Stalled` とも別の行で示す案は、どの状況の Group にも出せる代わりに表示要素が増え、Issue 自身の条件は状況欄、Group 自身の条件は別の行という不揃いを生むため採らなかった。理由として示す形では、詰まっていない扱いの Group（完了できる `Empty` と `Confirmable`）には示されないが、それらは完了できて次の一手が分かるため受け入れる。自身の条件だけで隠れている子孫は引き続き `Unsurfaced candidate:` にも並べ、原因と止まっている仕事の両方を読めるようにする。
 

@@ -69,7 +69,7 @@ pub(super) enum Command {
     List(ListOptions),
     /// List surfaced Undecided Entities with surfaced ancestors
     Proposals(CandidateOptions),
-    /// List surfaced NotStarted Entities and all InProgress work, including blocked work
+    /// List surfaced NotStarted Entities, InProgress Issues and the Groups above them, including blocked work
     Tasks(CandidateOptions),
     /// Set or repair resurfacing conditions without running them
     Condition {

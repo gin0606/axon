@@ -26,7 +26,7 @@ option値の先頭hyphenは `--description='--text'` のように渡す。構文
 | `axon tasks` | 浮上した未着手と着手中のIssue・Groupを並べた平らな一覧 |
 | `axon list` | 非浮上・完了・取りやめも含む保存済みEntityを、必要な条件で絞り込む汎用一覧 |
 
-`axon tasks` は依存先の完了待ちや祖先の採用待ちの未着手も含み、着手できるものだけには限定しない。行の集合と状況の導出は [候補と外部条件](candidates.md#一覧の行と状況) に従う。着手中だけを見るには `axon list --lifecycle in-progress` を使う。
+`axon tasks` は依存先の完了待ちや祖先の採用待ちの未着手も含み、着手できるものだけには限定しない。行の集合と状況の導出は [候補と外部条件](candidates.md#一覧の行と状況) に従う。浮上に関係なく実効値が `InProgress` の Entity を見るには `axon list --lifecycle in-progress` を使う。完了済みの子孫だけで実効値が `InProgress` の Group も含む。
 
 `axon list`は保存済み全件を作成日時の昇順、同時刻はID順で表示する。`--kind issue|group`、`--label bug|feat|chore|docs|test|refactor|spike`、`--lifecycle undecided|not-started|in-progress|completed|cancelled`、`--terminal=true|false` はANDで組み合わせる。kindとlabelは現在値、`--lifecycle` は実効値で絞り込むため、配下の仕事が始まったGroupは `in-progress` に当たり `not-started` に当たらない。terminalは`Completed`または`Cancelled`で、着手できることや浮上とは別。`--search` は現在title・本文だけのcase-sensitiveなliteral一致。Unicode正規化やtrimをせず、空文字は構文エラー。%、_、正規表現記号に特殊な意味はない。検索時だけMatchedに該当field（Title、Description）を付記する。
 

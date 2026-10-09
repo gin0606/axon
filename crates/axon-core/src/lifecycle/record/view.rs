@@ -63,6 +63,7 @@ pub struct View {
     order: Vec<EntityId>,
     children: BTreeMap<EntityId, Vec<EntityId>>,
     working: BTreeSet<EntityId>,
+    above_working_issue: BTreeSet<EntityId>,
     violations: BTreeSet<Violation>,
 }
 
@@ -215,9 +216,11 @@ impl View {
             order,
             children,
             working: BTreeSet::new(),
+            above_working_issue: BTreeSet::new(),
             violations: BTreeSet::new(),
         };
         view.working = view.derive_working();
+        view.above_working_issue = view.derive_above_working_issue();
         view.violations = view.derive_violations();
         Ok(view)
     }
@@ -248,6 +251,27 @@ impl View {
             }
         }
         working
+    }
+
+    /// The IDs above an InProgress Issue: its parent and, while each is settled, their
+    /// parents in turn, which are exactly the Entities with it among their descendants.
+    fn derive_above_working_issue(&self) -> BTreeSet<EntityId> {
+        let mut above = BTreeSet::new();
+        for entity in self.settled.values() {
+            if entity.current.kind != Kind::Issue
+                || entity.current.lifecycle != Lifecycle::InProgress
+            {
+                continue;
+            }
+            let mut parent = entity.current.parent.as_ref();
+            while let Some(id) = parent {
+                if !above.insert(id.clone()) {
+                    break;
+                }
+                parent = self.current(id).and_then(|c| c.parent.as_ref());
+            }
+        }
+        above
     }
 
     fn derive_violations(&self) -> BTreeSet<Violation> {
@@ -621,6 +645,10 @@ impl View {
         self.children(id)
             .iter()
             .all(|child| self.settled[child].current.is_terminal())
+    }
+    /// Whether an Issue below the Entity is InProgress.
+    pub fn has_working_descendant(&self, id: &EntityId) -> bool {
+        self.above_working_issue.contains(id)
     }
     fn has_started_descendant(&self, id: &EntityId) -> bool {
         self.descendants(id).iter().any(|d| {

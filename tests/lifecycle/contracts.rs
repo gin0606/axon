@@ -2499,6 +2499,103 @@ fn show_stalled_in_progress_group_names_dependency_and_own_condition() {
 }
 
 #[test]
+fn tasks_lists_unsurfaced_group_only_while_an_issue_below_it_works() {
+    let f = Fixture::new();
+    f.ok(&["init", "t"]);
+    let outer = f.ok(&[
+        "capture", "--label", "chore", "--kind", "group", "--accept", "--title", "Outer",
+    ]);
+    let outer = created(&outer).to_owned();
+    let sunk = f.ok(&[
+        "capture",
+        "--label",
+        "chore",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        "Sunk",
+        "--parent",
+        &outer,
+        "--command",
+        "exit 1",
+    ]);
+    let sunk = created(&sunk).to_owned();
+    let done = f.ok(&[
+        "capture", "--label", "chore", "--accept", "--title", "Done", "--parent", &sunk,
+    ]);
+    let done = created(&done).to_owned();
+    for title in ["Later", "Later too"] {
+        f.ok(&[
+            "capture", "--label", "chore", "--accept", "--title", title, "--parent", &sunk,
+        ]);
+    }
+    f.ok(&[
+        "capture", "--label", "chore", "--title", "Idea", "--parent", &sunk,
+    ]);
+    // While an Issue below it works, the Group is listed although it does not surface.
+    f.ok(&["start", &done]);
+    let tasks = f.ok(&["tasks"]);
+    assert!(
+        tasks.contains(&format!("{sunk}  Group  InProgress  chore  Sunk")),
+        "{tasks}"
+    );
+    // Once no Issue below it is InProgress, the Group is still effectively InProgress through
+    // the Completed one but sinks with its own condition, and show names that condition.
+    f.ok(&["complete", &done]);
+    let tasks = f.ok(&["tasks"]);
+    assert!(
+        !tasks.contains(&sunk) && tasks.contains(&outer) && !tasks.contains("Later"),
+        "{tasks}"
+    );
+    let show_sunk = f.ok(&["show", &sunk]);
+    assert!(
+        show_sunk.starts_with(&format!("{sunk}  Group  InProgress  chore  Sunk\n"))
+            && show_sunk.contains(&format!(
+                "Own condition unsatisfied: {sunk}  Group  InProgress  chore  Sunk\n"
+            )),
+        "{show_sunk}"
+    );
+    // An unsurfaced ancestor sinks it the same way.
+    f.ok(&["condition", "unset", &sunk]);
+    f.ok(&["condition", "set", &outer, "--command", "exit 1"]);
+    let tasks = f.ok(&["tasks"]);
+    assert!(!tasks.contains(&sunk) && !tasks.contains(&outer), "{tasks}");
+    let show_sunk = f.ok(&["show", &sunk]);
+    assert!(
+        show_sunk.contains(&format!("Unsurfaced ancestor: {outer}")),
+        "{show_sunk}"
+    );
+    // A sunk Group that can complete leaves the list too, and is not stalled.
+    let settled = f.ok(&[
+        "capture",
+        "--label",
+        "chore",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        "Settled",
+        "--command",
+        "exit 1",
+    ]);
+    let settled = created(&settled).to_owned();
+    let last = f.ok(&[
+        "capture", "--label", "chore", "--accept", "--title", "Last", "--parent", &settled,
+    ]);
+    let last = created(&last).to_owned();
+    f.ok(&["start", &last]);
+    f.ok(&["complete", &last]);
+    assert!(!f.ok(&["tasks"]).contains(&settled));
+    let show_settled = f.ok(&["show", &settled]);
+    assert!(
+        show_settled.starts_with(&format!("{settled}  Group  Confirmable  chore  Settled\n"))
+            && !show_settled.contains("Stalled"),
+        "{show_settled}"
+    );
+}
+
+#[test]
 fn list_and_skip_conditions_show_saved_candidate_states() {
     let (f, group, sub, issue) = condition_display_fixture();
     let empty = f.ok(&[

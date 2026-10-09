@@ -75,10 +75,12 @@ impl<'a, E: From<Error>, F: FnMut(&EntityId, &str) -> std::result::Result<bool, 
 }
 
 /// The rows of a list in creation order. `tasks` rows are NotStarted Issues and Groups that
-/// surface, every InProgress Issue, and every Group whose effective lifecycle is InProgress.
-/// Such a Group is listed whether or not it surfaces, but its own surfacing is still decided
-/// (below surfaced ancestors), so a failing condition of its own fails the list. Conflicted
-/// Entities have no current value and are never candidates.
+/// surface, every InProgress Issue, and every NotStarted Group with an InProgress Issue below it. Such a
+/// Group is listed whether or not it surfaces, but its own surfacing is still decided (below
+/// surfaced ancestors), so a failing condition of its own fails the list. A Group with no
+/// InProgress Issue below it, even one effectively InProgress through Completed descendants,
+/// is listed only when it surfaces.
+/// Conflicted Entities have no current value and are never candidates.
 ///
 /// `include` filters candidates before evaluation: an excluded Entity is not evaluated as a
 /// candidate, but when a retained candidate's surfacing is decided it is evaluated like any
@@ -111,7 +113,7 @@ pub fn list_candidates<
                 Lifecycle::InProgress => true,
                 Lifecycle::NotStarted => {
                     let surfaced = surfacing.surfaced(id)?;
-                    surfaced || (current.kind == Kind::Group && view.working().contains(id))
+                    surfaced || (current.kind == Kind::Group && view.has_working_descendant(id))
                 }
                 _ => false,
             },
@@ -172,8 +174,10 @@ mod tests {
 
     /// Every truth assignment of the four conditions over a three-level plan, in every phase
     /// of the leaf's work, lists exactly what the boolean oracle lists: the surfaced
-    /// candidates plus, for tasks, every effectively InProgress Entity. Each condition is
-    /// evaluated at most once, only when every ancestor surfaced, and after its ancestors.
+    /// candidates plus, for tasks, the InProgress leaf and the Groups above it. Once the leaf
+    /// completes, the Groups are effectively InProgress but listed only when they surface.
+    /// Each condition is evaluated at most once, only when every ancestor surfaced, and after
+    /// its ancestors.
     #[test]
     fn candidate_evaluation_matches_boolean_oracle_for_all_three_level_conditions() {
         let mut store = Store::new();
@@ -223,6 +227,19 @@ mod tests {
                 store.insert(Entry::Record(record)).unwrap();
             }
             let view = store.view().unwrap();
+            // InProgress Entities and their ancestors, listed by tasks whatever their conditions.
+            let mut listed_regardless = BTreeSet::new();
+            for (entity, settled) in view.settled() {
+                if settled.current.lifecycle != Lifecycle::InProgress {
+                    continue;
+                }
+                let mut cursor = Some(entity);
+                while let Some(current) = cursor {
+                    listed_regardless.insert(current.clone());
+                    cursor = view.current(current).unwrap().parent.as_ref();
+                }
+            }
+            assert_eq!(listed_regardless.len(), if phase == 1 { 3 } else { 0 });
             for bits in 0..16 {
                 let values = BTreeMap::from([
                     (id("item"), bits & 1 != 0),
@@ -249,7 +266,7 @@ mod tests {
                         .filter(|(entity, settled)| {
                             let state = settled.current.lifecycle;
                             if matches!(kind, CandidateList::Tasks)
-                                && view.effective_lifecycle(entity) == Some(Lifecycle::InProgress)
+                                && listed_regardless.contains(*entity)
                             {
                                 return true;
                             }

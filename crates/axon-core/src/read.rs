@@ -402,12 +402,7 @@ impl<'a> View<'a> {
         let descendants = self.descendants(group);
         let (unsurfaced_candidates, candidates) =
             self.candidate_descendants(group, &mut surfaced)?;
-        if !candidates.is_empty()
-            || descendants.iter().any(|d| {
-                self.current(d)
-                    .is_some_and(|c| c.kind == Kind::Issue && c.lifecycle == Lifecycle::InProgress)
-            })
-        {
+        if !candidates.is_empty() || self.view.has_working_descendant(group) {
             return Ok(None);
         }
         let ancestors = self.ancestors(group);

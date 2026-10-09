@@ -65,9 +65,11 @@ Daily workflow
   axon complete ID
 
 Reading and resurfacing
-  proposals lists surfaced Undecided work. tasks lists surfaced NotStarted work and
-  all InProgress work, including blocked work. Candidate conditions include every
-  ancestor Group. Absence from these lists does not mean an Entity is missing.
+  proposals lists surfaced Undecided work. tasks lists surfaced NotStarted work,
+  InProgress Issues and the Groups above them, including blocked work. A Group
+  with no InProgress Issue below it is listed only when it surfaces. Candidate
+  conditions include every ancestor Group. Absence from these lists does not mean
+  an Entity is missing.
   Each row is ID, kind, situation, label and title.
   list includes every saved Entity by default, in creation order. --kind, --label,
   --lifecycle, --terminal and --search narrow it without running conditions;

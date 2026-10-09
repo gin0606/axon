@@ -8,7 +8,7 @@
 | --- | --- |
 | 保存状態・条件・全直接関係 | `axon show ID --details --skip-conditions` |
 | 未判断の候補 | `axon proposals` |
-| 浮上した未着手と全着手中 | `axon tasks` |
+| 浮上した未着手と、着手中の Issue とそれを含む Group | `axon tasks` |
 | 保存済み全件（条件を実行しない） | `axon list` |
 | 本文と直接の待ち理由 | `axon show ID` |
 | Entityの現在の主題 | `axon list --search 語句` |
