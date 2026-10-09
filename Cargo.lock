@@ -622,6 +622,7 @@ dependencies = [
  "chrono",
  "dirs 6.0.0",
  "gpui-kit",
+ "markdown",
  "serde",
  "serde_json",
  "tempfile",

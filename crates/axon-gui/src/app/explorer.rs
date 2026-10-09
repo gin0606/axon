@@ -1,6 +1,6 @@
 //! The filters, the shared list and the detail pane of the selected project.
 
-use super::{AxonApp, StoreState, style::Palette, text};
+use super::{AxonApp, StoreState, markdown, style::Palette, text};
 use crate::board::{EntityDetail, Exclusion, Filter, Layout, Link, State, WaitKind};
 use crate::{OpenSelectedEntity, SelectNextEntity, SelectPreviousEntity};
 use axon::lifecycle::{EntityId, Kind, Label};
@@ -11,11 +11,15 @@ use gpui_kit::component::{
     input::Input,
 };
 use gpui_kit::{
-    AnyElement, Context, ElementId, Hsla, IntoElement, ScrollStrategy, SharedString, Window,
-    base::{StyledExt, TestSupportExt},
+    AnyElement, Context, ElementId, HighlightStyle, Hsla, IntoElement, ScrollStrategy,
+    SharedString, Window,
+    base::{
+        SelectableText, StyledExt, TestSupportExt,
+        text::{SelectionFormat, TextView, TextViewStyle},
+    },
     div,
     prelude::*,
-    px, uniform_list,
+    px, relative, rems, uniform_list,
 };
 use std::ops::Range;
 
@@ -472,6 +476,8 @@ impl AxonApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = Palette::of(cx);
+        let selection = cx.theme().colors.selection;
+        self.prepared.next_frame();
         // Scoped to the Entity, so another one opens scrolled to its top.
         let mut pane = div()
             .id(named(format!("detail-{}", detail.id)))
@@ -496,7 +502,10 @@ impl AxonApp {
                     .text_size(px(22.))
                     .line_height(px(30.))
                     .font_semibold()
-                    .child(detail.title.clone())
+                    .child(
+                        SelectableText::new("detail-title-text", detail.title.clone())
+                            .selection_color(selection),
+                    )
                     .test_support(),
             )
             .child(lifecycle_track(detail.state, palette));
@@ -606,12 +615,16 @@ impl AxonApp {
                     .text_sm()
                     .text_color(palette.muted)
                     .child("本文はありません。")
+                    .into_any_element()
             } else {
                 div()
+                    .id("detail-description-body")
                     .text_sm()
-                    .line_height(px(22.))
+                    .line_height(relative(1.6))
                     .max_w(px(MEASURE))
-                    .child(detail.description.clone())
+                    .child(self.render_markdown("detail-description-text", &detail.description, cx))
+                    .test_support()
+                    .into_any_element()
             },
         ));
         if let Some(condition) = &detail.condition {
@@ -624,9 +637,17 @@ impl AxonApp {
                 )
                 .child(
                     div()
+                        .id("detail-condition-text")
                         .text_sm()
-                        .font_family(cx.theme().mono_font_family.clone())
-                        .child(condition.clone()),
+                        .max_w(px(MEASURE))
+                        // A code block, so it reads as written and takes its place among the
+                        // description and the Notes when a selection runs across them.
+                        .child(self.render_markdown(
+                            "detail-condition-code",
+                            &markdown::code_block(condition),
+                            cx,
+                        ))
+                        .test_support(),
                 ),
             );
         }
@@ -697,10 +718,12 @@ impl AxonApp {
             notes = notes.child(
                 entry.child(
                     div()
+                        .id(("note-body", ix))
                         .text_sm()
-                        .line_height(px(22.))
+                        .line_height(relative(1.6))
                         .max_w(px(MEASURE))
-                        .child(note.body.clone()),
+                        .child(self.render_markdown(("note-text", ix), &note.body, cx))
+                        .test_support(),
                 ),
             );
         }
@@ -800,6 +823,42 @@ impl AxonApp {
                 .child(history),
         )
         .into_any_element()
+    }
+
+    /// A description or a Note: Markdown whose text can be selected and copied as shown, whose
+    /// web links open in the browser and whose images show their alternative text.
+    fn render_markdown(
+        &self,
+        id: impl Into<ElementId>,
+        source: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let palette = Palette::of(cx);
+        let theme = cx.theme();
+        let style = TextViewStyle::default()
+            .with_dark(theme.is_dark())
+            .with_foreground(palette.ink)
+            .with_muted_foreground(palette.muted)
+            .with_link(palette.signal)
+            .with_selection(theme.colors.selection)
+            .with_code_background(palette.hover)
+            .with_inline_code(HighlightStyle {
+                background_color: Some(palette.hover),
+                ..Default::default()
+            })
+            .with_border(palette.rule)
+            .with_paragraph_gap(rems(0.75));
+        TextView::markdown(id, self.prepared.get(source))
+            .style(style)
+            .selection_format(SelectionFormat::Plain)
+            .plugin(markdown::ImageAlt)
+            .image_source(markdown::no_image)
+            .on_link_click(|url, event, _, cx| {
+                if markdown::opens_link(url, event) {
+                    cx.open_url(url);
+                }
+            })
+            .into_any_element()
     }
 
     /// Why the selected Entity is not among the matches, when it is not.
