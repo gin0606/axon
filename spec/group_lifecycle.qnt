@@ -362,9 +362,11 @@ module group_lifecycle {
     if (candidateIssues(s, c).contains(id)) Ready
     else if (storedOf(s, id) == InProgress) Working
     else Blocked
-  // Group の行は、stored が NotStarted で自身と全祖先が浮上しているものと、浮上に関係なく実効が InProgress のもの。
+  // Group の行は、stored が NotStarted で自身と全祖先が浮上しているものと、浮上に関係なく着手中の Issue を子孫に持つもの。
+  // 完了済みの子孫だけで実効が InProgress の Group は、手元で進んでいる仕事がないため浮上の例外にしない。
   pure def groupRows(s: EntitySetState, c: Conditions): Set[Id] =
-    groups(s).filter(g => (storedOf(s, g) == NotStarted and surfaced(s, c, g)) or effective(s, g) == InProgress)
+    groups(s).filter(g => (storedOf(s, g) == NotStarted and surfaced(s, c, g)) or hasWorkingDescendant(s, g))
+  pure def groupsWithWorkingDescendant(s: EntitySetState): Set[Id] = groups(s).filter(g => hasWorkingDescendant(s, g))
   pure def hasCandidateDescendant(s: EntitySetState, c: Conditions, g: Id): bool =
     descendants(s, g).exists(id => candidateIssues(s, c).contains(id))
   // 優先順位: Empty（直属の子がない。完了できても計画を書くのが次の一手）> Confirmable（最終確認が通れば完了できる）
@@ -394,8 +396,9 @@ module group_lifecycle {
   // 完了できる Empty）は次の一手が状況から分かるため理由を示さない。
   // axon show は tasks の行でない stored が NotStarted の Group にも同じ導出を使うため、
   // 詰まっている Group には行に出るかに関係なく少なくとも一つ付く（invStalledHasReason）。
-  // 浮上していない祖先と自身の条件が未成立は、tasks の行になる Group では実効 InProgress の行にだけ当たり
-  // （浮上して行になる Group は自身と全祖先が浮上している）、行に出ない Group にも show が示す。
+  // 浮上していない祖先と自身の条件が未成立は、tasks の行になる Group では着手中の Issue を子孫に持つ行にだけ当たり
+  // （浮上して行になる Group は自身と全祖先が浮上している）、その行は詰まっていないため理由を示さない。
+  // 理由は行に出ない Group に show が示す。
   type StallReason = DependencyPending | UndecidedChild | OpenSubgroup | HiddenCandidate | UnadoptedAncestor
     | UnsurfacedAncestor | OwnConditionUnsatisfied
   pure def stallReasons(s: EntitySetState, c: Conditions, g: Id): Set[StallReason] = {
@@ -715,13 +718,17 @@ module group_lifecycle {
   pure val CONDITION_REASONS = Set(UnsurfacedAncestor, OwnConditionUnsatisfied)
   val invStalledHasStructuralReason = shownGroups(entitySet).forall(g =>
     stalled(entitySet, conditions, g) implies stallReasons(entitySet, conditions, g).exclude(CONDITION_REASONS).size() > 0)
-  // 構成の確認: 浮上していない祖先の理由は tasks の行には現れない。行になる Group は自身と全祖先が浮上しているか、
-  // 実効 InProgress で祖先が採用済みだが、後者は祖先の条件を問わないので、実効 InProgress の行にだけ現れうる。
+  // 構成の確認: 浮上していない祖先の理由は、tasks の行では着手中の Issue を子孫に持つ行にだけ現れうる。
+  // 行になる Group は自身と全祖先が浮上しているか、着手中の Issue を子孫に持ち、後者は祖先の条件を問わない。
   val invUnsurfacedAncestorOnlyOnWorkingRows = groupRows(entitySet, conditions).forall(g =>
-    stallReasons(entitySet, conditions, g).contains(UnsurfacedAncestor) implies effective(entitySet, g) == InProgress)
-  // 構成の確認: 自身の条件が未成立の理由も同じく、tasks の行では実効 InProgress の行にだけ現れる。
+    stallReasons(entitySet, conditions, g).contains(UnsurfacedAncestor) implies hasWorkingDescendant(entitySet, g))
+  // 構成の確認: 自身の条件が未成立の理由も同じく、着手中の Issue を子孫に持つ行にだけ現れうる。
   val invOwnConditionOnlyOnWorkingRows = groupRows(entitySet, conditions).forall(g =>
-    stallReasons(entitySet, conditions, g).contains(OwnConditionUnsatisfied) implies effective(entitySet, g) == InProgress)
+    stallReasons(entitySet, conditions, g).contains(OwnConditionUnsatisfied) implies hasWorkingDescendant(entitySet, g))
+  // 詰まっている行は自身と全祖先が浮上している。詰まっている Group は着手中の子孫を持たないため、
+  // 浮上していなければ行に出ない。沈めた Group は、完了済みの子孫だけで実効が InProgress でも一覧から消える。
+  val invStalledRowsSurfaced = groupRows(entitySet, conditions).forall(g =>
+    stalled(entitySet, conditions, g) implies surfaced(entitySet, conditions, g))
   // 構成の確認: Blocked の行は詰まっており、Working の行は着手中の子孫がなければ、Empty の行は完了できなければ詰まっている。
   // Blocked の節は「着手中の Issue の祖先は採用済み」（invWorkingAncestors）に依存し、残る二つは定義から従う。
   val invStalledRowStatuses = groupRows(entitySet, conditions).forall(g => and {
@@ -993,7 +1000,11 @@ module group_lifecycle {
   val wConfirmableOverWorking = groupRows(entitySet, conditions).exists(g =>
     groupStatus(entitySet, conditions, g) == Confirmable and effective(entitySet, g) == InProgress)
   val wWorkingGroupRowHidden = groupRows(entitySet, conditions).exists(g =>
-    effective(entitySet, g) == InProgress and not(surfaced(entitySet, conditions, g)))
+    hasWorkingDescendant(entitySet, g) and not(surfaced(entitySet, conditions, g)))
+  // 完了済みの子孫だけで実効が InProgress の Group は、浮上していなければ行に出ない。
+  val wStartedGroupSunkOffRows = groups(entitySet).exists(g =>
+    effective(entitySet, g) == InProgress and not(hasWorkingDescendant(entitySet, g))
+      and not(surfaced(entitySet, conditions, g)) and not(groupRows(entitySet, conditions).contains(g)))
   def sawIssueStatus(status: TaskStatus): bool =
     issueRows(entitySet, conditions).exists(id => issueStatus(entitySet, conditions, id) == status)
   val wIssueReady = sawIssueStatus(Ready)
@@ -1020,15 +1031,13 @@ module group_lifecycle {
   val wStalledByHiddenCandidate = sawStalledBy(HiddenCandidate)
   val wStalledByUnadoptedAncestor = sawStalledBy(UnadoptedAncestor)
   // 浮上していない祖先の理由は、axon show の対象（stored が NotStarted の Group）で観測する。
-  // 行に出ない Group と、行に出る実効 InProgress の Group の両方を観測する。
+  // 条件に由来する理由は詰まっている行には付かない（invStalledRowsSurfaced）ため、行に出ない Group で観測する。
   val wStalledByUnsurfacedAncestorOffRows = shownGroups(entitySet).exists(g =>
     stalled(entitySet, conditions, g) and children(entitySet, g).size() > 0
       and stallReasons(entitySet, conditions, g).contains(UnsurfacedAncestor)
       and not(groupRows(entitySet, conditions).contains(g)))
-  val wStalledByUnsurfacedAncestorOnWorkingRow = groupRows(entitySet, conditions).exists(g =>
-    stalled(entitySet, conditions, g) and stallReasons(entitySet, conditions, g).contains(UnsurfacedAncestor))
-  // 自身の条件が未成立の理由も、行に出ない Group と、行に出る実効 InProgress の Group の両方で観測する。
-  // 行に出ない Group では、着手可能な子孫が隠れている場合（Unsurfaced candidate と重なる）も観測する。
+  // 自身の条件が未成立の理由も行に出ない Group で観測し、着手可能な子孫が隠れている場合
+  // （Unsurfaced candidate と重なる）と、完了済みの子孫だけで実効が InProgress の場合も観測する。
   val wStalledByOwnConditionOffRows = shownGroups(entitySet).exists(g =>
     stalled(entitySet, conditions, g) and children(entitySet, g).size() > 0
       and stallReasons(entitySet, conditions, g).contains(OwnConditionUnsatisfied)
@@ -1038,8 +1047,10 @@ module group_lifecycle {
       and stallReasons(entitySet, conditions, g).contains(OwnConditionUnsatisfied)
       and stallReasons(entitySet, conditions, g).contains(HiddenCandidate)
       and not(groupRows(entitySet, conditions).contains(g)))
-  val wStalledByOwnConditionOnWorkingRow = groupRows(entitySet, conditions).exists(g =>
-    stalled(entitySet, conditions, g) and stallReasons(entitySet, conditions, g).contains(OwnConditionUnsatisfied))
+  val wStalledByOwnConditionOnStartedGroup = shownGroups(entitySet).exists(g =>
+    stalled(entitySet, conditions, g) and effective(entitySet, g) == InProgress
+      and stallReasons(entitySet, conditions, g).contains(OwnConditionUnsatisfied)
+      and not(groupRows(entitySet, conditions).contains(g)))
   def sawStalledStatus(status: TaskStatus): bool = groupRows(entitySet, conditions).exists(g =>
     stalled(entitySet, conditions, g) and groupStatus(entitySet, conditions, g) == status)
   // 完了済みの子孫はあるが着手中の子孫がない実効 InProgress の行に理由が付く。

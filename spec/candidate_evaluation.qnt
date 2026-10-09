@@ -90,9 +90,9 @@ module candidate_evaluation {
   pure def pending(s: EntitySetState, q: Listing): Set[Id] =
     requiredEntities(s, q).filter(e => q.cache.get(e) == Unevaluated and parentsSatisfied(s, q, e))
 
-  // tasks は浮上した対象に加えて、浮上に関係なく進行中の Issue と実効が InProgress の Group を含む。
+  // tasks は浮上した対象に加えて、浮上に関係なく進行中の Issue と、それを子孫に持つ Group を含む。
   pure def workingEntities(s: EntitySetState): Set[Id] =
-    workingIssues(s).union(workingGroups(s))
+    workingIssues(s).union(groupsWithWorkingDescendant(s))
   pure def visible(s: EntitySetState, q: Listing): Set[Id] = {
     val surfacedBase = q.base.filter(e => q.cache.get(e) == Satisfied and parentsSatisfied(s, q, e))
     if (q.kind == TasksList) surfacedBase.union(workingEntities(s)) else surfacedBase
