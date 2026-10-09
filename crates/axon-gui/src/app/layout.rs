@@ -244,6 +244,14 @@ impl AxonApp {
         }
     }
 
+    /// Moves the focus to the detail column when the text of the detail holds it, since that
+    /// text goes away with the Entity shown, and keys would then reach nothing of the window.
+    fn leave_detail_text(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.detail_focus.contains_focused(window, cx) && !self.detail_focus.is_focused(window) {
+            window.focus(&self.detail_focus, cx);
+        }
+    }
+
     /// Opens another Entity from the detail, over the one shown, which going back returns to.
     pub fn follow_link(&mut self, id: EntityId, cx: &mut Context<Self>) {
         if let Some(shown) = self.explorer.selected().cloned()
@@ -262,6 +270,7 @@ impl AxonApp {
     /// list, the selected row stays in view and takes the focus so the arrow keys go on from
     /// it. An Entity a reload removed is passed over.
     pub fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_detail_text(window, cx);
         while let Some(id) = self.layout.trail.pop() {
             if self
                 .explorer
@@ -656,6 +665,7 @@ impl AxonApp {
         let body = self.render_detail_body(cx);
         div()
             .id("detail-pane")
+            .track_focus(&self.detail_focus)
             .flex_1()
             .when(columns != Columns::One, |pane| {
                 pane.min_w(px(DETAIL_MIN_WIDTH))

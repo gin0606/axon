@@ -8,6 +8,7 @@
 
 mod explorer;
 mod layout;
+mod markdown;
 pub mod style;
 pub mod text;
 
@@ -113,6 +114,10 @@ pub struct AxonApp {
     /// The window's own focus, which Escape reaches when the focused list leaves the screen.
     app_focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
+    /// The detail column, which a click in it focuses and which outlives the Entity shown.
+    detail_focus: FocusHandle,
+    /// Descriptions and Notes as the detail renders them.
+    prepared: markdown::Prepared,
     /// Which columns are shown, which panel is open and how the detail was reached.
     layout: layout::State,
 }
@@ -160,6 +165,8 @@ impl AxonApp {
             list_focus: cx.focus_handle().tab_stop(true),
             app_focus: cx.focus_handle(),
             list_scroll: UniformListScrollHandle::new(),
+            detail_focus: cx.focus_handle(),
+            prepared: markdown::Prepared::default(),
             layout: layout::State::default(),
         };
         this.reload_registry(cx);
