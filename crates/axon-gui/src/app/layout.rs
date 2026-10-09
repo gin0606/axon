@@ -16,6 +16,7 @@ use axon::lifecycle::EntityId;
 use gpui_kit::component::{
     ActiveTheme, Disableable, IconName,
     button::{Button, ButtonVariants},
+    clipboard::Clipboard,
     menu::{DropdownMenu, PopupMenuItem},
 };
 use gpui_kit::{
@@ -604,6 +605,15 @@ impl AxonApp {
                             .text_color(palette.ink)
                             .truncate()
                             .child(detail.id.to_string()),
+                    )
+                    // Outside the truncated ID, so a narrow bar still copies the whole of it.
+                    .child(
+                        div().flex_none().child(
+                            Clipboard::new("copy-id")
+                                .value(detail.id.to_string())
+                                .tooltip("ID をコピー")
+                                .accessibility_label("ID をコピー"),
+                        ),
                     ),
             );
         }

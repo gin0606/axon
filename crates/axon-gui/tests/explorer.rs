@@ -391,6 +391,26 @@ fn an_id_from_the_cli_finds_its_row_which_starts_with_the_id(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
+fn the_detail_bar_copies_the_whole_id_even_when_it_is_truncated(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (project, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    let store = project.path().join(".axon");
+    let before = snapshot(&store);
+    let (handle, app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
+
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("案内を送る"));
+    with_window(handle, cx, |window, _| usable(window, &["copy-id"]));
+    click(handle, "copy-id", cx);
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(plan.invite.to_string())
+    );
+    assert_eq!(snapshot(&store), before);
+}
+
+#[gpui_kit::test]
 fn clearing_every_state_matches_nothing(cx: &mut TestAppContext) {
     let (_dir, data) = data();
     let (_, seed) = Seed::new(&data, "読書会");
