@@ -415,6 +415,250 @@ fn the_detail_bar_copies_the_whole_id_even_when_it_is_truncated(cx: &mut TestApp
     assert_eq!(snapshot(&store), before);
 }
 
+/// Each item of the context menu of `target`, inside the element `scope`, as its label and what
+/// it copies, in the order of the menu.
+fn copied_from_menu(
+    handle: Window,
+    scope: &'static str,
+    target: ElementId,
+    cx: &mut TestAppContext,
+) -> Vec<(String, String)> {
+    let mut copied = Vec::new();
+    for item in 0usize.. {
+        cx.write_to_clipboard(ClipboardItem::new_string("（前の内容）".into()));
+        with_window(handle, cx, |window, cx| {
+            window.within(scope).right_click(target.clone(), cx)
+        });
+        let mut offered = None;
+        with_window(handle, cx, |window, _| {
+            let menu = window.find("popup-menu");
+            assert!(menu.visible());
+            offered = window.within("popup-menu").try_find(item).map(|item| {
+                let label = item.label().unwrap_or_default().to_string();
+                (label, item.bounds().center())
+            });
+        });
+        // Each event is handled apart, as the platform delivers them, so the menu closes
+        // before the window draws again and gives the focus back.
+        let mut window = VisualTestContext::from_window(handle.into(), cx);
+        match &offered {
+            Some((_, at)) => window.simulate_click(*at, Default::default()),
+            None => window.simulate_keystrokes("escape"),
+        }
+        cx.run_until_parked();
+        let offered = offered.map(|(label, _)| label);
+        with_window(handle, cx, |window, _| {
+            assert!(window.try_find("popup-menu").is_none(), "the menu closes");
+        });
+        let Some(label) = offered else {
+            return copied;
+        };
+        copied.push((
+            label,
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .unwrap(),
+        ));
+    }
+    unreachable!()
+}
+
+#[gpui_kit::test]
+fn rows_and_links_copy_the_id_and_the_title_from_their_context_menu(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (project, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    // An Issue whose parent's records are missing, as a partial merge can leave it.
+    let mut lost = None;
+    let orphan = seed
+        .write(|records, prefix| {
+            let mut elsewhere = records.clone();
+            let group = new_entity_id(prefix).unwrap();
+            let created = elsewhere
+                .create(
+                    group.clone(),
+                    Current {
+                        kind: Kind::Group,
+                        lifecycle: Lifecycle::NotStarted,
+                        owner: None,
+                        title: "失われた Group".into(),
+                        description: String::new(),
+                        label: Label::Feat,
+                        condition: None,
+                        parent: None,
+                        needs: BTreeSet::new(),
+                    },
+                    now(),
+                )
+                .unwrap();
+            elsewhere.insert(Entry::Record(created)).unwrap();
+            let orphan = elsewhere
+                .create(
+                    new_entity_id(prefix).unwrap(),
+                    Current {
+                        kind: Kind::Issue,
+                        lifecycle: Lifecycle::NotStarted,
+                        owner: None,
+                        title: "取り残された Issue".into(),
+                        description: String::new(),
+                        label: Label::Feat,
+                        condition: None,
+                        parent: Some(group.clone()),
+                        needs: BTreeSet::new(),
+                    },
+                    now(),
+                )
+                .unwrap();
+            lost = Some(group);
+            Entry::Record(orphan)
+        })
+        .entity()
+        .clone();
+    let lost = lost.unwrap();
+    let store = project.path().join(".axon");
+    let before = snapshot(&store);
+    let (handle, app) = open(&data, cx);
+
+    let both = |id: &EntityId, title: &str| {
+        vec![
+            ("ID をコピー".to_string(), id.to_string()),
+            ("タイトルをコピー".into(), title.into()),
+            ("ID とタイトルをコピー".into(), format!("{id} {title}")),
+        ]
+    };
+    assert_eq!(
+        copied_from_menu(handle, "entity-list", entity_element(&plan.invite), cx),
+        both(&plan.invite, "案内を送る")
+    );
+    // The menu opens no detail, and leaves the focus on the list as a click would, though
+    // nothing had it before.
+    assert_eq!(detail_title(&app, cx), None);
+    with_window(handle, cx, |window, cx| {
+        assert!(app.read(cx).list_focus().is_focused(window));
+    });
+
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    assert_eq!(
+        copied_from_menu(handle, "detail-ancestors", entity_element(&plan.group), cx),
+        both(&plan.group, "読書会の準備")
+    );
+    assert_eq!(
+        copied_from_menu(
+            handle,
+            "detail-dependencies",
+            entity_element(&plan.venue),
+            cx
+        ),
+        both(&plan.venue, "会場を決める")
+    );
+    assert_eq!(
+        copied_from_menu(handle, "detail-waits", entity_element(&plan.venue), cx),
+        both(&plan.venue, "会場を決める")
+    );
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("案内を送る"));
+
+    // A link to an ID the store does not hold has no title to copy. The menu, opened while
+    // nothing has the focus, leaves it in the detail, where Escape still steps back.
+    click_in(handle, "entity-list", entity_element(&orphan), cx);
+    with_window(handle, cx, |window, cx| window.blur(cx));
+    assert_eq!(
+        copied_from_menu(handle, "detail-ancestors", entity_element(&lost), cx),
+        vec![("ID をコピー".to_string(), lost.to_string())]
+    );
+    press(handle, "escape", cx);
+    assert_eq!(detail_title(&app, cx), None);
+    assert_eq!(snapshot(&store), before);
+}
+
+#[gpui_kit::test]
+fn copying_takes_the_search_field_then_selected_text_then_the_selected_row(
+    cx: &mut TestAppContext,
+) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let id = seed.create_with(Current {
+        kind: Kind::Issue,
+        lifecycle: Lifecycle::NotStarted,
+        owner: None,
+        title: "会場を決める".into(),
+        description: "候補は公民館".into(),
+        label: Label::Feat,
+        condition: None,
+        parent: None,
+        needs: BTreeSet::new(),
+    });
+    let other = seed.create(
+        Kind::Issue,
+        Lifecycle::NotStarted,
+        "案内を送る",
+        Label::Feat,
+        None,
+    );
+    let (handle, app) = open(&data, cx);
+    let focus_list = |cx: &mut TestAppContext| {
+        with_window(handle, cx, |window, cx| {
+            let focus = app.read(cx).list_focus().clone();
+            window.focus(&focus, cx);
+        })
+    };
+
+    // Nothing is selected yet: the window copies nothing.
+    focus_list(cx);
+    assert_eq!(
+        copied(handle, cx),
+        [Some("（前の内容）".into()), Some("（前の内容）".into())]
+    );
+
+    // The selected row.
+    click_in(handle, "entity-list", entity_element(&id), cx);
+    assert_eq!(
+        copied(handle, cx),
+        [Some(id.to_string()), Some(id.to_string())]
+    );
+
+    // Not while a context menu is open over the list, nor once the list has lost the focus.
+    with_window(handle, cx, |window, cx| {
+        window
+            .within("entity-list")
+            .right_click(entity_element(&other), cx)
+    });
+    with_window(handle, cx, |window, _| {
+        assert!(window.find("popup-menu").visible())
+    });
+    assert_eq!(
+        copied(handle, cx),
+        [Some("（前の内容）".into()), Some("（前の内容）".into())]
+    );
+    press(handle, "escape", cx);
+    with_window(handle, cx, |window, cx| window.blur(cx));
+    assert_eq!(
+        copied(handle, cx),
+        [Some("（前の内容）".into()), Some("（前の内容）".into())]
+    );
+
+    // Text selected in the detail comes first, even while the list has the focus.
+    select_across(handle, "detail-description-body", Some(2.), cx);
+    focus_list(cx);
+    assert_eq!(
+        copied(handle, cx),
+        [Some("候補は公民館".into()), Some("候補は公民館".into())]
+    );
+
+    // The search field copies its own text.
+    with_window(handle, cx, |window, cx| {
+        let search = app.read(cx).search_input().clone();
+        search.update(cx, |search, cx| {
+            search.set_value("公民館", window, cx);
+            search.focus(window, cx);
+        });
+        window.press("cmd-a", cx);
+    });
+    assert_eq!(
+        copied(handle, cx),
+        [Some("公民館".into()), Some("公民館".into())]
+    );
+}
+
 /// Selects the text of the element `id` by dragging across it, from just inside its left edge
 /// `top` below its top, to just inside its right edge as far above its bottom; `None` drags
 /// across its middle.

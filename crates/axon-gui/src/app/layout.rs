@@ -666,6 +666,9 @@ impl AxonApp {
         div()
             .id("detail-pane")
             .track_focus(&self.detail_focus)
+            .capture_any_mouse_down(super::explorer::focus_before_menu(
+                self.detail_focus.clone(),
+            ))
             .flex_1()
             .when(columns != Columns::One, |pane| {
                 pane.min_w(px(DETAIL_MIN_WIDTH))
