@@ -185,6 +185,13 @@ impl AxonApp {
             .into_any_element()
     }
 
+    /// Whether [`render_list`](Self::render_list) draws rows, which take the focus of the list.
+    pub(super) fn shows_rows(&self) -> bool {
+        self.explorer.board().is_some()
+            && matches!(self.store, StoreState::Loaded(_) | StoreState::Reloading(_))
+            && !self.explorer.listing().rows.is_empty()
+    }
+
     /// The search, the layout switch and the rows, once the selected project has been read.
     pub(super) fn render_list(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let board = self.explorer.board()?;

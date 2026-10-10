@@ -188,7 +188,8 @@ impl AxonApp {
         cx.observe_window_bounds(window, |this, window, cx| this.window_moved(window, cx))
             .detach();
         cx.on_focus_lost(window, |this, window, cx| {
-            this.recover_from_hidden_menu(None, window, cx)
+            this.recover_from_hidden_menu(None, window, cx);
+            this.recover_from_hidden_detail(window, cx);
         })
         .detach();
         // Every change the session keeps notifies the window.
