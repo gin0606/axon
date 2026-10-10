@@ -1038,7 +1038,7 @@ fn copying_takes_the_search_field_then_selected_text_then_the_selected_row(
             search.set_value("公民館", window, cx);
             search.focus(window, cx);
         });
-        window.press("cmd-a", cx);
+        window.press(SELECT_ALL, cx);
     });
     assert_eq!(
         copied(handle, cx),
@@ -1065,6 +1065,16 @@ fn select_across(
     });
 }
 
+/// The shortcuts gpui-base binds to Copy and Select All: Command on macOS, Control elsewhere.
+#[cfg(target_os = "macos")]
+const COPY: &str = "cmd-c";
+#[cfg(not(target_os = "macos"))]
+const COPY: &str = "ctrl-c";
+#[cfg(target_os = "macos")]
+const SELECT_ALL: &str = "cmd-a";
+#[cfg(not(target_os = "macos"))]
+const SELECT_ALL: &str = "ctrl-a";
+
 /// What the edit menu's Copy and Command-C each put on the clipboard.
 fn copied(handle: Window, cx: &mut TestAppContext) -> [Option<String>; 2] {
     let mut copy = |copy: &dyn Fn(&mut gpui_kit::Window, &mut gpui_kit::App)| {
@@ -1074,7 +1084,7 @@ fn copied(handle: Window, cx: &mut TestAppContext) -> [Option<String>; 2] {
     };
     [
         copy(&|window, cx| window.dispatch_action(Box::new(edit::Copy), cx)),
-        copy(&|window, cx| window.press("cmd-c", cx)),
+        copy(&|window, cx| window.press(COPY, cx)),
     ]
 }
 
