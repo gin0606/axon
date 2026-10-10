@@ -8,7 +8,9 @@
 //! between details or screens slides the incoming one a short way in from the side it comes
 //! from, while a selection or a reload changes what is shown in place.
 
-use super::{AxonApp, RegistryState, STATUS_MAX_HEIGHT, root_label, style::Palette, text};
+use super::{
+    AxonApp, RegistryState, STATUS_MAX_HEIGHT, StoreState, root_label, style::Palette, text,
+};
 use crate::Dismiss;
 use crate::board::Filter;
 use crate::project::ProjectRoot;
@@ -97,6 +99,13 @@ pub(super) struct State {
     /// the shown one here, and going back returns to it.
     trail: Vec<EntityId>,
     motion: Motion,
+    /// The window took the focus the detail lost while no list was shown, as when a switch of
+    /// root is still reading; the list takes it once the root is read and shows rows, unless
+    /// it moved meanwhile.
+    list_awaited: bool,
+    /// The focus was in the detail of the frame on screen when the frame being drawn began, so
+    /// a focus this frame loses is lost with something in the detail.
+    focus_in_detail: bool,
 }
 
 #[derive(Default)]
@@ -170,6 +179,7 @@ impl AxonApp {
         panel.open = true;
         panel.closing = false;
         panel.moves += 1;
+        self.layout.list_awaited = false;
         window.focus(&self.app_focus, cx);
         cx.notify();
     }
@@ -244,11 +254,56 @@ impl AxonApp {
         }
     }
 
-    /// Moves the focus to the detail column when the text of the detail holds it, since that
-    /// text goes away with the Entity shown, and keys would then reach nothing of the window.
-    fn leave_detail_text(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.detail_focus.contains_focused(window, cx) && !self.detail_focus.is_focused(window) {
-            window.focus(&self.detail_focus, cx);
+    /// Gives the focus the detail held to what the window still shows, once what held it, such
+    /// as selected text, went away with it: a read that drops the text, a switch of root or a
+    /// step back. The keys would otherwise reach nothing until a click. The focus goes to the
+    /// detail column while it is shown, else to the list, else to the window. A focus that
+    /// something still shown holds, as a hidden menu leaves it, is left as it is.
+    pub(super) fn recover_from_hidden_detail(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.layout.focus_in_detail || self.app_focus.contains_focused(window, cx) {
+            return;
+        }
+        // The list behind the open panel is left alone, as opening the panel does.
+        let list = (!self.is_panel_open()).then_some(&self.list_focus);
+        let target = [Some(&self.detail_focus), list]
+            .into_iter()
+            .flatten()
+            .find(|shown| self.app_focus.contains(shown, window));
+        self.layout.list_awaited = target.is_none() && list.is_some();
+        window.focus(target.unwrap_or(&self.app_focus), cx);
+        // A focus moved while the window draws does not draw the window again by itself.
+        window.on_next_frame(|window, _| window.refresh());
+    }
+
+    /// Gives the list the focus the window took for it, as
+    /// [`recover_from_hidden_detail`](Self::recover_from_hidden_detail) asks, in the frame
+    /// that shows the root read. A root read with no rows to show leaves the focus on the
+    /// window, and a later read does not take it.
+    fn focus_awaited_list(
+        &mut self,
+        list_shown: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.layout.list_awaited {
+            return;
+        }
+        if !self.app_focus.is_focused(window) {
+            self.layout.list_awaited = false;
+            return;
+        }
+        if matches!(self.registry, RegistryState::Loading)
+            || matches!(self.store, StoreState::Loading)
+        {
+            return;
+        }
+        self.layout.list_awaited = false;
+        if list_shown && self.shows_rows() {
+            window.focus(&self.list_focus, cx);
         }
     }
 
@@ -270,7 +325,6 @@ impl AxonApp {
     /// list, the selected row stays in view and takes the focus so the arrow keys go on from
     /// it. An Entity a reload removed is passed over.
     pub fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.leave_detail_text(window, cx);
         while let Some(id) = self.layout.trail.pop() {
             if self
                 .explorer
@@ -764,6 +818,8 @@ impl Render for AxonApp {
         }
         let one_detail = columns == Columns::One && self.is_detail_shown();
         let sidebar = (columns == Columns::Three).then(|| self.render_sidebar(None, cx));
+        self.layout.focus_in_detail = self.detail_focus.contains_focused(window, cx);
+        self.focus_awaited_list(!one_detail, window, cx);
         let list = (!one_detail).then(|| self.render_list_column(columns, cx));
         let detail =
             (columns != Columns::One || one_detail).then(|| self.render_detail_column(columns, cx));
