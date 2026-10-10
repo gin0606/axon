@@ -188,8 +188,10 @@ impl AxonApp {
         cx.observe_window_bounds(window, |this, window, cx| this.window_moved(window, cx))
             .detach();
         cx.on_focus_lost(window, |this, window, cx| {
-            this.recover_from_hidden_menu(None, window, cx);
-            this.recover_from_hidden_detail(window, cx);
+            if this.recover_lost_focus(window, cx) {
+                // A focus moved while the window draws does not draw the window again by itself.
+                window.on_next_frame(|window, _| window.refresh());
+            }
         })
         .detach();
         // Every change the session keeps notifies the window.
@@ -380,6 +382,10 @@ impl AxonApp {
     /// The focus of the detail column.
     pub fn detail_focus(&self) -> &FocusHandle {
         &self.detail_focus
+    }
+    /// The focus of the window itself, where Escape still steps back.
+    pub fn app_focus(&self) -> &FocusHandle {
+        &self.app_focus
     }
 
     /// Reads the registry again, keeping the selection when it is still registered.

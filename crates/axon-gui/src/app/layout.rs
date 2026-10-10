@@ -22,7 +22,8 @@ use gpui_kit::component::{
     menu::{DropdownMenu, PopupMenuItem},
 };
 use gpui_kit::{
-    Animation, AnimationExt, AnyElement, Context, Div, ElementId, IntoElement, Render, Window,
+    Animation, AnimationExt, AnyElement, Context, Div, ElementId, FocusHandle, Focusable,
+    IntoElement, Render, WeakFocusHandle, Window,
     base::{StyledExt, TestSupportExt},
     div, ease_out_quint,
     prelude::*,
@@ -99,13 +100,25 @@ pub(super) struct State {
     /// the shown one here, and going back returns to it.
     trail: Vec<EntityId>,
     motion: Motion,
-    /// The window took the focus the detail lost while no list was shown, as when a switch of
-    /// root is still reading; the list takes it once the root is read and shows rows, unless
-    /// it moved meanwhile.
+    /// The window took a lost focus while no list was shown, as when a switch of root is still
+    /// reading; the list takes it once the root is read and shows rows, unless it moved
+    /// meanwhile.
     list_awaited: bool,
-    /// The focus was in the detail of the frame on screen when the frame being drawn began, so
-    /// a focus this frame loses is lost with something in the detail.
-    focus_in_detail: bool,
+    /// Where the focus was in the frame on screen when the frame being drawn began, or last was
+    /// while none has it, so a focus lost with something in it goes back there.
+    focus_area: FocusArea,
+    /// The focus when the frame being drawn began, so a focus that moves later is checked once
+    /// the window draws again.
+    focus_seen: Option<WeakFocusHandle>,
+}
+
+/// The part of the window that holds the focus.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum FocusArea {
+    #[default]
+    Elsewhere,
+    List,
+    Detail,
 }
 
 #[derive(Default)]
@@ -254,35 +267,101 @@ impl AxonApp {
         }
     }
 
-    /// Gives the focus the detail held to what the window still shows, once what held it, such
-    /// as selected text, went away with it: a read that drops the text, a switch of root or a
-    /// step back. The keys would otherwise reach nothing until a click. The focus goes to the
-    /// detail column while it is shown, else to the list, else to the window. A focus that
-    /// something still shown holds, as a hidden menu leaves it, is left as it is.
-    pub(super) fn recover_from_hidden_detail(
+    /// Gives a focus the window does not draw, or no focus at all, to what the window still
+    /// shows, since the keys would otherwise reach nothing until a click: the focus goes back
+    /// to the part it was in while that is shown, else to the list, else to the window, which
+    /// hands it to the list once the root is read. Nothing here takes the focus away on
+    /// purpose, and GPUI takes it away when what held it is dropped, so no focus counts as
+    /// lost too. A focus that something still drawn holds is left as it is. Tells whether the
+    /// focus moved.
+    pub(super) fn recover_lost_focus(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        if !self.layout.focus_in_detail || self.app_focus.contains_focused(window, cx) {
-            return;
+    ) -> bool {
+        let menu = self.close_hidden_menu(window, cx);
+        if self.app_focus.contains_focused(window, cx) {
+            return false;
         }
         // The list behind the open panel is left alone, as opening the panel does.
         let list = (!self.is_panel_open()).then_some(&self.list_focus);
-        let target = [Some(&self.detail_focus), list]
+        let origin = match menu.unwrap_or(self.layout.focus_area) {
+            FocusArea::Detail => Some(&self.detail_focus),
+            FocusArea::List => list,
+            FocusArea::Elsewhere => None,
+        };
+        let target = [origin, list]
             .into_iter()
             .flatten()
             .find(|shown| self.app_focus.contains(shown, window));
         self.layout.list_awaited = target.is_none() && list.is_some();
         window.focus(target.unwrap_or(&self.app_focus), cx);
-        // A focus moved while the window draws does not draw the window again by itself.
-        window.on_next_frame(|window, _| window.refresh());
+        true
+    }
+
+    /// `focus` has the focus, but the frame on screen does not draw it in the window.
+    pub(super) fn holds_undrawn_focus(&self, focus: &FocusHandle, window: &Window) -> bool {
+        focus.is_focused(window) && !self.app_focus.contains(focus, window)
+    }
+
+    /// Notes where the focus is as a frame begins, and checks a focus moved since the last one
+    /// began once the frame being drawn is on screen. GPUI reports a lost focus only when
+    /// something drew it in the frame before, so a focus moved from none, as a context menu
+    /// opened with nothing focused takes, is not reported when it is not drawn.
+    fn watch_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let focused = window.focused(cx);
+        // With no focus, the part it was last in is kept, as a blur leaves it.
+        if let Some(focused) = &focused {
+            self.layout.focus_area = if self.detail_focus.contains(focused, window) {
+                FocusArea::Detail
+            } else if self.list_focus.contains(focused, window) {
+                FocusArea::List
+            } else {
+                FocusArea::Elsewhere
+            };
+        }
+        let now = focused.as_ref().map(FocusHandle::downgrade);
+        if now == self.layout.focus_seen {
+            return;
+        }
+        self.layout.focus_seen = now;
+        // Only the focus of something the window itself places: GPUI draws some outside the
+        // window's focus, as a prompt off macOS, which would count as not drawn.
+        if let Some(focused) = &focused {
+            let search = self.search.focus_handle(cx);
+            let menu = self.copy_menu.as_ref().map(|menu| &menu.focus);
+            let own = [
+                Some(&self.list_focus),
+                Some(&self.detail_focus),
+                Some(&search),
+                menu,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|own| own == focused);
+            if !own {
+                return;
+            }
+        }
+        let app = cx.weak_entity();
+        window.on_next_frame(move |window, cx| {
+            app.update(cx, |this, cx| {
+                let lost = match &focused {
+                    Some(focused) => this.holds_undrawn_focus(focused, window),
+                    None => window.focused(cx).is_none(),
+                };
+                if lost {
+                    this.recover_lost_focus(window, cx);
+                }
+            })
+            .ok();
+        });
     }
 
     /// Gives the list the focus the window took for it, as
-    /// [`recover_from_hidden_detail`](Self::recover_from_hidden_detail) asks, in the frame
-    /// that shows the root read. A root read with no rows to show leaves the focus on the
-    /// window, and a later read does not take it.
+    /// [`recover_lost_focus`](Self::recover_lost_focus) asks, in the frame that shows the root
+    /// read. A root read with no rows to show leaves the focus on the window, and a later read
+    /// does not take it.
     fn focus_awaited_list(
         &mut self,
         list_shown: bool,
@@ -818,7 +897,7 @@ impl Render for AxonApp {
         }
         let one_detail = columns == Columns::One && self.is_detail_shown();
         let sidebar = (columns == Columns::Three).then(|| self.render_sidebar(None, cx));
-        self.layout.focus_in_detail = self.detail_focus.contains_focused(window, cx);
+        self.watch_focus(window, cx);
         self.focus_awaited_list(!one_detail, window, cx);
         let list = (!one_detail).then(|| self.render_list_column(columns, cx));
         let detail =

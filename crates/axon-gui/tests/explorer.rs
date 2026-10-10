@@ -17,9 +17,9 @@ use axon_gui::{
 };
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
-    AppContext, Bounds, ClipboardItem, ElementId, Entity, Focusable, InputEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Point, TestAppContext, VisualTestContext,
-    WindowBounds, WindowHandle, WindowOptions,
+    AppContext, Bounds, ClipboardItem, ElementId, Entity, InputEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Point, TestAppContext, VisualTestContext, WindowBounds,
+    WindowHandle, WindowOptions,
     base::{Root, input as edit},
     px, size,
 };
@@ -653,7 +653,7 @@ fn a_read_that_moves_a_row_under_its_menu_leaves_the_keys_on_the_list(cx: &mut T
     press(handle, "escape", cx);
     assert_eq!(detail_title(&app, cx), None);
 
-    // A menu closed as usual takes nothing back when the focus is lost later.
+    // A menu closed as usual takes nothing back when the focus moves on later.
     click_in(handle, "entity-list", entity_element(&plan.invite), cx);
     open_menu(handle, "entity-list", entity_element(&last), cx);
     VisualTestContext::from_window(handle.into(), cx).simulate_keystrokes("escape");
@@ -661,12 +661,15 @@ fn a_read_that_moves_a_row_under_its_menu_leaves_the_keys_on_the_list(cx: &mut T
     with_window(handle, cx, |window, cx| {
         assert!(window.try_find("popup-menu").is_none());
         assert!(app.read(cx).list_focus().is_focused(window));
-        window.blur(cx);
+        let detail = app.read(cx).detail_focus().clone();
+        window.focus(&detail, cx);
     });
-    with_window(handle, cx, |window, cx| {
-        assert!(!app.read(cx).list_focus().is_focused(window));
-        assert!(!app.read(cx).detail_focus().is_focused(window));
-    });
+    next_frames(handle, cx);
+    focused(handle, &app, AxonApp::detail_focus, cx);
+    // Nor when the focus is lost from there.
+    with_window(handle, cx, |window, cx| window.blur(cx));
+    next_frames(handle, cx);
+    focused(handle, &app, AxonApp::detail_focus, cx);
     let unchanged = Some("（前の内容）".to_string());
     assert_eq!(copied(handle, cx), [unchanged.clone(), unchanged]);
 }
@@ -1017,7 +1020,12 @@ fn copying_takes_the_search_field_then_selected_text_then_the_selected_row(
         [Some("（前の内容）".into()), Some("（前の内容）".into())]
     );
     press(handle, "escape", cx);
-    with_window(handle, cx, |window, cx| window.blur(cx));
+    with_window(handle, cx, |window, cx| {
+        let detail = app.read(cx).detail_focus().clone();
+        window.focus(&detail, cx);
+    });
+    next_frames(handle, cx);
+    focused(handle, &app, AxonApp::detail_focus, cx);
     assert_eq!(
         copied(handle, cx),
         [Some("（前の内容）".into()), Some("（前の内容）".into())]
@@ -1211,6 +1219,11 @@ fn focused(
     });
 }
 
+/// The window itself, not the list or the detail column, has the focus.
+fn on_the_window(handle: Window, app: &Entity<AxonApp>, cx: &mut TestAppContext) {
+    focused(handle, app, AxonApp::app_focus, cx);
+}
+
 // Selected text holds the focus; a read again, as coming back to the window does, or a switch
 // of root can take the text away with it.
 #[gpui_kit::test]
@@ -1265,10 +1278,8 @@ fn switching_roots_under_selected_text_leaves_the_keys_on_the_detail(cx: &mut Te
 }
 
 /// In one column, selects text of a detail in one root, switches to another with one Issue,
-/// and lets the window draw it while it is still being read, with no list to focus. When
-/// `meanwhile` is given, it runs before the read ends.
+/// and lets the window draw it while it is still being read, with no list to focus.
 fn switch_roots_under_selected_text_in_one_column(
-    meanwhile: Option<fn(&mut gpui_kit::Window, &mut gpui_kit::App, &Entity<AxonApp>)>,
     cx: &mut TestAppContext,
 ) -> (tempfile::TempDir, Window, Entity<AxonApp>) {
     let (dir, data) = data();
@@ -1288,9 +1299,6 @@ fn switch_roots_under_selected_text_in_one_column(
         window.render_frame(cx);
         assert!(window.try_find("detail-pane").is_none());
         assert!(window.try_find("entity-list").is_none());
-        if let Some(meanwhile) = meanwhile {
-            meanwhile(window, cx, &app);
-        }
     })
     .unwrap();
     cx.run_until_parked();
@@ -1301,7 +1309,7 @@ fn switch_roots_under_selected_text_in_one_column(
 fn switching_roots_under_selected_text_in_one_column_leaves_the_keys_on_the_list(
     cx: &mut TestAppContext,
 ) {
-    let (_dir, handle, app) = switch_roots_under_selected_text_in_one_column(None, cx);
+    let (_dir, handle, app) = switch_roots_under_selected_text_in_one_column(cx);
     focused(handle, &app, AxonApp::list_focus, cx);
     press(handle, "down", cx);
     assert_eq!(detail_title(&app, cx).as_deref(), Some("家計簿をつける"));
@@ -1309,18 +1317,29 @@ fn switching_roots_under_selected_text_in_one_column_leaves_the_keys_on_the_list
 
 #[gpui_kit::test]
 fn a_focus_moved_while_the_root_is_read_stays_where_it_was_moved(cx: &mut TestAppContext) {
-    let (_dir, handle, app) = switch_roots_under_selected_text_in_one_column(
-        Some(|window, cx, app| {
-            let search = app.read(cx).search_input().clone();
-            search.update(cx, |search, cx| search.focus(window, cx));
-        }),
-        cx,
-    );
-    with_window(handle, cx, |window, cx| {
-        let app = app.read(cx);
-        assert!(app.search_input().focus_handle(cx).is_focused(window));
-        assert!(!app.list_focus().is_focused(window));
+    let (_dir, data) = data();
+    let (first, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    let (second, other) = Seed::new(&data, "家計簿");
+    other.create_with(described("家計簿をつける"));
+    let (handle, app) = open(&data, cx);
+    cx.update(|cx| app.update(cx, |app, cx| app.select(first.clone(), cx)));
+    cx.run_until_parked();
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    cx.update(|cx| app.update(cx, |app, cx| app.select(second.clone(), cx)));
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("entity-list").is_none());
+        let detail = app.read(cx).detail_focus().clone();
+        window.focus(&detail, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    next_frames(handle, cx);
+    with_window(handle, cx, |window, _| {
+        assert!(window.try_find("entity-list").is_some())
     });
+    focused(handle, &app, AxonApp::detail_focus, cx);
 }
 
 #[gpui_kit::test]
@@ -1339,22 +1358,14 @@ fn switching_to_an_empty_root_under_selected_text_in_one_column_leaves_the_keys_
 
     cx.update(|cx| app.update(cx, |app, cx| app.select(second.clone(), cx)));
     cx.run_until_parked();
-    let on_the_window = |cx: &mut TestAppContext| {
-        with_window(handle, cx, |window, cx| {
-            let app = app.read(cx);
-            assert!(window.focused(cx).is_some());
-            assert!(!app.list_focus().is_focused(window));
-            assert!(!app.detail_focus().is_focused(window));
-        })
-    };
-    on_the_window(cx);
+    on_the_window(handle, &app, cx);
     // Rows a later read brings do not take the focus.
     other.create_with(described("家計簿をつける"));
     reload(&app, cx);
     with_window(handle, cx, |window, _| {
         assert!(window.try_find("entity-list").is_some())
     });
-    on_the_window(cx);
+    on_the_window(handle, &app, cx);
     // The keys reach the window: Escape closes a detail opened without a click.
     let id = cx.read(|cx| app.read(cx).explorer().listing().rows[0].id.clone());
     cx.update(|cx| app.update(cx, |app, cx| app.open_entity(id, cx)));
@@ -2220,4 +2231,226 @@ fn reading_again_keeps_the_detail_scrolled(cx: &mut TestAppContext) {
     with_window(handle, cx, |window, _| {
         assert_eq!(title_top(window), scrolled)
     });
+}
+
+// A focus lost with what held it goes back to what is still shown: here no list is shown, so
+// the window takes it, and the keys still reach the window.
+#[gpui_kit::test]
+fn stepping_back_to_an_empty_list_in_one_column_leaves_the_keys_on_the_window(
+    cx: &mut TestAppContext,
+) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let only = seed.create(
+        Kind::Issue,
+        Lifecycle::NotStarted,
+        "会場を決める",
+        Label::Chore,
+        None,
+    );
+    let (handle, app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
+    click_in(handle, "entity-list", entity_element(&only), cx);
+    assert!(cx.read(|cx| app.read(cx).is_detail_shown()));
+    seed.perform(&only, Operation::Start);
+    seed.perform(&only, Operation::Complete);
+    reload(&app, cx);
+    press(handle, "escape", cx);
+    assert!(!cx.read(|cx| app.read(cx).is_detail_shown()));
+    with_window(handle, cx, |window, _| {
+        assert!(window.try_find("entity-list").is_none())
+    });
+    on_the_window(handle, &app, cx);
+    cx.update(|cx| app.update(cx, |app, cx| app.open_entity(only.clone(), cx)));
+    assert!(cx.read(|cx| app.read(cx).is_detail_shown()));
+    press(handle, "escape", cx);
+    assert!(!cx.read(|cx| app.read(cx).is_detail_shown()));
+}
+
+#[gpui_kit::test]
+fn a_read_that_empties_the_focused_list_leaves_the_keys_on_the_window(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let only = seed.create(
+        Kind::Issue,
+        Lifecycle::NotStarted,
+        "会場を決める",
+        Label::Chore,
+        None,
+    );
+    let (handle, app) = open(&data, cx);
+    click_in(handle, "entity-list", entity_element(&only), cx);
+    focused(handle, &app, AxonApp::list_focus, cx);
+    seed.perform(&only, Operation::Start);
+    seed.perform(&only, Operation::Complete);
+    reload(&app, cx);
+    with_window(handle, cx, |window, _| {
+        assert!(window.try_find("entity-list").is_none())
+    });
+    on_the_window(handle, &app, cx);
+    press(handle, "escape", cx);
+    assert_eq!(detail_title(&app, cx), None);
+}
+
+#[gpui_kit::test]
+fn switching_roots_from_the_focused_list_leaves_the_keys_on_the_list(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (first, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    let (second, other) = Seed::new(&data, "家計簿");
+    other.create_with(described("家計簿をつける"));
+    let (handle, app) = open(&data, cx);
+    cx.update(|cx| app.update(cx, |app, cx| app.select(first.clone(), cx)));
+    cx.run_until_parked();
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    cx.update(|cx| app.update(cx, |app, cx| app.select(second.clone(), cx)));
+    cx.run_until_parked();
+    focused(handle, &app, AxonApp::list_focus, cx);
+    press(handle, "down", cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("家計簿をつける"));
+}
+
+// The search field is not drawn while a switched root is read.
+#[gpui_kit::test]
+fn switching_roots_under_the_search_field_leaves_the_keys_on_the_list(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (first, seed) = Seed::new(&data, "読書会");
+    plan(&seed);
+    let (second, other) = Seed::new(&data, "家計簿");
+    other.create_with(described("家計簿をつける"));
+    let (handle, app) = open(&data, cx);
+    cx.update(|cx| app.update(cx, |app, cx| app.select(first.clone(), cx)));
+    cx.run_until_parked();
+    with_window(handle, cx, |window, cx| {
+        let search = app.read(cx).search_input().clone();
+        search.update(cx, |search, cx| search.focus(window, cx));
+    });
+    cx.update(|cx| app.update(cx, |app, cx| app.select(second.clone(), cx)));
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("search").is_none());
+    })
+    .unwrap();
+    cx.run_until_parked();
+    focused(handle, &app, AxonApp::list_focus, cx);
+    press(handle, "down", cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("家計簿をつける"));
+}
+
+#[gpui_kit::test]
+fn switching_roots_under_a_link_menu_in_one_column_leaves_the_keys_on_the_list(
+    cx: &mut TestAppContext,
+) {
+    let (_dir, data) = data();
+    let (first, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    let (second, other) = Seed::new(&data, "家計簿");
+    other.create_with(described("家計簿をつける"));
+    let (handle, app) = open_sized(&data, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
+    cx.update(|cx| app.update(cx, |app, cx| app.select(first.clone(), cx)));
+    cx.run_until_parked();
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    open_menu(
+        handle,
+        "detail-dependencies",
+        entity_element(&plan.venue),
+        cx,
+    );
+    cx.update(|cx| app.update(cx, |app, cx| app.select(second.clone(), cx)));
+    cx.run_until_parked();
+    next_frames(handle, cx);
+    with_window(handle, cx, |window, _| {
+        assert!(window.try_find("popup-menu").is_none())
+    });
+    focused(handle, &app, AxonApp::list_focus, cx);
+    press(handle, "down", cx);
+    assert_eq!(detail_title(&app, cx).as_deref(), Some("家計簿をつける"));
+}
+
+// What held the focus can be dropped, and GPUI then leaves nothing focused.
+#[gpui_kit::test]
+fn a_focus_taken_away_goes_back_to_the_list(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    plan(&seed);
+    let (handle, app) = open(&data, cx);
+    let first = cx.read(|cx| app.read(cx).explorer().listing().rows[0].id.clone());
+    click_in(handle, "entity-list", entity_element(&first), cx);
+    with_window(handle, cx, |window, cx| window.blur(cx));
+    next_frames(handle, cx);
+    focused(handle, &app, AxonApp::list_focus, cx);
+    let selected =
+        |cx: &mut TestAppContext| cx.read(|cx| app.read(cx).explorer().selected().cloned());
+    let before = selected(cx);
+    press(handle, "down", cx);
+    assert_ne!(selected(cx), before);
+}
+
+#[gpui_kit::test]
+fn a_focus_taken_away_from_the_detail_goes_back_to_the_detail(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    let (handle, app) = open(&data, cx);
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    with_window(handle, cx, |window, cx| {
+        let detail = app.read(cx).detail_focus().clone();
+        window.focus(&detail, cx);
+    });
+    next_frames(handle, cx);
+    with_window(handle, cx, |window, cx| window.blur(cx));
+    next_frames(handle, cx);
+    focused(handle, &app, AxonApp::detail_focus, cx);
+}
+
+// The list behind the panel is left alone, as opening the panel does.
+#[gpui_kit::test]
+fn a_focus_taken_away_while_the_panel_is_open_goes_to_the_window(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    plan(&seed);
+    let (handle, app) = open_sized(&data, TWO_COLUMNS.0, TWO_COLUMNS.1, cx);
+    click(handle, "open-panel", cx);
+    cx.read(|cx| assert!(app.read(cx).is_panel_open()));
+    with_window(handle, cx, |window, cx| window.blur(cx));
+    next_frames(handle, cx);
+    on_the_window(handle, &app, cx);
+}
+
+// A prompt GPUI draws itself is drawn outside the window's focus, and keeps the focus it takes.
+#[gpui_kit::test]
+fn a_prompt_drawn_in_the_window_keeps_the_focus(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    let (handle, _app) = open(&data, cx);
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    cx.update(|cx| cx.set_prompt_builder(gpui_kit::fallback_prompt_renderer));
+    let (prompt, _answer) = cx
+        .update_window(handle.into(), |_, window, cx| {
+            let answer = window.prompt(gpui_kit::PromptLevel::Info, "確認", None, &["OK"], cx);
+            (window.focused(cx).unwrap(), answer)
+        })
+        .unwrap();
+    next_frames(handle, cx);
+    with_window(handle, cx, |window, _| {
+        assert!(window.has_active_prompt());
+        assert!(prompt.is_focused(window));
+    });
+}
+
+#[gpui_kit::test]
+fn sending_the_window_back_leaves_the_focus_where_it_is(cx: &mut TestAppContext) {
+    let (_dir, data) = data();
+    let (_, seed) = Seed::new(&data, "読書会");
+    let plan = plan(&seed);
+    let (handle, app) = open(&data, cx);
+    click_in(handle, "entity-list", entity_element(&plan.invite), cx);
+    VisualTestContext::from_window(handle.into(), cx).deactivate_window();
+    cx.run_until_parked();
+    next_frames(handle, cx);
+    cx.update_window(handle.into(), |_, window, _| {
+        assert!(!window.is_window_active())
+    })
+    .unwrap();
+    focused(handle, &app, AxonApp::list_focus, cx);
 }

@@ -1,5 +1,6 @@
 //! The filters, the shared list and the detail pane of the selected project.
 
+use super::layout::FocusArea;
 use super::{AxonApp, StoreState, markdown, style::Palette, text};
 use crate::board::{EntityDetail, Exclusion, Filter, Layout, Link, State, WaitKind};
 use crate::{OpenSelectedEntity, SelectNextEntity, SelectPreviousEntity};
@@ -434,7 +435,7 @@ impl AxonApp {
                     div().pb_px().child(line.test_support()),
                     &row.id,
                     Some(&item.title),
-                    MenuOrigin::List,
+                    FocusArea::List,
                     cx,
                 )
             })
@@ -450,7 +451,7 @@ impl AxonApp {
             div().min_w_0().child(target),
             &link.id,
             title,
-            MenuOrigin::Detail,
+            FocusArea::Detail,
             cx,
         )
     }
@@ -917,7 +918,7 @@ impl AxonApp {
         trigger: gpui_kit::Div,
         id: &EntityId,
         title: Option<&str>,
-        origin: MenuOrigin,
+        origin: FocusArea,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = id.clone();
@@ -927,28 +928,16 @@ impl AxonApp {
             .id(named(format!("copy-menu-{id}")))
             .context_menu(move |menu, window, cx| {
                 // The menu takes the focus as it is built rather than when it is first drawn,
-                // so a menu its row moved away from before then holds the focus too. Losing the
-                // focus is not seen when nothing had it in the frame before, so the frame after
-                // the first one the menu could be drawn in is checked as well.
+                // so a menu its row moved away from before then holds the focus too.
                 let focus = menu.focus_handle(cx);
                 window.focus(&focus, cx);
                 let opened = CopyMenu {
                     menu: cx.weak_entity(),
-                    focus: focus.clone(),
+                    focus,
                     origin,
                 };
                 app.update(cx, |app, cx| app.record_copy_menu(opened, cx))
                     .ok();
-                let app = app.clone();
-                window.on_next_frame(move |window, _| {
-                    window.on_next_frame(move |window, cx| {
-                        // Only this menu: another may have been opened since.
-                        app.update(cx, |app, cx| {
-                            app.recover_from_hidden_menu(Some(&focus), window, cx)
-                        })
-                        .ok();
-                    })
-                });
                 copy_menu(menu, &id, title.as_deref())
             })
             .into_any_element()
@@ -967,42 +956,23 @@ impl AxonApp {
         }
     }
 
-    /// Closes the last context menu and gives the focus back to where it was opened from,
-    /// when the menu holds the focus but was not drawn. A menu is drawn only while its row or
-    /// link is under the point right-clicked, so a read that moves them, or scrolls a row out
-    /// of the list, hides it with the focus, and the keys would reach nothing. Closed, it does
-    /// not come back and take the focus when the row returns to that place. When the focus
-    /// cannot go back to the list or the detail it was opened from, since that is not shown,
-    /// the window takes it.
-    /// Only the menu with the focus `only` is closed, when it is given.
-    pub(super) fn recover_from_hidden_menu(
+    /// Closes the last context menu when it holds the focus but was not drawn, and tells the
+    /// part it was opened from, where the focus goes back. A menu is drawn only while its row or
+    /// link is under the point right-clicked, so a read that moves them, or scrolls a row out of
+    /// the list, hides it with the focus. Closed, it does not come back and take the focus when
+    /// the row returns to that place.
+    pub(super) fn close_hidden_menu(
         &mut self,
-        only: Option<&FocusHandle>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        let Some(opened) = self.copy_menu.take_if(|opened| {
-            only.is_none_or(|only| *only == opened.focus)
-                && opened.focus.is_focused(window)
-                && !self.app_focus.contains(&opened.focus, window)
-        }) else {
-            return;
-        };
+    ) -> Option<FocusArea> {
+        let hidden = (self.copy_menu.as_ref())
+            .is_some_and(|opened| self.holds_undrawn_focus(&opened.focus, window));
+        let opened = self.copy_menu.take_if(|_| hidden)?;
         if let Some(menu) = opened.menu.upgrade() {
             menu.update(cx, |_, cx| cx.emit(DismissEvent));
         }
-        let origin = match opened.origin {
-            MenuOrigin::List => &self.list_focus,
-            MenuOrigin::Detail => &self.detail_focus,
-        };
-        let target = if self.app_focus.contains(origin, window) {
-            origin
-        } else {
-            &self.app_focus
-        };
-        window.focus(target, cx);
-        // A focus moved while the window draws does not draw the window again by itself.
-        window.on_next_frame(|window, _| window.refresh());
+        Some(opened.origin)
     }
 
     /// Why the selected Entity is not among the matches, when it is not.
@@ -1048,15 +1018,9 @@ pub(super) struct CopyMenu {
     menu: WeakEntity<PopupMenu>,
     /// The menu's focus, held so the menu is still known to have it once a read drops the menu
     /// with its row.
-    focus: FocusHandle,
-    origin: MenuOrigin,
-}
-
-/// The list or the detail column a context menu was opened from.
-#[derive(Clone, Copy)]
-enum MenuOrigin {
-    List,
-    Detail,
+    pub(super) focus: FocusHandle,
+    /// The list or the detail column the menu was opened from.
+    origin: FocusArea,
 }
 
 /// The items that copy the ID, the title, and both as `ID title`, as `axon list` lines them up.
