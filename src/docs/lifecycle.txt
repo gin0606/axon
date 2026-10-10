@@ -189,9 +189,9 @@ description, supporting details in Notes and the operation's decision in reason.
 A reason does not replace the description's active constraints or decisions.
 Capture (including --accept), note add and import apply have no reason input;
 registration purposes belong in the description and Note purposes in the Note.
-Current log output includes saved reasons on all displayed record kinds,
-including creation and import, and excludes Notes. These presentation choices
-may change when history is redesigned; they do not provide before/after diffs.
+Log output includes saved reasons on all displayed record kinds, including
+creation and import, and excludes Notes. Title and description edits show
+which fields changed, not the before/after text.
 
 Use axon docs declaration for YAML declaration fields and the bulk-edit workflow.
 Use axon docs declaration --example for a new-plan YAML template.

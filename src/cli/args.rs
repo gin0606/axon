@@ -105,7 +105,7 @@ To read saved information without running any condition, add --skip-conditions; 
     },
     /// Read the records of an Entity: state changes, edits, relationships, conversions and resolutions
     #[command(
-        after_help = "Currently includes saved reasons for every displayed record kind, including creation and import, but excludes Notes. These display choices may change when history presentation is redesigned."
+        after_help = "Includes saved reasons for every displayed record kind, including creation and import, but excludes Notes. Title and description edits show which fields changed, not the before/after text."
     )]
     Log {
         #[arg(help = ENTITY_ID_HELP)]
