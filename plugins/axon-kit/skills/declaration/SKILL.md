@@ -1,6 +1,6 @@
 ---
 name: declaration
-description: Axonのdeclarationを`axon export`し、`axon import prepare`・`axon import check`・`axon import apply`で計画を一括登録・編集する操作契約。対象選択や適用判断は呼び出し側が与える。
+description: Axonのdeclarationを`axon export`し、`axon import prepare`・`axon import check`・`axon import apply`で計画を一括登録・編集する操作契約。新規計画の登録と、変更前後のいずれかで同じGroupに含まれる（Group自身と全子孫）、またはdependencyでつながる登録済みの複数Entityのtitle・description・label・親・dependencyの一括修正に使う。対象選択や適用判断は呼び出し側が与える。
 ---
 
 # Declarationを取得・検査・反映する

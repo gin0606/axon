@@ -1,6 +1,6 @@
 ---
 name: declaration
-description: Axonの計画のdeclaration作成・レビュー・一括反映について、依頼の範囲と判断権限を確認し、`axon export`・`axon import prepare`・`axon import check`・`axon import apply`を進める。
+description: Axonの計画のdeclaration作成・レビュー・一括反映について、依頼の範囲と判断権限を確認し、`axon export`・`axon import prepare`・`axon import check`・`axon import apply`を進める。新規計画の一括登録と、変更前後のいずれかで同じGroupに含まれる（Group自身と全子孫）、またはdependencyでつながる登録済みの複数Entityのtitle・description・label・親・dependencyをまとめて修正する依頼に使う（依頼が個別の変更を明示した場合を除く）。
 ---
 
 # 計画の一括登録・編集を進める
@@ -8,6 +8,10 @@ description: Axonの計画のdeclaration作成・レビュー・一括反映に�
 `axon:conventions` と `axon-kit:declaration` を使う。形式・保存・再試行はkitと選択したCLIの `axon docs declaration` に従い、ここでは何を変えるかと適用の判断を扱う。
 
 ## 依頼の成果と境界を固定する
+
+単一または互いに関係のないEntityの個別の変更は、依頼がdeclarationを指定した場合だけここで扱う。
+
+declarationでの変更と`axon:update`・`axon:work-state`が扱う操作の両方を含む依頼では、`axon export`から`axon import apply`と保存後の照合までの間に、宣言の検査に関わるEntity（編集集合と、その親・祖先・依存先）のlifecycle・kindや宣言する項目を他の経路で変えない。他方の結果を前提とする操作を後に行う。`axon export`後に先行操作が必要と分かったら、その操作後に別fileへ`axon export`し直して編集を移す。
 
 計画の対象、declaration fileへの反映、active storageへの反映を区別する。file作成・レビューだけの依頼を保存済みEntityの変更へ広げない。`axon import prepare`もfileを置き換えるため、レビューだけの依頼では元fileを保持した作業copyで検査する。保存先への適用が未承認なら、fileと検査結果を具体的に揃えて変更案を提示し、その判断が必要な理由を説明する。明示された適用の直前で同じ権限を再確認しない。
 

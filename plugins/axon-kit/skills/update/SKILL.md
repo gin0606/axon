@@ -1,6 +1,6 @@
 ---
 name: update
-description: Axonの対象と変更内容が確定したEntityに、状態・種類・本文・label・包含・依存・再浮上条件の更新を適用・検証する操作契約。採用判断や変更内容の策定は行わない。
+description: Axonの対象と変更内容が確定したEntityに、状態・種類・本文・label・包含・依存・再浮上条件の更新を適用・検証する操作契約。変更前後のいずれかで同じGroupに含まれる（Group自身と全子孫）、またはdependencyでつながる複数Entityのtitle・description・label・親・dependencyの一括変更は通常`axon-kit:declaration`の対象で、どちらを使うかは呼び出し側が決める。採用判断や変更内容の策定は行わない。
 ---
 
 # 既存Entityを更新する
