@@ -823,7 +823,7 @@ fn declaration_help_gives_examples_and_next_commands_without_opening_the_store()
         (
             vec!["import", "apply", "--help"],
             "axon import apply plan.yaml",
-            "axon import check plan.yaml",
+            "no follow-up check is required",
         ),
     ] {
         let output = f.run(&args);
@@ -831,7 +831,11 @@ fn declaration_help_gives_examples_and_next_commands_without_opening_the_store()
         let text = success(output);
         assert!(text.contains(example), "{text}");
         assert!(text.contains(next), "{text}");
-        assert!(text.contains("Next"), "{text}");
+        if args == ["import", "apply", "--help"] {
+            assert!(!text.contains("Next:"), "{text}");
+        } else {
+            assert!(text.contains("Next"), "{text}");
+        }
     }
     assert_eq!(fs::read_to_string(storage).unwrap(), "broken storage");
 }

@@ -22,9 +22,11 @@ reasonは同値判定より先に検証される。一行で、空白だけの�
 
 ## 成功とno-op
 
-終了0と完全IDの確認文を読み、`axon show ID --details --skip-conditions`・log・個別Noteで要求した作用を検証する。`axon write`・`axon label set`の同値や同じparent/dependency/condition・種類の値は `No changes` の成功で履歴を増やさない。ただし終了したEntityへの`axon write`と`axon label set`は同値でも拒否される。同値lifecycleは拒否で、開始済みを新たな`axon start`成功と扱わない。作成とNote追記は非冪等で、再実行すると別IDになる。
+終了コード0で、成功出力が対象と要求した作用を示していれば検証済みとする。作成・本文更新・Note追記などの成功通知は、固定した入力の保存を示すもので、入力全項目の出力は求めない。読み直すのは、成功出力に出ない波及（対象・祖先Groupの実効lifecycleなど）を報告や後続判断に使う場合と、結果不明・出力失敗・想定と異なる出力の場合に限る。後者は下の復旧手順に従う。
 
-reasonを渡した場合は、現在値に加えて`axon log ID`で対応する操作とreasonの保存を照合する。現在値の一致だけでは理由の保存を立証できない。同値操作はreasonを指定しても操作・reasonとも記録を増やさず、`No changes`と`Reason not saved; use axon note add to record it.`を示す。その結果を呼び出し側へ返し、自動でNoteへ振り替えない。保存済みreasonの補足・訂正は`axon-kit:add-note`で扱い、理由だけのために操作を繰り返さない。
+`axon write`・`axon label set`の同値や同じparent/dependency/condition・種類の値は `No changes` の成功で履歴を増やさない。ただし終了したEntityへの`axon write`と`axon label set`は同値でも拒否される。同値lifecycleは拒否で、開始済みを新たな`axon start`成功と扱わない。作成とNote追記は非冪等で、再実行すると別IDになる。
+
+成功時に`Reason not saved`がなければ、reasonは操作と一体で保存されたとみなし、logでの照合は求めない。同値操作はreasonを指定しても操作・reasonとも記録を増やさず、`No changes`と`Reason not saved; use axon note add to record it.`を示す。その結果を呼び出し側へ返し、自動でNoteへ振り替えない。保存済みreasonの補足・訂正は`axon-kit:add-note`で扱い、理由だけのために操作を繰り返さない。
 
 ## 失敗・部分適用・結果不明
 

@@ -69,10 +69,9 @@ axon docs declaration --example > new-plan.yaml
 axon import prepare new-plan.yaml
 axon import check new-plan.yaml
 axon import apply new-plan.yaml
-axon import check new-plan.yaml
 ```
 
-`axon import prepare` は保存先を変えず、最終IDを割り当て、外部参照を再生成して同じfileをcanonical形式に置き換えます。新規recordの `key -> 完全ID` の対応も一行ずつ表示します。コメントは保持しません。`axon import check` はfileも保存先も変えず、作成・titleの前後・descriptionの変更有無・labelの前後・親の前後・依存の増減を表示します。titleの改行や制御文字は`axon list`と同じ規則で可視化され、一行で表示されます。本文の全文はfile自体の差分で確認してください。`axon import apply` は最新の保存状態で再検証して全件を原子的に反映し、成功後に同じfileの `base` などを更新し、更新前に新規だったrecordの `key -> 完全ID` も表示します。最後の `axon import check` で差分がないことを確認します。
+`axon import prepare` は保存先を変えず、最終IDを割り当て、外部参照を再生成して同じfileをcanonical形式に置き換えます。新規recordの `key -> 完全ID` の対応も一行ずつ表示します。コメントは保持しません。`axon import check` はfileも保存先も変えず、作成・titleの前後・descriptionの変更有無・labelの前後・親の前後・依存の増減を表示します。titleの改行や制御文字は`axon list`と同じ規則で可視化され、一行で表示されます。本文の全文はfile自体の差分で確認してください。`axon import apply` は最新の保存状態で再検証して全件を原子的に反映し、成功後に同じfileの `base` などを更新し、更新前に新規だったrecordの `key -> 完全ID` も表示します。終了コード0と期待した成功出力で反映を確認できれば、確認のための再 `axon import check` は不要です。
 
 ### 登録後の計画を修正する
 
@@ -82,7 +81,7 @@ axon import check new-plan.yaml
 axon export GROUP_ID > plan-edit.yaml
 ```
 
-Groupは自身と終了済みを含む全子孫、Issueは単体を取得します。複数IDを渡すと和集合になります。編集前のfileを別に保全してから `title`、`description`、`label`、`parent`、`needs` を修正し、必要な新規recordを足します。既存の `id`・`base`・`lifecycle`・kindは変更しません。編集後は同じ `axon import prepare` → `axon import check` → `axon import apply` → 再 `axon import check` を `plan-edit.yaml` に対して実行します。
+Groupは自身と終了済みを含む全子孫、Issueは単体を取得します。複数IDを渡すと和集合になります。編集前のfileを別に保全してから `title`、`description`、`label`、`parent`、`needs` を修正し、必要な新規recordを足します。既存の `id`・`base`・`lifecycle`・kindは変更しません。編集後は同じ `axon import prepare` → `axon import check` → `axon import apply` を `plan-edit.yaml` に対して実行します。
 
 `groups`・`issues` に載っていないEntityは触りません。fileからrecordを消しても、削除・取消・所属解除・依存解除にはなりません。Groupから外すにはそのEntityのrecordに `parent: null`、依存をすべて外すには `needs: []` を書きます。作業の取消や既存のlifecycle遷移には通常コマンドを使います。
 

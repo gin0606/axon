@@ -23,7 +23,6 @@ Edit the declaration, then follow these steps:
   axon import prepare plan.yaml
   axon import check plan.yaml
   axon import apply plan.yaml
-  axon import check plan.yaml
 Prepare assigns new IDs and rewrites the file without changing storage.
 Prepare prints each new record as key -> full ID.
 Assigned IDs on records with base: null are kept when unused or when the
@@ -35,13 +34,13 @@ a new Entity, set id: null on the new record.
 Check shows old -> new titles on one line (newlines as \n and controls escaped),
 description changed/unchanged, old -> new labels, and relationship changes
 without writing.
-Apply validates everything, saves one stored record file per changed Entity and rewrites
-the declaration; a retry finishes an interrupted save per Entity. Check again
-to confirm that no differences remain. Apply also prints key -> full ID for records
-whose base was null before the rewrite. An outdated base stops the whole apply
-as a conflict: base mismatch; prepare does not refresh it, so export every
-record of the file again into a separate file with axon export and transfer
-your edits.
+Apply validates everything, saves one stored record file per changed Entity
+and rewrites the declaration; a retry finishes an interrupted save per Entity.
+Exit status 0 and the success output confirm the apply; no follow-up check is
+required. Apply also prints key -> full ID for records whose base was null
+before the rewrite. An outdated base stops the whole apply as a conflict: base
+mismatch; prepare does not refresh it, so export every record of the file
+again into a separate file with axon export and transfer your edits.
 
 Entities not listed in groups or issues are untouched. Removing a record from
 the file does not delete or cancel it, detach it from its parent, or remove its

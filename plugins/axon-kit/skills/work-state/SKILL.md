@@ -13,4 +13,4 @@ Groupは`Start`・`Release`を持たない。Groupの実効値は配下から導
 
 `Completed`から`NotStarted`へ戻す`axon reopen`はその判断を要し、このcapabilityでは扱わず`axon-kit:update`が適用する。
 
-`axon start`・`axon release`・`axon complete`は祖先Groupの実効lifecycleと状況を変えうる。前後に直接dependent、祖先・子孫と`axon tasks`/`axon proposals`への影響を確認する。追加Noteは別capabilityとして保存確認してから進める。最終lifecycle、保存結果と波及を返す。
+`axon start`・`axon release`・`axon complete`は祖先Groupの実効lifecycleと状況を変えうる。直接dependent、祖先・子孫と候補一覧への波及は、報告や後続判断に使う場合に操作前後の情報で照合する。保存済みの作用自体の確認は成功出力で済ませる。追加Noteは別capabilityとして保存確認してから進める。最終lifecycle、保存結果と波及を返す。

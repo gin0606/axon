@@ -190,7 +190,7 @@ pub(super) enum Import {
     Check { file: PathBuf },
     /// Apply all changes atomically and refresh FILE; safe to retry the same declaration
     #[command(
-        after_help = "Example: axon import apply plan.yaml\nSaves all changes and refreshes the declaration. Prints key -> full ID mappings for records that had base: null.\nNext: axon import check plan.yaml"
+        after_help = "Example: axon import apply plan.yaml\nSaves all changes and refreshes the declaration. Prints key -> full ID mappings for records that had base: null.\nExit status 0 and the success output confirm the apply; no follow-up check is required."
     )]
     Apply { file: PathBuf },
 }

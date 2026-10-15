@@ -139,7 +139,7 @@ fingerprint には declaration が見せる項目だけを含める。記録 ID 
 
 `axon export ID...` は一貫した記録の集合から selector の和集合を編集集合として選び、canonical YAML を stdout へ出す。編集集合の各 Entity は現在値と `base` を持ち、`key` は null になる。取得した直後は `key` を復元できないため、参照はすべて ID 参照になる。`references` は編集集合外の参照先から計算する。参照先が保存先に存在しない（親の不在・依存先の不在の違反）場合はその参照を `references` に載せずに出し、`prepare`・`check`・`apply` はその不在を診断して拒否する。選んだ Group の子が衝突中なら、その子を含めずに出すのではなく拒否する。保存先を変更せず、再浮上条件を実行しない。
 
-新規計画の雛形は`axon docs declaration --example`で取得する。新規 Group 一件、その子 Issue 二件、子 Issue 間の dependency 一本を含む完全な YAML だけを stdout に出し、`id` と `base` は null、`lifecycle` は `not-started` とする。`axon docs declaration`は field、新規と既存の違い、`prepare` → `check` → `apply` → 再 `check` の手順を説明する。両者は保存先を開かず、管理 root、ネットワーク、ソース checkout に依存しない。引数なしの`axon docs`は状態モデルと基本の workflow を説明し、declaration の説明へ案内する。
+新規計画の雛形は`axon docs declaration --example`で取得する。新規 Group 一件、その子 Issue 二件、子 Issue 間の dependency 一本を含む完全な YAML だけを stdout に出し、`id` と `base` は null、`lifecycle` は `not-started` とする。`axon docs declaration`は field、新規と既存の違い、`prepare` → `check` → `apply` の手順を説明する。両者は保存先を開かず、管理 root、ネットワーク、ソース checkout に依存しない。引数なしの`axon docs`は状態モデルと基本の workflow を説明し、declaration の説明へ案内する。
 
 ## prepare、check、apply
 

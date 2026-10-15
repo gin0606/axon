@@ -30,6 +30,6 @@ titleとdescriptionは`axon:conventions`の「残す情報と置き場所を選�
 
 `axon:conventions`の重複確認を行う。完全に一致する未終端Entityを再利用できる場合は、そのIDと現在状態を結果とする。採否の不一致、`Completed`または`Cancelled`、cross-kind、scopeの差、複数候補がある場合はユーザーの選択を得る。新しいIDの作成が明示されていれば新規登録する。
 
-採否未判断なら`axon-kit:capture`、採用済みなら`axon-kit:plan`を使い、作成結果と関係を確認する。このskillは登録と検証で終了し、同じ依頼が明示的に実装workflowまで含み、そのworkflowへ引き渡す場合を除いて`axon start`や実装へ進まない。
+採否未判断なら`axon-kit:capture`、採用済みなら`axon-kit:plan`を使い、kitの保存確認に従って作成結果と関係への波及を確認する。このskillは登録と検証で終了し、同じ依頼が明示的に実装workflowまで含み、そのworkflowへ引き渡す場合を除いて`axon start`や実装へ進まない。
 
 作成または再利用したID、kind、label、タイトルと本文、lifecycleと条件、重複判断、候補と着手・完了の前提への影響、未解決事項を報告する。

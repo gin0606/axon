@@ -11,7 +11,7 @@ description: Axonの計画のdeclaration作成・レビュー・一括反映に�
 
 単一または互いに関係のないEntityの個別の変更は、依頼がdeclarationを指定した場合だけここで扱う。
 
-declarationでの変更と`axon:update`・`axon:work-state`が扱う操作の両方を含む依頼では、`axon export`から`axon import apply`と保存後の照合までの間に、宣言の検査に関わるEntity（編集集合と、その親・祖先・依存先）のlifecycle・kindや宣言する項目を他の経路で変えない。他方の結果を前提とする操作を後に行う。`axon export`後に先行操作が必要と分かったら、その操作後に別fileへ`axon export`し直して編集を移す。
+declarationでの変更と`axon:update`・`axon:work-state`が扱う操作の両方を含む依頼では、`axon export`から`axon import apply`と保存結果の確認までの間に、宣言の検査に関わるEntity（編集集合と、その親・祖先・依存先）のlifecycle・kindや宣言する項目を他の経路で変えない。他方の結果を前提とする操作を後に行う。`axon export`後に先行操作が必要と分かったら、その操作後に別fileへ`axon export`し直して編集を移す。
 
 計画の対象、declaration fileへの反映、active storageへの反映を区別する。file作成・レビューだけの依頼を保存済みEntityの変更へ広げない。`axon import prepare`もfileを置き換えるため、レビューだけの依頼では元fileを保持した作業copyで検査する。保存先への適用が未承認なら、fileと検査結果を具体的に揃えて変更案を提示し、その判断が必要な理由を説明する。明示された適用の直前で同じ権限を再確認しない。
 
@@ -29,7 +29,7 @@ Groupから外すには対象recordの `parent: null`、依存を外すにはそ
 
 ## 反映と競合を扱う
 
-差分が合意済みの対象・内容に収まり、`axon import check`が成功し、保存先への適用権限があればkitの`axon import apply`と保存後の照合まで進める。fileだけの成果を求められた場合はfileと検査結果を返す。
+差分が合意済みの対象・内容に収まり、`axon import check`が成功し、保存先への適用権限があればkitの`axon import apply`と保存結果の確認まで進める。fileだけの成果を求められた場合はfileと検査結果を返す。
 
 競合では元artifactと最新の保存情報を比較する。同じ効果へ解決できる訂正は自律できるが、意味上の選択が変わる場合は具体的な差と案を返す。`axon export`の再実行は別fileへ行い、ID・base・digestの再生成で競合を隠さない。結果不明はkitの固定入力による照合・再試行に従う。
 
