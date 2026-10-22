@@ -827,9 +827,9 @@ impl AxonApp {
         }
     }
 
-    /// What the selected root's store looks like, and the actions that state offers (kept
-    /// apart so a long message never scrolls them out of reach).
-    fn render_status(&self, cx: &mut Context<Self>) -> (AnyElement, Option<AnyElement>) {
+    /// Loading and error messages, with actions kept outside the scrollable message.
+    /// A readable store needs no message; its list indicates a reload in progress.
+    fn render_status(&self, cx: &mut Context<Self>) -> (Option<AnyElement>, Option<AnyElement>) {
         let palette = Palette::of(cx);
         let danger = palette.danger;
         let message = |text: SharedString| div().id("project-status").text_sm().child(text);
@@ -862,19 +862,7 @@ impl AxonApp {
             (_, Some(_), StoreState::Loading | StoreState::None) => {
                 (status.child(message("読み込み中…".into())), false)
             }
-            (_, Some(_), StoreState::Loaded(summary) | StoreState::Reloading(summary)) => {
-                let count = if summary.entities == 0 {
-                    "Issue・Group はまだありません。".to_string()
-                } else {
-                    format!("{} 件の Issue・Group があります。", summary.entities)
-                };
-                let text = if matches!(self.store, StoreState::Reloading(_)) {
-                    format!("{count}（読み直し中…）")
-                } else {
-                    count
-                };
-                (status.child(message(text.into())), false)
-            }
+            (_, Some(_), StoreState::Loaded(_) | StoreState::Reloading(_)) => return (None, None),
             (_, Some(_), StoreState::Failed(error)) => (
                 status
                     .child(message(
@@ -885,7 +873,7 @@ impl AxonApp {
             ),
         };
         let actions = reloadable.then(|| reload().into_any_element());
-        (status.into_any_element(), actions)
+        (Some(status.into_any_element()), actions)
     }
 }
 

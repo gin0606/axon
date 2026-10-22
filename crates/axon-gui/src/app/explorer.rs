@@ -215,11 +215,13 @@ impl AxonApp {
         };
         let count = if listing.context > 0 {
             format!(
-                "{} 件が一致 / 参考表示の親 {} 件",
-                listing.matched, listing.context
+                "{} / {} 件（参考表示の親 {} 件）",
+                listing.matched,
+                board.len(),
+                listing.context
             )
         } else {
-            format!("{} 件が一致", listing.matched)
+            format!("{} / {} 件", listing.matched, board.len())
         };
         let header = div()
             .px_1()
@@ -237,7 +239,13 @@ impl AxonApp {
                         Button::new("reload-list")
                             .outline()
                             .compact()
-                            .label("再読み込み")
+                            .w(px(100.))
+                            .label(if matches!(self.store, StoreState::Reloading(_)) {
+                                "読み直し中"
+                            } else {
+                                "再読み込み"
+                            })
+                            .tooltip("再読み込み")
                             .on_click(cx.listener(|this, _, _, cx| this.reload_selected(cx))),
                     ),
             )
@@ -540,8 +548,6 @@ impl AxonApp {
             .pt_5()
             .pb_8();
 
-        // What it is, then where it belongs. The kind, the label and the ID head the column's
-        // bar.
         let mut head = div()
             .flex()
             .flex_col()
@@ -589,11 +595,8 @@ impl AxonApp {
             .items_center()
             .gap_1()
             .text_sm()
-            .text_color(palette.muted)
-            .child(div().text_xs().pr_1().child("所属"));
-        if detail.ancestors.is_empty() {
-            belongs = belongs.child("なし");
-        } else {
+            .text_color(palette.muted);
+        if !detail.ancestors.is_empty() {
             for (ix, ancestor) in detail.ancestors.iter().enumerate() {
                 if ix > 0 {
                     belongs = belongs.child("›");
@@ -602,7 +605,8 @@ impl AxonApp {
             }
         }
         pane = pane
-            .child(head.child(belongs))
+            .when(!detail.ancestors.is_empty(), |pane| pane.child(belongs))
+            .child(head)
             .children(self.render_filtered_out(cx));
         if detail.heads > 0 {
             pane = pane.child(callout("detail-conflict", palette.danger).child(format!(
@@ -659,24 +663,17 @@ impl AxonApp {
             pane = pane.child(waits);
         }
 
-        pane = pane.child(section("detail-description", "本文".into(), palette).child(
-            if detail.description.is_empty() {
-                div()
-                    .text_sm()
-                    .text_color(palette.muted)
-                    .child("本文はありません。")
-                    .into_any_element()
-            } else {
+        if !detail.description.trim().is_empty() {
+            pane = pane.child(
                 div()
                     .id("detail-description-body")
                     .text_sm()
                     .line_height(relative(1.6))
                     .max_w(px(MEASURE))
                     .child(self.render_markdown("detail-description-text", &detail.description, cx))
-                    .test_support()
-                    .into_any_element()
-            },
-        ));
+                    .test_support(),
+            );
+        }
         if let Some(condition) = &detail.condition {
             pane = pane.child(
                 section(
@@ -718,24 +715,14 @@ impl AxonApp {
             }
             pane = pane.child(children);
         }
-        let mut dependencies = section("detail-dependencies", "依存先".into(), palette);
-        if detail.dependencies.is_empty() {
-            dependencies = dependencies.child(
-                div()
-                    .text_sm()
-                    .text_color(palette.muted)
-                    .child("依存先はありません。"),
-            );
-        }
-        for dependency in &detail.dependencies {
-            dependencies = dependencies.child(self.render_link(dependency, cx));
-        }
-        pane = pane.child(dependencies).children(self.render_links(
-            "detail-dependents",
-            "この仕事に依存している",
-            &detail.dependents,
-            cx,
-        ));
+        pane = pane
+            .children(self.render_links("detail-dependencies", "依存先", &detail.dependencies, cx))
+            .children(self.render_links(
+                "detail-dependents",
+                "この仕事に依存している",
+                &detail.dependents,
+                cx,
+            ));
 
         let mut notes = section(
             "detail-notes",
@@ -777,7 +764,7 @@ impl AxonApp {
                 ),
             );
         }
-        pane = pane.child(notes);
+        pane = pane.when(!detail.notes.is_empty(), |pane| pane.child(notes));
 
         // A timeline: a dot per record on one thread, oldest first.
         let mut history = div().flex().flex_col();

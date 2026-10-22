@@ -40,22 +40,22 @@ pub fn kind(kind: Kind) -> &'static str {
     }
 }
 
-/// The second line of a list row. The ID comes first so it stays visible when a narrow list
-/// truncates the line.
+/// Warnings and status precede identifiers, which may truncate in a narrow list.
 pub fn row_meta(item: &Item, matched: bool) -> String {
-    let mut meta = vec![
-        item.id.to_string(),
-        kind(item.kind).to_string(),
-        state(item.state).to_string(),
-    ];
-    meta.extend(situation(item.status).map(str::to_string));
-    meta.push(item.label.name().to_string());
+    let mut meta = Vec::new();
     if item.invalid {
         meta.push("構造の違反".into());
     }
     if !matched {
-        meta.push("参考表示（絞り込みに一致しない親）".into());
+        meta.push("参考表示".into());
     }
+    meta.push(state(item.state).to_string());
+    meta.extend(situation(item.status).map(str::to_string));
+    if item.kind == Kind::Group {
+        meta.push(kind(item.kind).to_string());
+    }
+    meta.push(item.label.name().to_string());
+    meta.push(item.id.to_string());
     meta.join(" · ")
 }
 

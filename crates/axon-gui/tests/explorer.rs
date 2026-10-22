@@ -371,20 +371,24 @@ fn the_list_filters_and_switches_between_tree_and_flat(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
-fn an_id_from_the_cli_finds_its_row_which_starts_with_the_id(cx: &mut TestAppContext) {
+fn an_id_from_the_cli_finds_its_row_with_status_before_the_id(cx: &mut TestAppContext) {
     let (_dir, data) = data();
     let (_, seed) = Seed::new(&data, "読書会");
     let plan = plan(&seed);
     let (handle, app) = open(&data, cx);
 
-    // Every row's second line starts with the ID, ahead of what a narrow list truncates.
+    // Status remains ahead of the ID when a narrow list truncates secondary information.
     cx.read(|cx| {
         let explorer = app.read(cx).explorer();
         let board = explorer.board().unwrap();
         assert_eq!(explorer.listing().rows.len(), 3);
         for row in &explorer.listing().rows {
             let meta = text::row_meta(board.item(&row.id).unwrap(), row.matched);
-            assert!(meta.starts_with(&format!("{} · ", row.id)), "{meta}");
+            assert!(meta.ends_with(&row.id.to_string()), "{meta}");
+            assert!(
+                meta.starts_with(text::state(board.item(&row.id).unwrap().state)),
+                "{meta}"
+            );
         }
     });
 
@@ -1638,6 +1642,15 @@ fn reloading_keeps_the_selection_and_shows_new_records(cx: &mut TestAppContext) 
     click_in(handle, "entity-list", entity_element(&plan.invite), cx);
     seed.note(&plan.invite, "返事が来た");
 
+    let row_bounds = |window: &mut gpui_kit::Window| {
+        window
+            .within("entity-list")
+            .find(entity_element(&plan.invite))
+            .bounds()
+    };
+    let mut before = None;
+    with_window(handle, cx, |window, _| before = Some(row_bounds(window)));
+    let before = before.unwrap();
     cx.update(|cx| app.update(cx, |app, cx| app.reload_selected(cx)));
     // While the store is read again, the earlier read stays on screen.
     cx.read(|cx| {
@@ -1647,11 +1660,27 @@ fn reloading_keeps_the_selection_and_shows_new_records(cx: &mut TestAppContext) 
         let detail = app.explorer().detail().unwrap().as_ref().unwrap();
         assert_eq!(detail.notes.len(), 1);
     });
+    with_window(handle, cx, |window, cx| {
+        assert!(matches!(app.read(cx).store(), StoreState::Reloading(_)));
+        assert_eq!(window.find("reload-list").label(), Some("読み直し中"));
+        assert_eq!(
+            row_bounds(window),
+            before,
+            "reloading must not move the click target"
+        );
+        let reads = app.read(cx).reads_started();
+        window.click("reload-list", cx);
+        assert_eq!(app.read(cx).reads_started(), reads + 1);
+    });
     cx.run_until_parked();
     cx.read(|cx| {
         let detail = app.read(cx).explorer().detail().unwrap().as_ref().unwrap();
         assert_eq!(detail.notes.len(), 2);
         assert_eq!(detail.notes[1].body, "返事が来た");
+    });
+    with_window(handle, cx, |window, _| {
+        assert_eq!(row_bounds(window), before);
+        assert_eq!(window.find("reload-list").label(), Some("再読み込み"));
     });
 
     // A store that can no longer be read (here: its header is gone) drops nothing silently.

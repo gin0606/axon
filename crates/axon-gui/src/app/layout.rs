@@ -603,6 +603,7 @@ impl AxonApp {
             .map(ProjectRoot::name)
             .unwrap_or_else(|| "Axon".into());
         let (status, action) = self.render_status(cx);
+        let show_status = status.is_some() || action.is_some() || self.notice.is_some();
         let list = self.render_list(cx);
         // Without the left column, the menu opens the panel that holds the roots and the
         // filters. A dot on it tells the filters differ from the defaults, since the list then
@@ -680,27 +681,29 @@ impl AxonApp {
                     .px_3()
                     .pt_3()
                     .pb_2()
-                    .child(
-                        div()
-                            .px_1()
-                            .flex()
-                            .flex_col()
-                            .items_start()
-                            .gap_1()
-                            // Long errors scroll here instead of pushing the list out of a
-                            // small window.
-                            .child(
-                                div()
-                                    .id("project-status-area")
-                                    .flex_none()
-                                    .max_h(px(STATUS_MAX_HEIGHT))
-                                    .overflow_y_scroll()
-                                    .text_color(palette.muted)
-                                    .child(status),
-                            )
-                            .children(notice)
-                            .children(action),
-                    )
+                    .when(show_status, |pane| {
+                        pane.child(
+                            div()
+                                .px_1()
+                                .flex()
+                                .flex_col()
+                                .items_start()
+                                .gap_1()
+                                // Long errors scroll here instead of pushing the list out of a
+                                // small window.
+                                .children(status.map(|status| {
+                                    div()
+                                        .id("project-status-area")
+                                        .flex_none()
+                                        .max_h(px(STATUS_MAX_HEIGHT))
+                                        .overflow_y_scroll()
+                                        .text_color(palette.muted)
+                                        .child(status)
+                                }))
+                                .children(notice)
+                                .children(action),
+                        )
+                    })
                     .children(list),
             )
             .test_support()
@@ -786,7 +789,7 @@ impl AxonApp {
                 .text_sm()
                 .text_color(palette.muted)
                 .when(self.explorer.listing().matched > 0, |empty| {
-                    empty.child("一覧から Issue・Group を選ぶと、ここに詳細を表示します。")
+                    empty.child("一覧から選択")
                 })
                 .test_support()
                 .into_any_element(),
