@@ -802,6 +802,35 @@ pub fn confirmation(id: &EntityId, effect: &str) -> String {
     };
     format!("{}  {effect}\n", display::identity(id))
 }
+/// Frequent invocations shown in the root help. Each form must parse when split on whitespace,
+/// so forms use placeholders instead of quoted values.
+const COMMON_FORMS: &[(&str, &str)] = &[
+    ("axon tasks", "List adopted work to start or continue"),
+    ("axon proposals", "List Undecided work awaiting a decision"),
+    (
+        "axon show ID --details --skip-conditions",
+        "Read saved text and relationships; runs no condition",
+    ),
+    ("axon note list ID", "Read every Note of an Entity"),
+    (
+        "axon capture --label feat --title TITLE -F FILE",
+        "Register Undecided work; choose the label from capture --help",
+    ),
+    ("axon start ID", "Start an adopted Issue"),
+    (
+        "axon note add ID -F -",
+        "Append a Note read from standard input",
+    ),
+    (
+        "axon write ID -F FILE -r REASON",
+        "Replace the description with the text of FILE",
+    ),
+    (
+        "axon dep add A --needs B",
+        "Make A wait until B is Completed",
+    ),
+    ("axon complete ID -r REASON", "Complete finished work"),
+];
 pub fn render_root_help() -> String {
     let mut command = Cli::command();
     command.build();
@@ -877,6 +906,15 @@ pub fn render_root_help() -> String {
                 padding = 10 - name.len()
             ));
         }
+    }
+    text.push_str(&format!("\n{}\n", display::heading("Common forms:")));
+    let width = COMMON_FORMS
+        .iter()
+        .map(|(form, _)| form.len())
+        .max()
+        .unwrap_or(0);
+    for (form, meaning) in COMMON_FORMS {
+        text.push_str(&format!("  {form:width$}  {meaning}\n"));
     }
     text.push_str(&format!("\n{}\n  axon help <COMMAND PATH>  Show detailed command help\n  axon docs                 Explain the lifecycle and daily workflow\n\n{}\n      --no-color  Disable ANSI decoration in all output, including help and diagnostics\n  -h, --help      Print help\n  -V, --version   Print version\n", display::heading("More help:"), display::heading("Options:")));
     text
@@ -980,6 +1018,24 @@ pub(super) fn storage_report(view: &read::View<'_>) -> StorageReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_common_form_in_root_help_parses_as_written() {
+        let help = render_root_help();
+        let section = help
+            .split_once("Common forms:")
+            .and_then(|(_, rest)| rest.split_once('\n'))
+            .and_then(|(_, rest)| rest.split("\n\n").next())
+            .expect("root help has a Common forms section");
+        let shown: Vec<_> = section.lines().map(str::trim_start).collect();
+        assert_eq!(shown.len(), COMMON_FORMS.len());
+        for ((form, _), line) in COMMON_FORMS.iter().zip(shown) {
+            assert!(line.starts_with(form), "{line}");
+            if let Err(error) = <Cli as clap::Parser>::try_parse_from(form.split_whitespace()) {
+                panic!("{form}: {error}");
+            }
+        }
+    }
 
     #[test]
     fn current_log_renders_reasons_for_every_record_kind() {

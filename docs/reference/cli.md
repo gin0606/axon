@@ -189,7 +189,7 @@ CLIが生成するhelp・ラベル・診断は英語。利用者のタイトル�
 
 一覧0件はstdoutに行を出さず、短い案内をstderrへ出して終了0。候補不在から保存情報の不存在を推測しない。通常行へ毎回操作例を付けず、helpと`axon docs`へ使い方を分ける。
 
-引数なしの `axon`、`axon help`、`axon -h`、`axon --help`は同じ用途別root helpをstdoutへ出して終了0。leaf help、`axon docs`、`axon actor`、`--version`、`axon completion`は保存先を開かず取得できる。`axon docs`はbinary同梱の端末用説明で、ソースcheckoutやネットワークへ依存しない。`axon --version`はbinaryのpackage versionだけを表示する。
+引数なしの `axon`、`axon help`、`axon -h`、`axon --help`は同じ用途別root helpをstdoutへ出して終了0。root helpは用途別のcommand一覧、よく使う呼び出し形を一行ずつ示す`Common forms:`、`More help:`、`Options:`の順に並べる。`Common forms:`の各行は、大文字のplaceholderを実際の値に置き換えれば現行のCLIが受け付ける引数の形にする。leaf helpはすべてのsubcommand・option・位置引数に説明を持つ。`-r/--reason`のhelpは一文の説明と`axon docs`への案内にとどめ、保存の扱いやNote・本文との使い分けは`axon docs`で説明する。leaf help、`axon docs`、`axon actor`、`--version`、`axon completion`は保存先を開かず取得できる。`axon docs`はbinary同梱の端末用説明で、ソースcheckoutやネットワークへ依存しない。`axon --version`はbinaryのpackage versionだけを表示する。
 
 ## mutationの結果
 

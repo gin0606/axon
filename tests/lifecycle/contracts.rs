@@ -480,6 +480,11 @@ fn help_sections_and_file_flags_work_without_discovery() {
             .collect();
         assert_eq!(&commands, names);
     }
+    for heading in ["Common forms:\n", "More help:\n", "Options:\n"] {
+        let offset = help.find(heading).unwrap();
+        assert!(offset > previous, "{heading}");
+        previous = offset;
+    }
     for args in [
         vec!["capture", "--help"],
         vec!["write", "--help"],
@@ -487,7 +492,17 @@ fn help_sections_and_file_flags_work_without_discovery() {
     ] {
         let leaf = f.ok(&args);
         assert!(leaf.contains("-F, --file"));
+        assert!(leaf.contains("- reads standard input"), "{args:?}");
     }
+    assert!(
+        f.ok(&["dep", "add", "--help"])
+            .contains("A waits until B is Completed")
+    );
+    assert!(
+        f.ok(&["parent", "set", "--help"])
+            .contains("ID of the parent Group")
+    );
+    assert!(f.ok(&["complete", "--help"]).contains("See axon docs"));
 }
 
 #[test]
@@ -498,6 +513,10 @@ fn docs_work_without_discovery() {
     assert!(docs.contains("Cancelled is terminal"));
     assert!(docs.contains("Short flags select inline (-m) or file (-F) input"));
     assert!(docs.contains("--description or --message"));
+    assert!(docs.contains("-m/--message or -F/--file (- reads stdin)"));
+    // The -r/--reason help defers these details to axon docs.
+    assert!(docs.contains("no record or reason is saved"));
+    assert!(docs.contains("Use note add to record a reason alone"));
 }
 
 #[test]

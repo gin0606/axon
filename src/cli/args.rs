@@ -33,6 +33,7 @@ pub(super) enum Command {
         after_help = "Example: axon export ID... > plan.yaml\nEdit title, description, label, parent or needs in plan.yaml.\nNext: axon import prepare plan.yaml\nFor a new plan: axon docs declaration --example > new-plan.yaml"
     )]
     Export {
+        /// Issue or Group IDs; a Group is exported with all its descendants
         #[arg(required = true, num_args = 1.., value_name = "ID")]
         ids: Vec<String>,
     },
@@ -49,7 +50,10 @@ pub(super) enum Command {
     )]
     Gui,
     /// Write an unstyled shell completion script to stdout
-    Completion { shell: clap_complete::Shell },
+    Completion {
+        /// The shell to write the completion script for
+        shell: clap_complete::Shell,
+    },
     /// Check the store for corrupt files, conflicts, violations and missing records
     Storage {
         #[command(subcommand)]
@@ -83,6 +87,7 @@ Conditions run through /bin/sh -c: exit 0 is satisfied, 1 is unsatisfied, other 
 To read saved information without running any condition, add --skip-conditions; the situation is then derived as if every condition were satisfied."
     )]
     Show {
+        #[arg(help = ENTITY_ID_HELP)]
         id: String,
         /// Include saved lifecycle, condition and all direct relationships without duplicate wait sections
         #[arg(long)]
@@ -103,6 +108,7 @@ To read saved information without running any condition, add --skip-conditions; 
         after_help = "Currently includes saved reasons for every displayed record kind, including creation and import, but excludes Notes. These display choices may change when history presentation is redesigned."
     )]
     Log {
+        #[arg(help = ENTITY_ID_HELP)]
         id: String,
         /// Include the stored recorder data as JSON
         #[arg(long)]
@@ -129,6 +135,7 @@ To read saved information without running any condition, add --skip-conditions; 
         after_help = "Example: axon convert ID --kind group\nOnly an Undecided or NotStarted Entity converts; release an InProgress Issue first, and a Group with children is not converted to an Issue. Lifecycle, parent, dependencies, text, label, condition and Notes stay as they are. Converting to the kind the Entity already has is No changes.\nA Group's description states its overall outcomes and what its final review confirms, so reread an Issue's description after converting it."
     )]
     Convert {
+        #[arg(help = ENTITY_ID_HELP)]
         id: String,
         /// The kind to convert to
         #[arg(long, value_enum)]
@@ -157,7 +164,9 @@ To read saved information without running any condition, add --skip-conditions; 
     },
     /// Edit title or description without changing lifecycle
     Write {
+        #[arg(help = ENTITY_ID_HELP)]
         id: String,
+        /// New title: one line, at most 200 characters
         #[arg(long)]
         title: Option<String>,
         #[command(flatten)]
@@ -182,17 +191,26 @@ pub(super) enum Import {
     #[command(
         after_help = "Example: axon import prepare plan.yaml\nPrints new key -> full ID mappings. Storage is unchanged.\nAn assigned new ID with a different stored value is a conflict. Export that ID into a separate file and transfer your edits; to intentionally create a new Entity, set id: null.\nNext: axon import check plan.yaml"
     )]
-    Prepare { file: PathBuf },
+    Prepare {
+        /// Declaration YAML file; rewritten in place as canonical YAML with new IDs assigned
+        file: PathBuf,
+    },
     /// Validate canonical FILE and display changes without writing or running conditions
     #[command(
         after_help = "Example: axon import check plan.yaml\nReview title changes, description change indicators, label changes and relationship changes.\nNext, after reviewing: axon import apply plan.yaml"
     )]
-    Check { file: PathBuf },
+    Check {
+        /// Declaration YAML file prepared by axon import prepare
+        file: PathBuf,
+    },
     /// Apply all changes atomically and refresh FILE; safe to retry the same declaration
     #[command(
         after_help = "Example: axon import apply plan.yaml\nSaves all changes and refreshes the declaration. Prints key -> full ID mappings for records that had base: null.\nExit status 0 and the success output confirm the apply; no follow-up check is required."
     )]
-    Apply { file: PathBuf },
+    Apply {
+        /// Declaration YAML file to apply; refreshed after applying
+        file: PathBuf,
+    },
 }
 #[derive(Subcommand)]
 pub(super) enum Docs {
@@ -246,7 +264,9 @@ pub(super) enum Condition {
         after_help = "Example: axon condition set ID --command 'test -f ready.txt'\nExit 0=satisfied, 1=unsatisfied, others=evaluation failed. Repair broken conditions with set or unset."
     )]
     Set {
+        #[arg(help = ENTITY_ID_HELP)]
         id: String,
+        /// Shell command to store; it runs only when conditions are evaluated
         #[arg(long)]
         command: String,
         #[arg(short, long, help = REASON_HELP)]
@@ -254,6 +274,7 @@ pub(super) enum Condition {
     },
     /// Remove the condition without changing lifecycle
     Unset {
+        #[arg(help = ENTITY_ID_HELP)]
         id: String,
         #[arg(short, long, help = REASON_HELP)]
         reason: Option<String>,
@@ -261,6 +282,7 @@ pub(super) enum Condition {
 }
 #[derive(Args)]
 pub(super) struct Body {
+    /// Description text given inline; -F reads it from a file or standard input
     #[arg(short = 'm', long, conflicts_with = "description_file")]
     pub(super) description: Option<String>,
     /// Read UTF-8 text from a file; - reads standard input
@@ -302,20 +324,23 @@ pub(super) struct Create {
     pub(super) command: Option<String>,
     #[command(flatten)]
     pub(super) body: Body,
-    /// Containing Group; an Issue starts only after every ancestor Group is adopted
+    /// ID of the containing Group; an Issue starts only after every ancestor Group is adopted
     #[arg(long)]
     pub(super) parent: Option<String>,
-    /// Dependency that must be Completed first; repeat for several
+    /// ID of a dependency that must be Completed first; repeat for several
     #[arg(long)]
     pub(super) needs: Vec<String>,
 }
 #[derive(Args)]
 pub(super) struct Change {
+    #[arg(help = ENTITY_ID_HELP)]
     pub(super) id: String,
     #[arg(short, long, help = REASON_HELP)]
     pub(super) reason: Option<String>,
 }
-const REASON_HELP: &str = "Optional decision reason, saved with the operation and readable in axon log. One nonblank line, at most 500 characters; no control characters. No changes means the reason is not saved; use axon note add to record it alone. Keep the current work definition in the description and supporting detail in Notes; a reason does not replace either.";
+const REASON_HELP: &str = "Optional decision reason saved with the operation: one nonblank line of at most 500 characters, without control characters. See axon docs for when it is saved and how it differs from descriptions and Notes.";
+/// The help for a positional Entity ID that has no more specific role.
+const ENTITY_ID_HELP: &str = "Entity ID: the complete ID or a unique ending of it";
 /// The label help shared by the commands that take one.
 const LABEL_HELP: &str = "Every Entity has exactly one label from a fixed set: bug, feat, chore, docs, test, refactor, spike.
 A label classifies the kind of work; it is not a priority and changes no lifecycle rule, candidate list or situation. A Group's label is the main kind of work across the Group.
@@ -325,7 +350,9 @@ pub(super) enum LabelCommand {
     /// Replace the label; the same value is No changes
     #[command(after_help = LABEL_HELP)]
     Set {
+        #[arg(help = ENTITY_ID_HELP)]
         id: String,
+        /// The new label
         #[arg(value_enum)]
         value: LabelValue,
         #[arg(short, long, help = REASON_HELP)]
@@ -364,7 +391,9 @@ impl ValueEnum for LabelValue {
 pub(super) enum Parent {
     /// Set or move the parent Group
     Set {
+        #[arg(help = ENTITY_ID_HELP)]
         id: String,
+        /// ID of the parent Group
         #[arg(long)]
         parent: String,
         #[arg(short, long, help = REASON_HELP)]
@@ -372,6 +401,7 @@ pub(super) enum Parent {
     },
     /// Remove the parent Group
     Unset {
+        #[arg(help = ENTITY_ID_HELP)]
         id: String,
         #[arg(short, long, help = REASON_HELP)]
         reason: Option<String>,
@@ -379,15 +409,22 @@ pub(super) enum Parent {
 }
 #[derive(Subcommand)]
 pub(super) enum Dependency {
+    /// Make ID wait until the --needs Entity is Completed; a Group's dependency also holds the start of every Issue below it
+    #[command(after_help = "Example: axon dep add A --needs B\nA waits until B is Completed.")]
     Add {
+        /// ID of the Entity that waits
         id: String,
+        /// ID of the Entity that must be Completed first
         #[arg(long)]
         needs: String,
         #[arg(short, long, help = REASON_HELP)]
         reason: Option<String>,
     },
+    /// Remove the dependency of ID on the --needs Entity
     Rm {
+        /// ID of the Entity that waits
         id: String,
+        /// ID of the Entity it no longer waits for
         #[arg(long)]
         needs: String,
         #[arg(short, long, help = REASON_HELP)]
@@ -401,24 +438,36 @@ pub(super) enum Notes {
         after_help = "Matches case-sensitive literal text without trimming or Unicode normalization. Prints one line per Note: complete Entity and Note IDs, local timestamp and an escaped excerpt around the first match. Entities are listed in creation order and Notes in time order (record ID order at the same time). Read the original with axon note show ID NOTE_ID. No matches succeeds with empty stdout. For a query beginning with a hyphen use: axon note search -- '--text'."
     )]
     Search {
+        /// Literal text to find in Note bodies
         #[arg(value_parser = clap::builder::NonEmptyStringValueParser::new())]
         query: String,
     },
     /// Read one Note by its complete stable ID
     Show {
+        /// ID of the Entity the Note belongs to: the complete ID or a unique ending of it
         id: String,
+        /// The complete Note ID, as printed by note add, note list and note search
         note_id: String,
+        /// Include the stored recorder data as JSON
         #[arg(long)]
         recorder_details: bool,
     },
+    /// Read every Note of an Entity in time order
     List {
+        #[arg(help = ENTITY_ID_HELP)]
         id: String,
         /// Include the stored recorder data as JSON
         #[arg(long)]
         recorder_details: bool,
     },
+    /// Append an immutable Note to an Entity
+    #[command(
+        after_help = "Example: axon note add ID -F result.md\n         axon note add ID -F - < result.md"
+    )]
     Add {
+        #[arg(help = ENTITY_ID_HELP)]
         id: String,
+        /// Note text given inline
         #[arg(
             short = 'm',
             long,
@@ -426,6 +475,7 @@ pub(super) enum Notes {
             conflicts_with = "file"
         )]
         message: Option<String>,
+        /// Read UTF-8 Note text from a file; - reads standard input
         #[arg(short = 'F', long)]
         file: Option<PathBuf>,
     },
@@ -625,5 +675,41 @@ mod tests {
             };
             assert_eq!(conditions.condition_timeout, Duration::from_secs(30));
         }
+    }
+
+    #[test]
+    fn every_subcommand_and_argument_has_a_description() {
+        fn check(command: &clap::Command, path: &str, missing: &mut Vec<String>) {
+            for arg in command.get_arguments() {
+                let id = arg.get_id().as_str();
+                if matches!(id, "help" | "version") {
+                    continue;
+                }
+                if arg
+                    .get_help()
+                    .is_none_or(|h| h.to_string().trim().is_empty())
+                {
+                    missing.push(format!("{path} {id}"));
+                }
+            }
+            for child in command.get_subcommands() {
+                if child.get_name() == "help" {
+                    continue;
+                }
+                let child_path = format!("{path} {}", child.get_name());
+                if child
+                    .get_about()
+                    .is_none_or(|a| a.to_string().trim().is_empty())
+                {
+                    missing.push(child_path.clone());
+                }
+                check(child, &child_path, missing);
+            }
+        }
+        let mut command = <Cli as clap::CommandFactory>::command();
+        command.build();
+        let mut missing = Vec::new();
+        check(&command, "axon", &mut missing);
+        assert!(missing.is_empty(), "missing descriptions: {missing:#?}");
     }
 }
