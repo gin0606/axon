@@ -142,6 +142,7 @@ fn declaration_docs_and_template_work_with_broken_management_root() {
         "Every record has id, key, base, lifecycle, title, description, label, parent and needs.",
         "Existing records have a full id and a read-only base fingerprint and lifecycle.",
         "New records have id: null, base: null, a unique key, and lifecycle: undecided or not-started.",
+        "Keys are file-local aliases of 1 to 64 ASCII lowercase letters, digits and hyphens, starting with a lowercase letter.",
         "References use { id: FULL-ID } or { key: local-key }.",
         "The label is required and one of bug, feat, chore, docs, test, refactor or spike",
         "axon import prepare plan.yaml axon import check plan.yaml axon import apply plan.yaml",

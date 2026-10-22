@@ -114,7 +114,7 @@ canonical serializer は次の規則で出力する。
 7. LF 改行、2 space indent、document marker なし、末尾 newline 一つとする。
 8. comment は意味に含めず、canonical rewrite では保持しない。
 
-parser は strict とし、unknown field、重複 key、anchor、alias、merge key、独自 tag、複数 document、mapping 以外の root、要求型と異なる scalar を拒否する。schema label が `axon-declaration/v2` 以外の file は変換せずに拒否する。診断には入力された schema label と対応する schema label を示す。
+parser は strict とし、unknown field、YAML mapping key の重複、anchor、alias、merge key、独自 tag、複数 document、mapping 以外の root、要求型と異なる scalar を拒否する。schema label が `axon-declaration/v2` 以外の file は変換せずに拒否する。診断には入力された schema label と対応する schema label を示す。
 
 ## 競合検知
 
@@ -172,11 +172,13 @@ description の全文差分は file 自体の git diff に任せ、CLI では変
 
 次はいずれも file 全体を拒否し、部分適用しない。診断は原因の分類、対象 ID、固定されている項目名を示す。
 
-- strict YAML 違反、schema label の不一致、unknown field、重複 key、anchor・alias・merge key・tag、`label` の欠落・null・固定集合の外の値
-- ASCII 小文字英数字とハイフン以外を含む `id`、一つの参照 mapping での id と key の併記、`id` が null で `base` が non-null の record、`base` が null の record の `key` 欠落、未解決の ID・key、同じ Entity の二重宣言、解決後の重複した `needs`、自己依存、Issue を親にする参照、新規 Entity の `lifecycle` が `undecided`・`not-started` 以外
+- strict YAML 違反、schema label の不一致、unknown field、YAML mapping key の重複、anchor・alias・merge key・tag、`label` の欠落・null・固定集合の外の値
+- ASCII 小文字英数字とハイフン以外を含む `id`、一つの参照 mapping での id と key の併記、`id` が null で `base` が non-null の record、`base` が null の record の `key` 欠落、`key` の書式違反と重複、未解決の ID・key、同じ Entity の二重宣言、解決後の重複した `needs`、自己依存、Issue を親にする参照、新規 Entity の `lifecycle` が `undecided`・`not-started` 以外
 - 既存 Entity の `lifecycle` の書き換え、既存 Entity の record を `issues` と `groups` の間で移す kind の変更
 - `base` の不一致、または新規 Entity の割り当て済み ID が保存先に存在すること（再試行の Entity ごとの適用済み判定に該当する場合を除く）。保存先の変更と入力側の `base` の改変・null 化は区別せず、いずれも競合として扱う
 - `Completed`・`Cancelled` の title・description・label の差分、`Completed` の `needs` の差分、終了した Group の構成を変える所属変更、終了した Group を親にする作成・所属変更、実効値が `InProgress` か `Completed` の Entity を、移動先の Group 自身かその祖先に採用済みでないものがある場合に、その下へ移す変更、包含の循環、dependency の循環など、共通コアが通常操作でも拒否する変更。新規作成の親は終了していない Group であればよく、採用済みや着手済みである必要はない
+
+`key` の書式違反と重複は別の診断にし、どちらも入力された `key` の値を引用して示し、書式違反の診断には `key` の書式も示す。
 
 読み取り専用項目の書き換えと `base` の不一致の診断は、対象 ID に加えて代わりに行う操作を示す。取り直しを示す場合は、file 全体の record を`axon export`で別 file へ取り直して編集を移すよう示す。対象の record だけを取り直すと、元の file には一致しない `base` が残るためである。
 

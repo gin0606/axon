@@ -313,8 +313,31 @@ fn declaration_rejects_duplicate_record_keys_without_a_self_dependency() {
     let duplicate = text.replace("key: second", "key: first");
     assert_eq!(
         parse(&duplicate).unwrap_err().to_string(),
-        "Declaration: identity/reference: first: invalid or duplicate key"
+        "Declaration: identity/reference: duplicate key \"first\""
     );
+}
+#[test]
+fn declaration_rejects_malformed_keys_with_the_key_rule() {
+    let text = example().serialize(&empty_view()).unwrap();
+    let rule =
+        "1 to 64 ASCII lowercase letters, digits and hyphens, starting with a lowercase letter";
+    for bad in ["", "G", "Ab", "0a", "-a", "a_b", &"a".repeat(65)] {
+        let malformed = text.replace("key: second", &format!("key: \"{bad}\""));
+        assert_eq!(
+            parse(&malformed).unwrap_err().to_string(),
+            format!("Declaration: identity/reference: invalid key {bad:?}: expected {rule}"),
+        );
+    }
+    let with_id = text.replace("id: null\n    key: second", "id: demo-1\n    key: G");
+    assert_ne!(with_id, text);
+    assert_eq!(
+        parse(&with_id).unwrap_err().to_string(),
+        format!("Declaration: identity/reference: demo-1: invalid key \"G\": expected {rule}"),
+    );
+    for good in ["a1", "step-2", &format!("a{}", "-".repeat(63))] {
+        let accepted = text.replace("key: second", &format!("key: {good}"));
+        parse(&accepted).unwrap_or_else(|e| panic!("{good}: {e}"));
+    }
 }
 #[test]
 fn label_is_required_and_limited_to_the_fixed_set() {

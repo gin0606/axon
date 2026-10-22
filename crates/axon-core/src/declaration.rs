@@ -232,10 +232,23 @@ impl Declaration {
             {
                 return Err(invalid(format!("{label}: empty or duplicate Entity ID")));
             }
-            if let Some(key) = &record.key
-                && (!valid_key(key) || !keys.insert(key))
-            {
-                return Err(invalid(format!("{label}: invalid or duplicate key")));
+            if let Some(key) = &record.key {
+                let prefix = || {
+                    record
+                        .id
+                        .as_deref()
+                        .map(|id| format!("{id}: "))
+                        .unwrap_or_default()
+                };
+                if !valid_key(key) {
+                    return Err(invalid(format!(
+                        "{}invalid key {key:?}: expected {KEY_RULE}",
+                        prefix()
+                    )));
+                }
+                if !keys.insert(key) {
+                    return Err(invalid(format!("{}duplicate key {key:?}", prefix())));
+                }
             }
             if let Some(base) = &record.base {
                 if record.id.is_none() || !valid_base(base) {
@@ -431,6 +444,8 @@ impl Declaration {
         Ok(out)
     }
 }
+const KEY_RULE: &str =
+    "1 to 64 ASCII lowercase letters, digits and hyphens, starting with a lowercase letter";
 fn valid_key(s: &str) -> bool {
     (1..=64).contains(&s.len())
         && s.as_bytes()[0].is_ascii_lowercase()

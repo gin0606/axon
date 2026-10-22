@@ -13,8 +13,10 @@ not yet in storage a label under the current schema.
 
 Existing records have a full id and a read-only base fingerprint and lifecycle.
 New records have id: null, base: null, a unique key, and lifecycle: undecided
-or not-started. Keys are file-local aliases. References use { id: FULL-ID } or
-{ key: local-key }. A parent must be a Group; needs lists outgoing dependencies.
+or not-started. Keys are file-local aliases of 1 to 64 ASCII lowercase
+letters, digits and hyphens, starting with a lowercase letter. References use
+{ id: FULL-ID } or { key: local-key }. A parent must be a Group; needs lists
+outgoing dependencies.
 Titles must not be blank. Description text is preserved without trimming.
 The label is required and one of bug, feat, chore, docs, test, refactor or
 spike; a new record is created with the label it declares.
