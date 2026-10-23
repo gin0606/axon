@@ -337,9 +337,52 @@ fn settles(root: &Path) -> Result<bool> {
         }),
     }
 }
+/// Refuses `path` unless one of `users` owns it. Outside Git nothing like Git's ownership check
+/// guards the ancestor walk, so a store another user planted in a shared ancestor such as `/tmp`
+/// would run its conditions as the caller.
+#[cfg(unix)]
+fn owned_by(path: &Path, users: &[u32]) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let owner = fs::symlink_metadata(path)?.uid();
+    if users.contains(&owner) {
+        return Ok(());
+    }
+    Err(invalid(format!(
+        "{} is owned by uid {owner}, not the current user (uid {}); outside Git only a directory and .axon owned by you are used",
+        path.display(),
+        users
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(" or ")
+    )))
+}
+/// The effective user and, under sudo, the user who ran it, as Git's ownership check does.
+#[cfg(unix)]
+fn owners(euid: u32, sudo_uid: Option<&str>) -> Vec<u32> {
+    let sudo = (euid == 0).then(|| sudo_uid?.parse().ok()).flatten();
+    [euid].into_iter().chain(sudo).collect()
+}
+#[cfg(unix)]
+fn owned_by_current_user(path: &Path) -> Result<()> {
+    let users = owners(
+        unsafe { libc::geteuid() },
+        std::env::var("SUDO_UID").ok().as_deref(),
+    );
+    owned_by(path, &users)
+}
+#[cfg(not(unix))]
+fn owned_by_current_user(_: &Path) -> Result<()> {
+    Ok(())
+}
 impl Location {
     /// `init` targets the current worktree and never the store a linked worktree would share.
     pub fn discover(cwd: &Path, init: bool) -> Result<Self> {
+        Self::discover_with(cwd, init, &owned_by_current_user)
+    }
+    /// [`Location::discover`] with `owned` refusing a path outside Git that the caller does not
+    /// own.
+    fn discover_with(cwd: &Path, init: bool, owned: &dyn Fn(&Path) -> Result<()>) -> Result<Self> {
         let cwd = fs::canonicalize(cwd)?;
         if let Some(found) = git(&cwd)? {
             let worktree = found.root.clone();
@@ -362,6 +405,20 @@ impl Location {
             });
         }
         for root in cwd.ancestors() {
+            // Nothing inside a `.axon` is read before its owner is known. A `.axon` that appears
+            // after this probe is not read at all.
+            let directory = root.join(".axon");
+            if !present(&directory)? {
+                continue;
+            }
+            for path in [root, &directory] {
+                owned(path).map_err(|e| {
+                    invalid(format!(
+                        "refusing the management root {}: {e}",
+                        root.display()
+                    ))
+                })?;
+            }
             if settles(root)? {
                 if init && root != cwd {
                     return Err(invalid(format!(
@@ -377,6 +434,7 @@ impl Location {
             }
         }
         if init {
+            owned(&cwd).map_err(|e| invalid(format!("refusing to initialize: {e}")))?;
             Ok(Self {
                 root: cwd.clone(),
                 worktree: cwd,
@@ -570,6 +628,103 @@ mod tests {
         assert_eq!(view.known().count(), 0);
         assert!(root.join(".axon/axon-init.lock").exists());
         assert!(!base.join(".git/axon-init.lock").exists());
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owners_add_the_sudo_user_only_for_root() {
+        assert_eq!(owners(0, Some("1000")), [0, 1000]);
+        assert_eq!(owners(0, Some("x")), [0]);
+        assert_eq!(owners(0, None), [0]);
+        assert_eq!(owners(1000, Some("1001")), [1000]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ownership_is_read_from_the_path_itself() {
+        use std::os::unix::fs::MetadataExt;
+        let base = scratch("owner");
+        let me = fs::metadata(&base).unwrap().uid();
+        owned_by(&base, &[me.wrapping_add(1), me]).unwrap();
+        let error = owned_by(&base, &[me.wrapping_add(1)]).unwrap_err();
+        assert!(error.to_string().contains("is owned by uid"), "{error}");
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// The production check reads the effective user. Root owns `/` on every Unix, so only a
+    /// non-root run (as in CI) can see it refused.
+    #[cfg(unix)]
+    #[test]
+    fn the_current_user_is_the_effective_one() {
+        let base = scratch("current");
+        owned_by_current_user(&base).unwrap();
+        if unsafe { libc::geteuid() } != 0 {
+            let error = owned_by_current_user(Path::new("/")).unwrap_err();
+            assert!(error.to_string().contains("/ is owned by uid 0"), "{error}");
+        }
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let path = fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!("axon-{name}-{:032x}", rand::random::<u128>()));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    /// Discovery outside Git with `foreign` taken for another user's: the refusal must name
+    /// that path, and no store further up is used instead.
+    fn refused(cwd: &Path, init: bool, foreign: &Path) {
+        let owned = |path: &Path| {
+            if path == foreign {
+                Err(invalid(format!("{} is foreign", path.display())))
+            } else {
+                Ok(())
+            }
+        };
+        let error = Location::discover_with(cwd, init, &owned)
+            .err()
+            .expect("a foreign path is refused")
+            .to_string();
+        assert!(
+            error.contains(&format!("{} is foreign", foreign.display())),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn discovery_outside_git_refuses_what_another_user_owns() {
+        let base = scratch("foreign");
+        let inner = base.join("inner");
+        let sub = inner.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        // A store the caller owns further up must not be fallen back to.
+        Location::standalone(&base).unwrap().init("outer").unwrap();
+        Location::standalone(&inner).unwrap().init("inner").unwrap();
+        refused(&sub, false, &inner.join(".axon"));
+        refused(&sub, false, &inner);
+        // Init reports the foreign store above, not an enclosing management root.
+        refused(&sub, true, &inner);
+
+        // Without a header, residue or not, a foreign `.axon` is refused before it is read.
+        fs::remove_file(inner.join(".axon").join(HEADER_FILE)).unwrap();
+        refused(&sub, false, &inner.join(".axon"));
+        fs::write(inner.join(".axon/junk"), "").unwrap();
+        refused(&sub, false, &inner.join(".axon"));
+        let error = Location::discover_with(&sub, false, &|_| Ok(()))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("not a store"), "{error}");
+
+        refused(&inner, true, &inner.join(".axon"));
+
+        // Init creates nothing in a directory another user owns.
+        let empty = scratch("empty");
+        refused(&empty, true, &empty);
+        fs::remove_dir_all(&empty).unwrap();
         fs::remove_dir_all(&base).unwrap();
     }
 }

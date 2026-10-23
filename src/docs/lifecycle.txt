@@ -150,7 +150,10 @@ Storage and recovery
   main worktree's .axon, so linked worktrees without one of their own use
   that store. Git replaces an ignored store without warning when you check
   out or merge a commit that tracks it. Outside Git, the nearest management
-  root is used. Corrupt record files and unmerged index entries are errors; no
+  root is used; an ancestor holding a .axon, where that ancestor or its .axon
+  belongs to another user (other than the sudo caller), stops discovery before
+  anything in it is read, and init refuses a directory another user owns.
+  Corrupt record files and unmerged index entries are errors; no
   fallback or automatic conversion runs. A record file that is its record with
   CRLF line endings is reported as such, with a hint that Git converted it and a
   pointer to the storage guide; the file is not repaired.
