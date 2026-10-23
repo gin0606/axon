@@ -214,6 +214,24 @@ pub struct Recorder {
     )]
     pub data: BTreeMap<String, Value>,
 }
+impl Recorder {
+    /// Writes are held to the depth reads accept, so no record is published that every later
+    /// read would reject.
+    pub(crate) fn validate(&self) -> Result<()> {
+        let mut pending: Vec<(&Value, usize)> = self.data.values().map(|v| (v, 0)).collect();
+        while let Some((value, depth)) = pending.pop() {
+            match value {
+                Value::Array(_) | Value::Object(_) if depth >= RECORDER_DATA_DEPTH => {
+                    return Err(invalid(too_deep()));
+                }
+                Value::Array(items) => pending.extend(items.iter().map(|v| (v, depth + 1))),
+                Value::Object(entries) => pending.extend(entries.values().map(|v| (v, depth + 1))),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Context {
@@ -262,21 +280,31 @@ where
     entries
         .into_iter()
         .map(|(key, raw)| {
-            literal_json(&raw)
+            literal_json(&raw, 0)
                 .map(|value| (key, value))
                 .map_err(serde::de::Error::custom)
         })
         .collect()
 }
 
-fn literal_json(raw: &RawValue) -> serde_json::Result<Value> {
+/// How deeply arrays and objects may nest inside one recorder data value. Each level of
+/// `literal_json` re-reads its children as `RawValue`, which escapes serde_json's own recursion
+/// limit, so without this one record file could overflow the stack of every reader.
+const RECORDER_DATA_DEPTH: usize = 128;
+
+fn too_deep() -> String {
+    format!("recorder data nests deeper than {RECORDER_DATA_DEPTH} levels")
+}
+
+fn literal_json(raw: &RawValue, depth: usize) -> serde_json::Result<Value> {
     let text = raw.get();
     match text.as_bytes()[0] {
+        b'{' | b'[' if depth >= RECORDER_DATA_DEPTH => Err(serde::de::Error::custom(too_deep())),
         b'{' => {
             let entries: BTreeMap<String, &RawValue> = serde_json::from_str(text)?;
             entries
                 .into_iter()
-                .map(|(key, value)| literal_json(value).map(|v| (key, v)))
+                .map(|(key, value)| literal_json(value, depth + 1).map(|v| (key, v)))
                 .collect::<serde_json::Result<serde_json::Map<_, _>>>()
                 .map(Value::Object)
         }
@@ -284,7 +312,7 @@ fn literal_json(raw: &RawValue) -> serde_json::Result<Value> {
             let entries: Vec<&RawValue> = serde_json::from_str(text)?;
             entries
                 .into_iter()
-                .map(literal_json)
+                .map(|value| literal_json(value, depth + 1))
                 .collect::<serde_json::Result<Vec<_>>>()
                 .map(Value::Array)
         }

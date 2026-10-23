@@ -283,6 +283,52 @@ fn record_labels_use_the_fixed_spellings_and_canonical_field_position() {
 }
 
 #[test]
+fn decode_bounds_the_nesting_of_recorder_data() {
+    let (store, ids) = store_with_every_kind();
+    let bytes = encode(store.get(&ids[1]).unwrap()).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    let nested = |open: &str, close: &str, depth: usize| {
+        let value = format!("{}null{}", open.repeat(depth), close.repeat(depth));
+        text.replacen(
+            "\"data\":{\"session_id\":\"session-1\"}",
+            &format!("\"data\":{{\"session_id\":{value}}}"),
+            1,
+        )
+    };
+    for (open, close) in [("[", "]"), ("{\"k\":", "}"), ("[{\"k\":", "}]")] {
+        let levels = open.matches(['[', '{']).count();
+        decode(nested(open, close, 128 / levels).as_bytes()).unwrap();
+        assert!(
+            error(decode(nested(open, close, 128 / levels + 1).as_bytes()))
+                .contains("nests deeper than 128 levels")
+        );
+        // Deep enough to overflow the stack if the depth were unbounded.
+        assert!(error(decode(nested(open, close, 100_000).as_bytes())).contains("nests deeper"));
+    }
+}
+
+#[test]
+fn encode_refuses_recorder_data_that_decode_would_reject() {
+    use serde_json::{Value, json};
+    let (store, ids) = store_with_every_kind();
+    let wraps: [fn(Value) -> Value; 2] = [|v| json!([v]), |v| json!({ "k": v })];
+    for wrap in wraps {
+        let encoded = |depth: usize| {
+            let mut entry = store.get(&ids[1]).unwrap().clone();
+            let Entry::Record(record) = &mut entry else {
+                panic!("expected a record");
+            };
+            let deep = (0..depth).fold(Value::Null, |inner, _| wrap(inner));
+            let data = &mut record.recorder.as_mut().unwrap().data;
+            data.insert("session_id".into(), deep);
+            encode(&entry)
+        };
+        encoded(128).unwrap();
+        assert!(error(encoded(129)).contains("nests deeper than 128 levels"));
+    }
+}
+
+#[test]
 fn decode_rejects_invalid_lifecycle_and_ownership() {
     let (store, ids) = store_with_every_kind();
     let bytes = encode(store.get(&ids[1]).unwrap()).unwrap();
