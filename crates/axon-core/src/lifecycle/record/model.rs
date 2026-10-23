@@ -315,6 +315,9 @@ impl Entry {
         }
     }
     pub(super) fn validate(&self) -> Result<()> {
+        if let Some(recorder) = self.recorder() {
+            recorder.validate()?;
+        }
         match self {
             Self::Record(record) => record.validate(),
             Self::Note(note) => note.validate(),

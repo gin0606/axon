@@ -9,7 +9,7 @@
 - 対象の Entity ID。
 - 記録の種類。登録、lifecycle 遷移（操作名を含む）、文面編集、label の設定、所属変更、dependency の追加と削除、再浮上条件の設定と解除、種類の変換、declaration の適用（title・description・label・parent・needs の変更をまとめて持つ）、解決、Note。
 - 親記録の ID の集合。登録の記録は親を持たず、解決記録は衝突していた全 head を親にし、それ以外の記録は親を一つだけ持つ。Note は親を持たず、因果を持たない集合をなす。
-- 日時（UTC の瞬間と小数秒）、任意の記録者情報（`actor` と任意の JSON `data`）、任意の理由。
+- 日時（UTC の瞬間と小数秒）、任意の記録者情報（`actor` と任意の JSON `data`。入れ子は [128段まで](lifecycle.md#記録者情報とエージェント連携)）、任意の理由。
 - 操作後の現在値（Note 以外）。種類（Issue・Group）、保存値の lifecycle、`InProgress` の Issue なら着手した actor、title、description、label、再浮上条件、親 Group、outgoing dependency。label は固定集合（[label](lifecycle.md#label)）の値で、どの種類の記録の現在値も常に持ち、記録 file では `description` の次に置く。Note は本文と、同じ本文・日時・記録者の Note を別の記録にするための乱数（nonce）を持つ。
 
 記録 ID は記録 file の bytes 全体の BLAKE3 hash を小文字 16 進 64 文字で表したもので、接頭辞を持たない。同じ ID なら同じ内容であり、file 名と内容を照合できる。Note ID も記録 ID である。Entity の短い ID（[識別子と入力](cli.md#識別子と入力)）とは別の契約で、CLI では完全な記録 ID を使う。
