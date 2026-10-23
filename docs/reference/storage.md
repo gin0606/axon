@@ -115,11 +115,11 @@ Git 内では現在の repository を探索境界とし、次の順で保存先�
 
 Git 内では、header file のない段ごとに、header の有無による確定と破損・未知の format・未初期化の判定より先に、その段の worktree の Git index で `.axon/` の下に unmerged な path があるかを検査する（`.axon` に記録などがある場合、残骸しかない場合、`.axon` が存在しない場合のいずれも）。unmerged なら次の段へ進まずに停止し、unmerged を報告する。統合が未解決なまま header が作業 tree から消えた保存先では、header の欠落や未初期化より Git での解決と stage が要ることを示し、その worktree が追跡する保存先を飛ばして次の段の保存先を使わないためである。unmerged の報告は、unmerged な path と、その index を持つ worktree の path を示す単独の診断で、header が作業 tree になくても header の欠落を破損として併記しない。header の有無と破損は、Git での解決と stage の後の探索と読取で判定するためである。linked worktree から main worktree の index で止まった場合も、どの worktree で解決するかが分かる。header file のある段では保存先に確定し、その保存先の unmerged 検査は読取の前に行う。
 
-Git 外では最寄りの header file を持つ祖先を管理 root とし、中断した初期化の残骸しかない `.axon` では探索を止めない。header がなく記録やその他の file がある `.axon` は破損または未知の format として停止する。
+Git 外では最寄りの header file を持つ祖先を管理 root とし、中断した初期化の残骸しかない `.axon` では探索を止めない。header がなく記録やその他の file がある `.axon` は破損または未知の format として停止する。`.axon` のある祖先では、その中を読む前に、祖先の directory と `.axon` の所有者が実行ユーザーであることを検査する。どちらかが他のユーザーのものなら、header の有無や残骸かどうかにかかわらず停止し、別の祖先へ fallback しない。root で実行していて環境変数 `SUDO_UID` があれば、そのユーザーの所有も実行ユーザーの所有とみなす（Git の所有者の検査と同じ扱い）。Git 内では Git 自身が所有者の異なる repository を拒否するが、Git 外の探索にはその検査がなく、`/tmp` のような共有 directory に他のユーザーが置いた保存先の条件を実行ユーザーの権限で実行してしまうためである。
 
 ### 初期化の対象
 
-`axon init` は探索の 2 を使わず、Git 内では現在の worktree root、Git 外では現在 directory を対象とする。Git 外では既存管理 root 内の入れ子初期化を拒否する。
+`axon init` は探索の 2 を使わず、Git 内では現在の worktree root、Git 外では現在 directory を対象とする。Git 外では既存管理 root 内の入れ子初期化を拒否する。Git 外では、探索と同じ所有者の検査を祖先に行い、現在 directory が他のユーザーのものなら作成せずに拒否する。作っても探索がその保存先を拒否するためである。
 
 探索の 2 が働く構成の linked worktree での `axon init` は、main worktree に保存先が既にあれば拒否し、その path を示す。無視する運用では手前に保存先ができて読む先が気づかないまま切り替わり、追跡する運用では別の store ができて後で統合できなくなるためである。main worktree に保存先がない場合と、探索の 2 が働かない構成では拒否せず、作成した保存先が他の worktree からは見えないことを表示する。ただし main worktree の Git index で `.axon/` の下に unmerged な path があれば、統合が未解決なまま header が消えた main worktree の保存先がありうるため、unmerged として拒否する。main worktree を判定できなかった場合は、未初期化として扱わずにエラーとする。それ以外の取り違え（読む先の思い違い、worktree の削除による保存先の消失）は利用者の運用に委ね、`axon init` は既存の保存先を壊さないことだけを保証する。
 
