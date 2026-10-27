@@ -30,7 +30,7 @@ Group の実効 lifecycle、一覧の状況、候補集合は settled な Entity
 
 ## 衝突と通常操作
 
-衝突中の Entity が一つでもある保存先では、解決と Note の追加以外の操作を拒否する。読取はでき、一覧と詳細は衝突中の Entity を示す（[CLI と表示の契約](cli.md#衝突違反と解決)）。declaration の一括反映だけは、衝突に加えて違反のある保存先でも拒否する。例外は途中で止まった反映の再試行で、残りの反映で消える違反は拒否の対象にしない（[Declaration](declaration.md#目的と用途)）。
+衝突中の Entity が一つでもある保存先では、解決と Note の追加以外の操作を拒否する。記録を書かない [条件の許可](candidates.md#条件の許可) の操作はこの規則の対象外とする。保存値と同じ文字列の `axon condition set` は許可だけを書く場合も通常操作で、この規則に従う。`axon condition allow` は対象の Entity が衝突中のときだけ拒否し、`axon condition unapproved` は衝突中の Entity を示さずに実行する。読取はでき、一覧と詳細は衝突中の Entity を示す（[CLI と表示の契約](cli.md#衝突違反と解決)）。declaration の一括反映だけは、衝突に加えて違反のある保存先でも拒否する。例外は途中で止まった反映の再試行で、残りの反映で消える違反は拒否の対象にしない（[Declaration](declaration.md#目的と用途)）。
 
 ## 構造の違反と修復
 
@@ -68,7 +68,7 @@ gap は記録が消せないため解決記録では埋まらない。欠けた�
 
 prefix は Entity ID の先頭に使い、ASCII の小文字英数字とハイフンだけを許す。空文字と、先頭・末尾のハイフンは受け付けない。明示した値は変換せずに検証する。省略した場合は管理 root の directory 名の ASCII 大文字を小文字にした結果を使い、それがこの規則に合わなければ保存先を作らずに失敗し、明示指定を求める。
 
-`axon init` が作るのは次の四つで、いずれも `.axon/` の中にある。初期化を直列化する lock file（[初期化の対象](#初期化の対象)。Git 内では common Git directory に残る）を除き、`.axon/` の外には何も書かず、repository root の file と Git config には触れず、stage・commit もしない。
+`axon init` が作るのは次の四つで、いずれも `.axon/` の中にある。初期化を直列化する lock file（[初期化の対象](#初期化の対象)。Git 内では common Git directory に残る）を除き、`.axon/` の外には何も書かず、repository root の file と Git config には触れず、stage・commit もしない。`axon init` 以外の操作が `.axon/` の外に書くものは [Axon が `.axon/` の外に書くもの](#axon-が-axon-の外に書くもの) にある。
 
 | path | 内容 |
 | --- | --- |
@@ -130,6 +130,36 @@ Git 外では最寄りの header file を持つ祖先を管理 root とし、中
 書込は記録 file の作成だけで行う。既存の記録 file を書き直す、置き換える、削除する機構は持たない。writer は保存先の OS lock を取り、記録の集合を読み、通常操作の前提を検査し、新しい記録を目的の subdirectory に一時 file `<記録 ID>.tmp` として書いて sync し、記録 ID へ rename して directory を sync する。一つの操作が作る記録は一つで、Note の追加も同じ境界で直列化する。例外は `axon import apply` で、一回の lock の下で検証済みの複数の記録（Entity ごとに一つ）を、新規 Entity の登録を親と依存先が先になる順に、次いで既存 Entity の変更の順に公開する（[Declaration](declaration.md#preparecheckapply)）。
 
 lock は `.axon/write.lock` で、writer は置換・削除しない。Git や editor は OS lock に従わないため、同じ worktree で checkout・merge・editor 保存と Axon の書込を並行しない。最終 sync 直後の非協調な書込や、network filesystem での透過的な保証は対象外とする。
+
+### Axon が `.axon/` の外に書くもの
+
+保存先に結び付いて Axon が `.axon/` の外に書くのは次のものだけで、どれも記録ではなく、Git で追跡されない場所に置く。repository root の file と Git config には触れない。利用者が path を指定した file（`axon import prepare` が書き戻す declaration file など）と、デスクトップアプリのデータ directory（[デスクトップアプリ](gui.md)）はこの表に含めない。
+
+| path | 書く操作 | 内容 |
+| --- | --- | --- |
+| Git 内: common Git directory の `axon-init.lock` | `axon init` | 初期化を直列化する OS lock。file は残る |
+| Git 内: 保存先を含む worktree root から求めた common Git directory の `axon-condition-approvals` | `axon condition set --command`・`axon capture --command`・`axon condition allow` | [条件の許可](candidates.md#条件の許可) の file |
+| Git 内: 同じ directory の `axon-condition-approvals.lock` | 同上 | 許可の file の書込を直列化する OS lock。file は残る |
+| Git 外: `<状態 directory>/axon-condition-approvals/<key>` | 同上 | 管理 root ごとの許可の file |
+| Git 外: `<状態 directory>/axon-condition-approvals/<key>.lock` | 同上 | 許可の file の書込を直列化する OS lock。file は残る |
+
+書込の途中では、どの許可の file にも `.tmp` を付けた一時 file が同じ directory にできる。
+
+Git 外の状態 directory は、root の library crate（`axon`）が依存に加える Rust の `dirs` crate で決める。`dirs::state_dir()` が絶対 path を返せばそれを使い、None か相対 path なら `dirs::data_local_dir()` が絶対 path を返せばそれを使う。どちらも使えなければ許可を読めない場合として扱う。OS では分岐しない（Linux では `$XDG_STATE_HOME`、なければ `~/.local/state`。macOS では `state_dir` が None なので `~/Library/Application Support`）。その下の `axon-condition-approvals` という directory はこの用途だけに使い、デスクトップアプリのデータ directory（[デスクトップアプリ](gui.md)）とは分ける。Axon 独自の環境変数で場所を変える手段は持たない。
+
+`<key>` は、header の store ID の UTF-8 bytes、NUL 1 byte、管理 root の symlink を解決した絶対 path の bytes をこの順に連ねた列の BLAKE3 hash を、小文字 16 進 64 文字で表したものである。path だけでは、同じ path に置き直された別の保存先（受け取った archive の展開など）が許可を引き継ぐ。store ID だけでは、header が追跡される file にあり他人の保存先が同じ値を持てるため、別の path の保存先が許可を引き継ぐ。両方を使うので、管理 root の移動・改名でも、同じ path に store ID の異なる保存先を置いても、改めて許可することになる。同じ store を複製したもの（header を共有するもの）を同じ path に置き直した場合は、許可を引き継ぐ。
+
+Git 内の許可の file を置く common Git directory は、現在 directory からの探索の結果ではなく、確定した保存先を含む worktree root を作業 directory にして `git rev-parse --git-common-dir` を実行した結果（symlink を解決した絶対 path）とする。`axon-init.lock` が使う探索の結果の common Git directory とは求め方が異なる。これを求められなければ、許可を読めない場合として扱う。repository に commit した bare repository の directory に `core.worktree` を設定しておくと、その中からの探索では追跡される directory が common Git directory になり、他人が書いた許可の file が読まれうるためである。そのうえで、同じ worktree root で `git rev-parse --git-dir` を実行し、Git directory が worktree root 直下の `.git` に由来することを確かめる。次のどれかに当たる場合は、場所を信頼できないものとして許可の file を読まず、許可を読めない場合として扱い、書込も拒否する。
+
+- worktree root の直下に `.git` がない。
+- Git directory（symlink を解決した絶対 path）が、`.git` が directory ならその directory、`.git` が gitfile ならそれが指す directory と一致しない。Git は Git directory として有効でない `.git`（空の directory など）を飛ばし、祖先にある bare repository の形の directory（`HEAD`・`objects/`・`refs/` と `core.worktree` を持つ `config`）を使いうるためである。
+- common Git directory が worktree root 自身か、その内側にあり、root 直下の `.git` でない（`--separate-git-dir` で worktree の内側に Git directory を置いた場合などを含む）。
+
+archive の展開など clone 以外で受け取った directory は、`.git` を含まなくても、bare repository の形の directory と、ふつうの file としての許可の file を持ち込めるためである。受け取った directory 自体が `.git`（directory か gitfile）を含む場合は、Git directory ごと受け取ったものとして [範囲外](candidates.md#許可の範囲と保存場所) とする。Axon は Git を呼ぶとき `GIT_` で始まる環境変数を除くので、common Git directory は Git の環境変数で変わらない。`$XDG_STATE_HOME` や `HOME` を repository の中へ向けた場合は、Axon はそのまま使い、拒否しない。環境変数は利用者が設定するもので、守る対象である repository の内容からは変えられないためである。
+
+許可の file は UTF-8 の text で、1 行目が形式の識別子 `axon-condition-approvals/v1`、続く各行が許可した digest（小文字 16 進 64 文字）で、各行は LF で終わる。writer は digest を昇順に重複なく書く。reader は手で編集した file も読めるよう、識別子の行を含む各行の前後の空白、空行（空白だけの行を含み、識別子より前でもよい）、CRLF の行末、最後の行の LF の欠け、digest の順序と重複を問わない。空の file と空行だけの file は許可の集合を空とし、writer はそれを置き換える。それ以外の内容（空行を除いた最初の行が識別子でない、digest の形でない行）、通常の file でないもの（symlink を含む）を読めない file として扱い、変換・修復しない。file がなければ許可の集合は空とする。利用者は digest の行を消して許可を取り消せ、file を消すとすべての許可を捨てる。読めない file は利用者が直すか消すまで読めないままで、診断はその path を示す。
+
+許可の file の書込は、その file の lock を取り、file を読み直して digest を加え、一時 file に全体を書いて sync してから rename で置き換え、directory を sync する。追記はしない。書込で必要な directory がなければ作る。読めない file があれば書込も拒否し、上書きしない。reader は lock を取らず、rename の前後どちらかの内容を読む。保存先の書込 lock と許可の lock を同時には持たない。`axon condition set` と `axon capture` は記録を公開して保存先の書込 lock を放した後に許可の lock を取り、`axon condition allow` は保存先の書込 lock を取らずに記録の集合を読む。許可の lock は保存先の書込 lock とは別のものである。追跡する運用では同じ clone の worktree ごとに保存先と書込 lock が分かれ、許可の file だけを共有するためである。
 
 ## 検査と解決の入口
 

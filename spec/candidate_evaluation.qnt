@@ -5,9 +5,12 @@
 // 浮上に関係なく進行中の Issue と実効 lifecycle が InProgress の Group を対象にする。
 // show は対象が tasks の行になる場合と同じ範囲（対象自身と、Group なら着手可能な子孫の Issue、
 // それらの祖先）だけを評価し、対象の状況と詰まっている理由がその範囲で決まることを検査する。
+// 条件の許可は、このマシンで許可したコマンド内容の集合として持つ。利用者が CLI で指定して設定した条件は
+// 自動で許可し、統合や解決で入った条件は許可しない。許可していない条件は実行せず、成立として扱う。
 // 対象外: 行の状況（Ready・Blocked など）の導出（group_lifecycle が扱い、このモデルは行の集合だけを見る）、
 // 実際のコマンド内容と shell、作業ディレクトリ、終了コードの解釈、timeout と中断、
-// 出力の上限と診断、非実行の閲覧、永続化、並行実行。これらは実装側で検証する。
+// 出力の上限と診断、非実行の閲覧、永続化、並行実行、許可の保存場所と digest、許可を読めない場合。
+// これらは実装側で検証する。
 // 対応する契約: ../docs/reference/candidates.md
 module candidate_evaluation {
   import lifecycle_rules.* from "lifecycle_rules"
@@ -16,41 +19,57 @@ module candidate_evaluation {
   // 保存する条件は Unset か外部コマンド一つ。変更は置き換え、解除は Unset への変更になる。
   // コマンド内容は不透明な識別子へ抽象化し、探索では2つの識別子で置き換えを区別する。
   // 識別子の数は探索上の制限で、製品のコマンド種類や長さの上限ではない。
-  // 外部の結果は評価時に成立・未成立・判定失敗から選ぶ。
+  // 外部の結果は評価時に成立・未成立・判定失敗から選ぶ。許可されていない外部コマンドは実行せず、
+  // 結果を Unapproved とする。Unapproved は浮上の判定では成立と同じに扱う。
   type Setting = Unset | ExternalCommand(int)
-  type ObservationResult = Unevaluated | Satisfied | Unsatisfied | EvaluationFailed
+  type ObservationResult = Unevaluated | Satisfied | Unsatisfied | EvaluationFailed | Unapproved
   // ShowTarget は axon show ID の1回の表示で、Id は対象。未登録の枠を指す場合は何も評価しない。
   type ListingKind = JudgmentList | TasksList | ShowTarget(Id)
   type ListingStatus = Idle | Running | Succeeded(Set[Id]) | Failed(Id)
 
   // Listing は1回の取得の間だけ持つ検証用の一時状態で、Entity への保存項目ではない。
   // cache は同じ呼び出し中の評価結果を共有し、counts は評価回数、
+  // runs は実際に外部コマンドを起動した回数、approvals は取得の開始時に読んだ許可の集合。
   // previousCache は前回と異なる結果への到達性を調べる ghost state で候補判定には参照しない。
   // 各 map は未登録の枠も含む全 ID を持ち、未登録の枠は Unevaluated・0 回のまま使われない。
   type Listing = {
     kind: ListingKind,
     status: ListingStatus,
     base: Set[Id],
+    approvals: Set[int],
     cache: Id -> ObservationResult,
     counts: Id -> int,
+    runs: Id -> int,
     previousCache: Id -> ObservationResult,
   }
   type ListingEvent = ListingInitialized | Began | EvaluatedEntity(Id)
-    | Published | SettingEdited(Id) | EntitySetChanged
+    | Published | SettingEdited(Id) | EntitySetChanged | Allowed((Id, int))
+  // approving は SettingEdited が自動で許可する設定（利用者が CLI でコマンドを指定した設定）だったことを示す。
   type ListingObservation = {
     beforeEntitySet: EntitySetState,
     beforeSettings: Id -> Setting,
+    beforeApproved: Set[int],
     beforeListing: Listing,
     event: ListingEvent,
+    approving: bool,
   }
   var settings: Id -> Setting
+  // このマシンで許可したコマンド内容の集合。許可の範囲（Git 内では clone、Git 外では管理 root）ごとに一つで、
+  // 記録には含まない。利用者が許可の file を手で編集して取り消す経路はモデルに含めない。
+  var approved: Set[int]
   var listing: Listing
   var listingObservation: ListingObservation
 
   pure def emptyListing(kind: ListingKind): Listing = {
-    kind: kind, status: Idle, base: Set(),
-    cache: IDS.mapBy(_ => Unevaluated), counts: IDS.mapBy(_ => 0),
+    kind: kind, status: Idle, base: Set(), approvals: Set(),
+    cache: IDS.mapBy(_ => Unevaluated), counts: IDS.mapBy(_ => 0), runs: IDS.mapBy(_ => 0),
     previousCache: IDS.mapBy(_ => Unevaluated),
+  }
+  // 浮上の判定で成立として扱う結果。未許可は実行していないが、浮上を妨げない。
+  pure def surfacing(r: ObservationResult): bool = r == Satisfied or r == Unapproved
+  pure def isUnapproved(setting: Setting, approvals: Set[int]): bool = match setting {
+    | ExternalCommand(c) => not(approvals.contains(c))
+    | Unset => false
   }
 
   // group_lifecycle の init に加え、全 Entity の条件を Unset から始める。
@@ -58,11 +77,13 @@ module candidate_evaluation {
   action queryInit = all {
     init,
     settings' = IDS.mapBy(_ => Unset),
+    approved' = Set(),
     listing' = emptyListing(JudgmentList),
     listingObservation' = {
       beforeEntitySet: initialEntitySet,
-      beforeSettings: IDS.mapBy(_ => Unset), beforeListing: emptyListing(JudgmentList),
-      event: ListingInitialized,
+      beforeSettings: IDS.mapBy(_ => Unset), beforeApproved: Set(),
+      beforeListing: emptyListing(JudgmentList),
+      event: ListingInitialized, approving: false,
     },
   }
 
@@ -86,7 +107,7 @@ module candidate_evaluation {
   pure def requiredEntities(s: EntitySetState, q: Listing): Set[Id] =
     q.base.union(q.base.map(e => ancestorsOf(s, e)).flatten())
   pure def parentsSatisfied(s: EntitySetState, q: Listing, e: Id): bool =
-    ancestorsOf(s, e).forall(a => q.cache.get(a) == Satisfied)
+    ancestorsOf(s, e).forall(a => surfacing(q.cache.get(a)))
   pure def pending(s: EntitySetState, q: Listing): Set[Id] =
     requiredEntities(s, q).filter(e => q.cache.get(e) == Unevaluated and parentsSatisfied(s, q, e))
 
@@ -94,41 +115,53 @@ module candidate_evaluation {
   pure def workingEntities(s: EntitySetState): Set[Id] =
     workingIssues(s).union(groupsWithWorkingDescendant(s))
   pure def visible(s: EntitySetState, q: Listing): Set[Id] = {
-    val surfacedBase = q.base.filter(e => q.cache.get(e) == Satisfied and parentsSatisfied(s, q, e))
+    val surfacedBase = q.base.filter(e => surfacing(q.cache.get(e)) and parentsSatisfied(s, q, e))
     if (q.kind == TasksList) surfacedBase.union(workingEntities(s)) else surfacedBase
   }
   def recordListing(event: ListingEvent): ListingObservation = {
-    beforeEntitySet: entitySet, beforeSettings: settings, beforeListing: listing, event: event,
+    beforeEntitySet: entitySet, beforeSettings: settings, beforeApproved: approved,
+    beforeListing: listing, event: event, approving: false,
   }
   action preserveBase = all {
     entitySet' = entitySet, conditions' = conditions, observation' = observation, history' = history,
   }
 
-  // 取得は開始・Entity ごとの評価・公開の3段で進む。開始時に対象を確定し、
+  // 取得は開始・Entity ごとの評価・公開の3段で進む。開始時に対象と許可の集合を確定し、
   // 前回の結果は引き継がない。
   action beginListing(kind: ListingKind): bool = all {
     listing.status != Running,
     preserveBase,
     settings' = settings,
+    approved' = approved,
     listing' = { ...emptyListing(kind), status: Running, base: baseCandidates(entitySet, kind),
-      previousCache: listing.cache },
+      approvals: approved, previousCache: listing.cache },
     listingObservation' = recordListing(Began),
   }
 
-  // 評価できるのは祖先がすべて成立した未評価の Entity だけで、各 Entity は1回の取得で最大一回。
-  // 未設定は常に成立とする。判定失敗はその場で取得全体を失敗にし、途中の候補を公開しない。
+  // 評価できるのは祖先がすべて浮上した未評価の Entity だけで、各 Entity は1回の取得で最大一回。
+  // 未設定は常に成立とする。開始時の許可の集合にない外部コマンドは実行せず Unapproved とし、
+  // 未設定と同じく1回の観測ステップとして数える。判定失敗はその場で取得全体を失敗にし、
+  // 途中の候補を公開しない。
   action evaluateEntity(e: Id, result: ObservationResult): bool = all {
     listing.status == Running,
     pending(entitySet, listing).contains(e),
-    Set(Satisfied, Unsatisfied, EvaluationFailed).contains(result),
-    settings.get(e) == Unset implies result == Satisfied,
-    preserveBase,
-    settings' = settings,
-    listing' = {
-      ...listing,
-      status: if (result == EvaluationFailed) Failed(e) else Running,
-      cache: listing.cache.set(e, result),
-      counts: listing.counts.set(e, listing.counts.get(e) + 1),
+    val unapproved = isUnapproved(settings.get(e), listing.approvals)
+    val runsCommand = settings.get(e) != Unset and not(unapproved)
+    // 未許可なら外部の結果の選択によらず Unapproved とする。
+    val observed = if (unapproved) Unapproved else result
+    all {
+      Set(Satisfied, Unsatisfied, EvaluationFailed).contains(result),
+      settings.get(e) == Unset implies result == Satisfied,
+      preserveBase,
+      settings' = settings,
+      approved' = approved,
+      listing' = {
+        ...listing,
+        status: if (observed == EvaluationFailed) Failed(e) else Running,
+        cache: listing.cache.set(e, observed),
+        counts: listing.counts.set(e, listing.counts.get(e) + 1),
+        runs: listing.runs.set(e, listing.runs.get(e) + if (runsCommand) 1 else 0),
+      },
     },
     listingObservation' = recordListing(EvaluatedEntity(e)),
   }
@@ -139,6 +172,7 @@ module candidate_evaluation {
     pending(entitySet, listing).size() == 0,
     preserveBase,
     settings' = settings,
+    approved' = approved,
     listing' = { ...listing, status: Succeeded(visible(entitySet, listing)) },
     listingObservation' = recordListing(Published),
   }
@@ -147,21 +181,47 @@ module candidate_evaluation {
   // どちらも取得中には行わず、cache を初期化して次の取得へ結果を引き継がない。
   // 取得中に保存状態を固定するのは単一呼び出しを調べるための前提であり、
   // 並行更新や snapshot の実装契約を決めるものではない。
-  action editSetting(e: Id, setting: Setting): bool = all {
+  // approve は利用者が CLI でコマンドを指定した設定（axon capture --command・axon condition set --command）で、
+  // そのコマンドを自動で許可する。approve のない変更は、統合で取り込んだ記録や axon resolve で採った head の値を表す。
+  action editSetting(e: Id, setting: Setting, approve: bool): bool = all {
     listing.status != Running,
     entitySet.registered.contains(e),
     settings.get(e) != setting,
     preserveBase,
     settings' = settings.set(e, setting),
+    approved' = match setting {
+      | ExternalCommand(c) => if (approve) approved.union(Set(c)) else approved
+      | Unset => approved
+    },
     listing' = emptyListing(listing.kind),
-    listingObservation' = recordListing(SettingEdited(e)),
+    listingObservation' = { ...recordListing(SettingEdited(e)), approving: approve },
   }
   action changeEntitySet = all {
     listing.status != Running,
     step,
     settings' = settings,
+    approved' = approved,
     listing' = emptyListing(listing.kind),
     listingObservation' = recordListing(EntitySetChanged),
+  }
+  // Entity e の現在の条件の許可。axon condition allow と、保存値と同じ文字列の axon condition set（記録を作らない）を表す。
+  // 評価を呼ばず、取得の途中でも起きうるが、取得は開始時に読んだ許可の集合を使うため、その取得の結果は変わらない。
+  // 衝突中の Entity と digest の照合はこのモデルの対象外で、実装側で検証する。
+  pure def commandOf(setting: Setting): Set[int] = match setting {
+    | ExternalCommand(c) => Set(c)
+    | Unset => Set()
+  }
+  action allowEntity(e: Id): bool = all {
+    entitySet.registered.contains(e),
+    commandOf(settings.get(e)).exists(c => not(approved.contains(c))),
+    nondet c = commandOf(settings.get(e)).oneOf()
+    all {
+      approved' = approved.union(Set(c)),
+      listingObservation' = recordListing(Allowed((e, c))),
+      preserveBase,
+      settings' = settings,
+      listing' = listing,
+    },
   }
 
   // 取得の各段と、取得外の条件編集・Entity集合の変更を混ぜて探索する。show の対象は全 ID から選ぶ。
@@ -170,9 +230,11 @@ module candidate_evaluation {
     nondet setting = Set(Unset, ExternalCommand(0), ExternalCommand(1)).oneOf()
     nondet kind = Set(JudgmentList, TasksList).union(IDS.map(id => ShowTarget(id))).oneOf()
     nondet result = Set(Satisfied, Unsatisfied, EvaluationFailed).oneOf()
+    nondet approve = Bool.oneOf()
     any {
       changeEntitySet,
-      editSetting(e, setting),
+      editSetting(e, setting, approve),
+      allowEntity(e),
       beginListing(kind),
       evaluateEntity(e, result),
       publishListing,
@@ -194,22 +256,24 @@ module candidate_evaluation {
         listing.status != Running,
         any { performIssue(id, op), performGroup(id, op, true) },
         settings' = settings,
+        approved' = approved,
         listing' = emptyListing(listing.kind),
         listingObservation' = recordListing(EntitySetChanged),
       },
-      editSetting(e, setting),
+      editSetting(e, setting, true),
       beginListing(TasksList),
       evaluateEntity(e, result),
       publishListing,
     }
   }
 
-  // 未評価の入力をすべて成立と仮定した場合と、すべて未成立と仮定した場合の
-  // 抽象モデル側の候補集合を求める。どちらも公開した結果と一致すれば、
+  // 未許可を成立に固定したうえで、残りの未評価の入力をすべて成立と仮定した場合と、
+  // すべて未成立と仮定した場合の抽象モデル側の候補集合を求める。どちらも公開した結果と一致すれば、
   // 省いた評価が候補の欠落を隠していないことになる。
   pure def observedConditions(q: Listing, unseen: bool): Conditions =
     IDS.mapBy(e => match q.cache.get(e) {
       | Satisfied => true
+      | Unapproved => true
       | Unevaluated => unseen
       | _ => false
     })
@@ -238,6 +302,18 @@ module candidate_evaluation {
   // 条件編集と明示操作が評価を呼ばないこと、進行中の Issue を評価しないこと。
   val invQueryPreservesEntitySet = listingObservation.event != EntitySetChanged
     implies entitySet == listingObservation.beforeEntitySet
+  // 許可が増えるのは、自動で許可する設定でそのコマンドを指定したときと、Entity の現在の条件を許可したときだけで、
+  // 減ることはない。自動で許可しない設定（統合・解決で入った値）は許可を変えない。
+  val invApprovalOwnership = match listingObservation.event {
+    | Allowed(allowed) => approved == listingObservation.beforeApproved.union(Set(allowed._2))
+        and settings.get(allowed._1) == ExternalCommand(allowed._2)
+    | SettingEdited(e) => if (listingObservation.approving) (match settings.get(e) {
+          | ExternalCommand(c) => approved == listingObservation.beforeApproved.union(Set(c))
+          | Unset => approved == listingObservation.beforeApproved
+        })
+        else approved == listingObservation.beforeApproved
+    | _ => approved == listingObservation.beforeApproved
+  }
   val invSettingsOwnership = match listingObservation.event {
     | SettingEdited(e) => IDS.exclude(Set(e)).forall(other =>
         settings.get(other) == listingObservation.beforeSettings.get(other))
@@ -252,6 +328,33 @@ module candidate_evaluation {
   })
   val invUnsetSatisfied = IDS.forall(e =>
     settings.get(e) == Unset and listing.counts.get(e) == 1 implies listing.cache.get(e) == Satisfied)
+  // 評価した Entity が未許可になるのは、開始時の許可の集合にない外部コマンドを持つときだけで、そのときは実行しない。
+  // 実行するのは許可済みの外部コマンドだけで、未設定も実行しない。
+  val invUnapprovedNotRun = IDS.forall(e => and {
+    listing.counts.get(e) == 1 implies
+      ((listing.cache.get(e) == Unapproved) iff isUnapproved(settings.get(e), listing.approvals)),
+    listing.runs.get(e) <= listing.counts.get(e),
+    (listing.runs.get(e) == 1) iff (listing.counts.get(e) == 1
+      and settings.get(e) != Unset and not(isUnapproved(settings.get(e), listing.approvals))),
+  })
+  // 取得が使う許可の集合は開始時に読んだもので、取得の途中の許可はその取得に入らない。許可は取り消さない。
+  val invApprovalSnapshot = and {
+    listing.approvals.subseteq(approved),
+    match listingObservation.event {
+      | Began => listing.approvals == approved
+      | EvaluatedEntity(_) => listing.approvals == listingObservation.beforeListing.approvals
+      | Published => listing.approvals == listingObservation.beforeListing.approvals
+      | Allowed(_) => listing.approvals == listingObservation.beforeListing.approvals
+      | _ => true
+    },
+  }
+  // 未許可は浮上を妨げない。祖先が浮上した未許可の対象は、成功した結果に含まれる。
+  val invUnapprovedSurfaces = match listing.status {
+    | Succeeded(result) => listing.base.forall(e =>
+        listing.cache.get(e) == Unapproved and parentsSatisfied(entitySet, listing, e)
+          implies result.contains(e))
+    | _ => true
+  }
   val invFreshInvocation = listingObservation.event == Began implies
     IDS.forall(e => listing.counts.get(e) == 0 and listing.cache.get(e) == Unevaluated)
   val invCacheShared = match listingObservation.event {
@@ -282,9 +385,13 @@ module candidate_evaluation {
       }
     | _ => true
   }
+  // 条件の設定（自動の許可を含む）、明示操作、allow は評価を呼ばない。allow は取得中の cache・回数も変えない。
   val invNoEvaluationForEditsOrWork = match listingObservation.event {
     | SettingEdited(_) => listing.status == Idle and IDS.forall(e => listing.counts.get(e) == 0)
     | EntitySetChanged => listing.status == Idle and IDS.forall(e => listing.counts.get(e) == 0)
+    | Allowed(_) => listing.counts == listingObservation.beforeListing.counts
+      and listing.runs == listingObservation.beforeListing.runs
+      and listing.cache == listingObservation.beforeListing.cache
     | _ => true
   }
   val invBaseStableDuringQuery = listing.status != Idle
@@ -427,6 +534,37 @@ module candidate_evaluation {
     ancestorsOf(entitySet, e).size() >= 2 and settings.get(e) != Unset
       and listing.cache.get(e) == Unevaluated
       and ancestorsOf(entitySet, e).exists(a => listing.cache.get(a) == Unsatisfied))
+  // witness: 許可。利用者が指定した設定の自動の許可、許可しない設定（統合・解決）で入った条件が
+  // 未許可として実行されずに表示されること、未許可の祖先の配下を評価すること、allow 後の次の取得での実行、
+  // 取得の途中の allow がその取得の未許可を変えないこと。
+  val wAutoApproved = match listingObservation.event {
+    | SettingEdited(e) => match settings.get(e) {
+        | ExternalCommand(c) => not(listingObservation.beforeApproved.contains(c)) and approved.contains(c)
+        | Unset => false
+      }
+    | _ => false
+  }
+  val wUnapprovedSetting = match listingObservation.event {
+    | SettingEdited(e) => isUnapproved(settings.get(e), approved)
+    | _ => false
+  }
+  val wUnapprovedVisible = listingObservation.event == Published and (match listing.status {
+    | Succeeded(result) => result.exists(e => listing.cache.get(e) == Unapproved)
+    | _ => false
+  })
+  val wUnapprovedAncestorDescends = listingObservation.event == Published and listing.base.exists(e =>
+    listing.counts.get(e) == 1 and ancestorsOf(entitySet, e).exists(a => listing.cache.get(a) == Unapproved))
+  val wRunAfterAllow = match listingObservation.event {
+    | EvaluatedEntity(e) => listing.previousCache.get(e) == Unapproved and listing.runs.get(e) == 1
+    | _ => false
+  }
+  val wAllowDuringListing = match listingObservation.event {
+    | Allowed(allowed) => listing.status == Running and IDS.exists(e =>
+        listing.cache.get(e) == Unapproved and settings.get(e) == ExternalCommand(allowed._2))
+    | _ => false
+  }
+  val wUnapprovedAfterAllowPublished = listingObservation.event == Published and IDS.exists(e =>
+    listing.cache.get(e) == Unapproved and not(isUnapproved(settings.get(e), approved)))
   val wNoEligibleSkipsConfigured = wEmptyListing and listing.base.size() == 0
     and entitySet.registered.exists(e => settings.get(e) != Unset)
     and IDS.forall(e => listing.counts.get(e) == 0)

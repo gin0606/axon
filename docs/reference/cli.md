@@ -30,7 +30,7 @@ option値の先頭hyphenは `--description='--text'` のように渡す。構文
 
 `axon list`は保存済み全件を作成日時の昇順、同時刻はID順で表示する。`--kind issue|group`、`--label bug|feat|chore|docs|test|refactor|spike`、`--lifecycle undecided|not-started|in-progress|completed|cancelled`、`--terminal=true|false` はANDで組み合わせる。kindとlabelは現在値、`--lifecycle` は実効値で絞り込むため、配下の仕事が始まったGroupは `in-progress` に当たり `not-started` に当たらない。terminalは`Completed`または`Cancelled`で、着手できることや浮上とは別。`--search` は現在title・本文だけのcase-sensitiveなliteral一致。Unicode正規化やtrimをせず、空文字は構文エラー。%、_、正規表現記号に特殊な意味はない。検索時だけMatchedに該当field（Title、Description）を付記する。
 
-`axon proposals|tasks`は `--kind`・`--label`・`--search` をANDで組み合わせて候補を絞ってから、必要な祖先を含め条件を評価する。`--label` はkindと同じく候補を絞るだけで、評価する条件の範囲の規則は変えない。一回の呼出しで同じ条件を重複評価しない。除外候補の条件は評価しないが、残った候補の祖先ならkindやlabelが異なっても評価し、`axon tasks` は残ったGroupの行の状況を導出するためにその子孫の着手可能なIssueと途中のGroupも評価する。評価失敗時に部分一覧をstdoutへ出さない。時間制限は正整数とms/s/m/hで、既定30s。詳細は [候補と外部条件](candidates.md)。`axon show`も既定で対象の行に必要な範囲の条件を評価し、`--skip-conditions` を付けると評価しない。`axon list`は外部条件コマンドを実行しない。
+`axon proposals|tasks`は `--kind`・`--label`・`--search` をANDで組み合わせて候補を絞ってから、必要な祖先を含め条件を評価する。`--label` はkindと同じく候補を絞るだけで、評価する条件の範囲の規則は変えない。一回の呼出しで同じ条件を重複評価しない。除外候補の条件は評価しないが、残った候補の祖先ならkindやlabelが異なっても評価し、`axon tasks` は残ったGroupの行の状況を導出するためにその子孫の着手可能なIssueと途中のGroupも評価する。評価失敗時に部分一覧をstdoutへ出さない。時間制限は正整数とms/s/m/hで、既定30s。詳細は [候補と外部条件](candidates.md)。`axon show`も既定で対象の行に必要な範囲の条件を評価し、`--skip-conditions` を付けると評価しない。`axon list`は外部条件コマンドを実行しない。評価の範囲に入っても、[許可](candidates.md#条件の許可) されていない条件は実行しない。
 
 一覧とGroupの子一覧は、状態ごとに区切らず作成日時の古い順へ統一する。作成日時そのものを通常の各行へ表示する必要はない。同時刻はID順で安定させる。
 
@@ -48,7 +48,9 @@ option値の先頭hyphenは `--description='--text'` のように渡す。構文
 | `Cancelled` | `Cancelled` | 取りやめ |
 | `Conflicted` | headが複数ある | 衝突中で現在値がない。他のすべての状況より優先する |
 
-Groupは、衝突中なら `Conflicted`、保存値が `Undecided`・`Completed`・`Cancelled` ならその状態名を示し、保存値が `NotStarted` なら配下から導出した `Empty`・`Confirmable`・`Ready`・`InProgress`・`Blocked` のいずれかを示す。GroupにはIssueの `InProgress+Blocked` に当たる複合表示を設けず、Groupの状況欄に `Unsurfaced` も設けない。`axon tasks` と `axon show` は評価した再浮上条件を使って着手候補の子孫から `Ready` を決め、条件を評価しない `axon list` と `axon show --skip-conditions` は着手可能な子孫から決める。このため、浮上していない着手可能なIssueだけを配下に持つGroupは、`axon tasks`・`axon show` では `Blocked`、`axon list`・`axon show --skip-conditions` では `Ready` になる。`Undecided` のEntityの状況欄は浮上の有無にかかわらず `Undecided` のままにする。衝突中のEntityは現在値を持たないため、`axon proposals`・`axon tasks` の行にならず、`axon list` と `axon show` で `Conflicted` として読む。Groupの行の状況と子孫の集計では衝突中の子孫を存在しないものとして導出し、衝突中の祖先は採用済みでない祖先として扱う（配下のIssueは `Blocked`）。違反に含まれるEntity（[構造の違反と修復](storage.md#構造の違反と修復)）は、Issue・Groupとも状況の後ろに `+Invalid` を付す（`Completed+Invalid`、`InProgress+Blocked+Invalid` など）。衝突中のEntityの行のlabelとタイトルは、それぞれheadの値が一致すればその値、異なれば記録ID順で最初のheadの値を示す。衝突・違反・記録の欠けのある保存先を読む一覧と詳細は、件数と `axon storage check` への案内をstderrに一行で示す。
+Groupは、衝突中なら `Conflicted`、保存値が `Undecided`・`Completed`・`Cancelled` ならその状態名を示し、保存値が `NotStarted` なら配下から導出した `Empty`・`Confirmable`・`Ready`・`InProgress`・`Blocked` のいずれかを示す。GroupにはIssueの `InProgress+Blocked` に当たる複合表示を設けず、Groupの状況欄に `Unsurfaced` も設けない。`axon tasks` と `axon show` は評価した再浮上条件を使って着手候補の子孫から `Ready` を決め、条件を評価しない `axon list` と `axon show --skip-conditions` は着手可能な子孫から決める。このため、浮上していない着手可能なIssueだけを配下に持つGroupは、`axon tasks`・`axon show` では `Blocked`、`axon list`・`axon show --skip-conditions` では `Ready` になる。`Undecided` のEntityの状況欄は浮上の有無にかかわらず `Undecided` のままにする。衝突中のEntityは現在値を持たないため、`axon proposals`・`axon tasks` の行にならず、`axon list` と `axon show` で `Conflicted` として読む。Groupの行の状況と子孫の集計では衝突中の子孫を存在しないものとして導出し、衝突中の祖先は採用済みでない祖先として扱う（配下のIssueは `Blocked`）。違反に含まれるEntity（[構造の違反と修復](storage.md#構造の違反と修復)）は、Issue・Groupとも状況の後ろに `+Invalid` を付す（`Completed+Invalid`、`InProgress+Blocked+Invalid` など）。`axon proposals`・`axon tasks`・`axon show` は、その呼び出しで評価の範囲に入り自身の条件が [未許可](candidates.md#未許可の条件の評価) だったEntityの状況の後ろに `+Unapproved` を付す（`Ready+Unapproved`、`Undecided+Unapproved`、`Blocked+Unapproved+Invalid` など）。両方が当たれば `+Unapproved` を先に置く。印はそのEntity自身の行だけに付け、未許可の祖先の配下の行には付けない。`axon show` では、対象の状況欄に加えて、所属・依存先・依存元・子孫ツリーなど関連するEntityの行にも、その表示の評価範囲で未許可だったEntityなら付ける。条件を評価しない `axon list`、`axon show --skip-conditions`、`axon condition unapproved` の行と、評価しない `axon show` の対象（`Undecided`・`InProgress`・終了したEntity）には付けない。このため `Undecided` のEntityは、`axon proposals` の行では `Undecided+Unapproved` になり、同じEntityの `axon show` の状況欄は `Undecided` のままになる。衝突中のEntityの行のlabelとタイトルは、それぞれheadの値が一致すればその値、異なれば記録ID順で最初のheadの値を示す。衝突・違反・記録の欠けのある保存先を読む一覧と詳細は、件数と `axon storage check` への案内をstderrに一行で示す。
+
+`axon proposals|tasks|show` の呼び出しで未許可のEntityが一件以上あれば、stderrに `Conditions not run: N unapproved (treated as satisfied); review with axon condition unapproved and allow with axon condition allow ID --digest DIGEST` を一行で示す。`N` はその呼び出しで評価の範囲に入り、未許可だったEntityの数である。行として示さないのに評価するEntity（絞り込みで除外された行の祖先、`axon tasks` がGroupの行の状況のために評価する除外された子孫、`axon show` の範囲のEntity）も数えるため、印の付いた行の数と一致しないことがある。許可を読めず、評価の範囲に外部コマンドの条件が一つ以上あった場合は、この行の代わりに `Conditions not run: approvals could not be read (DETAIL); every condition was treated as unapproved` を示す（[許可を読めない場合](candidates.md#許可を読む時点と読めない場合)）。どちらも終了codeを変えず、`--trace-conditions` は実行しなかった条件を表示しない。判定失敗で一覧の取得または表示がエラーになった呼び出しでは、どちらの行も出さない。
 
 祖先の採用待ちも`Blocked`に含める。これは表示上のまとめ方で、保存する包含と明示dependencyの区別は維持する。Groupの未終了の子は最終確認前の進捗として子一覧へ示し、明示dependencyと混ぜない。一行の中に表示する値（タイトル、理由、actor、条件コマンド、親のタイトル）に含まれる改行は `\n` として表示し、保存された文字列が記録の行や節の見出しを装えないようにする。
 
@@ -85,7 +87,7 @@ Groupの場合は、この共通表示の末尾へ短い集計と全子孫のツ
 
 衝突中のEntityの `axon show` は本文の前へ `Conflicted` の節を置き、`axon resolve ID` と同じheadの一覧を示す。本文と所属は記録ID順で最初のheadの値を示し、待ち理由と `Stalled` の節は置かない。違反に含まれるEntityは `Invalid` の節に自身の違反を種類ごとに一行で示し、関係するEntity（存在しない親・依存先のID、終了した親、未採用の祖先、未完了の依存先、循環に含まれるEntity）を添える。
 
-`axon show ID --details` は保存情報の明示的な詳細入口。通常の待ち理由節を保存情報の詳細へ置き換え、親・条件・全直接dependency・直接dependentを取得する。状況欄の導出は `--details` の有無で変わらず、評価を避けるには `--skip-conditions` を併せて付ける。同じ関係を複数の節へ重複して列挙しない。Issueでは状況と異なる場合だけ保存lifecycleを `Lifecycle:` として別記する。Groupでは `Lifecycle:` に実効値を示し、保存値と異なれば `Lifecycle: InProgress (stored NotStarted)` のように保存値を併記する。条件未設定、親なし、空の依存集合も `(none)` と明示する。Groupの全子孫ツリーは通常表示と同様に表示する。
+`axon show ID --details` は保存情報の明示的な詳細入口。通常の待ち理由節を保存情報の詳細へ置き換え、親・条件・全直接dependency・直接dependentを取得する。状況欄の導出は `--details` の有無で変わらず、評価を避けるには `--skip-conditions` を併せて付ける。同じ関係を複数の節へ重複して列挙しない。Issueでは状況と異なる場合だけ保存lifecycleを `Lifecycle:` として別記する。Groupでは `Lifecycle:` に実効値を示し、保存値と異なれば `Lifecycle: InProgress (stored NotStarted)` のように保存値を併記する。条件未設定、親なし、空の依存集合も `(none)` と明示する。条件が外部コマンドなら、`Condition:` の値はこれまでどおり一行の値の表記で示し、`Condition:` の次の行に `Approval: approved`・`Approval: unapproved`・`Approval: unknown` のいずれかを、その次の行に `Digest: ` と条件の [digest](candidates.md#許可と-digest) を、その次の行に `Command: ` と [再浮上条件の許可](#再浮上条件の許可) の表記の条件の文字列を、`Condition:` と同じく字下げせずに示す。この三行は評価しない `Undecided`・`InProgress`・終了した対象と `--skip-conditions` でも、許可の集合を照合して示す。衝突中の対象は現在値を持たないため、この三行を示さない。`Condition:` の表記は元のバックスラッシュや紛らわしい文字を escape しないため、`Digest:` が指す文字列の確認には `Command:` を使う。許可を読めなければ `Approval: unknown` とし、表示を失敗させない。評価した対象の状況欄は未許可として扱った結果どおり `+Unapproved` を持ちうる。`--skip-conditions` のない `axon show` は、対象の状態と条件の有無によらず開始時に許可を読む。`--skip-conditions --details` は対象の条件が外部コマンドの場合だけ許可を読み、`--details` のない `--skip-conditions` は読まない。読めなかった場合のstderrは、評価の範囲に外部コマンドの条件があれば上の `Conditions not run: approvals could not be read …` の一行だけとし、そうでなく `Approval: unknown` を示したときは `Approvals could not be read (DETAIL)` の一行とし、どちらでもなければ何も示さない。Groupの全子孫ツリーは通常表示と同様に表示する。
 
 ## Noteと履歴
 
@@ -129,6 +131,7 @@ Groupの場合は、この共通表示の末尾へ短い集計と全子孫のツ
 | 親Groupを設定・変更 / 解除 | `axon parent set A --parent G` / `axon parent unset A` |
 | 依存先を追加 / 解除 | `axon dep add A --needs B` / `axon dep rm A --needs B` |
 | 再浮上条件を設定 / 解除 | `axon condition set A --command '条件コマンド'` / `axon condition unset A` |
+| 未許可の再浮上条件を一覧 / 許可 | `axon condition unapproved` / `axon condition allow A [--digest DIGEST]` |
 
 登録は一つのコマンドで行い、種別は `--kind issue|group`、採否は `--accept` の有無で指定する。`--kind` の既定は `issue`、`--accept` 省略時は`Undecided`、指定時は`NotStarted`で作成する。登録と採否は直交し、作成後は同じIDベースの操作を使う。操作対象のIDは位置引数、関係先のIDは役割を明示するoptionとし、登録時の親・依存指定も `--parent`・`--needs` に揃える。
 
@@ -146,6 +149,29 @@ Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへ
 
 `axon log` は、表示対象の記録に保存済みの reason があれば種類によらず操作と併せて表示する。CLI が reason を生成しない登録・一括反映の記録も含み、Note は含まない。保存形式は Note を含む全記録で任意の reason を許し、既存値を拒否・削除しない（[設計判断](../design/decisions.md#単独変更に操作と一体の理由を添える理由)）。
 
+## 再浮上条件の許可
+
+許可の意味、自動で許可する経路、未許可の条件の評価は [条件の許可](candidates.md#条件の許可)、許可の保存場所と形式は [保存と統合の契約](storage.md#axon-が-axon-の外に書くもの) に定める。
+
+このsectionと `axon show --details` で条件の文字列を示す `Command: CMD` の `CMD` は、元のバックスラッシュを `\\`、改行を `\n`、tabを `\t`、CRを `\r` にし、それ以外の制御文字（U+0000〜U+001F、U+007F〜U+009F）を `\x{2桁16進}`、それ以外のASCII以外の文字（日本語、引用符に似た文字、不可視の書式文字、双方向制御文字、U+2028・U+2029を含む）を `\u{16進}` にして一行で示す。規則は上から順に当て、最初に当たったものを使う。表示から元の文字列を一意に復元でき、実際の改行と2文字の `\n`、shellの引用符と似た文字を見分けられるようにするためである。許可の判断の材料にするため、読みやすさより一対一の対応を優先する。`Digest: DIGEST` の `DIGEST` は小文字16進64文字の完全な値で示す。このsectionの出力では、どちらも字下げしてEntityの行の後に `Digest:`、`Command:` の順に置く。`axon show --details` での位置と字下げは [`axon show` と待ち理由](#axon-show-と待ち理由) に定める。
+
+`axon condition set A --command CMD` と `axon capture --command CMD` は、条件の記録を公開した後に `CMD` を許可する。新しい文字列を保存した場合の成功出力は、自動の許可を別に示さない。保存値と同じ文字列の `axon condition set` は `No changes` の成功で記録を作らず、その文字列がまだ許可されていなければ許可する。出力は、同値操作の通常の出力（`ID  No changes` の行と、`-r/--reason` を付けた場合の `Reason not saved; …` の行）の後に、`ID  Allowed condition` の一行と、字下げした `Digest:`・`Command:` の二行をこの順に置く。`ID` は完全なEntity IDである。すでに許可されていれば同値操作の通常の出力だけを示す。この経路で許可を読めない・書けない場合は、記録も許可も変わっていないため、同値操作の出力の後に `Error: approval not saved (DETAIL)` をstderrへ示して終了1とする。
+
+記録の公開が確定しなかった場合（Result unknown）は許可を書かず、通常のResult unknownの診断に、記録が公開されていても条件は許可されていないことと、`axon condition allow ID --digest DIGEST` で許可できることを添える。新しい文字列の記録を公開した後、許可のfileの一時fileをrenameした後のsyncに失敗した場合は、許可が効いている可能性があるため、通常の成功出力の後に `Warning: approval result unknown (DETAIL); check it with axon show ID --details` をstderrへ一行で示して終了0とする。同じ文字列の `axon condition set` でこれが起きた場合は、同値操作の出力の後に `Error: approval result unknown (DETAIL); check it with axon show ID --details` をstderrへ示して終了1とする。rename前に失敗した場合は許可を書けなかったものとし、次のとおりとする。新しい文字列の記録を公開した後に許可を書けなかった場合は、通常の成功出力（`axon capture` では作成したEntityの完全ID）の後に `Warning: approval not saved (DETAIL); the condition is saved but will not run until approved; after fixing that, approve it with axon condition allow ID --digest DIGEST` をstderrへ一行で示し、終了0とする。`ID` は条件を設定したEntityの完全ID、`DIGEST` は指定した `CMD` のdigestである。記録は適用済みなので、終了codeで未適用と読ませず、`axon capture` の再実行で別のEntityを作らせない。この警告はstdoutの成功出力の後に書き、警告の書込に失敗しても終了codeと成功出力を変えない。許可は `axon condition allow ID` か、同じ文字列の `axon condition set` で後から書ける。
+
+`axon condition unapproved` は、保存先の衝突していないEntityのうち、条件が外部コマンドでdigestが許可されていないものを、lifecycleによらず作成日時の昇順（同時刻はID順）に示す。各Entityは `axon list` と同じ行（条件を評価せず、`+Unapproved` は付けない）に続けて、`Digest:` と `Command:` の二行を持つ。該当がなければstdoutに行を出さず、短い案内をstderrへ出して終了0。許可を読めなければエラー（終了1）とする。条件を実行せず、保存先と許可を変えない。衝突中のEntityがあっても実行でき、衝突中のEntityは示さない。
+
+`axon condition allow A [--digest DIGEST]` は、Aの現在の条件の文字列を許可する。`A` は完全なEntity IDだけを受け付け、[一意なsuffix](#識別子と入力) では解決しない。suffixを受け付けると、利用者が自分のEntityのsuffixのつもりで入力した文字列と同じ完全IDのEntityを他人が記録で持ち込み、完全IDの一致の優先によってそちらの条件を許可させられるためである。`DIGEST` は小文字16進64文字の完全な値だけを受け付け、それ以外の形はClapの構文エラー（終了2）とする。保存先の書込lockは取らずに記録の集合を読んで現在の文字列を決め、許可のlockの下で許可の集合に加える。許可するのは読んだ文字列のdigestなので、その後に条件が変わっても、示した文字列以外を許可しない。次の場合は許可を変えずに拒否して終了1とする。ほかのEntityが衝突中であることは拒否の理由にしない。
+
+- Aが衝突中である。
+- Aの条件が未設定である。
+- `--digest` を与え、現在の文字列のdigestと一致しない。診断には現在のdigestと文字列を `Digest:`・`Command:` と同じ表記で示すが、許可はしない。
+- 許可を読めない、または書けない。
+
+成功時のstdoutは、新たに許可したら `ID  Allowed condition`、すでに許可されていれば `ID  Condition already allowed` の一行（`ID` は完全なEntity ID）と、続く字下げした `Digest:` と `Command:` の二行とする。許可のfileの一時fileをrenameした後のsyncに失敗した場合は、許可が効いている可能性があるため `Result unknown` として示し、`axon show ID --details` の `Approval:` で確かめるよう案内して終了1とする。rename前の失敗は許可されていない（Not applied）。許可は記録ではないため、`-r/--reason` を持たず、`axon log` に現れず、条件を評価しない。終了したEntityの条件も許可できる。
+
+許可に関する診断の `DETAIL` は、許可のfileのpathが決まればそのpathと理由（`PATH: REASON`）、決まらなければ理由だけとする。fileを読めない場合は、診断の行末に `; fix or remove PATH (removing it discards every approval)` を添える。書けない場合（容量不足、directoryの権限など）はfileを消すよう案内しない。状態directoryを決められない場合は、行末に `HOME` を絶対pathにするよう添える（[状態directoryの決め方](storage.md#axon-が-axon-の外に書くもの)）。Git内で許可のfileを置くcommon Git directoryを求められない場合は、そのGitの失敗を `REASON` に示す。その場所を信頼できない場合は、`REASON` に [信頼できない場合](storage.md#axon-が-axon-の外に書くもの) の三つのうち当たったもの（worktree rootに `.git` がない、Git directoryがworktree rootの `.git` に由来しない、common Git directoryがworktreeの内側の `.git` 以外の場所にある）と、得られたGit directoryとcommon Git directoryを示し、fileを消すよう案内しない。
+
 ## 衝突・違反と解決
 
 衝突・違反・記録の欠け（gap）・保存先の破損の意味は [保存と統合の契約](storage.md) に従う。
@@ -156,7 +182,7 @@ Groupへの`axon start`・`axon release`は拒否し、Groupは配下のIssueへ
 
 `axon resolve ID --head RECORD_ID` は指定したheadの現在値を採る解決記録を書く。`RECORD_ID` は対象Entityのheadの完全な記録IDで、headでなければ拒否する。`-r/--reason` は他の状態変更と同じ規則で記録に保存する。成功出力は完全なEntity IDが先頭で、採ったheadと解決後の状況（他の変更コマンドと同じく条件は評価せず、違反に含まれれば `+Invalid` を付す）を短く示す。解決の後に残る違反は `axon show` の `Invalid` と `axon storage check` で読み、通常操作で直す。
 
-衝突中のEntityが一つでもある保存先では、`axon resolve` と `axon note add` 以外の変更コマンドを拒否し、衝突中のEntityのIDと `axon resolve` を診断に示す。破損のある保存先では読取を含む全コマンド（`axon storage check`、および保存先を開かないコマンドを除く）を拒否し、破損したfileのpathと理由を診断に示す。改行変換が疑われるfile（[保存先の破損](storage.md#保存先の破損)）があれば、`axon storage check` と同じ案内を診断の末尾に添える。
+衝突中のEntityが一つでもある保存先では、`axon resolve` と `axon note add` 以外の変更コマンドを拒否し（記録を書かない `axon condition allow` は対象のEntityが衝突中のときだけ拒否する。[再浮上条件の許可](#再浮上条件の許可)）、衝突中のEntityのIDと `axon resolve` を診断に示す。破損のある保存先では読取を含む全コマンド（`axon storage check`、および保存先を開かないコマンドを除く）を拒否し、破損したfileのpathと理由を診断に示す。改行変換が疑われるfile（[保存先の破損](storage.md#保存先の破損)）があれば、`axon storage check` と同じ案内を診断の末尾に添える。
 
 `axon init [PREFIX]` は `.axon/records/`、`.axon/header.json`、`.axon/.gitignore`、`* -text` の1行だけの `.axon/.gitattributes`（記録fileをGitの改行変換から外す。mergeやunionの属性は書かない。[保存と統合の契約](storage.md#保存先と初期化)）を作り、成功時は作成したheaderのpathを示す。Git内ではさらに、保存先がuntrackedに見えること、無視する運用（`.git/info/exclude` などに `.axon/` を書く）と追跡する運用（`git add .axon` してcommitする）の手順、Axonの状態の取り消しにrevertを使わないことを表示する。repository rootのfileとGit configを作成も編集もせず、stage・commitもしない。`.axon/` に中断した初期化の残骸（lock、`.tmp` で終わるfile、空の記録のdirectory、CRLFをLFと読んで同じ内容の `.gitignore` と `.gitattributes`。CRLFのものは `axon init` が書く内容で置き換える）以外の何か（header、記録、内容の異なる `.gitignore` か `.gitattributes`、その他のfile）があれば拒否し、そのpathを示す。Git外では、他のユーザーが所有するdirectoryへの初期化と、他のユーザーが所有する祖先の `.axon` の下での初期化も拒否する（[探索](storage.md#探索)）。
 

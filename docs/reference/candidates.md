@@ -1,6 +1,6 @@
 # 候補一覧と外部条件
 
-この文書は、`axon tasks` の一覧の行と状況、詰まっている Group の理由、`axon proposals`・`axon tasks`・`axon show` が再浮上条件を評価する範囲と失敗の扱い、および再浮上条件の外部コマンドの実行契約を定める。候補集合そのものの定義は [lifecycleと構造の契約](lifecycle.md#候補集合)、option の表記と一覧・詳細の表示は [CLIと表示の契約](cli.md) に定める。行と状況の定義は [`spec/group_lifecycle.qnt`](../../spec/group_lifecycle.qnt)、評価範囲は [`spec/candidate_evaluation.qnt`](../../spec/candidate_evaluation.qnt) がモデルとして検査し、その範囲は [モデルの読み方](../../spec/README.md) にある。
+この文書は、`axon tasks` の一覧の行と状況、詰まっている Group の理由、`axon proposals`・`axon tasks`・`axon show` が再浮上条件を評価する範囲と失敗の扱い、再浮上条件を実行してよいかを決める条件の許可、および再浮上条件の外部コマンドの実行契約を定める。候補集合そのものの定義は [lifecycleと構造の契約](lifecycle.md#候補集合)、option の表記と一覧・詳細の表示は [CLIと表示の契約](cli.md) に定める。行と状況の定義は [`spec/group_lifecycle.qnt`](../../spec/group_lifecycle.qnt)、評価範囲は [`spec/candidate_evaluation.qnt`](../../spec/candidate_evaluation.qnt) がモデルとして検査し、その範囲は [モデルの読み方](../../spec/README.md) にある。
 
 ```sh
 axon proposals
@@ -11,6 +11,8 @@ axon tasks --condition-timeout 5s --trace-conditions
 axon show ID
 axon show ID --skip-conditions
 axon condition unset ID
+axon condition unapproved
+axon condition allow ID --digest DIGEST
 ```
 
 ## 一覧の行と状況
@@ -80,13 +82,78 @@ Group の行の状況は配下から導出し、次の表を上から順に見�
 
 日時まで待つ用途では、日時・タイムゾーンの解釈や複合条件を外部コマンド側で表現する。Axon は日時を解釈・検証する専用の条件型を持たない。採らなかった条件の種類とその理由は [設計判断](../design/decisions.md#外部コマンドを再浮上条件にした理由) に残す。
 
-`axon condition set` は一つの shell 文字列を保存・置換し、`axon condition unset` は未設定へ戻す。どちらも終了した Entity に使え、条件を評価せず、lifecycle を変えない。条件の設定と解除は記録として残り、`axon log` で読める。空白だけのコマンドは拒否する。
+`axon condition set` は一つの shell 文字列を保存・置換し、`axon condition unset` は未設定へ戻す。どちらも終了した Entity に使え、条件を評価せず、lifecycle を変えない。条件の設定と解除は記録として残り、`axon log` で読める。空白だけのコマンドは拒否する。`axon condition set --command` と `axon capture --command` は、指定した文字列を [許可](#条件の許可) する。
+
+## 条件の許可
+
+外部コマンドの条件は、このマシンで許可された文字列だけを実行する。`.axon/` を Git で追跡する repository では、他人が書いた条件が merge・checkout・clone で記録として入り、読むだけの操作で利用者の権限で実行されうるためである。許可は記録ではなく、記録の形式と条件の shell 文字列の柔軟さは変えない。この方式にした理由と採らなかった案は [設計判断](../design/decisions.md#再浮上条件を許可リストで実行する理由) にある。
+
+### 許可と digest
+
+許可は条件の文字列の digest の集合で表す。digest は条件の文字列の UTF-8 bytes の BLAKE3 hash を小文字 16 進 64 文字で表したもので、記録 ID と同じ hash を使い、接頭辞を持たない。条件の文字列が同じなら、どの Entity の条件でも同じ digest になり、一度の許可で同じ文字列のすべての条件を実行してよくなる。digest は保存しない値から計算し、記録 ID とは別の値である。CLI では完全な 64 文字だけを受け付け、suffix では解決しない。
+
+Axon が許可を増やす経路は次の三つだけである。利用者が許可の file を手で編集して digest の行を加えることは、Axon の操作ではないため、この表に含めない。
+
+| 経路 | 許可するもの |
+| --- | --- |
+| `axon condition set ID --command CMD` | 指定した `CMD`。保存値が既に同じ文字列で `No changes` になる場合も許可する |
+| `axon capture --command CMD` | 指定した `CMD` |
+| `axon condition allow ID [--digest DIGEST]` | 対象 Entity の現在の条件の文字列 |
+
+前の二つは、呼び出し元が文字列を自分で書いたか、確認したことを信頼する自動の許可である。Git で取り込んだ記録（merge・rebase・cherry-pick・checkout・clone）、`axon resolve` で採った head の値、`axon convert` などで保持された既存の値は許可しない。`axon condition unset` は許可を変えない。保存値と同じ文字列の `axon condition set` は記録を作らないが、その文字列がまだ許可されていなければ許可し、許可した文字列と digest を示す。
+
+この契約より前に設定された条件と、許可の file のない環境で設定された条件は、許可の file に digest がないため未許可になる。それらを実行するには、一件ずつ確かめて許可する。
+
+許可を取り消すコマンドは持たない。取り消すには、利用者が許可の file から該当する digest の行を消すか、file を消してすべての許可を捨てる（[形式](storage.md#axon-が-axon-の外に書くもの)）。
+
+自動の許可は条件の記録の公開が確定した後（Applied）に書く。公開の結果が不明（Result unknown）なら許可を書かない。許可を書けなかった場合も記録は適用済みで、[CLIと表示の契約](cli.md#再浮上条件の許可) のとおり適用済みであることと許可の失敗を示して成功として終える。許可は `axon condition allow`、または同じ文字列の `axon condition set` で後から書ける。`axon capture` の再実行は別の Entity を作るので、この回復には使わない。条件の設定・解除は許可の保存場所の状態によらず記録を書けるため、壊れた条件の修復は許可を読めない場合も行える。
+
+`axon condition allow` は、完全な ID で指定した対象 Entity の条件が外部コマンドで、Entity が衝突中でない場合だけ許可する。ほかの Entity が衝突中でも許可できる。許可は記録ではないため、[衝突中の保存先で通常操作を拒否する規則](storage.md#衝突と通常操作) の対象にならない。`--digest` を与えた場合は現在の文字列の digest と一致しなければ拒否し、確認してから許可するまでに文字列が変わっても、確認していない文字列を許可しない。`--digest` を省いた場合はこの照合を行わず、実行時の文字列を許可するため、確認していない文字列を許可しないことは `--digest` を与えた場合だけ保証する。案内（stderr の通知、`axon condition unapproved`）は `--digest` を付けた形を示す。どちらでも、成功時は許可した文字列と digest を必ず示す。許可は記録を作らず、`axon log` に現れない。表記と拒否の扱いは [CLIと表示の契約](cli.md#再浮上条件の許可) に定める。
+
+### 未許可の条件の評価
+
+評価の範囲（[評価契約](#評価契約)）に入った条件のうち、外部コマンドで digest が許可の集合にないものを未許可とする。未許可の条件は実行せず、浮上の判定では成立として扱う。未許可は判定失敗ではなく、一覧の取得や表示を失敗させない。
+
+- 未許可の Entity は隠さず `axon proposals`・`axon tasks`・`axon show` に出し、その Entity 自身の行と状況欄に `+Unapproved` の印を付ける（[表記](cli.md#一覧)）。祖先の条件が未許可でも、配下の Entity には印を付けない。祖先は自身の行を持てば、その行に印が付く。
+- 評価の範囲を決める規則は許可によって変えない。未許可の祖先は成立として扱うので、成立した祖先と同じくその配下を評価する。このため、同じ祖先の条件が許可済みで未成立なら配下は評価されず、未許可なら評価される。外からの変更で祖先の条件の文字列が変わると、祖先が未許可になり、配下の許可済みの条件がそれまでより早く実行されうる。実行されるのは利用者が許可した文字列だけなので、この順序の変化は許容する。
+- 未許可の条件も、評価した条件と同じく一回の取得で一回だけ判定し、子や別の参照から結果を共有する。範囲外の条件は、許可されていなくても未許可として数えず、印も付けない。
+- 未設定の条件は未許可にならない。
+
+`axon show` は `Undecided` の対象を評価しないため、`Undecided` の対象の状況欄には `+Unapproved` が付かない。`axon proposals` は `Undecided` の Entity を評価するため、同じ Entity の `axon proposals` の行には付く。
+
+未許可の Entity が一件以上あった呼び出しは、件数と確認の方法を stderr に一行で示す。件数は、その呼び出しで評価の範囲に入り、未許可だった Entity の数とする。行として示さないのに評価する Entity（`--kind`・`--label`・`--search` で除外された行の祖先、`axon tasks` が Group の行の状況のために評価する除外された子孫など）も数えるため、件数は印の付いた行の数より多くなりうる。
+
+### 許可を読む時点と読めない場合
+
+評価する経路（`axon proposals|tasks|show`）は、許可の集合を一回の一覧取得または表示の開始時に、記録の集合を読んだ後で一度だけ読む。評価中に別の process が許可を加えても、その取得の結果は変わらない。`axon show --details` は、対象の条件が外部コマンドなら、評価しない対象と `--skip-conditions` でも許可の集合を読む。`--details` のない `axon show --skip-conditions` と `axon list` は許可を読まない。
+
+許可の保存場所に file がなければ、許可の集合は空とする。file を読めない場合（読取の失敗、通常の file でない、[形式](storage.md#axon-が-axon-の外に書くもの) に合わない内容、Git 外で状態 directory を決められない、Git 内で許可の file を置く common Git directory を求められないか、その場所を [信頼できない](storage.md#axon-が-axon-の外に書くもの)）は次のように扱う。
+
+- 評価する経路では、評価の範囲のすべての外部コマンドの条件を未許可として扱い、何も実行せずに続ける。評価の範囲に外部コマンドの条件が一つ以上あれば、未許可の件数の行の代わりに、読めなかったことを stderr に一行で示す。範囲に外部コマンドの条件がなければ何も示さない。
+- `axon show --details` は対象の許可を「不明」と示し、表示を失敗させない。評価した対象の状況欄は、未許可として扱った結果どおり `+Unapproved` を持ちうる。上の行を出さなかった場合は、読めなかったことを別の一行で stderr に示す。
+- `axon condition unapproved` と `axon condition allow` は、許可の状態を答えられないためエラーにする。
+- 自動の許可は、書けなかったことを示す。読めない file は上書きしない。
+
+読めない file は、診断に示す path の file を利用者が直すか消すまで読めないままである。消すとすべての許可が失われ、改めて許可する。状態 directory を決められない場合は環境を、common Git directory を求められないか信頼できない場合は repository の構成を、file ではなく直す。
+
+### 許可の範囲と保存場所
+
+許可の範囲は、Git 内では clone、Git 外では管理 root とし、範囲が異なれば同じ文字列でも改めて許可する。保存場所は Git で追跡されず、`.axon/` の中には置かない。後で `.axon/` を追跡し始めても、許可が commit されないためである。
+
+| 保存先 | 許可の file | 範囲 |
+| --- | --- | --- |
+| Git 内 | common Git directory の `axon-condition-approvals` | その clone。linked worktree 間で共有し、clone ごとに分かれる。追跡する運用で worktree ごとに別の保存先がある場合も、同じ clone の保存先は許可を共有する |
+| Git 外 | 状態 directory の下の `axon-condition-approvals/<key>` | その管理 root。`<key>` は保存先の store ID と管理 root の path から作る。管理 root を移動・改名するか、同じ path に store ID の異なる保存先を置くと、改めて許可する |
+
+Git 外の状態 directory、`<key>`、file の形式と同時書込の扱いは [保存と統合の契約](storage.md#axon-が-axon-の外に書くもの) に定める。
+
+許可は条件の文字列そのものを対象にする。許可した条件が参照する script・環境変数・作業 tree の file の内容が後で変わることは対象外とし、通常の差分として利用者のレビューに委ねる。clone ではなく、`.git`（directory か gitfile）を含む directory ごと複製・受け取った repository は、複製元の許可の file や、gitfile が指す先も持ち込む。これは `.git/hooks` の script が持ち込まれるのと同じ経路で、対象外とする。`.git` を含まずに Git directory を作れる構成（bare repository の形の directory と `core.worktree`）は archive の展開でも届くため対象外にせず、Git directory が worktree root 直下の `.git` に由来しなければ許可を読めない場合として扱う（[規則](storage.md#axon-が-axon-の外に書くもの)）。
 
 ## 評価契約
 
 条件が未設定なら常に浮上する。設定済みの条件は、その時点で候補に出してよいかを判定し、表示によって消費しない。成立後も再評価し、外界が変われば未成立や判定失敗にもなりうる。日時を判定する外部コマンドのように、成立が持続する条件もこの契約に含む。
 
-再浮上条件は候補の表示と、`axon show` の状況・理由の表示にだけ使う。明示操作は lifecycle・包含・dependency の許可条件だけを使い、再浮上条件を評価しない。`axon list` と `axon show --skip-conditions` も条件を実行せず、保存情報だけを表示する。条件の設定・訂正・解除も評価せずに行うため、壊れた条件を修復できる。
+再浮上条件は候補の表示と、`axon show` の状況・理由の表示にだけ使う。明示操作は lifecycle・包含・dependency の許可条件だけを使い、再浮上条件を評価しない。`axon list` と `axon show --skip-conditions` も条件を実行しない。`axon show --skip-conditions` は保存情報に加えて [条件の許可](#条件の許可) を照合して示すことがあり、照合できなくても失敗しない。`axon list` は許可を読まない。条件の設定・訂正・解除も評価せずに行い、許可の保存場所の状態に左右されないため、壊れた条件を修復できる。
 
 評価する範囲は次のとおりとする。
 
@@ -96,6 +163,7 @@ Group の行の状況は配下から導出し、次の表を上から順に見�
 - `--kind`・`--label`・`--search` の絞り込みでは、残った候補とその祖先を評価し、除外された候補は自身の表示のためには評価しない。残った候補の祖先は kind や label が異なっても評価する。例外として `axon tasks` は、残った Group の行の状況を導出するため、その子孫の着手可能な Issue と、それらと残った Group の間にある Group を、絞り込みで除外されていても上から評価する。
 - 残った候補の祖先を上から評価し、祖先が非浮上ならその配下を評価しない。終了した祖先は評価せず、その配下を非浮上として扱う。衝突中の祖先と記録のない祖先（[構造の違反](storage.md#構造の違反と修復)）は現在値も条件も持たないので評価せず、祖先の連なりはそこで切れる。その配下は残りの連なりだけで浮上の可否を決め、着手可能にはならない（`Blocked`）。
 - `axon show ID` は、対象が `axon tasks` の行になる場合にその行が必要とする範囲だけを評価する。保存値が `NotStarted` の対象について、祖先の chain、対象自身、Group なら配下の着手可能な Issue と、それらと対象の間にある Group を上から評価する。`Undecided`・`InProgress`・終了した対象は何も評価しない。所属・依存先・依存元・子孫ツリーなど関連する Entity の行は、この範囲で得た結果だけを使い、範囲外の条件は成立したものとして状況を導出する。このため、範囲外の条件を持つ Entity は、関連する行では `Ready`・`Blocked` でも、その Entity 自身の `axon show` では `Unsurfaced` になりうる。
+- 範囲に入った条件が [未許可](#未許可の条件の評価) なら実行せず、成立として扱う。範囲を決める規則は許可によって変えず、未許可の祖先の配下は成立した祖先の配下と同じく評価する。
 - 一回の一覧取得または表示で各 Entity を最大一回評価し、子や別の参照から同じ結果を共有する。次の取得では結果を引き継がない。
 - 取得開始時に読んだ記録の集合を使い、評価中は書込み transaction を保持しない。衝突中の Entity（[保存と統合の契約](storage.md#現在値の導出)）は現在値を持たないため、どの候補集合にも入らず、`axon proposals`・`axon tasks` の行にならず、条件を評価しない（`axon list` には `Conflicted` として出る）。子孫の導出では存在しない Entity として扱い、衝突中の子だけを持つ Group の行は子のない Group として導出する。衝突中の祖先は採用済みでない祖先として扱い、その配下の Issue は着手可能にならない。
 
@@ -111,7 +179,7 @@ Group の行の状況は配下から導出し、次の表を上から順に見�
 | 終了コード `1` | 条件未成立 |
 | その他の終了コード、起動失敗、シグナル終了、タイムアウト | 判定失敗。候補一覧の取得自体をエラーにする |
 
-この終了コードは条件コマンドの契約であり、呼び出す任意のツールの意味を自動判別するものではない。利用するツールが終了コード `1` を実行エラーに使う場合などは、条件コマンド側で変換する。stdout の内容を成立判定には使わない。
+[未許可](#未許可の条件の評価) の条件は実行しないため、この表の対象にならない。この終了コードは条件コマンドの契約であり、呼び出す任意のツールの意味を自動判別するものではない。利用するツールが終了コード `1` を実行エラーに使う場合などは、条件コマンド側で変換する。stdout の内容を成立判定には使わない。
 
 ### 実行環境と責任範囲
 

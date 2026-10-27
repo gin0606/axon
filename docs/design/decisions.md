@@ -277,6 +277,40 @@ Issue と Group は同じ ID の namespace を使い、kind を ID に埋め込�
 
 条件の意味と評価の契約は [候補と外部条件](../reference/candidates.md) に定める。
 
+## 再浮上条件を許可リストで実行する理由
+
+再浮上条件は shell 文字列で、`axon tasks`・`axon proposals`・`axon show` が利用者の権限で実行する。`.axon/` を Git で追跡する repository では、他人が書いた条件が merge・PR の checkout・clone で記録として入る。記録は hash 名の JSON file なので、PR の差分を見ても条件が加わったことにほぼ気づけず、条件が未成立で終われば一覧に出ないため実行された手がかりも残らない。Axon で読むだけの操作で、見えない場所から取り出したコードを実行しないことを Axon の責任とし、このマシンで利用者が自分で設定したか明示的に許可した条件だけを実行する。
+
+守る場面は、外部の変更を merge した後、PR を手元に checkout してレビューしている最中、他人の repository を clone した後の三つである。2026-10-27 時点の main では、Git で取り込んだ追跡される内容を受け身で実行する経路は、再浮上条件のほかにない。他の process の起動は保存先の探索と index の検査の `git rev-parse`・`git ls-files --unmerged` と `axon gui` の `open` だけである。Git 自体が読む設定（`core.fsmonitor` など）に従ってコマンドを実行しうることは Git の振る舞いで、条件の許可では扱わない（commit した bare repository の設定は clone でも届くので、Axon が Git を呼ぶ経路を変えるときはこの点を確かめる。[リンクで開く管理 root を利用者が確かめる理由](#リンクで開く管理-root-を利用者が確かめる理由)）。
+
+方式は direnv の allow に近い、ローカルな許可リストにした。許可の範囲は Git 内では clone、Git 外では管理 root とする。条件の文字列の digest で照合し、記録の形式と shell 条件の柔軟さは変えない。利用者が CLI で文字列を指定した設定（`axon capture --command`・`axon condition set --command`）は、呼び出し元が文字列を自分で書いたか確認したことを信頼して自動で許可し、自分で設定した条件は今どおり追加の手間なく動く。`axon resolve` で採った head の値と Git で取り込んだ記録は、利用者がその文字列を入力していないため許可しない。
+
+- 未許可の条件は実行しないが、一覧から隠さず `+Unapproved` の印を付けて成立として扱う。隠すと、新しいマシンで clone し直したときに自分の仕事が見えなくなる。判定失敗として一覧全体を失敗させると、外部の変更 1 件で `axon tasks` が使えなくなる。
+- `axon condition allow` には確認した digest を指定でき、指定すれば現在の文字列の digest と一致しなければ拒否する。確認してから許可するまでに文字列が変わっても、見ていない文字列を許可しないためである。この保証は digest を指定した場合だけで、案内は digest を付けた形を示す。digest は任意とし、指定しない場合も許可した文字列を必ず出力する。保存値と同じ文字列の `axon condition set` で許可した場合も、許可した文字列と digest を示し、気づかないまま許可しないようにする。
+- 許可の範囲は、Git 内では clone、Git 外では管理 root にする。別のマシンや clone し直した repository でまとめて許可し直す手間は許容する。Git 内では common Git directory に置くので、clone し直せば許可は空から始まる。Git 外の鍵は store ID と管理 root の path の両方から作る。store ID だけでは、header が追跡される file にあり他人の保存先が同じ値を持てる。path だけでは、同じ path に置き直された別の保存先が許可を引き継ぐ。
+- 許可は `.axon/` の外の、Git で追跡されない場所に置く。`.axon/` の中に置くと、後で `.axon/` を追跡し始めたときに許可が commit され、他人の許可が入る経路になる。
+- 許可の集合は取得の開始時に一度だけ読む。読めない場合に評価を失敗させず、すべての条件を未許可として続けるのは、許可の file の不具合で一覧が使えなくなるのを避けつつ、何も実行しない側に倒すためである。条件の設定・解除と `--skip-conditions` の表示は許可の file の状態に左右されず、壊れた条件を修復できる。
+- 許可は記録にしない。許可は保存先の状態ではなく、このマシンの利用者の判断であり、Git で共有すると他人の許可が入る経路になる。取り消すコマンドは今回の範囲に含めず、利用者が許可の file から digest の行を消して取り消す。
+- 許可の file は lock の下で一時 file に書いて rename で置き換え、reader は lock を取らない。一覧の取得は書込 transaction を保持しないため、reader が lock を待たずに rename の前後どちらかの完全な内容を読めることを優先した。保存先の書込 lock とは別の lock にしたのは、追跡する運用では同じ clone の worktree ごとに保存先と書込 lock が分かれ、許可の file だけを共有するためである。二つの lock を同時に持たないので、許可の lock を待つ process が保存先の書込を止めない。`axon condition allow` は保存先の書込 lock を取らない。許可するのは読んだ文字列の digest で、その後に記録が変わっても、示した文字列以外は許可されないためである。
+- 自動の許可を書けなかった場合も、記録は適用済みとして成功で終える。終了 code で失敗と読まれると、`axon capture` の再試行で同じ Entity が重複して作られる。許可されなかった条件は実行されない側に倒れるので、警告を出して後からの許可に委ねる。
+
+範囲外とした経路は次のとおりである。
+
+- 許可済みの条件が参照する script・環境変数・作業 tree の file の内容が変わる場合。これらは通常のコードの差分として見え、Makefile や test を差し替えられるのと同じく、利用者のレビューに委ねる。
+- `$XDG_STATE_HOME`・`HOME` で、Git 外の許可の保存場所を repository の中などへ向けた場合。環境変数は利用者が設定するもので、repository の内容からは変えられないため拒否しない。Axon 独自の環境変数で保存場所を変える手段も設けない。Git の環境変数は Axon が Git を呼ぶときに除くため、common Git directory を変えない。
+- clone ではなく、`.git` を含む directory ごと複製・受け取った repository。複製元の許可の file も持ち込むが、`.git/hooks` の script が持ち込まれるのと同じ経路で、Git 自体がこの経路を守らない。一方、commit した bare repository の directory を common Git directory に見せる構成は clone でも、管理 root 自身を bare repository の形にした archive は展開でも届くため、範囲外にしない。許可の file の場所を保存先を含む worktree root から求め、Git directory がその root 直下の `.git` に由来しない場合と、common Git directory が worktree root の内側の `.git` 以外の場所の場合は許可を読まない。`.git` そのものを含めて受け取った directory は、`.git/hooks` と同じく範囲外とする。
+- GUI の表示。GUI は条件を実行しないため、許可の状態を示さない。
+
+### 採らなかった案
+
+- 組み込みの条件型を日時だけにし、外部の観測はローカルに登録した probe に限る案。記録形式の変更、既存の条件の移行、日時の専用条件型を持たないという [外部コマンドを再浮上条件にした判断](#外部コマンドを再浮上条件にした理由) の撤回が要る。チームでの共有を前提にしないため、この負担に見合わない。
+- probe や plugin の定義を repository で追跡する案。定義が見えても、PR が定義ごと書き換えられるため、結局ローカルでの許可が別に必要になる。
+- shell 条件を残し、許可の手順だけを設ける案。自分で書いた条件まで毎回許可が要り、手間が大きい。
+
+agent は `axon condition allow` を自律で実行せず、利用者が入力または確認していない文字列を `--command` に渡さない。public repository では本文などに agent 向けの指示を仕込めるため、許可の判断を利用者に残す。この規則は Axon の意味論ではなく、agent の協業規約（`plugins/axon` と `plugins/axon-kit` の skill）に置く。
+
+許可の意味と評価の契約は [条件の許可](../reference/candidates.md#条件の許可)、表記は [CLIと表示の契約](../reference/cli.md#再浮上条件の許可)、保存場所と形式は [保存と統合の契約](../reference/storage.md#axon-が-axon-の外に書くもの) に定める。
+
 ## 操作案内と利用者の判断の境界
 
 エラーには次の操作を含める。原因の事実だけを表示しても、利用者がデータを保持したまま再開する方法を特定できないためである。案内の有無ではなく、利用者の判断を代行するかどうかを境界にする。成立条件、確認先、選択肢とその効果は説明し、採否や計画変更の選択は利用者に残す。
