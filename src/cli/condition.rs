@@ -58,7 +58,7 @@ impl Evaluation {
             EvaluationError(format!(
                 "{}: Command({}) could not install Ctrl-C handling: {error}",
                 entity,
-                display::human_text(script)
+                display::line(script)
             ))
         })?;
         let mut command = Command::new("/bin/sh");
@@ -73,7 +73,7 @@ impl Evaluation {
             EvaluationError(format!(
                 "{}: Command({}) could not start in {}: {error}",
                 entity,
-                display::human_text(script),
+                display::line(script),
                 display::human_text(self.root.display())
             ))
         })?;
@@ -96,7 +96,7 @@ impl Evaluation {
             EvaluationError(format!(
                 "{}: Command({}) evaluation failed in {}: {detail}\nstdout:\n{}\nstderr:\n{}",
                 entity,
-                display::human_text(script),
+                display::line(script),
                 display::human_text(self.root.display()),
                 failure.stdout.render(),
                 failure.stderr.render()
@@ -110,7 +110,7 @@ impl Evaluation {
             _ => Err(EvaluationError(format!(
                 "{}: Command({}) failed in {}: {}\nstdout:\n{}\nstderr:\n{}",
                 entity,
-                display::human_text(script),
+                display::line(script),
                 display::human_text(self.root.display()),
                 outcome.status,
                 outcome.stdout.render(),

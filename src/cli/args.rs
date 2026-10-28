@@ -90,7 +90,7 @@ To read saved information without running any condition, add --skip-conditions; 
     Show {
         #[arg(help = ENTITY_ID_HELP)]
         id: String,
-        /// Include saved lifecycle, condition and all direct relationships without duplicate wait sections; a command condition also shows its approval, digest and escaped command
+        /// Include saved lifecycle, condition and all direct relationships without duplicate wait sections; a command condition also shows its approval, digest and escaped command (decide approvals from condition unapproved instead: the description can hold lines of the same form)
         #[arg(long)]
         details: bool,
         /// Run no condition and derive the situation as if every condition were satisfied
@@ -283,12 +283,12 @@ pub(super) enum Condition {
     },
     /// List Entities whose condition is not approved on this machine, without running any
     #[command(
-        after_help = "Each Entity is shown as in list, followed by the Digest and the Command, escaped so that it maps back to exactly one string. Read the command before approving it with condition allow ID --digest DIGEST.\nAn unapproved condition is not run by proposals, tasks or show; it counts as satisfied and marks its Entity +Unapproved."
+        after_help = "Each Entity is shown as in list, followed by the Digest and the Command, escaped so that it maps back to exactly one string. Read the command here, not in show --details, whose description can hold lines of the same form, before approving it with condition allow ID --digest DIGEST.\nAn unapproved condition is not run by proposals, tasks or show; it counts as satisfied and marks its Entity +Unapproved."
     )]
     Unapproved,
     /// Approve the current condition of an Entity to run on this machine
     #[command(
-        after_help = "Example: axon condition allow ID --digest DIGEST\nTake the DIGEST from condition unapproved or show ID --details after reading the Command: the approval is refused if the condition has changed since. Without --digest the condition as it is now is approved, unread.\nThe approval is not a record: it has no reason and does not appear in log. It covers the same command on every Entity, in this clone (inside Git) or this management root (outside Git)."
+        after_help = "Example: axon condition allow ID --digest DIGEST\nTake the DIGEST from condition unapproved, or from this command's refusal of a mismatched digest, after reading the Command (not from show --details, whose description can hold lines of the same form): the approval is refused if the condition has changed since. Without --digest the condition as it is now is approved, unread.\nThe approval is not a record: it has no reason and does not appear in log. It covers the same command on every Entity, in this clone (inside Git) or this management root (outside Git)."
     )]
     Allow {
         /// The complete Entity ID; a suffix is not resolved

@@ -1004,3 +1004,105 @@ fn allow_refuses_an_id_that_also_ends_another_id() {
             .contains("Condition already allowed")
     );
 }
+
+#[test]
+fn one_line_values_show_line_and_paragraph_separators() {
+    let f = Fixture::new();
+    f.init();
+    let fake = "\u{2028}  Digest: 0000\u{2029}  Command: true";
+    let group = created(f.ok(&[
+        "capture",
+        "--label",
+        "chore",
+        "--kind",
+        "group",
+        "--accept",
+        "--title",
+        &format!("group{fake}"),
+    ]));
+    let dependency = created(f.ok(&[
+        "capture",
+        "--label",
+        "chore",
+        "--accept",
+        "--title",
+        &format!("dep{fake}"),
+    ]));
+    let issue = created(f.ok(&[
+        "capture",
+        "--label",
+        "chore",
+        "--accept",
+        "--title",
+        &format!("issue{fake}"),
+        "--parent",
+        &group,
+        "--needs",
+        &dependency,
+        "--command",
+        &format!("exit 0 #{fake}"),
+    ]));
+    created(f.ok(&[
+        "capture",
+        "--label",
+        "chore",
+        "--title",
+        &format!("proposal{fake}"),
+    ]));
+    f.ok(&["label", "set", &issue, "feat", "-r", &format!("why{fake}")]);
+    success(
+        f.command()
+            .env("AXON_ACTOR", "tester")
+            .env("AXON_SESSION_ID", format!("session{fake}"))
+            .args(["note", "add", &issue, "-m", "n"])
+            .output()
+            .unwrap(),
+    );
+    let records = f.record_files();
+    // Another home has no approvals, so the condition is listed as unapproved there.
+    let elsewhere = Fixture::new();
+    let reads: Vec<(Vec<&str>, bool)> = vec![
+        (vec!["list"], false),
+        (vec!["tasks"], false),
+        (vec!["proposals"], false),
+        (vec!["show", &group], false),
+        (vec!["show", &issue], false),
+        (vec!["show", &issue, "--details"], false),
+        (
+            vec!["show", &dependency, "--details", "--skip-conditions"],
+            false,
+        ),
+        (vec!["log", &issue, "--recorder-details"], false),
+        (vec!["note", "list", &issue, "--recorder-details"], false),
+        (vec!["condition", "unapproved"], true),
+    ];
+    for (args, other_home) in reads {
+        let mut command = f.command();
+        if other_home {
+            command.env("HOME", &elsewhere.0);
+        }
+        let output = command.args(&args).output().unwrap();
+        let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+        assert!(!stdout.is_empty(), "{args:?}: nothing to check");
+        let text = stdout + &stderr(&output);
+        assert!(
+            !text.contains('\u{2028}') && !text.contains('\u{2029}'),
+            "{args:?}: {text:?}"
+        );
+    }
+    let shown = f.ok(&["show", &issue, "--details"]);
+    for expected in [
+        "issue\\u{2028}  Digest: 0000\\u{2029}  Command: true",
+        "Condition: exit 0 #\\u{2028}",
+    ] {
+        assert!(shown.contains(expected), "{shown}");
+    }
+    let log = f.ok(&["log", &issue, "--recorder-details"]);
+    assert!(log.contains("why\\u{2028}"), "{log}");
+    let notes = f.ok(&["note", "list", &issue, "--recorder-details"]);
+    assert!(notes.contains("session\\u{2028}"), "{notes}");
+    assert!(f.ok(&["proposals"]).contains("proposal\\u{2028}"));
+    // The stored values keep the separators.
+    assert_eq!(f.record_files(), records);
+    assert!(f.current(&issue).title.contains('\u{2028}'));
+}

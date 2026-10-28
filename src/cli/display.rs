@@ -102,10 +102,19 @@ fn paint(style: Style, text: impl std::fmt::Display, terminal: bool) -> String {
         text.to_string()
     }
 }
-/// A value printed inside one output line. A newline in it must not start a line of its own,
-/// or stored text could imitate records and section headings.
+/// A value printed inside one output line. A newline, or a line or paragraph separator that some
+/// readers break lines at, must not start a line of its own, or stored text could imitate
+/// records, section headings and the lines an approval is decided from.
 pub fn line(value: impl std::fmt::Display) -> String {
-    human_text(value).replace('\n', "\\n")
+    let mut rendered = String::new();
+    for character in human_text(value).chars() {
+        match character {
+            '\n' => rendered.push_str("\\n"),
+            '\u{2028}' | '\u{2029}' => rendered.extend(character.escape_unicode()),
+            character => rendered.push(character),
+        }
+    }
+    rendered
 }
 /// Multi-line stored text printed among structural lines. Structural lines start at column
 /// zero and this text never does, so it cannot imitate a record heading or a section.
@@ -273,13 +282,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn one_line_values_show_line_and_paragraph_separators() {
+        assert_eq!(line("a\nb\u{2028}c\u{2029}d"), "a\\nb\\u{2028}c\\u{2029}d");
+        // Multi-line text keeps them, as it keeps newlines.
+        assert!(block("a\u{2028}b").contains('\u{2028}'));
+    }
+
     proptest! {
         #[test]
         fn generated_text_escapes_controls_without_losing_other_characters(
             characters in prop::collection::vec(
                 prop_oneof![
                     any::<char>(),
-                    prop::sample::select(vec!['\u{061c}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202e}', '\u{2066}', '\u{2069}']),
+                    prop::sample::select(vec!['\u{061c}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202e}', '\u{2066}', '\u{2069}', '\u{2028}', '\u{2029}']),
                 ],
                 0..80,
             )
@@ -298,7 +314,13 @@ mod tests {
             }).collect();
             let expected = format!("{prefix}{expected}");
             prop_assert_eq!(human_text(&input), expected.as_str());
-            prop_assert_eq!(line(&input), expected.replace('\n', "\\n"));
+            prop_assert_eq!(
+                line(&input),
+                expected
+                    .replace('\n', "\\n")
+                    .replace('\u{2028}', "\\u{2028}")
+                    .replace('\u{2029}', "\\u{2029}")
+            );
             let block_expected = expected.split('\n').map(|line| {
                 if line.is_empty() { String::new() } else { format!("  {line}") }
             }).collect::<Vec<_>>().join("\n");

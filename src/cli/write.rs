@@ -49,7 +49,7 @@ fn approve_published(location: &Location, store: &StoreId, id: &EntityId, comman
             display::line(problem.detail())
         ),
         Err(WriteError::Unknown(problem)) => format!(
-            "{} approval result unknown ({}); check it with axon show {id} --details\n",
+            "{} approval result unknown ({}); check whether {id} is listed by axon condition unapproved\n",
             display::warning_label(),
             display::line(problem.detail())
         ),
@@ -404,7 +404,7 @@ pub(super) fn condition(command: Condition) -> Result<Output> {
         }
         Err(WriteError::Unknown(problem)) => {
             out.trailer = format!(
-                "{} approval result unknown ({}); check it with axon show {id} --details\n",
+                "{} approval result unknown ({}); check whether {id} is listed by axon condition unapproved\n",
                 display::error_label(),
                 display::line(problem.detail())
             );
@@ -604,7 +604,7 @@ pub(super) fn allow(value: String, expected: Option<String>) -> Result<Output> {
         }
         Err(WriteError::Unknown(problem)) => {
             return Err(axon::Error::PublicationUnknown(format!(
-                "Result unknown: the approval of this condition may be in effect ({}); check Approval: with axon show {id} --details\n{}",
+                "Result unknown: the approval of this condition may be in effect ({}); check whether {id} is listed by axon condition unapproved\n{}",
                 display::line(problem.detail()),
                 plain_command_lines(command, "  ").trim_end()
             )));

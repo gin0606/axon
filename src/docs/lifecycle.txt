@@ -75,6 +75,8 @@ Reading and resurfacing
   --lifecycle, --terminal and --search narrow it without running conditions;
   tasks and proposals take --kind, --label and --search. Filters combine with AND.
   list/tasks/proposals --search match only current title and description, not Notes.
+  One-line values show newlines as \n and line or paragraph separators as
+  \u{2028} and \u{2029}.
   On a terminal, list/tasks/proposals rows and the show tree line up their columns
   and wrap long titles inside the title column. Piped output keeps one row per line
   with columns joined by two spaces.
@@ -120,7 +122,9 @@ Reading and resurfacing
   management root outside Git, never in .axon/. If they cannot be read, nothing
   runs and stderr says why.
   condition unapproved lists the Entities whose condition is not approved, each
-  with its Digest and escaped Command. Read the command, then approve it with
+  with its Digest and escaped Command. Read the command there (or in the refusal
+  allow prints for a mismatched digest), not in show --details, whose
+  description can hold lines of the same form; then approve it with
   condition allow ID --digest DIGEST: ID must be complete, and the approval is
   refused if the condition no longer has that digest. An approval is not a record
   and does not appear in log; it covers the same command on every Entity.

@@ -235,7 +235,7 @@ pub(crate) fn main() -> std::process::ExitCode {
                             Publication::StorageAndDeclaration =>
                                 "Error: output failed\nApplied: storage applied; declaration updated; output failed; inspect saved state before retrying".to_owned(),
                             Publication::Approval(id) => format!(
-                                "Error: output failed\nApplied: approval saved; output failed; check Approval: with axon show {id} --details"
+                                "Error: output failed\nApplied: approval saved; output failed; check whether {id} is listed by axon condition unapproved"
                             ),
                             Publication::None => "Error: output failed".to_owned(),
                         }

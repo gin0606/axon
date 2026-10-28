@@ -520,7 +520,7 @@ pub(super) fn recorder_display(recorder: Option<&Recorder>, details: bool) -> St
     let mut text = actor_of(recorder);
     if details && let Some(recorder) = recorder {
         text.push_str("  data: ");
-        text.push_str(&display::human_text(
+        text.push_str(&display::line(
             serde_json::to_string(&recorder.data).expect("JSON object"),
         ));
     }
