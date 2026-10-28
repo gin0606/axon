@@ -25,15 +25,35 @@ pub(super) fn status_label(status: read::Status) -> &'static str {
         read::Status::Conflicted => "Conflicted",
     }
 }
-/// The situation column of a row without decoration: the status, `+Invalid` when the Entity
-/// is in a violation.
+/// The situation column of a row without decoration: the status, then `+Unapproved` when the
+/// read did not run the Entity's own condition for want of approval, then `+Invalid` when the
+/// Entity is in a violation.
 pub(super) fn situation_label(value: &read::Row<'_>) -> String {
-    let label = status_label(value.status);
-    if value.invalid {
-        format!("{label}+Invalid")
-    } else {
-        label.into()
+    let mut label = status_label(value.status).to_string();
+    if value.unapproved {
+        label.push_str("+Unapproved");
     }
+    if value.invalid {
+        label.push_str("+Invalid");
+    }
+    label
+}
+/// Whether this machine may run a condition command, as `axon show --details` shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Approval {
+    Approved,
+    Unapproved,
+    Unknown,
+}
+/// The `Digest:` and `Command:` lines of a condition command, each after `indent`.
+pub(super) fn command_lines(command: &str, indent: &str) -> String {
+    format!(
+        "{indent}{} {}\n{indent}{} {}\n",
+        display::muted("Digest:"),
+        axon::approval::digest(command),
+        display::muted("Command:"),
+        display::command_text(command)
+    )
 }
 /// A cell before the title: the text to measure and the text as printed.
 struct Cell {
@@ -210,7 +230,8 @@ pub(super) fn conflicts(view: &read::View<'_>, ids: &[&EntityId]) -> String {
     }
     out
 }
-pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
+/// `approval` is shown with `details` for a settled Entity whose condition is a command.
+pub(super) fn show(value: &read::Detail<'_>, details: bool, approval: Option<Approval>) -> String {
     let mut out = row(&value.row);
     let notes = value.note_count;
     if notes > 0 {
@@ -366,6 +387,18 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool) -> String {
                 .map(display::line)
                 .unwrap_or_else(|| "(none)".into())
         ));
+        if let (Some(command), Some(approval)) = (value.condition, approval) {
+            out.push_str(&format!(
+                "{} {}\n",
+                display::muted("Approval:"),
+                match approval {
+                    Approval::Approved => "approved",
+                    Approval::Unapproved => "unapproved",
+                    Approval::Unknown => "unknown",
+                }
+            ));
+            out.push_str(&command_lines(command, ""));
+        }
         out.push_str(&format!(
             "\n{}{}\n",
             display::heading("Dependencies (must be Completed to start or complete):"),

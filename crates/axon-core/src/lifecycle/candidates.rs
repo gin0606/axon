@@ -1,6 +1,6 @@
 use super::record::{Current, View};
 use super::{EntityId, Error, Kind, Lifecycle};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy)]
 pub enum CandidateList {
@@ -8,24 +8,54 @@ pub enum CandidateList {
     Tasks,
 }
 
+/// The result of deciding one condition: run and satisfied or not, or not run because this
+/// machine has not approved its command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Observation {
+    Satisfied,
+    Unsatisfied,
+    Unapproved,
+}
+impl Observation {
+    /// Whether the Entity surfaces as far as its own condition goes. An unapproved condition
+    /// counts as satisfied, so a command nobody approved here hides nothing; this is the only
+    /// place that reading is made.
+    pub fn surfaces(self) -> bool {
+        self != Self::Unsatisfied
+    }
+}
+impl From<bool> for Observation {
+    fn from(satisfied: bool) -> Self {
+        if satisfied {
+            Self::Satisfied
+        } else {
+            Self::Unsatisfied
+        }
+    }
+}
+
 /// Condition results of one list invocation. Each Entity is evaluated at most once, ancestors
 /// before descendants, and nothing below an unsurfaced or terminal ancestor is evaluated. A
 /// conflicted or missing ancestor has no condition and ends the chain there.
-pub struct Surfacing<'a, E, F> {
+pub struct Surfacing<'a, E, F, O = bool> {
     view: &'a View,
-    cache: BTreeMap<EntityId, bool>,
+    cache: BTreeMap<EntityId, Observation>,
     evaluate: F,
-    error: std::marker::PhantomData<E>,
+    marker: std::marker::PhantomData<(E, O)>,
 }
-impl<'a, E: From<Error>, F: FnMut(&EntityId, &str) -> std::result::Result<bool, E>>
-    Surfacing<'a, E, F>
+impl<
+    'a,
+    E: From<Error>,
+    O: Into<Observation>,
+    F: FnMut(&EntityId, &str) -> std::result::Result<O, E>,
+> Surfacing<'a, E, F, O>
 {
     pub fn new(view: &'a View, evaluate: F) -> Self {
         Self {
             view,
             cache: BTreeMap::new(),
             evaluate,
-            error: std::marker::PhantomData,
+            marker: std::marker::PhantomData,
         }
     }
     fn chain(&self, id: &EntityId) -> Vec<EntityId> {
@@ -44,18 +74,18 @@ impl<'a, E: From<Error>, F: FnMut(&EntityId, &str) -> std::result::Result<bool, 
             if !current.lifecycle.editable() {
                 return Ok(false);
             }
-            let satisfied = match self.cache.get(&ancestor) {
+            let observation = match self.cache.get(&ancestor) {
                 Some(value) => *value,
                 None => {
                     let value = match &current.condition {
-                        Some(command) => (self.evaluate)(&ancestor, command)?,
-                        None => true,
+                        Some(command) => (self.evaluate)(&ancestor, command)?.into(),
+                        None => Observation::Satisfied,
                     };
                     self.cache.insert(ancestor.clone(), value);
                     value
                 }
             };
-            if !satisfied {
+            if !observation.surfaces() {
                 return Ok(false);
             }
         }
@@ -69,8 +99,19 @@ impl<'a, E: From<Error>, F: FnMut(&EntityId, &str) -> std::result::Result<bool, 
             self.view
                 .current(&ancestor)
                 .is_some_and(|c| c.lifecycle.editable())
-                && self.cache.get(&ancestor).copied().unwrap_or(true)
+                && self
+                    .cache
+                    .get(&ancestor)
+                    .is_none_or(|observation| observation.surfaces())
         })
+    }
+    /// The Entities this invocation decided whose condition was not run for want of approval.
+    pub fn unapproved(&self) -> BTreeSet<EntityId> {
+        self.cache
+            .iter()
+            .filter(|(_, observation)| **observation == Observation::Unapproved)
+            .map(|(id, _)| id.clone())
+            .collect()
     }
 }
 
@@ -90,12 +131,13 @@ impl<'a, E: From<Error>, F: FnMut(&EntityId, &str) -> std::result::Result<bool, 
 pub fn list_candidates<
     'a,
     E: From<Error>,
-    F: FnMut(&EntityId, &str) -> std::result::Result<bool, E>,
+    O: Into<Observation>,
+    F: FnMut(&EntityId, &str) -> std::result::Result<O, E>,
 >(
     view: &'a View,
     kind: CandidateList,
     mut include: impl FnMut(&EntityId) -> bool,
-    surfacing: &mut Surfacing<'a, E, F>,
+    surfacing: &mut Surfacing<'a, E, F, O>,
 ) -> std::result::Result<Vec<&'a EntityId>, E> {
     let mut visible = Vec::new();
     for id in view.in_creation_order() {

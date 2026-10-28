@@ -84,12 +84,13 @@ pub(super) enum Command {
     #[command(
         after_help = "Like tasks, show runs the resurfacing conditions that decide the situation of a NotStarted Entity: the ancestors, the Entity itself and, for a Group, its startable descendants. Undecided, InProgress and terminal Entities run nothing. An unsurfaced Issue is shown as Unsurfaced, and a stalled Group lists unsurfaced candidates, its own unsatisfied condition and an unsurfaced ancestor under Stalled.
 Conditions run through /bin/sh -c: exit 0 is satisfied, 1 is unsatisfied, other exits fail the whole command.
+Only commands approved on this machine run. An unapproved condition is not run, counts as satisfied and adds +Unapproved to its Entity's situation; stderr gives the count.
 To read saved information without running any condition, add --skip-conditions; the situation is then derived as if every condition were satisfied."
     )]
     Show {
         #[arg(help = ENTITY_ID_HELP)]
         id: String,
-        /// Include saved lifecycle, condition and all direct relationships without duplicate wait sections
+        /// Include saved lifecycle, condition and all direct relationships without duplicate wait sections; a command condition also shows its approval, digest and escaped command
         #[arg(long)]
         details: bool,
         /// Run no condition and derive the situation as if every condition were satisfied
@@ -235,6 +236,7 @@ pub(super) enum Storage {
 #[derive(Args)]
 #[command(
     after_help = "Conditions run through /bin/sh -c: exit 0 is satisfied, 1 is unsatisfied, other exits fail the whole list.
+Only commands approved on this machine run: condition set and capture --command approve the command they are given. An unapproved condition is not run, counts as satisfied and adds +Unapproved to its Entity's situation; stderr gives the count.
 The working directory is the current Git worktree root, or the management root outside Git.
 Ctrl-C and timeout send TERM to the process group, then KILL after 1s.
 Each stdout/stderr stream retains up to 64 KiB (first and last 32 KiB on overflow).
@@ -261,12 +263,12 @@ pub(super) struct ConditionOptions {
 pub(super) enum Condition {
     /// Save or replace a shell condition without evaluating it
     #[command(
-        after_help = "Example: axon condition set ID --command 'test -f ready.txt'\nExit 0=satisfied, 1=unsatisfied, others=evaluation failed. Repair broken conditions with set or unset."
+        after_help = "Example: axon condition set ID --command 'test -f ready.txt'\nExit 0=satisfied, 1=unsatisfied, others=evaluation failed. Repair broken conditions with set or unset.\nThe command is approved to run on this machine, also when it is already stored; set it only when you wrote or checked it."
     )]
     Set {
         #[arg(help = ENTITY_ID_HELP)]
         id: String,
-        /// Shell command to store; it runs only when conditions are evaluated
+        /// Shell command to store and approve on this machine; it runs only when conditions are evaluated
         #[arg(long)]
         command: String,
         #[arg(short, long, help = REASON_HELP)]
@@ -319,7 +321,7 @@ pub(super) struct Create {
     /// Register as adopted work in NotStarted instead of Undecided
     #[arg(long)]
     pub(super) accept: bool,
-    /// Initial shell condition; stored without evaluation
+    /// Initial shell condition; stored without evaluation and approved on this machine
     #[arg(long)]
     pub(super) command: Option<String>,
     #[command(flatten)]

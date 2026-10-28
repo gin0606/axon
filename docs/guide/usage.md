@@ -19,7 +19,7 @@
 | 状態変更の経緯 | `axon log ID` |
 | 記録者の詳細 | `axon log ID --recorder-details` / `axon note list ID --recorder-details` |
 
-一覧と `axon show` の先頭行は `ID  Kind  Situation  Label  Title` の順です。`axon tasks` にはIssueとGroupが平らに並び、依存や祖先の採用待ちも含まれます。表示の状況を読み、着手できると決めつけないでください。Groupの状況は配下から導出され、`Empty` は計画を書く段階、`Confirmable` は最終確認して完了できる段階、`Ready` は配下に着手できる浮上したIssueがある段階です（再浮上条件を評価しない `axon list`・`axon show --skip-conditions` では浮上を問いません）。`InProgress` は配下の仕事が始まっていること、`Blocked` はそれ以外を示します。完了できず、配下に着手できるIssueも着手中のIssueもないGroupは、`axon show` の `Stalled` 節で理由を確認できます。`axon show` は `axon tasks` と同じく再浮上条件を評価するので、条件で隠れているIssueは `Unsurfaced`、隠れたIssueしか持たないGroupは `Blocked` と `Unsurfaced candidate:`、Group自身の条件で隠れていることは `Own condition unsatisfied:` で読めます。保存情報だけを読むときは `--skip-conditions` を付けます。候補に出ないことは操作禁止やEntityの不存在を意味しません。
+一覧と `axon show` の先頭行は `ID  Kind  Situation  Label  Title` の順です。`axon tasks` にはIssueとGroupが平らに並び、依存や祖先の採用待ちも含まれます。表示の状況を読み、着手できると決めつけないでください。Groupの状況は配下から導出され、`Empty` は計画を書く段階、`Confirmable` は最終確認して完了できる段階、`Ready` は配下に着手できる浮上したIssueがある段階です（再浮上条件を評価しない `axon list`・`axon show --skip-conditions` では浮上を問いません）。`InProgress` は配下の仕事が始まっていること、`Blocked` はそれ以外を示します。完了できず、配下に着手できるIssueも着手中のIssueもないGroupは、`axon show` の `Stalled` 節で理由を確認できます。`axon show` は `axon tasks` と同じく再浮上条件を評価するので、条件で隠れているIssueは `Unsurfaced`、隠れたIssueしか持たないGroupは `Blocked` と `Unsurfaced candidate:`、Group自身の条件で隠れていることは `Own condition unsatisfied:` で読めます。条件を実行せずに読むときは `--skip-conditions` を付けます。候補に出ないことは操作禁止やEntityの不存在を意味しません。
 
 ## 登録と状態変更
 
@@ -102,6 +102,8 @@ Groupは自身と終了済みを含む全子孫、Issueは単体を取得しま�
 ## 再浮上
 
 `axon condition set ID --command 'test -f ready.txt'` は条件を保存し、`axon condition unset ID` は解除します。保存時には実行しません。`axon proposals|tasks` と既定の `axon show` が必要な条件を `/bin/sh -c` で評価し、終了0は成立、1は未成立、その他は一覧または表示の失敗です。`axon show ID --skip-conditions` は評価しません。`--condition-timeout` と `--trace-conditions` の契約は [外部条件](../reference/candidates.md) を参照してください。
+
+条件は、このマシンで許可したコマンドだけを実行します。`axon condition set --command` と `axon capture --command` は、指定したコマンドを許可します。`.axon/` を Git で追跡していて、merge・checkout・clone で他人が書いた条件が入っても、読むだけでは実行されません。未許可の条件は成立として扱われ、その Entity の状況に `+Unapproved` が付き、件数が stderr に出ます。`axon show ID --details` で `Approval:`・`Digest:`・`Command:` を確かめられます。中身を確かめたコマンドを許可するには、保存されている文字列と同じものを `axon condition set` に渡します。`Command:` は文字列を escape して表示するため、そのまま貼り付けると別の文字列になる場合があります。許可の範囲と保存場所は [条件の許可](../reference/candidates.md#条件の許可) を参照してください。
 
 IDはprefix＋ランダム8文字で、完全IDまたは一意なsuffixを指定できます。CLI生成文は英語、TTYでは意味に応じて装飾します。非TTY、非空の`NO_COLOR`、`TERM=dumb`、`--no-color`では装飾しません。例えば`axon --no-color tasks`または`axon tasks --no-color`で、その呼び出しのhelpと診断を含めて装飾を無効化できます。一覧の絞り込み・検索、Note個別参照と保存結果は [CLIと表示の契約](../reference/cli.md) を参照してください。
 

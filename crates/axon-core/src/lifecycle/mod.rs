@@ -8,7 +8,7 @@ mod model;
 pub mod record;
 mod refusal;
 
-pub use candidates::{CandidateList, Surfacing, list_candidates};
+pub use candidates::{CandidateList, Observation, Surfacing, list_candidates};
 pub use model::*;
 pub use record::{
     Current, Entry, HEADER_FORMAT, Header, NONCE_LENGTH, Nonce, Note, RECORD_ID_LENGTH, Record,

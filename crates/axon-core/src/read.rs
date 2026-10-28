@@ -43,6 +43,8 @@ pub struct Row<'a> {
     pub status: Status,
     /// The Entity is attributed a structural violation.
     pub invalid: bool,
+    /// The read decided the Entity's own condition and did not run it for want of approval.
+    pub unapproved: bool,
     pub matches: Vec<MatchLocation>,
 }
 
@@ -351,6 +353,7 @@ impl<'a> View<'a> {
             title: &presented.title,
             status,
             invalid: self.view.in_violation(id),
+            unapproved: false,
             matches: query.map(|q| matches_in(presented, q)).unwrap_or_default(),
         }
     }
@@ -503,11 +506,13 @@ pub fn list<'a>(
         .collect()
 }
 
-pub fn candidates<'a, E: From<Error>>(
+/// The rows of a candidate list. A row is marked unapproved when its own condition was decided
+/// and not run for want of approval; an unapproved ancestor marks only its own row.
+pub fn candidates<'a, E: From<Error>, O: Into<Observation>>(
     view: &View<'a>,
     kind: CandidateList,
     include: impl FnMut(&EntityId) -> bool,
-    evaluate: impl FnMut(&EntityId, &str) -> std::result::Result<bool, E>,
+    evaluate: impl FnMut(&EntityId, &str) -> std::result::Result<O, E>,
     query: Option<&str>,
 ) -> std::result::Result<Vec<Row<'a>>, E> {
     let mut surfacing = Surfacing::new(view.derived(), evaluate);
@@ -519,6 +524,10 @@ pub fn candidates<'a, E: From<Error>>(
             CandidateList::Tasks => view.status_with(id, |issue| surfacing.surfaced(issue))?,
         };
         rows.push(view.row_from(id, status, query));
+    }
+    let unapproved = surfacing.unapproved();
+    for row in &mut rows {
+        row.unapproved = unapproved.contains(row.id);
     }
     Ok(rows)
 }
@@ -676,16 +685,69 @@ pub fn detail<'a>(view: &View<'a>, id: &EntityId) -> Result<Detail<'a>> {
 /// when it is NotStarted, and for a Group its startable descendants with the Groups between.
 /// Each condition runs at most once, and the rows of related Entities use the results so far
 /// rather than evaluating further. A conflicted Entity evaluates nothing.
-pub fn detail_with<'a, E: From<Error>>(
+pub fn detail_with<'a, E: From<Error>, O: Into<Observation>>(
     view: &View<'a>,
     id: &EntityId,
-    evaluate: impl FnMut(&EntityId, &str) -> std::result::Result<bool, E>,
+    evaluate: impl FnMut(&EntityId, &str) -> std::result::Result<O, E>,
 ) -> std::result::Result<Detail<'a>, E> {
     // Evaluation and the cache-only lookups never overlap, so one cell serves both closures.
     let surfacing = std::cell::RefCell::new(Surfacing::new(view.derived(), evaluate));
     let surfaced = |e: &EntityId| surfacing.borrow_mut().surfaced(e);
     let known = |e: &EntityId| Ok(surfacing.borrow().surfaced_so_far(e));
-    detail_from(view, id, surfaced, known)
+    let mut detail = detail_from(view, id, surfaced, known)?;
+    // Every row of the detail, the target's and the related ones, is marked from what this
+    // read decided, so a related row never evaluates anything only to be marked.
+    let unapproved = surfacing.borrow().unapproved();
+    detail.mark_unapproved(&unapproved);
+    Ok(detail)
+}
+
+impl Detail<'_> {
+    fn mark_unapproved(&mut self, unapproved: &BTreeSet<EntityId>) {
+        let mark = |row: &mut Row<'_>| row.unapproved = unapproved.contains(row.id);
+        let mark_related = |related: &mut Related<'_>| {
+            if let Some(row) = &mut related.row {
+                mark(row);
+            }
+        };
+        mark(&mut self.row);
+        self.parent.iter_mut().for_each(mark_related);
+        for violation in &mut self.violations {
+            violation.related.iter_mut().for_each(mark_related);
+        }
+        if let Some(p) = &mut self.prerequisites {
+            p.ancestors.iter_mut().for_each(mark_related);
+            p.dependencies.iter_mut().for_each(mark_related);
+            p.ancestor_dependencies.iter_mut().for_each(mark_related);
+            p.unsurfaced_ancestors.iter_mut().for_each(mark);
+        }
+        if let Some(s) = &mut self.stall {
+            s.dependencies.iter_mut().for_each(mark_related);
+            s.ancestor_dependencies.iter_mut().for_each(mark_related);
+            for (row, related) in &mut s.descendant_dependencies {
+                mark(row);
+                mark_related(related);
+            }
+            for rows in [
+                &mut s.undecided_children,
+                &mut s.open_subgroups,
+                &mut s.unsurfaced_candidates,
+                &mut s.own_condition_unsatisfied,
+                &mut s.undecided_ancestors,
+                &mut s.unsurfaced_ancestors,
+            ] {
+                rows.iter_mut().for_each(mark);
+            }
+            s.unadopted_ancestors.iter_mut().for_each(mark_related);
+        }
+        self.dependencies.iter_mut().for_each(mark_related);
+        self.dependents.iter_mut().for_each(mark);
+        if let Some(d) = &mut self.descendants {
+            for entry in &mut d.entries {
+                mark(&mut entry.row);
+            }
+        }
+    }
 }
 
 /// The detail from the given surfacing decisions: `surfaced` for the Entities in the range of
@@ -1375,7 +1437,7 @@ mod tests {
         let derived = f.derived();
         let view = View::new(&f.store, &derived);
         let mut calls = Vec::new();
-        let rows = candidates::<Error>(
+        let rows = candidates::<Error, bool>(
             &view,
             CandidateList::Tasks,
             |e| view.current(e).unwrap().kind == Kind::Group,
@@ -1400,7 +1462,7 @@ mod tests {
         let view = View::new(&f.store, &derived);
         for filter in [true, false] {
             let view = &view;
-            let error = candidates::<Error>(
+            let error = candidates::<Error, bool>(
                 view,
                 CandidateList::Tasks,
                 move |e| !filter || view.current(e).unwrap().kind == Kind::Group,
@@ -1422,7 +1484,7 @@ mod tests {
         let derived = f.derived();
         let view = View::new(&f.store, &derived);
         let rows =
-            candidates::<Error>(&view, CandidateList::Tasks, |_| true, |_, _| Ok(true), None)
+            candidates::<Error, bool>(&view, CandidateList::Tasks, |_| true, |_, _| Ok(true), None)
                 .unwrap();
         assert_eq!(
             ids(&rows),
@@ -1482,7 +1544,7 @@ mod tests {
         let derived = f.derived();
         let view = View::new(&f.store, &derived);
         let mut calls = Vec::new();
-        let value = detail_with::<Error>(&view, &id(name), |entity, command| {
+        let value = detail_with::<Error, bool>(&view, &id(name), |entity, command| {
             calls.push(entity.to_string());
             assert_eq!(command, entity.to_string());
             Ok(results
@@ -1626,7 +1688,7 @@ mod tests {
         {
             let derived = f.derived();
             let view = View::new(&f.store, &derived);
-            let error = detail_with::<Error>(&view, &id("vacant"), |entity, _| {
+            let error = detail_with::<Error, bool>(&view, &id("vacant"), |entity, _| {
                 Err(Error::new(format!("{entity} failed")))
             })
             .unwrap_err();
@@ -1751,7 +1813,7 @@ mod tests {
         // A failing evaluation fails the whole read, and skipping conditions never evaluates.
         let derived = f.derived();
         let view = View::new(&f.store, &derived);
-        let error = detail_with::<Error>(&view, &id("plan"), |entity, _| {
+        let error = detail_with::<Error, bool>(&view, &id("plan"), |entity, _| {
             Err(Error::new(format!("{entity} failed")))
         })
         .unwrap_err();
@@ -1864,7 +1926,7 @@ mod tests {
                 prop_assert_eq!(found, expected);
             }
             let mut calls = Vec::new();
-            let rows = candidates::<Error>(&view, CandidateList::Tasks, |_| true, |entity, _| {
+            let rows = candidates::<Error, bool>(&view, CandidateList::Tasks, |_| true, |entity, _| {
                 calls.push(entity.clone());
                 Ok(true)
             }, None).unwrap();
@@ -1893,7 +1955,7 @@ mod tests {
                 prop_assert_eq!(related_ids(&cycle.related), [format!("work-{}", (index + 1) % length)]);
                 prop_assert_eq!(value.row.status, Status::Blocked);
             }
-            prop_assert_eq!(candidates::<Error>(&view, CandidateList::Tasks, |_| true, |_, _| Ok(true), None).unwrap().len(), length);
+            prop_assert_eq!(candidates::<Error, bool>(&view, CandidateList::Tasks, |_| true, |_, _| Ok(true), None).unwrap().len(), length);
         }
 
         #[test]
@@ -1935,7 +1997,7 @@ mod tests {
             prop_assert_eq!(ancestors.len(), 1);
             prop_assert_eq!(&ancestors[0].id, &broken_id);
             prop_assert_eq!(ancestors[0].row.as_ref().map(|row| row.status), match mode { 0 => None, 1 => Some(Status::Conflicted), _ => Some(Status::Undecided) });
-            let rows = candidates::<Error>(&view, CandidateList::Tasks, |_| true, |_, _| Ok(true), None).unwrap();
+            let rows = candidates::<Error, bool>(&view, CandidateList::Tasks, |_| true, |_, _| Ok(true), None).unwrap();
             prop_assert_eq!(rows.iter().find(|row| *row.id == id("leaf")).unwrap().status, Status::Blocked);
             prop_assert_eq!(rows.iter().any(|row| row.id == &broken_id), false);
             }
@@ -2060,7 +2122,7 @@ mod tests {
             let expected_calls = if root_ok { &["root", "first", "second"][..] } else { &["root"][..] };
             for _ in 0..2 {
                 let mut calls = Vec::new();
-                let rows = candidates::<Error>(&view, CandidateList::Tasks,
+                let rows = candidates::<Error, bool>(&view, CandidateList::Tasks,
                     |entity| entity == &id("root"),
                     |entity, _| {
                         let index = ["root", "first", "second"].iter().position(|name| entity == &id(name)).unwrap();
@@ -2081,7 +2143,7 @@ mod tests {
                 }
             }
             let mut calls = Vec::new();
-            let shown = detail_with::<Error>(&view, &id("root"), |entity, _| {
+            let shown = detail_with::<Error, bool>(&view, &id("root"), |entity, _| {
                 calls.push(entity.to_string());
                 Ok(values[["root", "first", "second"].iter().position(|name| entity == &id(name)).unwrap()])
             }).unwrap();
@@ -2134,7 +2196,7 @@ mod tests {
         let derived = f.derived();
         let view = View::new(&f.store, &derived);
         let mut calls = Vec::new();
-        let rows = candidates::<Error>(
+        let rows = candidates::<Error, bool>(
             &view,
             CandidateList::Tasks,
             |_| true,
@@ -2580,7 +2642,7 @@ mod tests {
         assert_eq!(related_ids(&prerequisites.ancestors), ["plan"]);
         assert!(prerequisites.unsurfaced_ancestors.is_empty());
         // With conditions evaluated, the terminal ancestor hides it as the tasks row would.
-        let value = detail_with::<Error>(&view, &id("late"), |_, _| Ok(true)).unwrap();
+        let value = detail_with::<Error, bool>(&view, &id("late"), |_, _| Ok(true)).unwrap();
         assert_eq!(value.row.status, Status::Unsurfaced);
     }
 
@@ -2627,7 +2689,7 @@ mod tests {
             Status::Conflicted
         );
         let mut calls = Vec::new();
-        let rows = candidates::<Error>(
+        let rows = candidates::<Error, bool>(
             &view,
             CandidateList::Tasks,
             |_| true,
@@ -2668,11 +2730,11 @@ mod tests {
         );
         let view = View::new(&alone.store, &derived);
         let rows =
-            candidates::<Error>(&view, CandidateList::Tasks, |_| true, |_, _| Ok(true), None)
+            candidates::<Error, bool>(&view, CandidateList::Tasks, |_| true, |_, _| Ok(true), None)
                 .unwrap();
         assert_eq!(ids(&rows), ["plan", "work"]);
         assert!(rows.iter().all(|row| row.status == Status::Blocked));
-        let evaluated = |name: &str| detail_with::<Error>(&view, &id(name), |_, _| Ok(true));
+        let evaluated = |name: &str| detail_with::<Error, bool>(&view, &id(name), |_, _| Ok(true));
         for work in [
             detail(&view, &id("work")).unwrap(),
             evaluated("work").unwrap(),
@@ -2788,7 +2850,7 @@ mod tests {
             kind: ViolationKind::OpenUnderTerminal
         }));
         let view = View::new(&f.store, &derived);
-        let evaluated = |name: &str| detail_with::<Error>(&view, &id(name), |_, _| Ok(true));
+        let evaluated = |name: &str| detail_with::<Error, bool>(&view, &id(name), |_, _| Ok(true));
         for plan in [
             detail(&view, &id("plan")).unwrap(),
             evaluated("plan").unwrap(),
@@ -2820,7 +2882,7 @@ mod tests {
         let derived = f.derived();
         let view = View::new(&f.store, &derived);
         let mut asked = Vec::new();
-        let plan = detail_with::<Error>(&view, &id("plan"), |e, _| {
+        let plan = detail_with::<Error, bool>(&view, &id("plan"), |e, _| {
             asked.push(e.to_string());
             Ok(false)
         })
@@ -2955,7 +3017,7 @@ mod tests {
         assert_eq!(rows.len(), 3);
         assert_eq!(rows.iter().filter(|r| r.invalid).count(), 2);
         let tasks =
-            candidates::<Error>(&view, CandidateList::Tasks, |_| true, |_, _| Ok(true), None)
+            candidates::<Error, bool>(&view, CandidateList::Tasks, |_| true, |_, _| Ok(true), None)
                 .unwrap();
         assert_eq!(tasks.len(), 3);
     }
@@ -3002,5 +3064,115 @@ mod tests {
                 .unwrap()
                 .awaiting_confirmation
         );
+    }
+
+    /// An unapproved condition counts as satisfied: the Entities below it are still evaluated,
+    /// and only the rows of the Entities whose own condition went unapproved are marked, in a
+    /// list and on every row of a detail, within the range the read evaluated.
+    #[test]
+    fn unapproved_conditions_surface_and_mark_only_their_own_rows() {
+        let mut f = Fixture::new();
+        f.create("plan", Kind::Group, None, &[], 1);
+        f.create("kid", Kind::Issue, Some("plan"), &[], 2);
+        f.create("gated", Kind::Issue, Some("plan"), &[], 3);
+        f.create("sub", Kind::Group, Some("plan"), &[], 4);
+        f.create("leaf", Kind::Issue, Some("sub"), &[], 5);
+        f.create("dep", Kind::Issue, None, &[], 6);
+        f.create("user", Kind::Issue, None, &["dep"], 7);
+        for (name, command) in [
+            ("kid", "unapproved"),
+            ("gated", "unsatisfied"),
+            ("sub", "unapproved"),
+            ("leaf", "satisfied"),
+            ("dep", "unapproved"),
+        ] {
+            f.set_condition(name, Some(command));
+        }
+        let derived = f.derived();
+        let view = View::new(&f.store, &derived);
+        let calls = std::cell::RefCell::new(Vec::new());
+        let evaluate = |entity: &EntityId, command: &str| {
+            calls.borrow_mut().push(entity.to_string());
+            Ok::<_, Error>(match command {
+                "unapproved" => Observation::Unapproved,
+                "unsatisfied" => Observation::Unsatisfied,
+                _ => Observation::Satisfied,
+            })
+        };
+        let marked = |rows: &[Row<'_>]| -> Vec<(String, bool)> {
+            rows.iter()
+                .map(|r| (r.id.to_string(), r.unapproved))
+                .collect()
+        };
+
+        let rows = candidates(&view, CandidateList::Tasks, |_| true, evaluate, None).unwrap();
+        assert_eq!(
+            marked(&rows),
+            [
+                ("plan".into(), false),
+                ("kid".into(), true),
+                ("sub".into(), true),
+                ("leaf".into(), false),
+                ("dep".into(), true),
+                ("user".into(), false),
+            ]
+        );
+        assert!(calls.borrow().contains(&"leaf".to_string()));
+        calls.borrow_mut().clear();
+        // The excluded Group is still evaluated for the Issue below it, but has no row.
+        let rows = candidates(
+            &view,
+            CandidateList::Tasks,
+            |e| e.as_ref() == "leaf",
+            evaluate,
+            None,
+        )
+        .unwrap();
+        assert_eq!(marked(&rows), [("leaf".into(), false)]);
+        assert_eq!(*calls.borrow(), ["sub", "leaf"]);
+        calls.borrow_mut().clear();
+
+        let plan = detail_with(&view, &id("plan"), evaluate).unwrap();
+        assert!(!plan.row.unapproved);
+        let tree: Vec<_> = plan
+            .descendants
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .map(|d| (d.row.id.to_string(), d.row.unapproved))
+            .collect();
+        assert_eq!(
+            tree,
+            [
+                ("kid".into(), true),
+                ("gated".into(), false),
+                ("sub".into(), true),
+                ("leaf".into(), false),
+            ]
+        );
+        calls.borrow_mut().clear();
+        // A dependency is outside the range, so it is neither evaluated nor marked.
+        let user = detail_with(&view, &id("user"), evaluate).unwrap();
+        assert!(!user.dependencies[0].row.as_ref().unwrap().unapproved);
+        assert_eq!(*calls.borrow(), Vec::<String>::new());
+
+        let leaf = detail_with(&view, &id("leaf"), evaluate).unwrap();
+        assert_eq!(leaf.row.status, Status::Ready);
+        assert!(!leaf.row.unapproved);
+        assert!(
+            leaf.parent
+                .as_ref()
+                .unwrap()
+                .row
+                .as_ref()
+                .unwrap()
+                .unapproved
+        );
+
+        let dep = detail_with(&view, &id("dep"), evaluate).unwrap();
+        assert!(dep.row.unapproved);
+        assert_eq!(dep.row.status, Status::Ready);
+        assert_eq!(marked(&dep.dependents), [("user".into(), false)]);
     }
 }

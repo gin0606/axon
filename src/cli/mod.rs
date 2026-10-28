@@ -25,6 +25,12 @@ pub(super) struct Output {
     pub(super) text: String,
     pub(super) publication: Publication,
     pub(super) diagnostic: String,
+    /// Stderr written after stdout, for what follows an applied change: a failure to write it
+    /// changes neither the output nor the exit code.
+    pub(super) trailer: String,
+    /// The invocation exits 1 after writing its output, as when the record set is unchanged
+    /// but the approval it was asked for could not be saved.
+    pub(super) failed: bool,
 }
 pub(super) fn output(text: String, saved: bool) -> Output {
     Output {
@@ -35,6 +41,8 @@ pub(super) fn output(text: String, saved: bool) -> Output {
             Publication::None
         },
         diagnostic: String::new(),
+        trailer: String::new(),
+        failed: false,
     }
 }
 fn run(command: Command) -> Result<Output> {
@@ -198,14 +206,21 @@ pub(crate) fn main() -> std::process::ExitCode {
                 return std::process::ExitCode::from(1);
             }
             let mut stdout = std::io::stdout().lock();
-            match stdout
+            let written = stdout
                 .write_all(output.text.as_bytes())
-                .and_then(|_| stdout.flush())
-            {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
-                    std::process::ExitCode::SUCCESS
-                }
+                .and_then(|_| stdout.flush());
+            drop(stdout);
+            if !output.trailer.is_empty() {
+                let _ = std::io::stderr().write_all(output.trailer.as_bytes());
+            }
+            let success = if output.failed {
+                std::process::ExitCode::from(1)
+            } else {
+                std::process::ExitCode::SUCCESS
+            };
+            match written {
+                Ok(()) => success,
+                Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => success,
                 Err(error) => {
                     let _ = writeln!(
                         std::io::stderr(),

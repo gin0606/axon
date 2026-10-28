@@ -23,6 +23,30 @@ pub fn human_text(value: impl std::fmt::Display) -> String {
     rendered
 }
 
+/// A condition command as `Command:` shows it for an approval decision: one line that maps
+/// back to exactly one string. Backslash, newline, tab and CR get their escapes, other controls
+/// `\xHH`, and every other character outside ASCII `\u{...}`, so a real newline differs from
+/// the two characters `\n` and a lookalike quote from a shell quote.
+pub fn command_text(value: &str) -> String {
+    let mut rendered = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => rendered.push_str("\\\\"),
+            '\n' => rendered.push_str("\\n"),
+            '\t' => rendered.push_str("\\t"),
+            '\r' => rendered.push_str("\\r"),
+            '\u{00}'..='\u{1f}' | '\u{7f}'..='\u{9f}' => {
+                write!(rendered, "\\x{:02x}", character as u32).unwrap();
+            }
+            character if !character.is_ascii() => {
+                write!(rendered, "\\u{{{:x}}}", character as u32).unwrap();
+            }
+            character => rendered.push(character),
+        }
+    }
+    rendered
+}
+
 fn bidi_control(character: char) -> bool {
     matches!(
         character,
@@ -112,6 +136,9 @@ pub fn positive(text: impl std::fmt::Display) -> String {
 }
 pub fn error_label() -> String {
     paint(FAILURE, "Error:", std::io::stderr().is_terminal())
+}
+pub fn warning_label() -> String {
+    paint(WAITING, "Warning:", std::io::stderr().is_terminal())
 }
 pub fn situation(text: &str) -> String {
     let style = match text {

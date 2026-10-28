@@ -50,7 +50,7 @@ pub(crate) fn git_command(cwd: &Path) -> Command {
     command
 }
 /// Absolute paths printed by one rev-parse, one per line.
-fn rev_parse<const N: usize>(text: &str) -> Option<[PathBuf; N]> {
+pub(crate) fn rev_parse<const N: usize>(text: &str) -> Option<[PathBuf; N]> {
     let lines: Vec<_> = text.strip_suffix('\n')?.split('\n').collect();
     let paths: [&str; N] = lines.try_into().ok()?;
     Some(paths.map(PathBuf::from))
@@ -474,6 +474,10 @@ impl Location {
             root,
             git: None,
         })
+    }
+    /// Whether the management root is inside a Git repository.
+    pub fn in_git(&self) -> bool {
+        self.git.is_some()
     }
     pub(crate) fn header(&self) -> PathBuf {
         self.root.join(".axon").join(HEADER_FILE)

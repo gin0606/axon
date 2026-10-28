@@ -2,18 +2,59 @@ use super::{
     Output, Publication,
     args::{Body, Change, Condition, Create, Dependency, Import, LabelCommand, Parent},
     display, output,
-    render::{confirmation, converted, declaration_changes, declaration_ids, situation_label},
+    render::{
+        command_lines, confirmation, converted, declaration_changes, declaration_ids,
+        situation_label,
+    },
     store::{context, fresh_entity_id, open, resolve},
 };
 use axon::{
     Result,
+    approval::{self, Added, WriteError},
     lifecycle::{
-        Context, EntityId, Kind, Lifecycle, Operation,
+        Context, EntityId, Kind, Lifecycle, Operation, StoreId,
         record::{Current, Entry, Record, RecordId, Store, View},
     },
+    location::Location,
 };
 use chrono::Utc;
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{cell::RefCell, collections::BTreeSet, path::PathBuf};
+
+/// A publication whose result is unknown may have saved a condition, but never its approval:
+/// approvals are written only after a record is known to be published.
+fn approval_after_unknown(
+    error: axon::Error,
+    id: &RefCell<Option<EntityId>>,
+    command: &str,
+) -> axon::Error {
+    match (error, id.borrow().as_ref()) {
+        (axon::Error::PublicationUnknown(message), Some(id)) => {
+            axon::Error::PublicationUnknown(format!(
+                "{message}; even if the record was published, the condition is not approved; approve it with axon condition allow {id} --digest {}",
+                approval::digest(command)
+            ))
+        }
+        (error, _) => error,
+    }
+}
+/// Approves the command of a record just published. The record stays applied whatever
+/// happens here, so a failure is a warning after the success output, never an error.
+fn approve_published(location: &Location, store: &StoreId, id: &EntityId, command: &str) -> String {
+    let digest = approval::digest(command);
+    match approval::approve(location, store, &digest) {
+        Ok(_) => String::new(),
+        Err(WriteError::NotApplied(problem)) => format!(
+            "{} approval not saved ({}); the condition is saved but will not run until approved; after fixing that, approve it with axon condition allow {id} --digest {digest}\n",
+            display::warning_label(),
+            display::line(problem.detail())
+        ),
+        Err(WriteError::Unknown(problem)) => format!(
+            "{} approval result unknown ({}); check it with axon show {id} --details\n",
+            display::warning_label(),
+            display::line(problem.detail())
+        ),
+    }
+}
 
 /// One ordinary mutation: resolve against the locked record set, produce at most one record,
 /// publish it and confirm from the result.
@@ -61,6 +102,8 @@ pub(super) fn import(command: Import) -> Result<Output> {
                     Publication::Declaration
                 },
                 diagnostic: String::new(),
+                trailer: String::new(),
+                failed: false,
             })
         }
         command => {
@@ -113,6 +156,8 @@ pub(super) fn import(command: Import) -> Result<Output> {
                 text: display::human_text(text),
                 publication,
                 diagnostic: String::new(),
+                trailer: String::new(),
+                failed: false,
             })
         }
     }
@@ -126,41 +171,53 @@ pub(super) fn capture(args: Create) -> Result<Output> {
     };
     let description = args.body.read()?.unwrap_or_default();
     let title = args.title;
-    let (_, mut store) = open()?;
-    let text = store.update(|header, records, view| {
-        let parent = args.parent.map(|p| resolve(view, &p)).transpose()?;
-        let needs = args
-            .needs
-            .into_iter()
-            .map(|p| resolve(view, &p))
-            .collect::<Result<BTreeSet<_>>>()?;
-        let id = fresh_entity_id(&header.prefix, view)?;
-        let record = records.create(
-            id.clone(),
-            Current {
-                kind,
-                lifecycle,
-                owner: None,
-                title,
-                description,
-                label: args.label.0,
-                condition: args.command,
-                parent,
-                needs,
-            },
-            context(),
-        )?;
-        let title = display::line(&record.after.title);
-        let text = format!(
-            "{}  {}  {}  {}  {title}\n",
-            display::identity(&id),
-            display::positive("Created"),
-            display::muted(format!("{kind:?}")),
-            display::situation(&format!("{lifecycle:?}"))
-        );
-        Ok((vec![Entry::Record(record)], text))
-    })?;
-    Ok(output(text, true))
+    let command = args.command.clone();
+    let (location, mut store) = open()?;
+    let created = RefCell::new(None);
+    let (text, store_id) = store
+        .update(|header, records, view| {
+            let parent = args.parent.map(|p| resolve(view, &p)).transpose()?;
+            let needs = args
+                .needs
+                .into_iter()
+                .map(|p| resolve(view, &p))
+                .collect::<Result<BTreeSet<_>>>()?;
+            let id = fresh_entity_id(&header.prefix, view)?;
+            *created.borrow_mut() = Some(id.clone());
+            let record = records.create(
+                id.clone(),
+                Current {
+                    kind,
+                    lifecycle,
+                    owner: None,
+                    title,
+                    description,
+                    label: args.label.0,
+                    condition: args.command,
+                    parent,
+                    needs,
+                },
+                context(),
+            )?;
+            let title = display::line(&record.after.title);
+            let text = format!(
+                "{}  {}  {}  {}  {title}\n",
+                display::identity(&id),
+                display::positive("Created"),
+                display::muted(format!("{kind:?}")),
+                display::situation(&format!("{lifecycle:?}"))
+            );
+            Ok((vec![Entry::Record(record)], (text, header.store.clone())))
+        })
+        .map_err(|error| match &command {
+            Some(command) => approval_after_unknown(error, &created, command),
+            None => error,
+        })?;
+    let mut out = output(text, true);
+    if let (Some(command), Some(id)) = (&command, created.borrow().as_ref()) {
+        out.trailer = approve_published(&location, &store_id, id, command);
+    }
+    Ok(out)
 }
 
 pub(super) fn write(
@@ -275,25 +332,84 @@ pub(super) fn condition(command: Condition) -> Result<Output> {
             id,
             command,
             reason,
-        } => (id, Some(command), reason),
-        Condition::Unset { id, reason } => (id, None, reason),
+        } => (id, command, reason),
+        Condition::Unset { id, reason } => {
+            return mutate(reason.is_some(), |records, view| {
+                let id = resolve(view, &id)?;
+                let record = records.set_condition(&id, None, reason, context())?;
+                let text = confirmation(
+                    &id,
+                    if record.is_none() {
+                        "No changes"
+                    } else {
+                        "Condition unset"
+                    },
+                );
+                Ok((record, text))
+            });
+        }
     };
-    mutate(reason.is_some(), |records, view| {
-        let id = resolve(view, &value)?;
-        let unset = command.is_none();
-        let record = records.set_condition(&id, command, reason, context())?;
-        let text = confirmation(
-            &id,
-            if record.is_none() {
-                "No changes"
-            } else if unset {
-                "Condition unset"
-            } else {
-                "Condition updated"
-            },
-        );
-        Ok((record, text))
-    })
+    let reason_supplied = reason.is_some();
+    let (location, mut store) = open()?;
+    let target = RefCell::new(None);
+    let (mut text, saved, id, store_id) = store
+        .update(|header, records, view| {
+            let id = resolve(view, &value)?;
+            *target.borrow_mut() = Some(id.clone());
+            let record = records.set_condition(&id, Some(command.clone()), reason, context())?;
+            let mut text = confirmation(
+                &id,
+                if record.is_none() {
+                    "No changes"
+                } else {
+                    "Condition updated"
+                },
+            );
+            if record.is_none() && reason_supplied {
+                text = format!(
+                    "{}  Reason not saved; use axon note add to record it.\n",
+                    text.trim_end()
+                );
+            }
+            let saved = record.is_some();
+            Ok((
+                record.into_iter().map(Entry::Record).collect(),
+                (text, saved, id, header.store.clone()),
+            ))
+        })
+        .map_err(|error| approval_after_unknown(error, &target, &command))?;
+    if saved {
+        let mut out = output(text, true);
+        out.trailer = approve_published(&location, &store_id, &id, &command);
+        return Ok(out);
+    }
+    // The stored command is already this one: no record, but the caller vouched for it.
+    let mut out = output(String::new(), false);
+    match approval::approve(&location, &store_id, &approval::digest(&command)) {
+        Ok(Added::New) => {
+            text.push_str(&confirmation(&id, "Allowed condition"));
+            text.push_str(&command_lines(&command, "  "));
+        }
+        Ok(Added::Already) => {}
+        Err(WriteError::NotApplied(problem)) => {
+            out.trailer = format!(
+                "{} approval not saved ({})\n",
+                display::error_label(),
+                display::line(problem.detail())
+            );
+            out.failed = true;
+        }
+        Err(WriteError::Unknown(problem)) => {
+            out.trailer = format!(
+                "{} approval result unknown ({}); check it with axon show {id} --details\n",
+                display::error_label(),
+                display::line(problem.detail())
+            );
+            out.failed = true;
+        }
+    }
+    out.text = text;
+    Ok(out)
 }
 pub(super) fn dependency(command: Dependency) -> Result<Output> {
     let (value, needs, add, reason) = match command {

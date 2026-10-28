@@ -125,7 +125,7 @@ Axon が許可を増やす経路は次の三つだけである。利用者が許
 
 ### 許可を読む時点と読めない場合
 
-評価する経路（`axon proposals|tasks|show`）は、許可の集合を一回の一覧取得または表示の開始時に、記録の集合を読んだ後で一度だけ読む。評価中に別の process が許可を加えても、その取得の結果は変わらない。`axon show --details` は、対象の条件が外部コマンドなら、評価しない対象と `--skip-conditions` でも許可の集合を読む。`--details` のない `axon show --skip-conditions` と `axon list` は許可を読まない。
+評価する経路（`axon proposals|tasks|show`）は、許可の集合を一回の一覧取得または表示の開始時に、記録の集合を読んだ後で一度だけ読む。読んだ記録の集合のどのEntityも条件を持たなければ、判定する条件も示す許可もないため読まない。評価中に別の process が許可を加えても、その取得の結果は変わらない。`axon show --details` は、対象の条件が外部コマンドなら、評価しない対象と `--skip-conditions` でも許可の集合を読む。`--details` のない `axon show --skip-conditions` と `axon list` は許可を読まない。
 
 許可の保存場所に file がなければ、許可の集合は空とする。file を読めない場合（読取の失敗、通常の file でない、[形式](storage.md#axon-が-axon-の外に書くもの) に合わない内容、Git 外で状態 directory を決められない、Git 内で許可の file を置く common Git directory を求められないか、その場所を [信頼できない](storage.md#axon-が-axon-の外に書くもの)）は次のように扱う。
 

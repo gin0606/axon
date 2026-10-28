@@ -7,9 +7,63 @@ use super::{
 };
 use axon::{
     Result,
-    lifecycle::{CandidateList, RecordId},
+    approval::{Approvals, Problem},
+    lifecycle::{CandidateList, EntityId, Observation, RecordId},
     read,
 };
+use std::cell::Cell;
+
+/// Decides which conditions of one read run: only the approved ones. It counts what it
+/// left unapproved, so the read can say how many.
+struct Gate {
+    approvals: std::result::Result<Approvals, Problem>,
+    /// Whether any command came into the range of the read.
+    used: Cell<bool>,
+    unapproved: Cell<usize>,
+}
+impl Gate {
+    /// The gate of a read, with the approvals read now. A store without any condition has
+    /// nothing to decide, so its approvals are not looked for.
+    fn open(opened: &Read) -> Self {
+        Self {
+            approvals: if opened.has_conditions() {
+                opened.approvals()
+            } else {
+                Ok(Approvals::default())
+            },
+            used: Cell::new(false),
+            unapproved: Cell::new(0),
+        }
+    }
+    /// Runs the command when it is approved; otherwise reports it unapproved without running
+    /// it. With unreadable approvals no command is approved.
+    fn decide(&self, command: &str, run: impl FnOnce() -> Result<bool>) -> Result<Observation> {
+        self.used.set(true);
+        if self
+            .approvals
+            .as_ref()
+            .is_ok_and(|approvals| approvals.allows(command))
+        {
+            return run().map(Observation::from);
+        }
+        self.unapproved.set(self.unapproved.get() + 1);
+        Ok(Observation::Unapproved)
+    }
+    /// The stderr line about conditions not run, or nothing.
+    fn notice(&self) -> String {
+        match &self.approvals {
+            Err(problem) if self.used.get() => format!(
+                "Conditions not run: approvals could not be read ({}); every condition was treated as unapproved\n",
+                display::line(problem.detail())
+            ),
+            Ok(_) if self.unapproved.get() > 0 => format!(
+                "Conditions not run: {} unapproved (treated as satisfied); review with axon condition unapproved and allow with axon condition allow ID --digest DIGEST\n",
+                self.unapproved.get()
+            ),
+            _ => String::new(),
+        }
+    }
+}
 
 fn result(text: String, empty_hint: &str, notice: String) -> Result<Output> {
     let mut diagnostic = notice;
@@ -21,6 +75,8 @@ fn result(text: String, empty_hint: &str, notice: String) -> Result<Output> {
         text,
         publication: Publication::None,
         diagnostic,
+        trailer: String::new(),
+        failed: false,
     })
 }
 pub(super) fn export(ids: Vec<String>) -> Result<Output> {
@@ -68,6 +124,7 @@ fn evaluation(options: &ConditionOptions, root: std::path::PathBuf) -> condition
 }
 fn candidates(options: CandidateOptions, kind: CandidateList) -> Result<Output> {
     let opened = Read::open()?;
+    let gate = Gate::open(&opened);
     let text = {
         let view = opened.read();
         let evaluation = evaluation(&options.conditions, opened.location.worktree.clone());
@@ -76,14 +133,17 @@ fn candidates(options: CandidateOptions, kind: CandidateList) -> Result<Output> 
             kind,
             |id| options.selection.matches(&view, id),
             |entity, script| {
-                evaluation
-                    .run_command(entity, script)
-                    .map_err(|e| axon::Error::Invalid(e.to_string()))
+                gate.decide(script, || {
+                    evaluation
+                        .run_command(entity, script)
+                        .map_err(|e| axon::Error::Invalid(e.to_string()))
+                })
             },
             options.selection.search.as_deref(),
         )?;
         render::list(&rows, options.selection.search.is_some())
     };
+    let notice = opened.notice() + &gate.notice();
     result(
         text,
         match kind {
@@ -94,7 +154,7 @@ fn candidates(options: CandidateOptions, kind: CandidateList) -> Result<Output> 
                 "No task candidates. Conditions and ancestor scope may hide saved Entities; use axon list for the inventory."
             }
         },
-        opened.notice(),
+        notice,
     )
 }
 pub(super) fn show(
@@ -105,25 +165,56 @@ pub(super) fn show(
 ) -> Result<Output> {
     let opened = Read::open()?;
     let id = resolve(&opened.view, &value)?;
+    // A conflicted Entity has no current condition, so its approval is not shown.
+    let command = opened
+        .view
+        .current(&id)
+        .and_then(|current| current.condition.as_deref());
+    // An evaluating read reads the approvals whatever the target; `--skip-conditions` reads
+    // them only for the approval `--details` shows.
+    let gate = (!skip_conditions || (details && command.is_some())).then(|| Gate::open(&opened));
     let view = opened.read();
-    let detail = if skip_conditions {
-        read::detail(&view, &id)?
-    } else {
-        let evaluation = evaluation(&options, opened.location.worktree.clone());
-        let hint = format!(
-            "Use axon show {id}{} --skip-conditions to read saved information without running conditions",
-            if details { " --details" } else { "" }
-        );
-        read::detail_with(&view, &id, |entity, script| {
-            evaluation
-                .run_command(entity, script)
-                .map_err(|e| axon::Error::Invalid(format!("{e}\n{hint}")))
-        })?
+    let detail = match &gate {
+        Some(gate) if !skip_conditions => {
+            let evaluation = evaluation(&options, opened.location.worktree.clone());
+            let hint = format!(
+                "Use axon show {id}{} --skip-conditions to read saved information without running conditions",
+                if details { " --details" } else { "" }
+            );
+            read::detail_with(&view, &id, |entity: &EntityId, script| {
+                gate.decide(script, || {
+                    evaluation
+                        .run_command(entity, script)
+                        .map_err(|e| axon::Error::Invalid(format!("{e}\n{hint}")))
+                })
+            })?
+        }
+        _ => read::detail(&view, &id)?,
     };
+    let approval = match (&gate, command) {
+        (Some(gate), Some(command)) if details => Some(match &gate.approvals {
+            Ok(approvals) if approvals.allows(command) => render::Approval::Approved,
+            Ok(_) => render::Approval::Unapproved,
+            Err(_) => render::Approval::Unknown,
+        }),
+        _ => None,
+    };
+    let mut notice = opened.notice();
+    if let Some(gate) = &gate {
+        notice.push_str(&gate.notice());
+        if let (Err(problem), Some(render::Approval::Unknown)) = (&gate.approvals, approval)
+            && !gate.used.get()
+        {
+            notice.push_str(&format!(
+                "Approvals could not be read ({})\n",
+                display::line(problem.detail())
+            ));
+        }
+    }
     result(
-        render::show(&detail, details),
+        render::show(&detail, details, approval),
         "No records.",
-        opened.notice(),
+        notice,
     )
 }
 fn record_id(value: &str) -> Result<RecordId> {

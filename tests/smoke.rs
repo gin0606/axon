@@ -140,9 +140,39 @@ impl Drop for Fixture {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
+/// A home for every axon a test runs, so approvals outside Git land in a scratch state
+/// directory rather than the user's. One per test process; each store has its own file in it.
+const SCRATCH_HOME: &str = "AXON_TEST_SCRATCH_HOME";
+static HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+fn scratch_home() -> &'static Path {
+    HOME.get_or_init(|| {
+        // A test that reruns this binary passes its home on, so both see the same approvals.
+        if let Some(home) = std::env::var_os(SCRATCH_HOME) {
+            return PathBuf::from(home);
+        }
+        let home = fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!(
+                "axon-lifecycle-home-{:032x}",
+                rand::random::<u128>()
+            ));
+        fs::create_dir(&home).unwrap();
+        // The process that made the home removes it when it exits.
+        extern "C" fn remove_home() {
+            if let Some(home) = HOME.get() {
+                let _ = fs::remove_dir_all(home);
+            }
+        }
+        unsafe { libc::atexit(remove_home) };
+        home
+    })
+}
 fn command(path: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_axon"));
     cmd.current_dir(path);
+    cmd.env("HOME", scratch_home())
+        .env_remove("XDG_STATE_HOME")
+        .env_remove("XDG_DATA_HOME");
     for (name, _) in std::env::vars_os() {
         if name.to_string_lossy().starts_with("GIT_") {
             cmd.env_remove(name);
@@ -1039,7 +1069,7 @@ fn cli_candidate_counts_and_condition_calls_match_for_every_small_forest() {
             let store = f.records();
             let derived = store.view().unwrap();
             let view = axon::read::View::new(&store, &derived);
-            let structured = axon::read::candidates::<axon::lifecycle::Error>(
+            let structured = axon::read::candidates::<axon::lifecycle::Error, bool>(
                 &view,
                 axon::lifecycle::CandidateList::Tasks,
                 |_| true,
@@ -1161,7 +1191,7 @@ proptest! {
             }
             let expected_log = expected_calls.iter().map(|index| format!("{index}\n")).collect::<String>();
             let mut structured_calls = Vec::new();
-            let structured = axon::read::candidates::<axon::Error>(
+            let structured = axon::read::candidates::<axon::Error, bool>(
                 &view, axon::lifecycle::CandidateList::Proposals, |_| true,
                 |entity, command| {
                     let index = nodes.iter().position(|node| &eid(&node.0) == entity).unwrap();
@@ -1543,6 +1573,7 @@ fn condition_fixture_survives_owner_kill_without_leaking() {
     let child = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "condition_owner_fixture", "--ignored"])
         .env("AXON_TEST_ROOT", &f.0)
+        .env(SCRATCH_HOME, scratch_home())
         .env("LLVM_PROFILE_FILE", "/dev/null")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1834,3 +1865,6 @@ mod contracts;
 
 #[path = "lifecycle/declaration.rs"]
 mod declaration;
+
+#[path = "lifecycle/approval.rs"]
+mod approval;

@@ -1,7 +1,7 @@
 use axon::{
-    Result,
+    Result, approval,
     file::Store,
-    lifecycle::{Context, EntityId, record},
+    lifecycle::{Context, EntityId, Header, record},
     location::Location,
     read,
 };
@@ -63,18 +63,30 @@ pub(super) fn open() -> Result<(Location, Store)> {
 /// stop a read; a one-line notice about them goes to stderr.
 pub(super) struct Read {
     pub(super) location: Location,
+    pub(super) header: Header,
     pub(super) records: record::Store,
     pub(super) view: record::View,
 }
 impl Read {
     pub(super) fn open() -> Result<Self> {
         let (location, store) = open()?;
-        let (_, records, view) = store.read()?;
+        let (header, records, view) = store.read()?;
         Ok(Self {
             location,
+            header,
             records,
             view,
         })
+    }
+    /// Whether any settled Entity has a condition.
+    pub(super) fn has_conditions(&self) -> bool {
+        self.view
+            .known()
+            .any(|id| self.view.current(id).is_some_and(|c| c.condition.is_some()))
+    }
+    /// The approvals of this store, read now: after the records, once per read.
+    pub(super) fn approvals(&self) -> std::result::Result<approval::Approvals, approval::Problem> {
+        approval::read(&self.location, &self.header.store)
     }
     pub(super) fn read(&self) -> read::View<'_> {
         read::View::new(&self.records, &self.view)

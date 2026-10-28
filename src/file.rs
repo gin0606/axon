@@ -277,7 +277,7 @@ impl Loaded {
         )))
     }
 }
-fn is_hex_name(name: &str, length: usize) -> bool {
+pub(crate) fn is_hex_name(name: &str, length: usize) -> bool {
     name.len() == length
         && name
             .bytes()

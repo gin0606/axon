@@ -160,6 +160,8 @@ pub(super) fn storage(command: Storage) -> Result<Output> {
                 "Store is consistent: {} Entities, no conflicts, violations or missing records.\n",
                 view.entities().len()
             ),
+            trailer: String::new(),
+            failed: false,
         });
     }
     Ok(output(report.text, false))

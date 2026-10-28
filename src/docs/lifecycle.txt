@@ -92,7 +92,7 @@ Reading and resurfacing
   ancestors, the Entity and, for a Group, its startable descendants; other Entities run
   nothing. A NotStarted Issue that does not surface is Unsurfaced. show --skip-conditions
   runs nothing and treats every condition as satisfied; use it to read saved information
-  only.
+  without running conditions.
   show --details includes saved conditions and all direct relationships once.
   note list ID requires an Entity ID and reads full Notes in time order; note show
   ID NOTE_ID reads one Note. log reads the records of an Entity: state changes,
@@ -108,6 +108,17 @@ Reading and resurfacing
   --trace-conditions writes captured output to stderr. Conditions run at the
   current Git worktree root (management root outside Git). Filtering selects
   candidates before evaluating their ancestors.
+  Only commands approved on this machine run, so a condition someone else wrote,
+  arriving by merge, checkout or clone, does not run by reading. condition set
+  --command and capture --command approve the command they are given, also when
+  set receives the command already stored; resolve and Git do not approve. An
+  unapproved condition is not run and counts as satisfied: its own row and
+  situation get +Unapproved, and stderr gives the count. show --details shows a
+  command condition's Approval, Digest and Command, the command escaped so that
+  each character is visible. Approvals live in the common Git directory
+  (axon-condition-approvals) per clone, or in the state directory per
+  management root outside Git, never in .axon/. If they cannot be read, nothing
+  runs and stderr says why.
 
 Storage and recovery
   The store is a set of immutable records, one file per record under

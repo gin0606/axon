@@ -2054,7 +2054,8 @@ fn git_worktree_operations_start_few_git_processes() {
     };
     // Discovery runs one rev-parse, and one more only from a linked worktree without a store of
     // its own, which checks its own index and then looks at the main worktree. Reads check the
-    // store's index once, writes twice.
+    // store's index once, writes twice. Without any condition in the store, no read looks for
+    // the approvals.
     for (worktree, rev_parse, own_index) in [(&f.0, 1, 0), (&linked.0, 2, 1)] {
         for (args, unmerged) in [
             (vec!["list"], 1),
