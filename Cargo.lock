@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "axon"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "axon-core",
  "axon-recorder",
@@ -617,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "axon-gui"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "axon",
  "chrono",
