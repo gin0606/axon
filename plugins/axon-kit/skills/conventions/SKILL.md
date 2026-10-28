@@ -17,9 +17,9 @@ declarationはYAMLの一括宣言を指す。タイトルはtitle、本文はdes
 
 ## 対象環境を固定する
 
-呼び出し側が指定したrepositoryまたは管理rootで操作する。binaryが指定されていればそれを使い、指定がなければその環境の `axon` を発見し、`axon --version` と `axon --help` を確認する。`axon tasks|accept|cancel|reopen|resolve|convert|label`・`axon storage check` の有無と必要なleaf helpの構文をこのpluginの契約と照合して、実行ファイルとworking directoryを以後の操作で固定する。別repositoryのソースcheckoutは不要。このplugin内のreferenceと選択したCLIの `axon docs`・helpで手順を完結させる。
+呼び出し側が指定したrepositoryまたは管理rootで操作する。binaryが指定されていればそれを使い、指定がなければその環境の `axon` を発見し、`axon --version` と `axon --help` を確認する。`axon tasks|accept|cancel|reopen|resolve|convert|label`・`axon storage check`・`axon condition unapproved|allow` の有無と必要なleaf helpの構文をこのpluginの契約と照合して、実行ファイルとworking directoryを以後の操作で固定する。別repositoryのソースcheckoutは不要。このplugin内のreferenceと選択したCLIの `axon docs`・helpで手順を完結させる。
 
-コマンドやschemaが非対応なら観測したversion・構文・対象を返す。別のbinaryへの切替や、記録fileやheaderの直接編集で操作を代替しない。実保存先の境界は [保存操作](references/mutations.md) に従う。
+コマンドやschemaが非対応なら観測したversion・構文・対象を返す。`axon condition unapproved|allow`がないbinaryは他人が書いた条件を実行しうるため、その旨を返し、条件を評価する`axon proposals|tasks`と既定の`axon show`、条件の保存（`--command`）を行わず、保存された条件の文字列を自分で実行しない。別のbinaryへの切替や、記録file・header・条件の許可のfileの直接編集で操作を代替しない。実保存先の境界は [保存操作](references/mutations.md) に従う。
 
 ## 必要な契約を読む
 
