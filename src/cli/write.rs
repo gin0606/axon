@@ -4,7 +4,7 @@ use super::{
     display, output,
     render::{
         command_lines, confirmation, converted, declaration_changes, declaration_ids,
-        situation_label,
+        plain_command_lines, situation_label,
     },
     store::{context, fresh_entity_id, open, resolve},
 };
@@ -333,6 +333,8 @@ pub(super) fn condition(command: Condition) -> Result<Output> {
             command,
             reason,
         } => (id, command, reason),
+        Condition::Unapproved => return super::read::unapproved(),
+        Condition::Allow { id, digest } => return allow(id, digest),
         Condition::Unset { id, reason } => {
             return mutate(reason.is_some(), |records, view| {
                 let id = resolve(view, &id)?;
@@ -389,6 +391,7 @@ pub(super) fn condition(command: Condition) -> Result<Output> {
         Ok(Added::New) => {
             text.push_str(&confirmation(&id, "Allowed condition"));
             text.push_str(&command_lines(&command, "  "));
+            out.publication = Publication::Approval(id.to_string());
         }
         Ok(Added::Already) => {}
         Err(WriteError::NotApplied(problem)) => {
@@ -533,6 +536,90 @@ pub(super) fn transition(args: Change, operation: Operation) -> Result<Output> {
         };
         Ok((Some(record), confirmation(&id, effect)))
     })
+}
+
+/// `axon condition allow ID [--digest DIGEST]`: approves the condition the record set holds now.
+/// No store lock is taken, since nothing is recorded; what is approved is the digest of the
+/// string read here, so a later change of the condition is never approved by this call.
+pub(super) fn allow(value: String, expected: Option<String>) -> Result<Output> {
+    let opened = super::store::Read::open()?;
+    // A suffix could resolve to a complete ID someone else brought in by a record, so only
+    // the complete ID is taken.
+    let id: EntityId = value.clone().try_into()?;
+    if opened.view.noted_only().contains(&id) {
+        return Err(axon::Error::Invalid(format!(
+            "{id} has no condition: the store holds only its Notes"
+        )));
+    }
+    if !opened.view.is_known(&id) {
+        return Err(axon::Error::Invalid(format!(
+            "no Entity with the complete ID {value}; condition allow takes only a complete ID"
+        )));
+    }
+    // The ID typed may also be meant as the end of another ID; then which Entity is meant is
+    // not certain, and the one that merely matches could be someone else's.
+    let mut longer: Vec<_> = opened
+        .view
+        .known()
+        .chain(opened.view.noted_only())
+        .filter(|other| **other != id && other.as_ref().ends_with(value.as_str()))
+        .map(ToString::to_string)
+        .collect();
+    if !longer.is_empty() {
+        longer.sort();
+        return Err(axon::Error::Invalid(format!(
+            "{value} is also the end of {}; approve by the ID you mean, written in full",
+            longer.join(", ")
+        )));
+    }
+    let Some(current) = opened.view.current(&id) else {
+        return Err(axon::Error::Invalid(format!(
+            "{id} is conflicted; pick a head with axon resolve {id} before approving its condition"
+        )));
+    };
+    let Some(command) = current.condition.as_deref() else {
+        return Err(axon::Error::Invalid(format!("{id} has no condition")));
+    };
+    let digest = approval::digest(command);
+    if let Some(expected) = expected
+        && expected != digest
+    {
+        return Err(axon::Error::Invalid(format!(
+            "the condition of {id} is not the one with digest {expected}; nothing was approved. The current condition is:\n{}",
+            plain_command_lines(command, "  ").trim_end()
+        )));
+    }
+    let (effect, publication) = match approval::approve(
+        &opened.location,
+        &opened.header.store,
+        &digest,
+    ) {
+        Ok(Added::New) => ("Allowed condition", Publication::Approval(id.to_string())),
+        Ok(Added::Already) => ("Condition already allowed", Publication::None),
+        Err(WriteError::NotApplied(problem)) => {
+            return Err(axon::Error::Invalid(format!(
+                "not applied: approval not saved ({})",
+                display::line(problem.detail())
+            )));
+        }
+        Err(WriteError::Unknown(problem)) => {
+            return Err(axon::Error::PublicationUnknown(format!(
+                "Result unknown: the approval of this condition may be in effect ({}); check Approval: with axon show {id} --details\n{}",
+                display::line(problem.detail()),
+                plain_command_lines(command, "  ").trim_end()
+            )));
+        }
+    };
+    let mut out = output(
+        format!(
+            "{}{}",
+            confirmation(&id, effect),
+            command_lines(command, "  ")
+        ),
+        false,
+    );
+    out.publication = publication;
+    Ok(out)
 }
 
 #[cfg(test)]

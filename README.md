@@ -34,6 +34,8 @@ axon condition set ID --command 'test -f ready.txt'
 
 Exit code `0` means satisfied, `1` means not satisfied, and any other code is an evaluation error. Keep an Issue undecided with a condition attached when you want to think about it later. See [Resurfacing conditions](docs/reference/candidates.md#条件の種類) for details.
 
+Only conditions approved on this machine run. Setting one approves it; a condition that arrives from someone else through Git is listed by `axon condition unapproved` and runs only after you read it and approve it with `axon condition allow ID --digest DIGEST`. See [Condition approval](docs/reference/candidates.md#条件の許可).
+
 ## Install
 
 On macOS 15 (Sequoia) or later, with Apple Silicon or Intel and [Homebrew](https://brew.sh):

@@ -20,6 +20,8 @@ pub(super) enum Publication {
     Storage,
     Declaration,
     StorageAndDeclaration,
+    /// An approval of the named Entity's condition was saved; it is not a record.
+    Approval(String),
 }
 pub(super) struct Output {
     pub(super) text: String,
@@ -225,14 +227,17 @@ pub(crate) fn main() -> std::process::ExitCode {
                     let _ = writeln!(
                         std::io::stderr(),
                         "{}: {error}",
-                        match output.publication {
+                        match &output.publication {
                             Publication::Storage =>
-                                "Error: output failed\nApplied: storage applied; output failed; inspect saved state before retrying",
+                                "Error: output failed\nApplied: storage applied; output failed; inspect saved state before retrying".to_owned(),
                             Publication::Declaration =>
-                                "Error: output failed\nApplied: declaration updated; storage unchanged; output failed; inspect declaration before retrying",
+                                "Error: output failed\nApplied: declaration updated; storage unchanged; output failed; inspect declaration before retrying".to_owned(),
                             Publication::StorageAndDeclaration =>
-                                "Error: output failed\nApplied: storage applied; declaration updated; output failed; inspect saved state before retrying",
-                            Publication::None => "Error: output failed",
+                                "Error: output failed\nApplied: storage applied; declaration updated; output failed; inspect saved state before retrying".to_owned(),
+                            Publication::Approval(id) => format!(
+                                "Error: output failed\nApplied: approval saved; output failed; check Approval: with axon show {id} --details"
+                            ),
+                            Publication::None => "Error: output failed".to_owned(),
                         }
                     );
                     std::process::ExitCode::from(1)

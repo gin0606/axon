@@ -797,3 +797,210 @@ fn a_dot_git_link_to_a_gitfile_is_trusted() {
     assert!(success(tasks.clone()).is_empty());
     assert!(root.join("ran.marker").exists());
 }
+
+fn digest_of(command: &str) -> String {
+    blake3::hash(command.as_bytes()).to_hex().to_string()
+}
+
+#[test]
+fn unapproved_conditions_are_listed_and_run_once_allowed() {
+    let (origin, task, proposal) = origin();
+    let fresh = clone_of(&origin);
+    let task_command = planted("task.marker");
+    let proposal_command = planted("proposal.marker");
+    let listed = fresh.ok(&["condition", "unapproved"]);
+    assert_eq!(
+        listed,
+        format!(
+            "{task}  Issue  Ready  chore  task\n  Digest: {}\n  Command: {task_command}\n{proposal}  Issue  Undecided  chore  proposal\n  Digest: {}\n  Command: {proposal_command}\n",
+            digest_of(&task_command),
+            digest_of(&proposal_command)
+        )
+    );
+    let records = fresh.record_files();
+    let unrun = |f: &Fixture| {
+        for marker in ["task.marker", "proposal.marker"] {
+            assert!(!f.0.join(marker).exists(), "{marker} ran");
+        }
+    };
+    // Listing and approving run nothing.
+    unrun(&fresh);
+    let allowed = fresh.ok(&[
+        "condition",
+        "allow",
+        &task,
+        "--digest",
+        &digest_of(&task_command),
+    ]);
+    assert_eq!(
+        allowed,
+        format!(
+            "{task}  Allowed condition\n  Digest: {}\n  Command: {task_command}\n",
+            digest_of(&task_command)
+        )
+    );
+    assert_eq!(
+        fresh.ok(&["condition", "allow", &task]),
+        format!(
+            "{task}  Condition already allowed\n  Digest: {}\n  Command: {task_command}\n",
+            digest_of(&task_command)
+        )
+    );
+    unrun(&fresh);
+    // The approval is not a record and leaves no history.
+    assert_eq!(fresh.record_files(), records);
+    assert!(!fresh.ok(&["log", &task]).contains("llow"));
+    let tasks = fresh.run(&["tasks"]);
+    assert!(!success(tasks.clone()).contains(&task));
+    assert!(fresh.0.join("task.marker").exists());
+    assert!(stderr(&tasks).starts_with("No task candidates."));
+    assert!(!fresh.ok(&["condition", "unapproved"]).contains(&task));
+    // A terminal Entity's condition can be approved too.
+    fresh.ok(&["cancel", &proposal]);
+    fresh.ok(&["condition", "allow", &proposal]);
+    let none = fresh.run(&["condition", "unapproved"]);
+    assert!(success(none.clone()).is_empty());
+    assert!(stderr(&none).starts_with("No unapproved conditions."));
+}
+
+#[test]
+fn allow_refuses_what_it_cannot_approve_as_checked() {
+    let (origin, task, proposal) = origin();
+    let other = clone_of(&origin);
+    let approvals = other.0.join(".git/axon-condition-approvals");
+    let command = planted("task.marker");
+    // A suffix is not resolved.
+    let suffix = &task[task.len() - 6..];
+    let refused = failure(other.run(&["condition", "allow", suffix]));
+    assert!(
+        refused.contains("condition allow takes only a complete ID"),
+        "{refused}"
+    );
+    // A digest of another command shows the current one and approves nothing.
+    let refused = failure(other.run(&[
+        "condition",
+        "allow",
+        &task,
+        "--digest",
+        &digest_of("something else"),
+    ]));
+    assert!(
+        refused.contains(&format!(
+            "  Digest: {}\n  Command: {command}",
+            digest_of(&command)
+        )),
+        "{refused}"
+    );
+    assert!(!approvals.exists());
+    // A malformed digest is a usage error.
+    let usage = other.run(&["condition", "allow", &task, "--digest", "ABC"]);
+    assert_eq!(usage.status.code(), Some(2));
+    // An Entity without a condition.
+    let bare = other.accepted("bare");
+    assert!(failure(other.run(&["condition", "allow", &bare])).contains("has no condition"));
+    // A conflicted Entity is refused; another Entity can still be approved meanwhile.
+    origin.ok(&["write", &task, "--title", "origin"]);
+    track_store(&origin.0);
+    git_commit(&origin.0, &["-qm", "origin title"]);
+    other.ok(&["write", &task, "--title", "other"]);
+    track_store(&other.0);
+    git_commit(&other.0, &["-qm", "other title"]);
+    success(git_integration(
+        &other.0,
+        &["pull", "-q", "--no-rebase", "--no-edit", "origin", "main"],
+    ));
+    let refused = failure(other.run(&["condition", "allow", &task]));
+    assert!(
+        refused.contains(&format!(
+            "is conflicted; pick a head with axon resolve {task}"
+        )),
+        "{refused}"
+    );
+    assert!(
+        other
+            .ok(&["condition", "allow", &proposal])
+            .contains("Allowed condition")
+    );
+    // The conflicted Entity is not listed.
+    let listed = other.ok(&["condition", "unapproved"]);
+    assert!(!listed.contains(&task), "{listed}");
+    // Unreadable approvals: both commands refuse and the file is kept.
+    fs::write(&approvals, "bad\n").unwrap();
+    assert!(
+        failure(other.run(&["condition", "unapproved"])).contains("approvals could not be read")
+    );
+    assert!(failure(other.run(&["condition", "allow", &proposal])).contains("not applied"));
+    assert_eq!(fs::read_to_string(&approvals).unwrap(), "bad\n");
+}
+
+#[test]
+fn unapproved_shows_controls_in_commands_escaped() {
+    let origin = Fixture::new();
+    git(&origin.0, &["init", "-q", "-b", "main"]);
+    git_commit(&origin.0, &["-q", "--allow-empty", "-m", "base"]);
+    origin.init();
+    let command = "printf '\u{1b}]0;title\u{7}'\nexit 0";
+    let id = created(origin.ok(&[
+        "capture",
+        "--label",
+        "chore",
+        "--title",
+        "t",
+        "--command",
+        command,
+    ]));
+    track_store(&origin.0);
+    git_commit(&origin.0, &["-qm", "plan"]);
+    let fresh = clone_of(&origin);
+    let listed = fresh.ok(&["condition", "unapproved"]);
+    assert!(!listed.contains('\u{1b}') && !listed.contains('\u{7}'));
+    assert!(
+        listed.ends_with("  Command: printf '\\x1b]0;title\\x07'\\nexit 0\n"),
+        "{listed}"
+    );
+    let escaped = "  Command: printf '\\x1b]0;title\\x07'\\nexit 0";
+    // The refusal names the current command in the same escaped form.
+    let refused = failure(fresh.run(&["condition", "allow", &id, "--digest", &digest_of("other")]));
+    assert!(!refused.contains('\u{7}'));
+    assert!(!refused.contains("\\x1b["), "{refused}");
+    assert!(refused.trim_end().ends_with(escaped), "{refused}");
+    let allowed = fresh.ok(&["condition", "allow", &id, "--digest", &digest_of(command)]);
+    assert!(!allowed.contains('\u{1b}') && !allowed.contains('\u{7}'));
+    assert!(allowed.starts_with(&format!("{id}  Allowed condition\n")));
+    assert!(allowed.ends_with(&format!("{escaped}\n")), "{allowed}");
+}
+
+#[test]
+fn unapproved_needs_readable_approvals_even_without_conditions() {
+    let f = Fixture::new();
+    f.init();
+    f.accepted("plain");
+    let listed = f
+        .command()
+        .env("HOME", "relative-home")
+        .args(["condition", "unapproved"])
+        .output()
+        .unwrap();
+    assert!(failure(listed).contains("approvals could not be read"));
+}
+
+#[test]
+fn allow_refuses_an_id_that_also_ends_another_id() {
+    let f = Fixture::new();
+    f.ok(&["init", "my-proj"]);
+    let mine = f.accepted("mine");
+    f.ok(&["condition", "set", &mine, "--command", "exit 0"]);
+    // Someone else's Entity whose complete ID is the end of mine, as a record could bring.
+    let theirs = mine.strip_prefix("my-").unwrap().to_owned();
+    f.publish(vec![registration(&f.records(), &theirs)]);
+    let refused = failure(f.run(&["condition", "allow", &theirs]));
+    assert!(
+        refused.contains(&format!("{theirs} is also the end of {mine}")),
+        "{refused}"
+    );
+    // The longer ID is not the end of anything else and is approved.
+    assert!(
+        f.ok(&["condition", "allow", &mine])
+            .contains("Condition already allowed")
+    );
+}

@@ -34,6 +34,8 @@ axon condition set ID --command 'test -f ready.txt'
 
 コマンドの終了コードが `0` なら成立、`1` なら未成立、それ以外は判定エラーです。「後で考える」Issue は、`Undecided` のまま条件を付けて残せます。詳しくは [再浮上条件](docs/reference/candidates.md#条件の種類) を参照してください。
 
+条件は、このマシンで許可したものだけが実行されます。自分で設定した条件は許可されます。Git で他人から入った条件は `axon condition unapproved` で一覧でき、中身を読んで `axon condition allow ID --digest DIGEST` で許可するまで実行されません。詳しくは [条件の許可](docs/reference/candidates.md#条件の許可) を参照してください。
+
 ## インストール
 
 macOS 15（Sequoia）以上の Apple Silicon / Intel と [Homebrew](https://brew.sh) が必要です。

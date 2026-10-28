@@ -55,6 +55,25 @@ pub(super) fn command_lines(command: &str, indent: &str) -> String {
         display::command_text(command)
     )
 }
+/// The same lines without decoration, for a diagnostic.
+pub(super) fn plain_command_lines(command: &str, indent: &str) -> String {
+    format!(
+        "{indent}Digest: {}\n{indent}Command: {}\n",
+        axon::approval::digest(command),
+        display::command_text(command)
+    )
+}
+/// The rows of `condition unapproved`: list rows, each followed by its command lines.
+pub(super) fn unapproved(values: &[(read::Row<'_>, &str)]) -> String {
+    let rows: Vec<_> = values
+        .iter()
+        .map(|(value, command)| TableRow {
+            below: command_lines(command, "  "),
+            ..TableRow::new(value)
+        })
+        .collect();
+    table(&rows, display::terminal().as_ref())
+}
 /// A cell before the title: the text to measure and the text as printed.
 struct Cell {
     text: String,

@@ -75,7 +75,7 @@ pub(super) enum Command {
     Proposals(CandidateOptions),
     /// List surfaced NotStarted Entities, InProgress Issues and the Groups above them, including blocked work
     Tasks(CandidateOptions),
-    /// Set or repair resurfacing conditions without running them
+    /// Set, repair or approve resurfacing conditions without running them
     Condition {
         #[command(subcommand)]
         command: Condition,
@@ -84,7 +84,7 @@ pub(super) enum Command {
     #[command(
         after_help = "Like tasks, show runs the resurfacing conditions that decide the situation of a NotStarted Entity: the ancestors, the Entity itself and, for a Group, its startable descendants. Undecided, InProgress and terminal Entities run nothing. An unsurfaced Issue is shown as Unsurfaced, and a stalled Group lists unsurfaced candidates, its own unsatisfied condition and an unsurfaced ancestor under Stalled.
 Conditions run through /bin/sh -c: exit 0 is satisfied, 1 is unsatisfied, other exits fail the whole command.
-Only commands approved on this machine run. An unapproved condition is not run, counts as satisfied and adds +Unapproved to its Entity's situation; stderr gives the count.
+Only commands approved on this machine run. An unapproved condition is not run, counts as satisfied and adds +Unapproved to its Entity's situation; stderr gives the count. Review them with condition unapproved and approve one with condition allow ID --digest DIGEST.
 To read saved information without running any condition, add --skip-conditions; the situation is then derived as if every condition were satisfied."
     )]
     Show {
@@ -236,7 +236,7 @@ pub(super) enum Storage {
 #[derive(Args)]
 #[command(
     after_help = "Conditions run through /bin/sh -c: exit 0 is satisfied, 1 is unsatisfied, other exits fail the whole list.
-Only commands approved on this machine run: condition set and capture --command approve the command they are given. An unapproved condition is not run, counts as satisfied and adds +Unapproved to its Entity's situation; stderr gives the count.
+Only commands approved on this machine run: condition set and capture --command approve the command they are given. An unapproved condition is not run, counts as satisfied and adds +Unapproved to its Entity's situation; stderr gives the count. Review them with condition unapproved and approve one with condition allow ID --digest DIGEST.
 The working directory is the current Git worktree root, or the management root outside Git.
 Ctrl-C and timeout send TERM to the process group, then KILL after 1s.
 Each stdout/stderr stream retains up to 64 KiB (first and last 32 KiB on overflow).
@@ -280,6 +280,22 @@ pub(super) enum Condition {
         id: String,
         #[arg(short, long, help = REASON_HELP)]
         reason: Option<String>,
+    },
+    /// List Entities whose condition is not approved on this machine, without running any
+    #[command(
+        after_help = "Each Entity is shown as in list, followed by the Digest and the Command, escaped so that it maps back to exactly one string. Read the command before approving it with condition allow ID --digest DIGEST.\nAn unapproved condition is not run by proposals, tasks or show; it counts as satisfied and marks its Entity +Unapproved."
+    )]
+    Unapproved,
+    /// Approve the current condition of an Entity to run on this machine
+    #[command(
+        after_help = "Example: axon condition allow ID --digest DIGEST\nTake the DIGEST from condition unapproved or show ID --details after reading the Command: the approval is refused if the condition has changed since. Without --digest the condition as it is now is approved, unread.\nThe approval is not a record: it has no reason and does not appear in log. It covers the same command on every Entity, in this clone (inside Git) or this management root (outside Git)."
+    )]
+    Allow {
+        /// The complete Entity ID; a suffix is not resolved
+        id: String,
+        /// The digest of the command you checked: 64 lowercase hexadecimal characters
+        #[arg(long, value_parser = parse_digest)]
+        digest: Option<String>,
     },
 }
 #[derive(Args)]
@@ -568,6 +584,13 @@ impl ListOptions {
             })
     }
 }
+pub fn parse_digest(value: &str) -> std::result::Result<String, String> {
+    if axon::approval::is_digest(value) {
+        Ok(value.to_owned())
+    } else {
+        Err("expected 64 lowercase hexadecimal characters".into())
+    }
+}
 pub fn parse_timeout(value: &str) -> std::result::Result<Duration, String> {
     let (number, factor) = if let Some(n) = value.strip_suffix("ms") {
         (n, 1_u64)
@@ -617,6 +640,12 @@ pub fn operation_label(command: &Command) -> String {
         Command::Condition {
             command: Condition::Unset { id, .. },
         } => ("condition unset", Some(id)),
+        Command::Condition {
+            command: Condition::Allow { id, .. },
+        } => ("condition allow", Some(id)),
+        Command::Condition {
+            command: Condition::Unapproved,
+        } => ("condition unapproved", None),
         Command::Dep {
             command: Dependency::Add { id, .. },
         } => ("dep add", Some(id)),

@@ -309,3 +309,29 @@ pub(super) fn list_notes(value: String, recorder_details: bool) -> Result<Output
     };
     result(text, "No Notes.", String::new())
 }
+/// `axon condition unapproved`: the settled Entities whose command is not approved, in
+/// creation order, without evaluating anything. Unreadable approvals are an error even when
+/// nothing would be listed, since the approval state cannot be answered.
+pub(super) fn unapproved() -> Result<Output> {
+    let opened = Read::open()?;
+    let approvals = opened.approvals().map_err(|problem| {
+        axon::Error::Invalid(format!(
+            "approvals could not be read ({})",
+            display::line(problem.detail())
+        ))
+    })?;
+    let view = opened.read();
+    let rows: Vec<_> = view
+        .entities()
+        .into_iter()
+        .filter_map(|id| {
+            let command = view.current(id)?.condition.as_deref()?;
+            (!approvals.allows(command)).then(|| (view.row(id, None), command))
+        })
+        .collect();
+    result(
+        render::unapproved(&rows),
+        "No unapproved conditions.",
+        opened.notice(),
+    )
+}

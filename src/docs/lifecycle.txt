@@ -119,6 +119,11 @@ Reading and resurfacing
   (axon-condition-approvals) per clone, or in the state directory per
   management root outside Git, never in .axon/. If they cannot be read, nothing
   runs and stderr says why.
+  condition unapproved lists the Entities whose condition is not approved, each
+  with its Digest and escaped Command. Read the command, then approve it with
+  condition allow ID --digest DIGEST: ID must be complete, and the approval is
+  refused if the condition no longer has that digest. An approval is not a record
+  and does not appear in log; it covers the same command on every Entity.
 
 Storage and recovery
   The store is a set of immutable records, one file per record under
@@ -177,8 +182,9 @@ Storage and recovery
   After integrating branches, storage check reports corrupt files, conflicted
   Entities (several head records), structural violations and missing parent
   records, and exits non-zero for the first three. While any Entity is conflicted, the
-  store accepts only resolve and note add; resolve ID --head RECORD_ID picks one
-  head. Remaining violations are repaired with ordinary commands such as reopen,
+  store accepts only resolve and note add (condition allow, which records
+  nothing, still approves the condition of an Entity that is not conflicted);
+  resolve ID --head RECORD_ID picks one head. Remaining violations are repaired with ordinary commands such as reopen,
   parent unset and dep rm. Undo Axon state with lifecycle commands, not git
   revert: reverting a commit only removes record files, and later records that
   depend on them are left with a missing parent.
