@@ -645,6 +645,26 @@ fn log_names_an_edit_record_without_field_changes_and_its_reason() {
     );
 }
 #[test]
+fn a_store_with_a_formatter_reformatted_header_is_read() {
+    let f = Fixture::new();
+    f.ok(&["init", "my-long-project-prefix"]);
+    let id = f.accepted("before formatting");
+    let written = fs::read(f.header()).unwrap();
+    assert_eq!(written.iter().filter(|&&byte| byte == b'\n').count(), 1);
+    assert!(written.ends_with(b"}\n"));
+    let store = record::decode_header(&written).unwrap().store;
+    // What oxfmt 0.75.0 writes (2026-10-30) for a header longer than its line width of 100.
+    let formatted = format!(
+        "{{\n  \"format\": \"axon-records/v2\",\n  \"store\": \"{store}\",\n  \"prefix\": \"my-long-project-prefix\"\n}}\n"
+    );
+    fs::write(f.header(), &formatted).unwrap();
+    assert!(f.ok(&["list"]).contains(&id));
+    let added = f.accepted("after formatting");
+    assert!(added.starts_with("my-long-project-prefix-"), "{added}");
+    f.ok(&["storage", "check"]);
+    assert_eq!(fs::read_to_string(f.header()).unwrap(), formatted);
+}
+#[test]
 fn unsupported_corrupt_and_earlier_format_stores_are_rejected_without_changes() {
     for kind in ["wrong-format", "corrupt-header", "earlier-format"] {
         let f = Fixture::new();

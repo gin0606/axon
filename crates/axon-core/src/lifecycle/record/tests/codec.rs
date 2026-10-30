@@ -593,12 +593,66 @@ fn header_round_trips_and_rejects_unknown_formats_and_bad_prefixes() {
         ))
         .contains("header")
     );
-    assert!(error(decode_header(b"")).contains("empty"));
+    assert!(error(decode_header(b"")).contains("empty header"));
+    assert!(error(decode_header(b" \r\n\n")).contains("empty header"));
+    assert!(
+        error(decode_header(format!("{text}{text}").as_bytes())).contains("trailing characters")
+    );
+    let array = format!(
+        "[\"{HEADER_FORMAT}\",\"{}\",\"demo-1\"]\n",
+        header.store.as_ref()
+    );
+    assert!(error(decode_header(array.as_bytes())).contains("not a JSON object"));
+    let bom = [b"\xEF\xBB\xBF".as_slice(), &bytes].concat();
+    assert!(error(decode_header(&bom)).contains("byte order mark"));
+    for bad in ["", "a b", "store_x"] {
+        let store = header.store.as_ref();
+        assert!(
+            error(decode_header(text.replacen(store, bad, 1).as_bytes())).contains("StoreId"),
+            "{bad}"
+        );
+    }
+    assert!(
+        error(decode_header(
+            text.replacen(
+                "\"format\":",
+                "\"format\":\"axon-records/v2\",\"format\":",
+                1
+            )
+            .as_bytes()
+        ))
+        .contains("duplicate field")
+    );
     for bad in ["", "-a", "a-", "Demo", "a b"] {
         assert!(error(Header::new(bad)).contains("prefix"));
         assert!(
             error(decode_header(text.replacen("demo-1", bad, 1).as_bytes())).contains("prefix")
         );
+    }
+}
+
+#[test]
+fn a_header_reformatted_by_a_formatter_still_decodes() {
+    let header = Header::new("my-long-project-prefix").unwrap();
+    let store = header.store.as_ref();
+    // The shape oxfmt 0.75.0 writes (2026-10-30) when the one-line header exceeds its line width.
+    let formatted = format!(
+        "{{\n  \"format\": \"axon-records/v2\",\n  \"store\": \"{store}\",\n  \"prefix\": \"my-long-project-prefix\"\n}}\n"
+    );
+    let crlf = formatted.replace('\n', "\r\n");
+    let unterminated = formatted.trim_end().to_string();
+    let one_line = String::from_utf8(encode_header(&header).unwrap()).unwrap();
+    for text in [
+        formatted,
+        crlf,
+        unterminated,
+        one_line.trim_end().to_string(),
+    ] {
+        assert_eq!(decode_header(text.as_bytes()).unwrap(), header, "{text:?}");
+        let unknown = text.replacen("axon-records/v2", "axon-records/v3", 1);
+        assert!(error(decode_header(unknown.as_bytes())).contains("unsupported store format"));
+        let renamed = text.replacen("\"prefix\"", "\"name\"", 1);
+        assert!(error(decode_header(renamed.as_bytes())).contains("unknown field"));
     }
 }
 
@@ -725,8 +779,10 @@ proptest! {
     ) {
         let header = Header::new(&prefix).unwrap();
         let bytes = encode_header(&header).unwrap();
-        prop_assert_eq!(decode_header(&bytes).unwrap(), header);
+        prop_assert_eq!(decode_header(&bytes).unwrap(), header.clone());
         let text = String::from_utf8(bytes).unwrap();
+        let spread = text.replace(':', ": ").replace(',', ",\r\n  ").replacen('{', "{\n  ", 1);
+        prop_assert_eq!(decode_header(spread.as_bytes()).unwrap(), header);
         for damage in 0..4 {
         let bad = match damage {
             0 => text.replacen(HEADER_FORMAT, "unknown/v2", 1),

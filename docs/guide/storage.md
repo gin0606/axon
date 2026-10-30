@@ -12,6 +12,8 @@ Gitが保存先を無視するか追跡するかにAxonは関与しません。`
 
 追跡する運用は、`git add .axon` で記録、header、`.axon/.gitignore`、`.axon/.gitattributes` をstageしてcommitして選びます。`.axon/.gitignore` がlockと一時fileを除き、`.axon/.gitattributes` が記録fileを改行変換から外すので、ほかに設定は要りません。各worktreeはcheckoutした自分の保存先を持ち、変更はGitで取り込むまで他のworktreeから見えないため、同じIssueに別々に着手できます。両側が記録を追加したbranchは、記録が別fileなのでmergeの属性やGitの設定なしにそのまま統合できます。Axonが契約として扱うのはローカルのGit操作（merge・rebase・cherry-pick・revert・squash）で、ホスティングサービスのweb上のmergeは契約の外です（GitHub上で確かめた結果は [設計判断](../design/decisions.md#記録-1-件-1-file-にした理由)）。同じEntityへの両側の操作はGit上では衝突せず、次の `axon` の読取で衝突として見えます。統合後は `axon storage check` で衝突・違反・記録の欠けを確認し、`axon resolve` と通常操作で直します。検査と解決の契約は [保存と統合の契約](../reference/storage.md#検査と解決の入口) にあります。
 
+headerはformatterで複数行に整形されても読めますが、この対応より前のbinary（リリース版では0.4.0まで。デスクトップアプリを含む）は整形されたheaderを破損と判定します。同じ保存先をそれらのbinaryでも使う間は、headerを整形しないか、`.axon/` をformatterの対象外にしてください。
+
 Axonの状態の取り消しは `axon reopen`・`axon release`・`axon reconsider` などのlifecycle操作で行い、Gitのrevertに頼らないでください。revertは記録fileを消すだけで、その後に記録が続いていれば親の欠けた記録が残り、状態は戻らずに偽の衝突として見えます。
 
 Gitはuntrackedなfileをcheckout・mergeの上書きから保護しますが、無視されているfileは保護しません。無視されている保存先がある作業directoryで、`.axon/` を追跡しているcommitをcheckout・mergeすると、Gitは警告なしにfileを置き換え、記録が失われます。二つの運用を一つのrepositoryで混ぜなければ起きませんが、Axonはこの混在を検出しません。

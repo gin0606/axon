@@ -58,7 +58,7 @@ gap は記録が消せないため解決記録では埋まらない。欠けた�
 - それ以外の、名前が記録 ID の形でない file（OS が作る file を含む）、名前と内容の hash が一致しない file、名前の先頭 2 文字と違う subdirectory にある file、途中で切れた file と空の file、規則外の内容の file（現在値に label がない記録、固定集合の外の label を持つ記録を含む）は保存先の破損とする。読取と `axon storage check` は衝突や違反とは別に破損として報告し、利用者が file を直すまで読取と全操作を止める。破損は Entity に属さないので、違反の免除は当てはまらない。
 - 名前と内容の hash が一致しない file のうち、内容の CRLF を LF に戻すと名前の hash と一致するものは、Git の改行変換が疑われる破損として、その file の理由にその旨を書き、報告の末尾に改行変換の可能性と [保存先と worktree](../guide/storage.md#改行変換と-axongitattributes) への案内を一行添える。読取は内容を戻さず、破損として止める扱いは変えない。
 
-`.axon/` 直下の header・`.gitignore`・`.gitattributes`・lock 以外の file は読まず、報告もしない。header file の欠落、読めない header、未知の format は破損と同じく操作を止める。未知の format は変換しない。
+`.axon/` 直下の header・`.gitignore`・`.gitattributes`・lock 以外の file は読まず、報告もしない。header file の欠落、読めない header（空の file、JSON の object でない内容、キーの欠落・未知のキー・重複、規則外の値など）、未知の format は破損と同じく操作を止める。未知の format は変換しない。
 
 現在の header の format は `axon-records/v2` である（[保存形式ごとに検証規則を固定する理由](../design/decisions.md#保存形式ごとに検証規則を固定する理由)）。
 
@@ -73,7 +73,7 @@ prefix は Entity ID の先頭に使い、ASCII の小文字英数字とハイ�
 | path | 内容 |
 | --- | --- |
 | `.axon/records/` | 記録の directory。記録は記録 ID の先頭 2 文字の subdirectory の下に、記録 ID を file 名として置く |
-| `.axon/header.json` | header。format の識別子（`axon-records/v2`）、store ID、prefix を持つ 1 行の JSON |
+| `.axon/header.json` | header。format の識別子（`axon-records/v2`）、store ID、prefix を持つ JSON。axon は 1 行で書き、読取は JSON の空白（space・tab・LF・CR。CRLF を含む）と末尾の改行の有無を問わない。BOM などそれ以外の文字は読めない header とする（[header だけ整形を許す理由](../design/decisions.md#header-だけ整形を許す理由)） |
 | `.axon/.gitignore` | `*.lock` と `*.tmp` の 2 行。lock と書込途中の一時 file だけを Git から除外し、記録と header は追跡できる |
 | `.axon/.gitattributes` | `* -text` の 1 行。`.axon/` の下の file を Git の改行変換の対象から外す |
 
