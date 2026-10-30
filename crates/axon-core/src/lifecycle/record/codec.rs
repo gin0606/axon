@@ -303,9 +303,26 @@ pub fn encode_header(header: &Header) -> Result<Vec<u8>> {
     })
 }
 
-/// Rejects an unknown format instead of converting it.
+/// Rejects an unknown format instead of converting it. Unlike a record, the header's bytes
+/// are not hashed into any ID, so line breaks and whitespace a formatter adds are accepted;
+/// `encode_header` still writes one line.
 pub fn decode_header(bytes: &[u8]) -> Result<Header> {
-    let row: HeaderRow = from_line(bytes).map_err(|error| invalid(format!("header: {error}")))?;
+    // The whitespace serde_json skips, so "empty" matches what the parser accepts.
+    let Some(&first) = bytes
+        .iter()
+        .find(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+    else {
+        return Err(invalid("empty header"));
+    };
+    if bytes.starts_with(b"\xEF\xBB\xBF") {
+        return Err(invalid("header starts with a UTF-8 byte order mark"));
+    }
+    // A derived struct also deserializes from a JSON array, which has no keys to check.
+    if first != b'{' {
+        return Err(invalid("header is not a JSON object"));
+    }
+    let row: HeaderRow =
+        serde_json::from_slice(bytes).map_err(|error| invalid(format!("header: {error}")))?;
     if row.format != HEADER_FORMAT {
         return Err(invalid(format!(
             "unsupported store format {:?}",
