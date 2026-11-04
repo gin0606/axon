@@ -1,0 +1,599 @@
+{
+  "_version": 2,
+  "state.undecided": {
+    "en": "Undecided",
+    "ja": "未判断"
+  },
+  "state.not_started": {
+    "en": "Not started",
+    "ja": "未着手"
+  },
+  "state.in_progress": {
+    "en": "In progress",
+    "ja": "着手中"
+  },
+  "state.completed": {
+    "en": "Completed",
+    "ja": "完了"
+  },
+  "state.cancelled": {
+    "en": "Cancelled",
+    "ja": "取りやめ"
+  },
+  "state.conflicted": {
+    "en": "Conflicted",
+    "ja": "衝突"
+  },
+  "row.invalid": {
+    "en": "Invalid structure",
+    "ja": "構造の違反"
+  },
+  "row.context": {
+    "en": "Context",
+    "ja": "参考表示"
+  },
+  "situation.ready": {
+    "en": "Ready",
+    "ja": "着手可"
+  },
+  "situation.blocked": {
+    "en": "Blocked",
+    "ja": "前提待ち"
+  },
+  "situation.unsurfaced": {
+    "en": "Unsurfaced",
+    "ja": "再浮上待ち"
+  },
+  "situation.empty": {
+    "en": "No children",
+    "ja": "子なし"
+  },
+  "situation.confirmable": {
+    "en": "Awaiting confirmation",
+    "ja": "完了確認待ち"
+  },
+  "waiting.start": {
+    "en": "Waiting for prerequisites to start",
+    "ja": "着手の前提を待っています"
+  },
+  "waiting.complete": {
+    "en": "Waiting for prerequisites to complete",
+    "ja": "完了の前提を待っています"
+  },
+  "waiting.group": {
+    "en": "This Group has no work that can proceed",
+    "ja": "この Group は進められる仕事がなく止まっています"
+  },
+  "wait.unadopted_ancestor": {
+    "en": "Unadopted ancestor",
+    "ja": "採用されていない祖先"
+  },
+  "wait.dependency": {
+    "en": "Incomplete dependency",
+    "ja": "完了していない依存先"
+  },
+  "wait.ancestor_dependency": {
+    "en": "Incomplete ancestor dependency",
+    "ja": "祖先の未完了の依存先"
+  },
+  "wait.unsurfaced_ancestor": {
+    "en": "Unsurfaced ancestor",
+    "ja": "再浮上条件を満たさない祖先"
+  },
+  "wait.descendant_dependency": {
+    "en": "Descendant waiting for a dependency",
+    "ja": "依存先を待つ子孫"
+  },
+  "wait.undecided_child": {
+    "en": "Undecided child",
+    "ja": "未判断の子"
+  },
+  "wait.open_subgroup": {
+    "en": "Child Group with no work that can proceed",
+    "ja": "進められる仕事のない子 Group"
+  },
+  "wait.unsurfaced_candidate": {
+    "en": "Unsurfaced descendant",
+    "ja": "再浮上条件を満たさない子孫"
+  },
+  "wait.own_condition": {
+    "en": "Own resurfacing condition",
+    "ja": "自身の再浮上条件"
+  },
+  "wait.undecided_ancestor": {
+    "en": "Undecided ancestor",
+    "ja": "未判断の祖先"
+  },
+  "violation.containment_cycle": {
+    "en": "Containment forms a cycle",
+    "ja": "包含が循環しています"
+  },
+  "violation.unknown_parent": {
+    "en": "The parent is missing or is not a Group",
+    "ja": "親が存在しないか Group ではありません"
+  },
+  "violation.open_under_terminal": {
+    "en": "An open entity has a terminal parent",
+    "ja": "終了した親の下で未終了です"
+  },
+  "violation.unadopted_ancestor": {
+    "en": "Work started under an unadopted ancestor",
+    "ja": "採用されていない祖先の下で着手しています"
+  },
+  "violation.open_dependency": {
+    "en": "Completed with an incomplete dependency",
+    "ja": "完了していない依存先があるのに完了しています"
+  },
+  "violation.unknown_dependency": {
+    "en": "A dependency is missing",
+    "ja": "存在しない依存先があります"
+  },
+  "violation.completion_cycle": {
+    "en": "Completion prerequisites form a cycle",
+    "ja": "完了の前提が循環しています"
+  },
+  "operation.accept": {
+    "en": "Accept",
+    "ja": "採用"
+  },
+  "operation.withdraw": {
+    "en": "Withdraw",
+    "ja": "採用撤回"
+  },
+  "operation.start": {
+    "en": "Start",
+    "ja": "着手"
+  },
+  "operation.release": {
+    "en": "Release",
+    "ja": "作業を解放"
+  },
+  "operation.reconsider": {
+    "en": "Reconsider",
+    "ja": "再検討"
+  },
+  "operation.reopen": {
+    "en": "Reopen",
+    "ja": "再開"
+  },
+  "record.created": {
+    "en": "Created",
+    "ja": "作成"
+  },
+  "menu.edit": {
+    "en": "Edit",
+    "ja": "編集"
+  },
+  "record.label": {
+    "en": "Label changed",
+    "ja": "label の変更"
+  },
+  "record.parent": {
+    "en": "Parent changed",
+    "ja": "所属の変更"
+  },
+  "record.dependency": {
+    "en": "Dependencies changed",
+    "ja": "依存の変更"
+  },
+  "record.condition": {
+    "en": "Resurfacing condition changed",
+    "ja": "再浮上条件の変更"
+  },
+  "record.convert": {
+    "en": "Kind converted",
+    "ja": "種類の変換"
+  },
+  "record.import": {
+    "en": "Imported changes",
+    "ja": "まとめて変更"
+  },
+  "difference.description": {
+    "en": "Description changed",
+    "ja": "本文を変更"
+  },
+  "difference.condition": {
+    "en": "Resurfacing condition changed",
+    "ja": "再浮上条件を変更"
+  },
+  "common.none": {
+    "en": "None",
+    "ja": "なし"
+  },
+  "filter.state": {
+    "en": "State",
+    "ja": "状態"
+  },
+  "filter.kind": {
+    "en": "Kind",
+    "ja": "種類"
+  },
+  "filter.reset": {
+    "en": "Reset filters",
+    "ja": "絞り込みを初期値に戻す"
+  },
+  "common.reload": {
+    "en": "Reload",
+    "ja": "再読み込み"
+  },
+  "common.reloading": {
+    "en": "Reloading",
+    "ja": "読み直し中"
+  },
+  "layout.tree": {
+    "en": "Tree",
+    "ja": "階層"
+  },
+  "layout.flat": {
+    "en": "Flat",
+    "ja": "フラット"
+  },
+  "list.empty": {
+    "en": "This repository has no Issues or Groups yet.",
+    "ja": "このリポジトリにはまだ Issue・Group がありません。"
+  },
+  "list.no_matches": {
+    "en": "No Issues or Groups match the filters.",
+    "ja": "絞り込みに一致する Issue・Group はありません。"
+  },
+  "detail.condition": {
+    "en": "Resurfacing condition (not run by the app; shown as satisfied)",
+    "ja": "再浮上条件（アプリは実行しません。満たしているものとして表示しています）"
+  },
+  "detail.dependencies": {
+    "en": "Dependencies",
+    "ja": "依存先"
+  },
+  "detail.dependents": {
+    "en": "Dependents",
+    "ja": "この仕事に依存している"
+  },
+  "history.parallel": {
+    "en": "Concurrent with the preceding record",
+    "ja": "直前の記録と並行"
+  },
+  "history.missing": {
+    "en": "Previous record is missing",
+    "ja": "前の記録が見つかりません"
+  },
+  "history.title": {
+    "en": "History",
+    "ja": "履歴"
+  },
+  "copy.id": {
+    "en": "Copy ID",
+    "ja": "ID をコピー"
+  },
+  "copy.title": {
+    "en": "Copy title",
+    "ja": "タイトルをコピー"
+  },
+  "copy.both": {
+    "en": "Copy ID and title",
+    "ja": "ID とタイトルをコピー"
+  },
+  "repository.none": {
+    "en": "No repository",
+    "ja": "リポジトリなし"
+  },
+  "common.close": {
+    "en": "Close",
+    "ja": "閉じる"
+  },
+  "repository.title": {
+    "en": "Repository",
+    "ja": "リポジトリ"
+  },
+  "repository.remove": {
+    "en": "Unregister",
+    "ja": "登録を解除"
+  },
+  "repository.add": {
+    "en": "+ Register repository",
+    "ja": "＋ リポジトリを登録"
+  },
+  "sidebar.filtered": {
+    "en": "Repository and filters (filters changed)",
+    "ja": "リポジトリと絞り込み（絞り込みを変更しています）"
+  },
+  "sidebar.title": {
+    "en": "Repository and filters",
+    "ja": "リポジトリと絞り込み"
+  },
+  "common.back": {
+    "en": "Back",
+    "ja": "戻る"
+  },
+  "common.list": {
+    "en": "List",
+    "ja": "一覧"
+  },
+  "detail.select": {
+    "en": "Select from the list",
+    "ja": "一覧から選択"
+  },
+  "search.placeholder": {
+    "en": "Search title, description or ID",
+    "ja": "タイトル・本文・ID を検索"
+  },
+  "repository.register": {
+    "en": "Register",
+    "ja": "登録"
+  },
+  "repository.confirm": {
+    "en": "Register and open this folder?",
+    "ja": "このフォルダを登録して開きますか？"
+  },
+  "repository.register_open": {
+    "en": "Register and open",
+    "ja": "登録して開く"
+  },
+  "common.cancel": {
+    "en": "Cancel",
+    "ja": "キャンセル"
+  },
+  "registry.loading": {
+    "en": "Loading registered repositories…",
+    "ja": "登録したリポジトリの一覧を読み込み中…"
+  },
+  "registry.failed": {
+    "en": "Could not load registered repositories. The list will not be treated as empty or overwritten.",
+    "ja": "登録したリポジトリの一覧を読み込めませんでした。空の一覧として扱わず、書き換えもしません。"
+  },
+  "registry.empty": {
+    "en": "No repositories are registered. Choose a management root containing .axon from “+ Register repository”.",
+    "ja": "登録したリポジトリがありません。「＋ リポジトリを登録」から、.axon を持つフォルダ（管理 root）を選んでください。"
+  },
+  "common.loading": {
+    "en": "Loading…",
+    "ja": "読み込み中…"
+  },
+  "store.failed": {
+    "en": "Could not load this repository’s records. It will not be treated as empty. Choose another repository in the Repository panel.",
+    "ja": "このリポジトリの記録を読み込めませんでした。空のリポジトリとしては扱いません。他のリポジトリには「リポジトリ」の欄から切り替えられます。"
+  },
+  "menu.quit": {
+    "en": "Quit Axon",
+    "ja": "Axon を終了"
+  },
+  "menu.undo": {
+    "en": "Undo",
+    "ja": "取り消す"
+  },
+  "menu.redo": {
+    "en": "Redo",
+    "ja": "やり直す"
+  },
+  "menu.cut": {
+    "en": "Cut",
+    "ja": "カット"
+  },
+  "menu.copy": {
+    "en": "Copy",
+    "ja": "コピー"
+  },
+  "menu.paste": {
+    "en": "Paste",
+    "ja": "ペースト"
+  },
+  "menu.select_all": {
+    "en": "Select All",
+    "ja": "すべてを選択"
+  },
+  "common.quit": {
+    "en": "Quit",
+    "ja": "終了"
+  },
+  "markdown.image": {
+    "en": "(image)",
+    "ja": "（画像）"
+  },
+  "record.resolve": {
+    "en": "Conflict resolved (chose %{chosen})",
+    "ja": "衝突の解決（%{chosen} を採用）"
+  },
+  "difference.state": {
+    "en": "State: %{before} → %{after}",
+    "ja": "状態: %{before} → %{after}"
+  },
+  "difference.kind": {
+    "en": "Kind: %{before} → %{after}",
+    "ja": "種類: %{before} → %{after}"
+  },
+  "difference.title": {
+    "en": "Title: %{before} → %{after}",
+    "ja": "タイトル: %{before} → %{after}"
+  },
+  "difference.label": {
+    "en": "label: %{before} → %{after}",
+    "ja": "label: %{before} → %{after}"
+  },
+  "difference.parent": {
+    "en": "Parent: %{before} → %{after}",
+    "ja": "所属: %{before} → %{after}"
+  },
+  "difference.dependency_added": {
+    "en": "Dependency added: %{id}",
+    "ja": "依存先を追加: %{id}"
+  },
+  "difference.dependency_removed": {
+    "en": "Dependency removed: %{id}",
+    "ja": "依存先を削除: %{id}"
+  },
+  "list.count_context": {
+    "en": "Items: %{matched} / %{total} (context parents: %{context})",
+    "ja": "%{matched} / %{total} 件（参考表示の親 %{context} 件）"
+  },
+  "list.count": {
+    "en": "Items: %{matched} / %{total}",
+    "ja": "%{matched} / %{total} 件"
+  },
+  "detail.missing": {
+    "en": "%{id} (missing ID)",
+    "ja": "%{id}（記録にない ID）"
+  },
+  "detail.derived": {
+    "en": "%{situation} (Derived from children; stored state: %{state})",
+    "ja": "%{situation}（子の進行から導出。保存値は%{state}）"
+  },
+  "detail.conflict": {
+    "en": "Conflicted (%{count} heads). Showing the first head’s values.",
+    "ja": "衝突しています（head %{count} 件）。表示は最初の head の値です。"
+  },
+  "detail.notes": {
+    "en": "Note (%{count})",
+    "ja": "Note（%{count} 件）"
+  },
+  "history.reason": {
+    "en": "Reason: %{reason}",
+    "ja": "理由: %{reason}"
+  },
+  "detail.excluded": {
+    "en": "This entity does not match the current filters (%{reasons}).",
+    "ja": "現在の絞り込みに一致しないため、一覧には一致として表示されていません（%{reasons}）。"
+  },
+  "registry.location": {
+    "en": "Registry location: %{path}",
+    "ja": "登録の一覧の保存場所: %{path}"
+  },
+  "detail.failed": {
+    "en": "Could not show details: %{error}",
+    "ja": "詳細を表示できません: %{error}"
+  },
+  "list.separator": {
+    "en": "; ",
+    "ja": "。"
+  },
+  "detail.children": {
+    "en": "Children: %{count}",
+    "ja": "子 %{count} 件"
+  },
+  "detail.descendants": {
+    "en": "Children: %{children}, non-conflicted descendants: %{total} (completed: %{completed}, cancelled: %{cancelled})",
+    "ja": "子 %{children} 件、衝突していない子孫 %{total} 件（完了 %{completed}、取りやめ %{cancelled}）"
+  },
+  "detail.descendants_confirmable": {
+    "en": "Children: %{children}, non-conflicted descendants: %{total} (completed: %{completed}, cancelled: %{cancelled}), awaiting confirmation",
+    "ja": "子 %{children} 件、衝突していない子孫 %{total} 件（完了 %{completed}、取りやめ %{cancelled}）、完了確認待ち"
+  },
+  "exclusion.state": {
+    "en": "State “%{state}” is not selected",
+    "ja": "状態「%{state}」を選んでいません"
+  },
+  "exclusion.kind": {
+    "en": "Kind “%{kind}” is not selected",
+    "ja": "種類「%{kind}」を選んでいません"
+  },
+  "exclusion.label": {
+    "en": "label “%{label}” is not selected",
+    "ja": "label「%{label}」を選んでいません"
+  },
+  "exclusion.query": {
+    "en": "Title, description and ID do not contain “%{query}”",
+    "ja": "タイトル・本文・ID に「%{query}」がありません"
+  },
+  "notice.folder": {
+    "en": "Could not choose a folder. (%{error})",
+    "ja": "フォルダを選べませんでした。（%{error}）"
+  },
+  "notice.registry": {
+    "en": "Could not open %{path}. The registered repository list could not be loaded.",
+    "ja": "%{path} を開けませんでした。登録したリポジトリの一覧を読み込めません。"
+  },
+  "notice.link": {
+    "en": "Could not open the linked folder. (%{error})",
+    "ja": "リンクのフォルダを開けませんでした。（%{error}）"
+  },
+  "notice.confirm": {
+    "en": "Could not confirm whether to register %{path}, so it was not registered.",
+    "ja": "%{path} を登録してよいかを確かめられないため、登録しませんでした。"
+  },
+  "repository.link_detail": {
+    "en": "%{path}\n\nA link requested opening this folder. Links can come from axon gui, web pages or other apps. Do not register it unless you recognize the request. Registering runs Git in this folder to read its records.",
+    "ja": "%{path}\n\nリンクでこのフォルダを開くよう求められました。リンクは axon gui のほか、Web ページやほかのアプリからも送れます。心当たりがなければ登録しないでください。登録すると、記録を読むためにこのフォルダで Git を実行します。"
+  },
+  "update.unreachable": {
+    "en": "The folder could not be opened and was not registered. (%{path}: %{error})",
+    "ja": "フォルダを開けないため登録しませんでした。（%{path}: %{error}）"
+  },
+  "update.not_directory": {
+    "en": "The path is not a folder and was not registered. (%{path})",
+    "ja": "フォルダではないため登録しませんでした。（%{path}）"
+  },
+  "update.not_store": {
+    "en": "A folder without an Axon store (.axon header) cannot be registered. Choose a management root containing .axon. (%{path} is missing)",
+    "ja": "Axon の保存先（.axon の header）がないフォルダは登録できません。.axon を持つ管理 root を選んでください。（%{path} がありません）"
+  },
+  "update.unrepresentable": {
+    "en": "A folder whose path is not valid UTF-8 cannot be registered. (%{path})",
+    "ja": "パスに UTF-8 で表せない文字を含むフォルダは登録できません。（%{path}）"
+  },
+  "update.duplicate": {
+    "en": "%{path} is already registered.",
+    "ja": "%{path} はすでに登録しています。"
+  },
+  "update.elsewhere": {
+    "en": "%{asked} now points to %{resolved} and was not registered. Run axon gui again in the folder you want to register.",
+    "ja": "%{asked} は今は %{resolved} を指しているため登録しませんでした。登録したいフォルダで axon gui を実行し直してください。"
+  },
+  "update.unknown": {
+    "en": "%{path} is not registered.",
+    "ja": "%{path} は登録されていません。"
+  },
+  "update.read": {
+    "en": "The registered repository list could not be loaded and was not changed. (%{error})",
+    "ja": "登録したリポジトリの一覧を読み込めないため、変更しませんでした。（%{error}）"
+  },
+  "update.save": {
+    "en": "Could not save the registered repository list. Showing the list read back from disk. (%{error})",
+    "ja": "登録したリポジトリの一覧を保存できませんでした。一覧には読み直した結果を表示しています。（%{error}）"
+  },
+  "startup.locate": {
+    "en": "Could not locate the data directory: %{error}",
+    "ja": "データの保存場所を決められません: %{error}"
+  },
+  "startup.running": {
+    "en": "Axon is already running. This instance will not open, to prevent two apps from changing the registered repository list. (Data directory: %{path})",
+    "ja": "Axon はすでに起動しています。登録したリポジトリの一覧を二つのアプリから書き換えないよう、こちらは開きません。（データの保存場所: %{path}）"
+  },
+  "startup.io": {
+    "en": "Could not use the data directory: %{path}: %{error}",
+    "ja": "データの保存場所を使えません: %{path}: %{error}"
+  },
+  "gpui_component.Input.Cut": {
+    "en": "Cut",
+    "ja": "カット"
+  },
+  "gpui_component.Input.Copy": {
+    "en": "Copy",
+    "ja": "コピー"
+  },
+  "gpui_component.Input.Paste": {
+    "en": "Paste",
+    "ja": "ペースト"
+  },
+  "gpui_component.Input.Select All": {
+    "en": "Select All",
+    "ja": "すべてを選択"
+  },
+  "note.heading": {
+    "en": "%{time} · %{actor}",
+    "ja": "%{time}　%{actor}"
+  },
+  "operation.complete": {
+    "en": "Complete",
+    "ja": "完了"
+  },
+  "operation.cancel": {
+    "en": "Cancel",
+    "ja": "取りやめ"
+  },
+  "record.edit": {
+    "en": "Edit",
+    "ja": "編集"
+  },
+  "detail.link_meta": {
+    "en": "%{kind} · %{state}",
+    "ja": "%{kind}・%{state}"
+  }
+}

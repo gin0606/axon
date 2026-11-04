@@ -16,6 +16,7 @@ category = "public.app-category.productivity"
 [package.metadata.bundle.osx]
 # `axon gui` opens a management root through this scheme; see `axon::app_link`.
 url_schemes = ["me.gin0606.axon"]
+info_plist_exts = ["resources/Info.plist"]
 
 [dependencies]
 axon = { path = "../.." }
@@ -23,8 +24,10 @@ chrono = "0.4.45"
 dirs = "6.0.0"
 gpui-kit = "=0.7.1"
 markdown = "=1.0.0"
+rust-i18n = "=4.2.4"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0"
+sys-locale = "=0.3.2"
 
 [dev-dependencies]
 gpui-kit = { version = "=0.7.1", features = ["test-support"] }

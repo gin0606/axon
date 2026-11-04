@@ -20,6 +20,8 @@ pub use layout::{
     SIDEBAR_PANEL_WIDTH, SIDEBAR_WIDTH, THREE_COLUMNS_MIN_WIDTH, TWO_COLUMNS_MIN_WIDTH,
 };
 
+use crate::i18n::Language;
+
 use crate::{
     board::{Board, Explorer},
     project::{InstanceLock, ProjectConnection, ProjectRoot, Registry, Requests, UpdateError},
@@ -36,11 +38,6 @@ use gpui_kit::{
 };
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use style::Palette;
-
-/// The button that confirms registering the root a link names.
-pub const REGISTER_ANSWER: &str = "登録して開く";
-/// The button that declines it.
-pub const CANCEL_ANSWER: &str = "キャンセル";
 
 /// The tallest the status of the selected root grows before it scrolls.
 pub const STATUS_MAX_HEIGHT: f32 = 120.;
@@ -92,6 +89,7 @@ pub struct Summary {
 }
 
 pub struct AxonApp {
+    language: Language,
     /// Held for as long as the window is open; the registry is changed through it.
     lock: Arc<InstanceLock>,
     registry: RegistryState,
@@ -108,7 +106,7 @@ pub struct AxonApp {
     window: AnyWindowHandle,
     /// The outcome of the last registration or unregistration that the screen does not
     /// otherwise show.
-    notice: Option<String>,
+    notices: Vec<Notification>,
     /// A root `axon gui` asked to open, waiting for the registry to settle.
     requested: Option<Request>,
     /// Counts the switches of root, the user's and those a link makes, so a result can tell
@@ -163,8 +161,10 @@ impl AxonApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("タイトル・本文・ID を検索"));
+        let language = Language::of(cx);
+        let search = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(crate::tr!(language, "search.placeholder"))
+        });
         cx.subscribe_in(
             &search,
             window,
@@ -207,6 +207,7 @@ impl AxonApp {
         explorer.update_filter(|filter| *filter = session.filter());
         explorer.set_layout(session.layout);
         let mut this = Self {
+            language,
             lock,
             registry: RegistryState::Loading,
             registry_loads: Requests::default(),
@@ -216,7 +217,7 @@ impl AxonApp {
             busy: false,
             choosing_folder: false,
             window: window.window_handle(),
-            notice: None,
+            notices: Vec::new(),
             requested: None,
             switches: 0,
             explorer,
@@ -362,8 +363,14 @@ impl AxonApp {
     pub fn is_choosing_folder(&self) -> bool {
         self.choosing_folder
     }
-    pub fn notice(&self) -> Option<&str> {
-        self.notice.as_deref()
+    pub fn notice(&self) -> Option<String> {
+        (!self.notices.is_empty()).then(|| {
+            self.notices
+                .iter()
+                .map(|notice| notice.message(self.language))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
     }
     pub fn explorer(&self) -> &Explorer {
         &self.explorer
@@ -449,7 +456,7 @@ impl AxonApp {
         if self.selected.as_ref() != Some(&root) {
             self.switches += 1;
             // The outcome of the last change was about the window as it was before.
-            self.notice = None;
+            self.notices.clear();
         }
         self.selected = Some(root);
         self.show_selected(cx);
@@ -544,7 +551,7 @@ impl AxonApp {
             return;
         }
         self.busy = true;
-        self.notice = None;
+        self.notices.clear();
         // A switch from here on, while the dialog is open too, keeps the user's choice.
         let switches = self.switches;
         self.choosing_folder = true;
@@ -552,7 +559,7 @@ impl AxonApp {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("登録".into()),
+            prompt: Some(crate::tr!(self.language, "repository.register").into()),
         });
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -566,8 +573,10 @@ impl AxonApp {
                 match path {
                     Some(path) => this.register(Target::Folder(path), switches, cx),
                     None => {
-                        this.notice =
-                            failure.map(|error| format!("フォルダを選べませんでした。（{error}）"));
+                        this.notices = failure
+                            .into_iter()
+                            .map(|error| Notification::Folder(error.to_string()))
+                            .collect();
                         // Coming back from the dialog read nothing while it was open.
                         this.reload(cx);
                         this.finish_change(cx);
@@ -588,7 +597,7 @@ impl AxonApp {
         // Only the outcome of a change still running, or one a waiting link took over, is kept
         // for the link to add to.
         if !self.busy && self.requested.is_none() {
-            self.notice = None;
+            self.notices.clear();
         }
         self.requested = Some(Request {
             path,
@@ -604,11 +613,8 @@ impl AxonApp {
     }
 
     /// Shows `message` after the outcome already on screen, which another change left there.
-    fn add_notice(&mut self, message: String) {
-        self.notice = Some(match self.notice.take() {
-            Some(shown) => format!("{shown}\n{message}"),
-            None => message,
-        });
+    fn add_notice(&mut self, message: Notification) {
+        self.notices.push(message);
         self.reveal_notice();
     }
 
@@ -636,10 +642,7 @@ impl AxonApp {
                 self.reload_registry(cx);
                 return;
             }
-            self.add_notice(format!(
-                "{} を開けませんでした。登録したリポジトリの一覧を読み込めません。",
-                text::path(request.path.display())
-            ));
+            self.add_notice(Notification::Registry(request.path));
             cx.notify();
             return;
         }
@@ -664,10 +667,7 @@ impl AxonApp {
         let root = match ProjectRoot::new(path) {
             Ok(root) => root,
             Err(error) => {
-                self.add_notice(format!(
-                    "リンクのフォルダを開けませんでした。（{}）",
-                    text::path(error)
-                ));
+                self.add_notice(Notification::Link(text::path(error)));
                 self.finish_change(cx);
                 return;
             }
@@ -688,28 +688,26 @@ impl AxonApp {
             self.finish_change(cx);
             return;
         }
-        let detail = format!(
-            "{}\n\nリンクでこのフォルダを開くよう求められました。リンクは axon gui のほか、Web ページやほかのアプリからも送れます。心当たりがなければ登録しないでください。登録すると、記録を読むためにこのフォルダで Git を実行します。",
-            text::path(&root)
+        let detail = crate::tr!(
+            self.language,
+            "repository.link_detail",
+            path = text::path(&root)
         );
         let asked = self.window.update(cx, |_, window, cx| {
             window.prompt(
                 PromptLevel::Warning,
-                "このフォルダを登録して開きますか？",
+                &crate::tr!(self.language, "repository.confirm"),
                 Some(&detail),
                 // Return does not register: Escape cancels and nothing is the default.
                 &[
-                    PromptButton::Cancel(CANCEL_ANSWER.into()),
-                    PromptButton::new(REGISTER_ANSWER),
+                    PromptButton::Cancel(crate::tr!(self.language, "common.cancel").into()),
+                    PromptButton::new(crate::tr!(self.language, "repository.register_open")),
                 ],
                 cx,
             )
         });
         let Ok(answer) = asked else {
-            self.add_notice(format!(
-                "{} を登録してよいかを確かめられないため、登録しませんでした。",
-                text::path(&root)
-            ));
+            self.add_notice(Notification::Confirm(root));
             self.finish_change(cx);
             return;
         };
@@ -757,11 +755,6 @@ impl AxonApp {
                         this.apply_registry(Ok(registry), select, cx);
                     }
                     Err((error, reloaded)) => {
-                        match (&error, open) {
-                            (UpdateError::Duplicate(_), true) => {}
-                            (_, true) => this.add_notice(update_message(&error)),
-                            (_, false) => this.notice = Some(update_message(&error)),
-                        }
                         // A folder already registered is shown, unless the user switched.
                         let select = match &error {
                             UpdateError::Duplicate(root) if this.switches == switches => {
@@ -769,6 +762,11 @@ impl AxonApp {
                             }
                             _ => keep,
                         };
+                        match (&error, open) {
+                            (UpdateError::Duplicate(_), true) => {}
+                            (_, true) => this.add_notice(Notification::Update(error)),
+                            (_, false) => this.notices = vec![Notification::Update(error)],
+                        }
                         match reloaded {
                             Some(reloaded) => this.apply_registry(reloaded, select, cx),
                             // The selected root was not read while the change ran.
@@ -792,7 +790,7 @@ impl AxonApp {
             return;
         }
         self.busy = true;
-        self.notice = None;
+        self.notices.clear();
         let lock = self.lock.clone();
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -807,7 +805,7 @@ impl AxonApp {
                 match outcome {
                     Ok(registry) => this.apply_registry(Ok(registry), keep, cx),
                     Err((error, reloaded)) => {
-                        this.notice = Some(update_message(&error));
+                        this.notices = vec![Notification::Update(error)];
                         if let Some(reloaded) = reloaded {
                             this.apply_registry(reloaded, this.selected.clone(), cx);
                         }
@@ -836,38 +834,35 @@ impl AxonApp {
         let reload = || {
             Button::new("reload")
                 .outline()
-                .label("再読み込み")
+                .label(crate::tr!(self.language, "common.reload"))
                 .on_click(cx.listener(|this, _, _, cx| this.reload(cx)))
         };
         let status = div().flex().flex_col().gap_1();
         let (status, reloadable) = match (&self.registry, self.selected(), &self.store) {
             (RegistryState::Loading, _, _) => (
-                status.child(message("登録したリポジトリの一覧を読み込み中…".into())),
+                status.child(message(
+                    crate::tr!(self.language, "registry.loading").into(),
+                )),
                 false,
             ),
             (RegistryState::Failed(error), _, _) => (
                 status
-                    .child(message(
-                        "登録したリポジトリの一覧を読み込めませんでした。空の一覧として扱わず、書き換えもしません。".into(),
-                    ))
+                    .child(message(crate::tr!(self.language, "registry.failed").into()))
                     .child(div().text_xs().text_color(danger).child(error.clone())),
                 true,
             ),
             (RegistryState::Loaded(_), None, _) => (
-                status.child(message(
-                    "登録したリポジトリがありません。「＋ リポジトリを登録」から、.axon を持つフォルダ（管理 root）を選んでください。".into(),
-                )),
+                status.child(message(crate::tr!(self.language, "registry.empty").into())),
                 false,
             ),
-            (_, Some(_), StoreState::Loading | StoreState::None) => {
-                (status.child(message("読み込み中…".into())), false)
-            }
+            (_, Some(_), StoreState::Loading | StoreState::None) => (
+                status.child(message(crate::tr!(self.language, "common.loading").into())),
+                false,
+            ),
             (_, Some(_), StoreState::Loaded(_) | StoreState::Reloading(_)) => return (None, None),
             (_, Some(_), StoreState::Failed(error)) => (
                 status
-                    .child(message(
-                        "このリポジトリの記録を読み込めませんでした。空のリポジトリとしては扱いません。他のリポジトリには「リポジトリ」の欄から切り替えられます。".into(),
-                    ))
+                    .child(message(crate::tr!(self.language, "store.failed").into()))
                     .child(div().text_xs().text_color(danger).child(error.clone())),
                 true,
             ),
@@ -907,36 +902,106 @@ fn root_label(root: &ProjectRoot) -> String {
     format!("{} — {}", root.name(), root)
 }
 
-fn update_message(error: &UpdateError) -> String {
-    match error {
-        UpdateError::Unreachable { path, error } => format!(
-            "フォルダを開けないため登録しませんでした。（{}: {error}）",
-            text::path(path.display())
-        ),
-        UpdateError::NotADirectory(path) => format!(
-            "フォルダではないため登録しませんでした。（{}）",
-            text::path(path.display())
-        ),
-        UpdateError::NotAStore(header) => format!(
-            "Axon の保存先（.axon の header）がないフォルダは登録できません。.axon を持つ管理 root を選んでください。（{} がありません）",
-            text::path(header.display())
-        ),
-        UpdateError::Unrepresentable(path) => format!(
-            "パスに UTF-8 で表せない文字を含むフォルダは登録できません。（{}）",
-            text::path(path.display())
-        ),
-        UpdateError::Duplicate(root) => format!("{} はすでに登録しています。", text::path(root)),
-        UpdateError::Elsewhere { asked, resolved } => format!(
-            "{} は今は {} を指しているため登録しませんでした。登録したいフォルダで axon gui を実行し直してください。",
-            text::path(asked),
-            text::path(resolved.display())
-        ),
-        UpdateError::Unknown(root) => format!("{} は登録されていません。", text::path(root)),
-        UpdateError::Read(error) => {
-            format!("登録したリポジトリの一覧を読み込めないため、変更しませんでした。（{error}）")
+enum Notification {
+    Folder(String),
+    Registry(PathBuf),
+    Link(String),
+    Confirm(ProjectRoot),
+    Update(UpdateError),
+}
+
+impl Notification {
+    fn message(&self, language: Language) -> String {
+        match self {
+            Self::Folder(error) => crate::tr!(language, "notice.folder", error = error),
+            Self::Registry(path) => crate::tr!(
+                language,
+                "notice.registry",
+                path = text::path(path.display())
+            ),
+            Self::Link(error) => crate::tr!(language, "notice.link", error = error),
+            Self::Confirm(root) => crate::tr!(language, "notice.confirm", path = text::path(root)),
+            Self::Update(error) => update_message(language, error),
         }
-        UpdateError::Save(error) => format!(
-            "登録したリポジトリの一覧を保存できませんでした。一覧には読み直した結果を表示しています。（{error}）"
+    }
+}
+
+fn update_message(language: Language, error: &UpdateError) -> String {
+    match error {
+        UpdateError::Unreachable { path, error } => crate::tr!(
+            language,
+            "update.unreachable",
+            path = text::path(path.display()),
+            error = error
         ),
+        UpdateError::NotADirectory(path) => crate::tr!(
+            language,
+            "update.not_directory",
+            path = text::path(path.display())
+        ),
+        UpdateError::NotAStore(path) => crate::tr!(
+            language,
+            "update.not_store",
+            path = text::path(path.display())
+        ),
+        UpdateError::Unrepresentable(path) => crate::tr!(
+            language,
+            "update.unrepresentable",
+            path = text::path(path.display())
+        ),
+        UpdateError::Duplicate(root) => {
+            crate::tr!(language, "update.duplicate", path = text::path(root))
+        }
+        UpdateError::Elsewhere { asked, resolved } => crate::tr!(
+            language,
+            "update.elsewhere",
+            asked = text::path(asked),
+            resolved = text::path(resolved.display())
+        ),
+        UpdateError::Unknown(root) => {
+            crate::tr!(language, "update.unknown", path = text::path(root))
+        }
+        UpdateError::Read(error) => crate::tr!(language, "update.read", error = error),
+        UpdateError::Save(error) => crate::tr!(language, "update.save", error = error),
+    }
+}
+
+#[cfg(test)]
+mod translation_tests {
+    use super::*;
+
+    #[test]
+    fn notification_arguments_survive_both_languages() {
+        let diagnostic = "raw diagnostic 日本語";
+        let path = PathBuf::from("/repository/line\nbreak");
+        for language in [Language::English, Language::Japanese] {
+            for (reason, arguments) in [
+                (
+                    Notification::Link(diagnostic.into()),
+                    vec![diagnostic.to_owned()],
+                ),
+                (
+                    Notification::Folder(diagnostic.into()),
+                    vec![diagnostic.to_owned()],
+                ),
+                (
+                    Notification::Registry(path.clone()),
+                    vec![text::path(path.display())],
+                ),
+                (
+                    Notification::Update(UpdateError::Unreachable {
+                        path: path.clone(),
+                        error: std::io::Error::other(diagnostic),
+                    }),
+                    vec![text::path(path.display()), diagnostic.to_owned()],
+                ),
+            ] {
+                let message = reason.message(language);
+                for argument in arguments {
+                    assert!(message.contains(&argument), "{message}");
+                }
+                assert!(!message.contains("%{"), "{message}");
+            }
+        }
     }
 }

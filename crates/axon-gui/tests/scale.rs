@@ -25,7 +25,7 @@ fn frames_and_list_operations(cx: &mut TestAppContext) {
             .lock_instance()
             .unwrap(),
     );
-    cx.update(axon_gui::init);
+    cx.update(|cx| axon_gui::init_with_language(axon_gui::Language::Japanese, cx));
     let (window, app) = cx.update(|cx| {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds {

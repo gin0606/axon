@@ -492,7 +492,7 @@ impl AxonApp {
         let current = self.selected.clone();
         let switch_label = match self.selected() {
             Some(root) => format!("{} ▾", root.name()),
-            None => "リポジトリなし".into(),
+            None => crate::tr!(self.language, "repository.none"),
         };
         let loaded = matches!(self.registry, RegistryState::Loaded(_));
         let bar = bar(palette)
@@ -501,17 +501,17 @@ impl AxonApp {
                     Button::new("close-panel")
                         .ghost()
                         .icon(IconName::Close)
-                        .tooltip("閉じる")
+                        .tooltip(crate::tr!(self.language, "common.close"))
                         .on_click(cx.listener(|this, _, _, cx| this.close_panel(cx))),
                 )
             })
             .when(panel.is_none(), |bar| bar.pl_4())
-            .child(bar_title("リポジトリ"));
+            .child(bar_title(crate::tr!(self.language, "repository.title")));
         let unregister = self.selected().is_some().then(|| {
             Button::new("remove-root")
                 .ghost()
                 .compact()
-                .label("登録を解除")
+                .label(crate::tr!(self.language, "repository.remove"))
                 .disabled(self.busy)
                 .on_click(cx.listener(|this, _, _, cx| this.remove_selected(cx)))
         });
@@ -559,9 +559,10 @@ impl AxonApp {
                     .truncate()
                     .child(match self.selected() {
                         Some(root) => short_path(root.path()),
-                        None => format!(
-                            "登録の一覧の保存場所: {}",
-                            short_path(self.lock.data().dir())
+                        None => crate::tr!(
+                            self.language,
+                            "registry.location",
+                            path = short_path(self.lock.data().dir())
                         ),
                     })
                     .test_support(),
@@ -571,7 +572,7 @@ impl AxonApp {
                 Button::new("add-root")
                     .ghost()
                     .w_full()
-                    .label("＋ リポジトリを登録")
+                    .label(crate::tr!(self.language, "repository.add"))
                     .loading(self.busy)
                     .disabled(self.busy || !loaded)
                     .on_click(cx.listener(|this, _, _, cx| this.add_root(cx))),
@@ -603,7 +604,7 @@ impl AxonApp {
             .map(ProjectRoot::name)
             .unwrap_or_else(|| "Axon".into());
         let (status, action) = self.render_status(cx);
-        let show_status = status.is_some() || action.is_some() || self.notice.is_some();
+        let show_status = status.is_some() || action.is_some() || !self.notices.is_empty();
         let list = self.render_list(cx);
         // Without the left column, the menu opens the panel that holds the roots and the
         // filters. A dot on it tells the filters differ from the defaults, since the list then
@@ -618,9 +619,9 @@ impl AxonApp {
                         .ghost()
                         .icon(IconName::Menu)
                         .tooltip(if filtered {
-                            "リポジトリと絞り込み（絞り込みを変更しています）"
+                            crate::tr!(self.language, "sidebar.filtered")
                         } else {
-                            "リポジトリと絞り込み"
+                            crate::tr!(self.language, "sidebar.title")
                         })
                         .on_click(cx.listener(|this, _, window, cx| this.open_panel(window, cx))),
                 )
@@ -638,7 +639,7 @@ impl AxonApp {
                     )
                 })
         });
-        let notice = self.notice.as_ref().map(|notice| {
+        let notice = self.notice().map(|notice| {
             div()
                 .id("notice")
                 .pl_2()
@@ -646,7 +647,7 @@ impl AxonApp {
                 .border_color(palette.danger)
                 .text_sm()
                 .text_color(palette.danger)
-                .child(notice.clone())
+                .child(notice)
                 .test_support()
         });
         let bar = bar(palette)
@@ -718,11 +719,17 @@ impl AxonApp {
             return bar.into_any_element();
         };
         let (icon, label) = if !self.layout.trail.is_empty() {
-            (IconName::ChevronLeft, "戻る")
+            (
+                IconName::ChevronLeft,
+                crate::tr!(self.language, "common.back"),
+            )
         } else if columns == Columns::One {
-            (IconName::ChevronLeft, "一覧")
+            (
+                IconName::ChevronLeft,
+                crate::tr!(self.language, "common.list"),
+            )
         } else {
-            (IconName::Close, "閉じる")
+            (IconName::Close, crate::tr!(self.language, "common.close"))
         };
         bar = bar.child(
             Button::new("close-detail")
@@ -756,8 +763,8 @@ impl AxonApp {
                         div().flex_none().child(
                             Clipboard::new("copy-id")
                                 .value(detail.id.to_string())
-                                .tooltip("ID をコピー")
-                                .accessibility_label("ID をコピー"),
+                                .tooltip(crate::tr!(self.language, "copy.id"))
+                                .accessibility_label(crate::tr!(self.language, "copy.id")),
                         ),
                     ),
             );
@@ -776,7 +783,7 @@ impl AxonApp {
                 .py_5()
                 .text_sm()
                 .text_color(palette.danger)
-                .child(format!("詳細を表示できません: {error}"))
+                .child(crate::tr!(self.language, "detail.failed", error = error))
                 .into_any_element(),
             // Nothing is open: the column stays empty, and points at the list while it has rows.
             None => div()
@@ -789,7 +796,7 @@ impl AxonApp {
                 .text_sm()
                 .text_color(palette.muted)
                 .when(self.explorer.listing().matched > 0, |empty| {
-                    empty.child("一覧から選択")
+                    empty.child(crate::tr!(self.language, "detail.select"))
                 })
                 .test_support()
                 .into_any_element(),

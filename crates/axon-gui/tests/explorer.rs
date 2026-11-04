@@ -165,7 +165,7 @@ fn open_sized(
     height: f32,
     cx: &mut TestAppContext,
 ) -> (Window, Entity<AxonApp>) {
-    cx.update(axon_gui::init);
+    cx.update(|cx| axon_gui::init_with_language(axon_gui::Language::Japanese, cx));
     cx.update(|cx| cx.set_reduce_motion(true));
     let data = data.clone();
     let (window, app) = cx.update(|cx| {
@@ -383,10 +383,17 @@ fn an_id_from_the_cli_finds_its_row_with_status_before_the_id(cx: &mut TestAppCo
         let board = explorer.board().unwrap();
         assert_eq!(explorer.listing().rows.len(), 3);
         for row in &explorer.listing().rows {
-            let meta = text::row_meta(board.item(&row.id).unwrap(), row.matched);
+            let meta = text::row_meta(
+                axon_gui::Language::Japanese,
+                board.item(&row.id).unwrap(),
+                row.matched,
+            );
             assert!(meta.ends_with(&row.id.to_string()), "{meta}");
             assert!(
-                meta.starts_with(text::state(board.item(&row.id).unwrap().state)),
+                meta.starts_with(&text::state(
+                    axon_gui::Language::Japanese,
+                    board.item(&row.id).unwrap().state
+                )),
                 "{meta}"
             );
         }
@@ -2189,7 +2196,7 @@ fn coming_back_while_a_read_runs_starts_no_other(cx: &mut TestAppContext) {
     plan(&seed);
 
     // Brought to the front as it opens, while the registry is read: no read is stacked on it.
-    cx.update(axon_gui::init);
+    cx.update(|cx| axon_gui::init_with_language(axon_gui::Language::Japanese, cx));
     let (handle, app) = cx.update(|cx| {
         let data = data.clone();
         gpui_kit::open_window(axon_gui::main_window_options(cx), cx, |window, cx| {

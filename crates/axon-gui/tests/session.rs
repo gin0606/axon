@@ -75,7 +75,7 @@ fn start(
     link: Option<&Path>,
     cx: &mut TestAppContext,
 ) -> (AnyWindowHandle, Entity<AxonApp>) {
-    cx.update(axon_gui::init);
+    cx.update(|cx| axon_gui::init_with_language(axon_gui::Language::Japanese, cx));
     let app = cx.update(|cx| {
         let app = axon_gui::open_main_window(lock.clone(), cx).unwrap();
         if let Some(path) = link {

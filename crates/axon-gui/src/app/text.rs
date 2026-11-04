@@ -1,20 +1,21 @@
 //! Display text for the core's values. The spelling of labels stays the one records and the
-//! CLI use; states, situations and record kinds are shown in Japanese.
+//! CLI use; states, situations and record kinds use the selected language.
 
 use crate::board::{Difference, Item, State, WaitKind};
+use crate::i18n::Language;
 use axon::lifecycle::{Kind, Lifecycle, Operation, record::RecordKind, record::ViolationKind};
 use axon::read::{PrerequisiteOperation, Status};
 use chrono::{DateTime, Local, Utc};
 use std::fmt;
 
-pub fn state(state: State) -> &'static str {
+pub fn state(language: Language, state: State) -> String {
     match state {
-        State::Undecided => "未判断",
-        State::NotStarted => "未着手",
-        State::InProgress => "着手中",
-        State::Completed => "完了",
-        State::Cancelled => "取りやめ",
-        State::Conflicted => "衝突",
+        State::Undecided => crate::tr!(language, "state.undecided"),
+        State::NotStarted => crate::tr!(language, "state.not_started"),
+        State::InProgress => crate::tr!(language, "state.in_progress"),
+        State::Completed => crate::tr!(language, "state.completed"),
+        State::Cancelled => crate::tr!(language, "state.cancelled"),
+        State::Conflicted => crate::tr!(language, "state.conflicted"),
     }
 }
 
@@ -29,8 +30,8 @@ pub fn state_icon(state: State) -> &'static str {
     }
 }
 
-pub fn lifecycle(lifecycle: Lifecycle) -> &'static str {
-    state(State::of(Some(lifecycle)))
+pub fn lifecycle(language: Language, lifecycle: Lifecycle) -> String {
+    state(language, State::of(Some(lifecycle)))
 }
 
 pub fn kind(kind: Kind) -> &'static str {
@@ -41,16 +42,16 @@ pub fn kind(kind: Kind) -> &'static str {
 }
 
 /// Warnings and status precede identifiers, which may truncate in a narrow list.
-pub fn row_meta(item: &Item, matched: bool) -> String {
+pub fn row_meta(language: Language, item: &Item, matched: bool) -> String {
     let mut meta = Vec::new();
     if item.invalid {
-        meta.push("構造の違反".into());
+        meta.push(crate::tr!(language, "row.invalid"));
     }
     if !matched {
-        meta.push("参考表示".into());
+        meta.push(crate::tr!(language, "row.context"));
     }
-    meta.push(state(item.state).to_string());
-    meta.extend(situation(item.status).map(str::to_string));
+    meta.push(state(language, item.state));
+    meta.extend(situation(language, item.status));
     if item.kind == Kind::Group {
         meta.push(kind(item.kind).to_string());
     }
@@ -61,14 +62,14 @@ pub fn row_meta(item: &Item, matched: bool) -> String {
 
 /// What the situation adds to the state, when it adds anything. Conditions are taken as
 /// satisfied, so nothing is called unsurfaced by this reading.
-pub fn situation(status: Status) -> Option<&'static str> {
+pub fn situation(language: Language, status: Status) -> Option<String> {
     match status {
-        Status::Ready => Some("着手可"),
-        Status::Blocked => Some("前提待ち"),
-        Status::InProgressBlocked => Some("前提待ち"),
-        Status::Unsurfaced => Some("再浮上待ち"),
-        Status::Empty => Some("子なし"),
-        Status::Confirmable => Some("完了確認待ち"),
+        Status::Ready => Some(crate::tr!(language, "situation.ready")),
+        Status::Blocked => Some(crate::tr!(language, "situation.blocked")),
+        Status::InProgressBlocked => Some(crate::tr!(language, "situation.blocked")),
+        Status::Unsurfaced => Some(crate::tr!(language, "situation.unsurfaced")),
+        Status::Empty => Some(crate::tr!(language, "situation.empty")),
+        Status::Confirmable => Some(crate::tr!(language, "situation.confirmable")),
         Status::Undecided
         | Status::InProgress
         | Status::Completed
@@ -77,90 +78,113 @@ pub fn situation(status: Status) -> Option<&'static str> {
     }
 }
 
-pub fn waiting_for(operation: Option<PrerequisiteOperation>) -> &'static str {
+pub fn waiting_for(language: Language, operation: Option<PrerequisiteOperation>) -> String {
     match operation {
-        Some(PrerequisiteOperation::Start) => "着手の前提を待っています",
-        Some(PrerequisiteOperation::Complete) => "完了の前提を待っています",
-        None => "この Group は進められる仕事がなく止まっています",
+        Some(PrerequisiteOperation::Start) => crate::tr!(language, "waiting.start"),
+        Some(PrerequisiteOperation::Complete) => crate::tr!(language, "waiting.complete"),
+        None => crate::tr!(language, "waiting.group"),
     }
 }
 
-pub fn wait(kind: WaitKind) -> &'static str {
+pub fn wait(language: Language, kind: WaitKind) -> String {
     match kind {
-        WaitKind::UnadoptedAncestor => "採用されていない祖先",
-        WaitKind::Dependency => "完了していない依存先",
-        WaitKind::AncestorDependency => "祖先の未完了の依存先",
-        WaitKind::UnsurfacedAncestor => "再浮上条件を満たさない祖先",
-        WaitKind::DescendantDependency => "依存先を待つ子孫",
-        WaitKind::UndecidedChild => "未判断の子",
-        WaitKind::OpenSubgroup => "進められる仕事のない子 Group",
-        WaitKind::UnsurfacedCandidate => "再浮上条件を満たさない子孫",
-        WaitKind::OwnCondition => "自身の再浮上条件",
-        WaitKind::UndecidedAncestor => "未判断の祖先",
+        WaitKind::UnadoptedAncestor => crate::tr!(language, "wait.unadopted_ancestor"),
+        WaitKind::Dependency => crate::tr!(language, "wait.dependency"),
+        WaitKind::AncestorDependency => crate::tr!(language, "wait.ancestor_dependency"),
+        WaitKind::UnsurfacedAncestor => crate::tr!(language, "wait.unsurfaced_ancestor"),
+        WaitKind::DescendantDependency => crate::tr!(language, "wait.descendant_dependency"),
+        WaitKind::UndecidedChild => crate::tr!(language, "wait.undecided_child"),
+        WaitKind::OpenSubgroup => crate::tr!(language, "wait.open_subgroup"),
+        WaitKind::UnsurfacedCandidate => crate::tr!(language, "wait.unsurfaced_candidate"),
+        WaitKind::OwnCondition => crate::tr!(language, "wait.own_condition"),
+        WaitKind::UndecidedAncestor => crate::tr!(language, "wait.undecided_ancestor"),
     }
 }
 
-pub fn violation(kind: ViolationKind) -> &'static str {
+pub fn violation(language: Language, kind: ViolationKind) -> String {
     match kind {
-        ViolationKind::ContainmentCycle => "包含が循環しています",
-        ViolationKind::UnknownParent => "親が存在しないか Group ではありません",
-        ViolationKind::OpenUnderTerminal => "終了した親の下で未終了です",
-        ViolationKind::UnadoptedAncestor => "採用されていない祖先の下で着手しています",
+        ViolationKind::ContainmentCycle => crate::tr!(language, "violation.containment_cycle"),
+        ViolationKind::UnknownParent => crate::tr!(language, "violation.unknown_parent"),
+        ViolationKind::OpenUnderTerminal => crate::tr!(language, "violation.open_under_terminal"),
+        ViolationKind::UnadoptedAncestor => crate::tr!(language, "violation.unadopted_ancestor"),
         ViolationKind::CompletedWithOpenDependency => {
-            "完了していない依存先があるのに完了しています"
+            crate::tr!(language, "violation.open_dependency")
         }
-        ViolationKind::UnknownDependency => "存在しない依存先があります",
-        ViolationKind::CompletionCycle => "完了の前提が循環しています",
+        ViolationKind::UnknownDependency => crate::tr!(language, "violation.unknown_dependency"),
+        ViolationKind::CompletionCycle => crate::tr!(language, "violation.completion_cycle"),
     }
 }
 
-pub fn operation(operation: Operation) -> &'static str {
+pub fn operation(language: Language, operation: Operation) -> String {
     match operation {
-        Operation::Accept => "採用",
-        Operation::Withdraw => "採用撤回",
-        Operation::Start => "着手",
-        Operation::Release => "作業を解放",
-        Operation::Complete => "完了",
-        Operation::Cancel => "取りやめ",
-        Operation::Reconsider => "再検討",
-        Operation::Reopen => "再開",
+        Operation::Accept => crate::tr!(language, "operation.accept"),
+        Operation::Withdraw => crate::tr!(language, "operation.withdraw"),
+        Operation::Start => crate::tr!(language, "operation.start"),
+        Operation::Release => crate::tr!(language, "operation.release"),
+        Operation::Complete => crate::tr!(language, "operation.complete"),
+        Operation::Cancel => crate::tr!(language, "operation.cancel"),
+        Operation::Reconsider => crate::tr!(language, "operation.reconsider"),
+        Operation::Reopen => crate::tr!(language, "operation.reopen"),
     }
 }
 
-pub fn record(kind: &RecordKind) -> String {
+pub fn record(language: Language, kind: &RecordKind) -> String {
     match kind {
-        RecordKind::Created => "作成".into(),
-        RecordKind::Transition(op) => operation(*op).into(),
-        RecordKind::Edit => "編集".into(),
-        RecordKind::Label => "label の変更".into(),
-        RecordKind::Parent => "所属の変更".into(),
-        RecordKind::Dependency => "依存の変更".into(),
-        RecordKind::Condition => "再浮上条件の変更".into(),
-        RecordKind::Convert => "種類の変換".into(),
+        RecordKind::Created => crate::tr!(language, "record.created"),
+        RecordKind::Transition(op) => operation(language, *op),
+        RecordKind::Edit => crate::tr!(language, "record.edit"),
+        RecordKind::Label => crate::tr!(language, "record.label"),
+        RecordKind::Parent => crate::tr!(language, "record.parent"),
+        RecordKind::Dependency => crate::tr!(language, "record.dependency"),
+        RecordKind::Condition => crate::tr!(language, "record.condition"),
+        RecordKind::Convert => crate::tr!(language, "record.convert"),
         // A declaration applied with `axon import apply`; earlier versions of this app also
         // wrote one for an edit of text and label together.
-        RecordKind::Import => "まとめて変更".into(),
-        RecordKind::Resolve { chosen } => format!("衝突の解決（{chosen} を採用）"),
+        RecordKind::Import => crate::tr!(language, "record.import"),
+        RecordKind::Resolve { chosen } => crate::tr!(language, "record.resolve", chosen = chosen),
     }
 }
 
-pub fn difference(difference: &Difference) -> String {
+pub fn difference(language: Language, difference: &Difference) -> String {
     match difference {
         Difference::Lifecycle(before, after) => {
-            format!("状態: {} → {}", lifecycle(*before), lifecycle(*after))
+            crate::tr!(
+                language,
+                "difference.state",
+                before = lifecycle(language, *before),
+                after = lifecycle(language, *after)
+            )
         }
-        Difference::Kind(before, after) => format!("種類: {} → {}", kind(*before), kind(*after)),
-        Difference::Title(before, after) => format!("タイトル: {before} → {after}"),
-        Difference::Description => "本文を変更".into(),
-        Difference::Label(before, after) => format!("label: {before} → {after}"),
-        Difference::Parent(before, after) => format!(
-            "所属: {} → {}",
-            before.as_ref().map_or("なし".into(), ToString::to_string),
-            after.as_ref().map_or("なし".into(), ToString::to_string)
+        Difference::Kind(before, after) => crate::tr!(
+            language,
+            "difference.kind",
+            before = kind(*before),
+            after = kind(*after)
         ),
-        Difference::DependencyAdded(id) => format!("依存先を追加: {id}"),
-        Difference::DependencyRemoved(id) => format!("依存先を削除: {id}"),
-        Difference::Condition => "再浮上条件を変更".into(),
+        Difference::Title(before, after) => {
+            crate::tr!(language, "difference.title", before = before, after = after)
+        }
+        Difference::Description => crate::tr!(language, "difference.description"),
+        Difference::Label(before, after) => {
+            crate::tr!(language, "difference.label", before = before, after = after)
+        }
+        Difference::Parent(before, after) => crate::tr!(
+            language,
+            "difference.parent",
+            before = before
+                .as_ref()
+                .map_or_else(|| language.text("common.none"), ToString::to_string),
+            after = after
+                .as_ref()
+                .map_or_else(|| language.text("common.none"), ToString::to_string)
+        ),
+        Difference::DependencyAdded(id) => {
+            crate::tr!(language, "difference.dependency_added", id = id)
+        }
+        Difference::DependencyRemoved(id) => {
+            crate::tr!(language, "difference.dependency_removed", id = id)
+        }
+        Difference::Condition => crate::tr!(language, "difference.condition"),
     }
 }
 

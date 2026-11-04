@@ -64,7 +64,7 @@ fn data_with_an_issue() -> (tempfile::TempDir, Arc<InstanceLock>) {
 }
 
 fn open(data: &Arc<InstanceLock>, cx: &mut TestAppContext) -> (Window, Entity<AxonApp>) {
-    cx.update(axon_gui::init);
+    cx.update(|cx| axon_gui::init_with_language(axon_gui::Language::Japanese, cx));
     let data = data.clone();
     let (window, app) = cx.update(|cx| {
         let options = WindowOptions {
@@ -183,7 +183,7 @@ fn the_window_cannot_shrink_below_the_smallest_size(cx: &mut TestAppContext) {
 
 #[test]
 fn menu_bar_offers_quit_and_editing_commands() {
-    let items: Vec<_> = axon_gui::menus()
+    let items: Vec<_> = axon_gui::menus(axon_gui::Language::Japanese)
         .into_iter()
         .flat_map(|menu| menu.items)
         .filter_map(|item| match item {

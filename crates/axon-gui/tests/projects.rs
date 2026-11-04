@@ -109,7 +109,7 @@ fn open(lock: &Arc<InstanceLock>, cx: &mut TestAppContext) -> (Window, Entity<Ax
 
 /// Initializes the app once, as `main` does, and opens its window.
 fn start(lock: &Arc<InstanceLock>, cx: &mut TestAppContext) -> (Window, Entity<AxonApp>) {
-    cx.update(axon_gui::init);
+    cx.update(|cx| axon_gui::init_with_language(axon_gui::Language::Japanese, cx));
     open(lock, cx)
 }
 
@@ -157,7 +157,7 @@ fn store(app: &Entity<AxonApp>, cx: &mut TestAppContext) -> StoreState {
 }
 
 fn notice(app: &Entity<AxonApp>, cx: &mut TestAppContext) -> Option<String> {
-    cx.read(|cx| app.read(cx).notice().map(str::to_owned))
+    cx.read(|cx| app.read(cx).notice())
 }
 
 /// The titles of the Entities the window shows.
@@ -435,7 +435,7 @@ fn smallest_main_window_keeps_the_roots_and_the_list_usable(cx: &mut TestAppCont
     let (dir, lock) = data();
     let long = "とても長い名前のリポジトリでも窓に収まる".repeat(3);
     lock.register(&root(dir.path(), &long, &[])).unwrap();
-    cx.update(axon_gui::init);
+    cx.update(|cx| axon_gui::init_with_language(axon_gui::Language::Japanese, cx));
     let (handle, _app) = open_sized(&lock, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
     // The roots are switched and registered from the panel a narrow window opens.
     with_window(handle, cx, |window, cx| window.click("open-panel", cx));
@@ -491,7 +491,7 @@ fn a_long_name_and_an_error_fit_in_the_smallest_window(cx: &mut TestAppContext) 
     let missing = root(dir.path(), &"長".repeat(80), &[]);
     lock.register(&missing).unwrap();
     fs::remove_dir_all(&missing).unwrap();
-    cx.update(axon_gui::init);
+    cx.update(|cx| axon_gui::init_with_language(axon_gui::Language::Japanese, cx));
     let (handle, app) = open_sized(&lock, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
     assert!(matches!(store(&app, cx), StoreState::Failed(_)));
     with_window(handle, cx, |window, _| {
@@ -510,10 +510,13 @@ fn a_long_name_and_an_error_fit_in_the_smallest_window(cx: &mut TestAppContext) 
 
 #[gpui_kit::test]
 fn a_refused_start_explains_itself(cx: &mut TestAppContext) {
-    cx.update(axon_gui::init);
-    let message = "Axon はすでに起動しています。";
+    cx.update(|cx| axon_gui::init_with_language(axon_gui::Language::Japanese, cx));
+    let (dir, _) = data();
+    let reason =
+        axon_gui::StartupRefusal::AlreadyRunning(AppData::at(dir.path().join("data")).unwrap());
+    let message = reason.message(axon_gui::Language::Japanese);
     let notice = cx
-        .update(|cx| axon_gui::open_notice_window(message.into(), cx))
+        .update(|cx| axon_gui::open_notice_window(reason, cx))
         .unwrap();
     cx.run_until_parked();
     cx.read(|cx| assert_eq!(notice.read(cx).message(), message));
@@ -529,7 +532,7 @@ fn a_refused_start_explains_itself(cx: &mut TestAppContext) {
 fn the_main_window_holds_the_instance_lock(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let data = AppData::at(dir.path().join("data")).unwrap();
-    cx.update(axon_gui::init);
+    cx.update(|cx| axon_gui::init_with_language(axon_gui::Language::Japanese, cx));
     let Startup::Ready(lock) = axon_gui::startup_on(Ok(data.clone())) else {
         panic!("the first start is refused");
     };
@@ -543,6 +546,7 @@ fn the_main_window_holds_the_instance_lock(cx: &mut TestAppContext) {
     let Startup::Refused(message) = axon_gui::startup_on(Ok(data.clone())) else {
         panic!("a second start is not refused");
     };
+    let message = message.message(axon_gui::Language::Japanese);
     assert!(message.contains("すでに起動しています"), "{message}");
 }
 
@@ -702,7 +706,7 @@ fn a_refused_change_shows_the_list_on_disk(cx: &mut TestAppContext) {
 /// Answers the question whether to register the root a link names with "register".
 fn confirm(cx: &mut TestAppContext) {
     assert!(cx.has_pending_prompt(), "no confirmation");
-    cx.simulate_prompt_answer(axon_gui::app::REGISTER_ANSWER);
+    cx.simulate_prompt_answer(&axon_gui::Language::Japanese.text("repository.register_open"));
     cx.run_until_parked();
 }
 
@@ -725,7 +729,7 @@ fn a_link_that_starts_the_app_registers_and_opens_its_root(cx: &mut TestAppConte
     let reading = root(dir.path(), "読書会", &["本を選ぶ"]);
     let budget = root(dir.path(), "家計簿", &["予算を決める"]);
     lock.register(&reading).unwrap();
-    cx.update(axon_gui::init);
+    cx.update(|cx| axon_gui::init_with_language(axon_gui::Language::Japanese, cx));
     // The link arrives before the window has read the registry.
     let link = link(&budget);
     let app = cx.update(|cx| {
@@ -994,7 +998,7 @@ fn a_failed_link_leaves_a_detail_that_hides_its_reason(cx: &mut TestAppContext) 
     let plain = dir.path().join("plain");
     fs::create_dir(&plain).unwrap();
     lock.register(&reading).unwrap();
-    cx.update(axon_gui::init);
+    cx.update(|cx| axon_gui::init_with_language(axon_gui::Language::Japanese, cx));
     let (handle, app) = open_sized(&lock, MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1, cx);
     let id = cx.read(|cx| {
         app.read(cx).explorer().board().unwrap().items()[0]
@@ -1020,7 +1024,7 @@ fn a_failed_link_keeps_a_detail_beside_the_list(cx: &mut TestAppContext) {
     let plain = dir.path().join("plain");
     fs::create_dir(&plain).unwrap();
     lock.register(&reading).unwrap();
-    cx.update(axon_gui::init);
+    cx.update(|cx| axon_gui::init_with_language(axon_gui::Language::Japanese, cx));
     let (handle, app) = open_sized(&lock, 1200., 600., cx);
     let id = cx.read(|cx| {
         app.read(cx).explorer().board().unwrap().items()[0]
@@ -1082,7 +1086,7 @@ fn a_link_that_starts_the_app_opens_a_registered_root_without_asking(cx: &mut Te
     let budget = root(dir.path(), "家計簿", &[]);
     lock.register(&reading).unwrap();
     lock.register(&budget).unwrap();
-    cx.update(axon_gui::init);
+    cx.update(|cx| axon_gui::init_with_language(axon_gui::Language::Japanese, cx));
     let link = link(&budget);
     let app = cx.update(|cx| {
         let lock = lock.clone();
@@ -1113,7 +1117,7 @@ fn the_confirmation_shows_the_path_it_registers_and_a_link_waits_for_it(cx: &mut
     // A second link waits behind the question instead of asking at once.
     open_link(&app, &budget, cx);
     assert!(asked(cx).starts_with(&canonical(&reading).to_string()));
-    cx.simulate_prompt_answer(axon_gui::app::CANCEL_ANSWER);
+    cx.simulate_prompt_answer(&axon_gui::Language::Japanese.text("common.cancel"));
     cx.run_until_parked();
     assert!(asked(cx).starts_with(&canonical(&budget).to_string()));
     confirm(cx);
@@ -1158,7 +1162,7 @@ fn the_confirmation_escapes_what_could_pass_for_other_text(cx: &mut TestAppConte
         first,
         "/tmp/a\\n\\nもう安全です\\u{202e}\\u{2028}\\u{200b}\\\\b"
     );
-    cx.simulate_prompt_answer(axon_gui::app::CANCEL_ANSWER);
+    cx.simulate_prompt_answer(&axon_gui::Language::Japanese.text("common.cancel"));
     cx.run_until_parked();
     assert!(registered(&app, cx).is_empty());
 }
@@ -1175,7 +1179,7 @@ fn a_root_waiting_for_the_answer_is_not_read(cx: &mut TestAppContext) {
     assert!(cx.has_pending_prompt());
     assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
     assert_eq!(titles(&app, cx), ["本を選ぶ"]);
-    cx.simulate_prompt_answer(axon_gui::app::CANCEL_ANSWER);
+    cx.simulate_prompt_answer(&axon_gui::Language::Japanese.text("common.cancel"));
     cx.run_until_parked();
     assert_eq!(selected(&app, cx).as_deref(), Some("読書会"));
     assert_eq!(titles(&app, cx), ["本を選ぶ"]);
@@ -1234,7 +1238,7 @@ fn whether_a_root_is_registered_is_decided_by_its_path_alone(cx: &mut TestAppCon
     cx.update(|cx| axon_gui::open_links(&app.downgrade(), vec![link], cx));
     cx.run_until_parked();
     assert!(cx.has_pending_prompt());
-    cx.simulate_prompt_answer(axon_gui::app::CANCEL_ANSWER);
+    cx.simulate_prompt_answer(&axon_gui::Language::Japanese.text("common.cancel"));
     cx.run_until_parked();
     assert_eq!(selected(&app, cx).as_deref(), Some("家計簿"));
 

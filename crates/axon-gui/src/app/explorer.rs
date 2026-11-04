@@ -1,5 +1,7 @@
 //! The filters, the shared list and the detail pane of the selected project.
 
+use crate::i18n::Language;
+
 use super::layout::FocusArea;
 use super::{AxonApp, StoreState, markdown, style::Palette, text};
 use crate::board::{EntityDetail, Exclusion, Filter, Layout, Link, State, WaitKind};
@@ -107,7 +109,7 @@ impl AxonApp {
     pub(super) fn render_filters(&self, cx: &mut Context<Self>) -> AnyElement {
         let palette = Palette::of(cx);
         let filter = self.explorer.filter();
-        let heading = |text: &'static str| {
+        let heading = |text: String| {
             div()
                 .px_1()
                 .pt_4()
@@ -121,7 +123,7 @@ impl AxonApp {
             .flex()
             .flex_col()
             .gap_1()
-            .child(heading("状態"));
+            .child(heading(crate::tr!(self.language, "filter.state")));
         for state in self.explorer.offered_states() {
             filters = filters.child(
                 div()
@@ -132,7 +134,7 @@ impl AxonApp {
                     .justify_between()
                     .child(
                         Checkbox::new(named(format!("state-{state:?}")))
-                            .label(text::state(state))
+                            .label(text::state(self.language, state))
                             .checked(filter.states.contains(&state))
                             .on_click(cx.listener(move |this, checked: &bool, _, cx| {
                                 this.update_filter(|f| f.toggle_state(state, *checked), cx)
@@ -146,7 +148,7 @@ impl AxonApp {
                     ),
             );
         }
-        filters = filters.child(heading("種類"));
+        filters = filters.child(heading(crate::tr!(self.language, "filter.kind")));
         for kind in [Kind::Issue, Kind::Group] {
             filters = filters.child(
                 div().px_1().child(
@@ -159,7 +161,7 @@ impl AxonApp {
                 ),
             );
         }
-        filters = filters.child(heading("label"));
+        filters = filters.child(heading("label".into()));
         for label in Label::ALL {
             filters = filters.child(
                 div().px_1().child(
@@ -179,7 +181,7 @@ impl AxonApp {
                         .ghost()
                         .compact()
                         .w_full()
-                        .label("絞り込みを初期値に戻す")
+                        .label(crate::tr!(self.language, "filter.reset"))
                         .on_click(cx.listener(|this, _, window, cx| this.reset_filter(window, cx))),
                 ),
             )
@@ -202,7 +204,7 @@ impl AxonApp {
         let palette = Palette::of(cx);
         let listing = self.explorer.listing();
         let layout = self.explorer.layout();
-        let layout_button = |id: &'static str, label: &'static str, value: Layout| {
+        let layout_button = |id: &'static str, label: String, value: Layout| {
             let button = Button::new(id)
                 .compact()
                 .label(label)
@@ -214,14 +216,20 @@ impl AxonApp {
             }
         };
         let count = if listing.context > 0 {
-            format!(
-                "{} / {} 件（参考表示の親 {} 件）",
-                listing.matched,
-                board.len(),
-                listing.context
+            crate::tr!(
+                self.language,
+                "list.count_context",
+                matched = listing.matched,
+                total = board.len(),
+                context = listing.context
             )
         } else {
-            format!("{} / {} 件", listing.matched, board.len())
+            crate::tr!(
+                self.language,
+                "list.count",
+                matched = listing.matched,
+                total = board.len()
+            )
         };
         let header = div()
             .px_1()
@@ -241,11 +249,11 @@ impl AxonApp {
                             .compact()
                             .w(px(100.))
                             .label(if matches!(self.store, StoreState::Reloading(_)) {
-                                "読み直し中"
+                                crate::tr!(self.language, "common.reloading")
                             } else {
-                                "再読み込み"
+                                crate::tr!(self.language, "common.reload")
                             })
-                            .tooltip("再読み込み")
+                            .tooltip(crate::tr!(self.language, "common.reload"))
                             .on_click(cx.listener(|this, _, _, cx| this.reload_selected(cx))),
                     ),
             )
@@ -256,8 +264,16 @@ impl AxonApp {
                     .flex_wrap()
                     .gap_1()
                     .items_center()
-                    .child(layout_button("layout-tree", "階層", Layout::Tree))
-                    .child(layout_button("layout-flat", "フラット", Layout::Flat))
+                    .child(layout_button(
+                        "layout-tree",
+                        crate::tr!(self.language, "layout.tree"),
+                        Layout::Tree,
+                    ))
+                    .child(layout_button(
+                        "layout-flat",
+                        crate::tr!(self.language, "layout.flat"),
+                        Layout::Flat,
+                    ))
                     .child(
                         div()
                             .id("list-count")
@@ -274,7 +290,7 @@ impl AxonApp {
                 .pt_4()
                 .text_sm()
                 .text_color(palette.muted)
-                .child("このリポジトリにはまだ Issue・Group がありません。")
+                .child(crate::tr!(self.language, "list.empty"))
                 .into_any_element()
         } else if listing.rows.is_empty() {
             div()
@@ -287,12 +303,12 @@ impl AxonApp {
                 .gap_2()
                 .text_sm()
                 .text_color(palette.muted)
-                .child("絞り込みに一致する Issue・Group はありません。")
+                .child(crate::tr!(self.language, "list.no_matches"))
                 .child(
                     Button::new("reset-filter-empty")
                         .outline()
                         .compact()
-                        .label("絞り込みを初期値に戻す")
+                        .label(crate::tr!(self.language, "filter.reset"))
                         .on_click(cx.listener(|this, _, window, cx| this.reset_filter(window, cx))),
                 )
                 .into_any_element()
@@ -360,7 +376,7 @@ impl AxonApp {
                 let item = board
                     .item(&row.id)
                     .expect("a listed Entity is on the board");
-                let meta = text::row_meta(item, row.matched);
+                let meta = text::row_meta(self.language, item, row.matched);
                 let id = row.id.clone();
                 let is_selected = selected == Some(&row.id);
                 let depth = row.depth.min(MAX_INDENT);
@@ -439,7 +455,7 @@ impl AxonApp {
                     );
                 }
                 // The gap between rows, inside each row so the heights stay equal.
-                Self::with_copy_menu(
+                self.with_copy_menu(
                     div().pb_px().child(line.test_support()),
                     &row.id,
                     Some(&item.title),
@@ -455,7 +471,7 @@ impl AxonApp {
     fn render_link(&self, link: &Link, cx: &mut Context<Self>) -> AnyElement {
         let title = link.known.as_ref().map(|known| known.title.as_str());
         let target = self.render_link_target(link, cx);
-        Self::with_copy_menu(
+        self.with_copy_menu(
             div().min_w_0().child(target),
             &link.id,
             title,
@@ -492,10 +508,11 @@ impl AxonApp {
                             .flex_none()
                             .text_xs()
                             .text_color(palette.muted)
-                            .child(format!(
-                                "{}・{}",
-                                text::kind(known.kind),
-                                text::state(known.state)
+                            .child(crate::tr!(
+                                self.language,
+                                "detail.link_meta",
+                                kind = text::kind(known.kind),
+                                state = text::state(self.language, known.state)
                             )),
                     )
                     .test_support()
@@ -505,7 +522,7 @@ impl AxonApp {
                 .id(entity_element(&link.id))
                 .text_sm()
                 .text_color(palette.muted)
-                .child(format!("{}（記録にない ID）", link.id))
+                .child(crate::tr!(self.language, "detail.missing", id = link.id))
                 .test_support()
                 .into_any_element(),
         }
@@ -514,7 +531,7 @@ impl AxonApp {
     fn render_links(
         &self,
         id: &'static str,
-        heading: &'static str,
+        heading: String,
         links: &[Link],
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
@@ -564,19 +581,23 @@ impl AxonApp {
                     )
                     .test_support(),
             )
-            .child(lifecycle_track(detail.state, palette));
+            .child(lifecycle_track(self.language, detail.state, palette));
 
         let mut state = String::new();
-        if let Some(situation) = text::situation(detail.status) {
-            state.push_str(situation);
+        if let Some(situation) = text::situation(self.language, detail.status) {
+            state.push_str(&situation);
         }
         if let Some(stored) = detail.stored
             && State::of(Some(stored)) != detail.state
         {
-            state.push_str(&format!(
-                "（子の進行から導出。保存値は{}）",
-                text::lifecycle(stored)
-            ));
+            state = crate::tr!(
+                self.language,
+                "detail.derived",
+                situation = state,
+                state = text::lifecycle(self.language, stored)
+            )
+            .trim_start()
+            .to_owned();
         }
         if !state.is_empty() {
             head = head.child(
@@ -609,9 +630,10 @@ impl AxonApp {
             .child(head)
             .children(self.render_filtered_out(cx));
         if detail.heads > 0 {
-            pane = pane.child(callout("detail-conflict", palette.danger).child(format!(
-                "衝突しています（head {} 件）。表示は最初の head の値です。",
-                detail.heads
+            pane = pane.child(callout("detail-conflict", palette.danger).child(crate::tr!(
+                self.language,
+                "detail.conflict",
+                count = detail.heads
             )));
         }
         if !detail.violations.is_empty() {
@@ -623,7 +645,7 @@ impl AxonApp {
                     .flex_row()
                     .flex_wrap()
                     .gap_1()
-                    .child(text::violation(*kind));
+                    .child(text::violation(self.language, *kind));
                 for link in links {
                     line = line.child(self.render_link(link, cx));
                 }
@@ -636,7 +658,7 @@ impl AxonApp {
                 div()
                     .text_color(palette.caution)
                     .font_medium()
-                    .child(text::waiting_for(detail.waiting_for)),
+                    .child(text::waiting_for(self.language, detail.waiting_for)),
             );
             for (ix, wait) in detail.waits.iter().enumerate() {
                 let mut line = div()
@@ -650,7 +672,7 @@ impl AxonApp {
                         div()
                             .text_xs()
                             .text_color(palette.muted)
-                            .child(text::wait(wait.kind)),
+                            .child(text::wait(self.language, wait.kind)),
                     )
                     .child(self.render_link(&wait.entity, cx));
                 if let (WaitKind::DescendantDependency, Some(via)) = (wait.kind, &wait.via) {
@@ -678,8 +700,7 @@ impl AxonApp {
             pane = pane.child(
                 section(
                     "detail-condition",
-                    "再浮上条件（アプリは実行しません。満たしているものとして表示しています）"
-                        .into(),
+                    crate::tr!(self.language, "detail.condition").into(),
                     palette,
                 )
                 .child(
@@ -699,16 +720,25 @@ impl AxonApp {
             );
         }
         if detail.descendants.is_some() || !detail.children.is_empty() {
-            let mut summary = format!("子 {} 件", detail.children.len());
-            if let Some(descendants) = &detail.descendants {
-                summary.push_str(&format!(
-                    "、衝突していない子孫 {} 件（完了 {}、取りやめ {}）",
-                    descendants.total, descendants.completed, descendants.cancelled
-                ));
-                if descendants.awaiting_confirmation {
-                    summary.push_str("、完了確認待ち");
-                }
-            }
+            let summary = match &detail.descendants {
+                Some(descendants) => crate::tr!(
+                    self.language,
+                    if descendants.awaiting_confirmation {
+                        "detail.descendants_confirmable"
+                    } else {
+                        "detail.descendants"
+                    },
+                    children = detail.children.len(),
+                    total = descendants.total,
+                    completed = descendants.completed,
+                    cancelled = descendants.cancelled
+                ),
+                None => crate::tr!(
+                    self.language,
+                    "detail.children",
+                    count = detail.children.len()
+                ),
+            };
             let mut children = section("detail-children", summary.into(), palette);
             for child in &detail.children {
                 children = children.child(self.render_link(child, cx));
@@ -716,24 +746,29 @@ impl AxonApp {
             pane = pane.child(children);
         }
         pane = pane
-            .children(self.render_links("detail-dependencies", "依存先", &detail.dependencies, cx))
+            .children(self.render_links(
+                "detail-dependencies",
+                crate::tr!(self.language, "detail.dependencies"),
+                &detail.dependencies,
+                cx,
+            ))
             .children(self.render_links(
                 "detail-dependents",
-                "この仕事に依存している",
+                crate::tr!(self.language, "detail.dependents"),
                 &detail.dependents,
                 cx,
             ));
 
         let mut notes = section(
             "detail-notes",
-            format!("Note（{} 件）", detail.notes.len()).into(),
+            crate::tr!(self.language, "detail.notes", count = detail.notes.len()).into(),
             palette,
         )
         .gap_3();
         for (ix, note) in detail.notes.iter().enumerate() {
             let mut head = text::time(note.at);
             if let Some(actor) = &note.actor {
-                head.push_str(&format!("　{actor}"));
+                head = crate::tr!(self.language, "note.heading", time = head, actor = actor);
             }
             let mut entry = div()
                 .id(("note", ix))
@@ -745,12 +780,11 @@ impl AxonApp {
                 .border_color(palette.rule)
                 .child(div().text_xs().text_color(palette.muted).child(head));
             if let Some(reason) = &note.reason {
-                entry = entry.child(
-                    div()
-                        .text_xs()
-                        .text_color(palette.muted)
-                        .child(format!("理由: {reason}")),
-                );
+                entry = entry.child(div().text_xs().text_color(palette.muted).child(crate::tr!(
+                    self.language,
+                    "history.reason",
+                    reason = reason
+                )));
             }
             notes = notes.child(
                 entry.child(
@@ -775,7 +809,11 @@ impl AxonApp {
                 .flex_row()
                 .flex_wrap()
                 .gap_x_2()
-                .child(div().text_sm().child(text::record(&entry.kind)))
+                .child(
+                    div()
+                        .text_sm()
+                        .child(text::record(self.language, &entry.kind)),
+                )
                 .child(
                     div()
                         .text_xs()
@@ -795,7 +833,7 @@ impl AxonApp {
                     div()
                         .text_xs()
                         .text_color(palette.caution)
-                        .child("直前の記録と並行"),
+                        .child(crate::tr!(self.language, "history.parallel")),
                 );
             }
             if entry.parent_missing {
@@ -803,7 +841,7 @@ impl AxonApp {
                     div()
                         .text_xs()
                         .text_color(palette.danger)
-                        .child("前の記録が見つかりません"),
+                        .child(crate::tr!(self.language, "history.missing")),
                 );
             }
             let mut line = div()
@@ -841,23 +879,26 @@ impl AxonApp {
                     div()
                         .text_xs()
                         .text_color(palette.muted)
-                        .child(text::difference(change)),
+                        .child(text::difference(self.language, change)),
                 );
             }
             if let Some(reason) = &entry.reason {
-                line = line.child(
-                    div()
-                        .text_xs()
-                        .text_color(palette.muted)
-                        .child(format!("理由: {reason}")),
-                );
+                line = line.child(div().text_xs().text_color(palette.muted).child(crate::tr!(
+                    self.language,
+                    "history.reason",
+                    reason = reason
+                )));
             }
             history = history.child(line);
         }
         pane.child(
-            section("detail-history", "履歴".into(), palette)
-                .gap_2()
-                .child(history),
+            section(
+                "detail-history",
+                crate::tr!(self.language, "history.title").into(),
+                palette,
+            )
+            .gap_2()
+            .child(history),
         )
         .into_any_element()
     }
@@ -885,10 +926,10 @@ impl AxonApp {
             })
             .with_border(palette.rule)
             .with_paragraph_gap(rems(0.75));
-        TextView::markdown(id, self.prepared.get(source))
+        TextView::markdown(id, self.prepared.get(self.language, source))
             .style(style)
             .selection_format(SelectionFormat::Plain)
-            .plugin(markdown::ImageAlt)
+            .plugin(markdown::ImageAlt(self.language))
             .image_source(markdown::no_image)
             .on_link_click(|url, event, _, cx| {
                 if markdown::opens_link(url, event) {
@@ -902,6 +943,7 @@ impl AxonApp {
     /// `id` and its title when there is one. The menu goes on a wrapper because a row or link
     /// observed for the tests cannot take one itself.
     fn with_copy_menu(
+        &self,
         trigger: gpui_kit::Div,
         id: &EntityId,
         title: Option<&str>,
@@ -911,6 +953,7 @@ impl AxonApp {
         let id = id.clone();
         let title = title.map(str::to_owned);
         let app = cx.weak_entity();
+        let language = self.language;
         trigger
             .id(named(format!("copy-menu-{id}")))
             .context_menu(move |menu, window, cx| {
@@ -925,7 +968,7 @@ impl AxonApp {
                 };
                 app.update(cx, |app, cx| app.record_copy_menu(opened, cx))
                     .ok();
-                copy_menu(menu, &id, title.as_deref())
+                copy_menu(language, menu, &id, title.as_deref())
             })
             .into_any_element()
     }
@@ -968,7 +1011,10 @@ impl AxonApp {
         if exclusions.is_empty() {
             return None;
         }
-        let reasons: Vec<String> = exclusions.iter().map(exclusion).collect();
+        let reasons: Vec<String> = exclusions
+            .iter()
+            .map(|value| exclusion(self.language, value))
+            .collect();
         Some(
             div()
                 .id("detail-filtered-out")
@@ -977,9 +1023,10 @@ impl AxonApp {
                 .border_color(Palette::of(cx).caution)
                 .text_sm()
                 .text_color(Palette::of(cx).caution)
-                .child(format!(
-                    "現在の絞り込みに一致しないため、一覧には一致として表示されていません（{}）。",
-                    reasons.join("。")
+                .child(crate::tr!(
+                    self.language,
+                    "detail.excluded",
+                    reasons = reasons.join(&self.language.text("list.separator"))
                 ))
                 .test_support()
                 .into_any_element(),
@@ -1011,27 +1058,34 @@ pub(super) struct CopyMenu {
 }
 
 /// The items that copy the ID, the title, and both as `ID title`, as `axon list` lines them up.
-fn copy_menu(menu: PopupMenu, id: &EntityId, title: Option<&str>) -> PopupMenu {
-    let copy = |label: &'static str, text: String| {
+fn copy_menu(language: Language, menu: PopupMenu, id: &EntityId, title: Option<&str>) -> PopupMenu {
+    let copy = |label: String, text: String| {
         PopupMenuItem::new(label).on_click(move |_, _, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
         })
     };
-    let menu = menu.item(copy("ID をコピー", id.to_string()));
+    let menu = menu.item(copy(crate::tr!(language, "copy.id"), id.to_string()));
     match title {
         Some(title) => menu
-            .item(copy("タイトルをコピー", title.to_owned()))
-            .item(copy("ID とタイトルをコピー", format!("{id} {title}"))),
+            .item(copy(crate::tr!(language, "copy.title"), title.to_owned()))
+            .item(copy(
+                crate::tr!(language, "copy.both"),
+                format!("{id} {title}"),
+            )),
         None => menu,
     }
 }
 
-fn exclusion(exclusion: &Exclusion) -> String {
+fn exclusion(language: Language, exclusion: &Exclusion) -> String {
     match exclusion {
-        Exclusion::State(state) => format!("状態「{}」を選んでいません", text::state(*state)),
-        Exclusion::Kind(kind) => format!("種類「{}」を選んでいません", text::kind(*kind)),
-        Exclusion::Label(label) => format!("label「{}」を選んでいません", label.name()),
-        Exclusion::Query(query) => format!("タイトル・本文・ID に「{query}」がありません"),
+        Exclusion::State(state) => crate::tr!(
+            language,
+            "exclusion.state",
+            state = text::state(language, *state)
+        ),
+        Exclusion::Kind(kind) => crate::tr!(language, "exclusion.kind", kind = text::kind(*kind)),
+        Exclusion::Label(label) => crate::tr!(language, "exclusion.label", label = label.name()),
+        Exclusion::Query(query) => crate::tr!(language, "exclusion.query", query = query),
     }
 }
 
@@ -1069,7 +1123,7 @@ fn callout(id: &'static str, color: Hsla) -> gpui_kit::Stateful<gpui_kit::Div> {
 
 /// The lifecycle an Issue or a Group walks, with where this one stands lit in its state's
 /// color. Cancelled and conflicted leave the track, which then dims and shows the state apart.
-fn lifecycle_track(current: State, palette: Palette) -> AnyElement {
+fn lifecycle_track(language: Language, current: State, palette: Palette) -> AnyElement {
     const TRACK: [State; 4] = [
         State::Undecided,
         State::NotStarted,
@@ -1112,7 +1166,7 @@ fn lifecycle_track(current: State, palette: Palette) -> AnyElement {
             .child(text::state_icon(*state));
         // Only the stop it stands on is named, so the track stays short in a narrow pane.
         track = track.child(if reached == Some(ix) {
-            stop.child(text::state(*state))
+            stop.child(text::state(language, *state))
         } else {
             stop
         });
@@ -1128,7 +1182,7 @@ fn lifecycle_track(current: State, palette: Palette) -> AnyElement {
                 .font_semibold()
                 .text_color(palette.state(current))
                 .child(text::state_icon(current))
-                .child(text::state(current)),
+                .child(text::state(language, current)),
         );
     }
     track.into_any_element()

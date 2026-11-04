@@ -11,6 +11,8 @@
 //! tag in a paragraph as their alternative text, and every other image it would still draw gets
 //! a source that loads nothing.
 
+use crate::i18n::Language;
+
 use gpui_kit::{
     App, ClickEvent, ImageCacheError, ImageSource, MouseButton, SharedString, SharedUri, Window,
     base::text::{
@@ -21,7 +23,8 @@ use markdown::{ParseOptions, mdast::Node};
 use std::{cell::RefCell, collections::HashMap, ops::Range, sync::Arc};
 
 /// What stands for an image without alternative text.
-pub const IMAGE_WITHOUT_ALT: &str = "（画像）";
+#[cfg(test)]
+const IMAGE_WITHOUT_ALT: &str = "（画像）";
 
 /// The tags written in a paragraph that the text view renders, or that stand for what an
 /// author would mean by them. Any other tag is shown as written.
@@ -102,18 +105,18 @@ const BLOCK_TAGS: &[&str] = &[
 ];
 
 /// The source the text view renders for `source`.
-pub fn prepare(source: &str) -> String {
+pub fn prepare(language: Language, source: &str) -> String {
     let mut prepared = source.to_string();
     // Rewriting the start of an HTML block makes the block a paragraph, which may start another
     // block, so blocks are rewritten until none changes. Each pass changes at least one; the
     // bound only guards against a case not foreseen.
     for _ in 0..16 {
-        match rewrite(&prepared, Pass::Blocks) {
+        match rewrite(language, &prepared, Pass::Blocks) {
             Some(rewritten) => prepared = rewritten,
             None => break,
         }
     }
-    rewrite(&prepared, Pass::Inline).unwrap_or(prepared)
+    rewrite(language, &prepared, Pass::Inline).unwrap_or(prepared)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -136,10 +139,10 @@ enum Place {
 }
 
 /// `source` with the edits of `pass`, or `None` when it has none.
-fn rewrite(source: &str, pass: Pass) -> Option<String> {
+fn rewrite(language: Language, source: &str, pass: Pass) -> Option<String> {
     let root = markdown::to_mdast(source, &options()).ok()?;
     let mut edits = Vec::new();
-    collect(&root, source, 0, pass, Place::Block, &mut edits);
+    collect(language, &root, source, 0, pass, Place::Block, &mut edits);
     if edits.is_empty() {
         return None;
     }
@@ -167,6 +170,7 @@ fn options() -> ParseOptions {
 /// Collects the edits of `pass` for `node`, whose positions count from `base` in the source,
 /// and for what it holds. `source` is the text from `base`.
 fn collect(
+    language: Language,
     node: &Node,
     source: &str,
     base: usize,
@@ -190,17 +194,17 @@ fn collect(
         (Node::InlineMath(_), Pass::Inline) if place == Place::Paragraph => {
             let literal = &source[span];
             for child in unclaimed_math(literal) {
-                collect(&child, literal, start, pass, Place::Math, edits);
+                collect(language, &child, literal, start, pass, Place::Math, edits);
             }
         }
         (Node::Html(_), Pass::Blocks) if place == Place::Block => {
-            if let Some((range, replacement)) = block_start(&source[span]) {
+            if let Some((range, replacement)) = block_start(language, &source[span]) {
                 edits.push((start + range.start..start + range.end, replacement));
             }
         }
         // The blocks no longer change, so the images left in one stay in HTML.
         (Node::Html(html), Pass::Inline) if place == Place::Block => {
-            for (range, replacement) in block_images(&html.value, &source[span]) {
+            for (range, replacement) in block_images(language, &html.value, &source[span]) {
                 edits.push((start + range.start..start + range.end, replacement));
             }
         }
@@ -217,7 +221,7 @@ fn collect(
                 _ => place,
             };
             for child in node.children().into_iter().flatten() {
-                collect(child, source, base, pass, place, edits);
+                collect(language, child, source, base, pass, place, edits);
             }
         }
     }
@@ -226,7 +230,7 @@ fn collect(
 /// The edit for an HTML block `html` whose first line is a single tag that the text view would
 /// not show as an author means it: an image tag becomes its alternative text, and a tag that is
 /// no HTML an author writes, such as `<id>`, is escaped. Either makes the block a paragraph.
-fn block_start(html: &str) -> Option<(Range<usize>, String)> {
+fn block_start(language: Language, html: &str) -> Option<(Range<usize>, String)> {
     let line = html
         .split(['\n', '\r'])
         .next()
@@ -238,7 +242,10 @@ fn block_start(html: &str) -> Option<(Range<usize>, String)> {
     if let Some((end, alt)) = image_tag(first_line, 0)
         && end == first_line.len()
     {
-        return Some((indent..indent + end, literal_text(&decode_entities(&alt))));
+        return Some((
+            indent..indent + end,
+            literal_text(language, &decode_entities(&alt)),
+        ));
     }
     let name = tag_name(first_line)?;
     (first_line.ends_with('>') && !is_one_of(&name, INLINE_TAGS) && !is_one_of(&name, BLOCK_TAGS))
@@ -263,8 +270,8 @@ const TEXT_ELEMENTS: &[&str] = &[
 /// as positions in `written`, the block as written in the source. `value` is `written` without
 /// the markers of the quotes and lists it stands in; a block where it is not, line by line,
 /// gets no edits.
-fn block_images(value: &str, written: &str) -> Vec<(Range<usize>, String)> {
-    let images = html_images(value);
+fn block_images(language: Language, value: &str, written: &str) -> Vec<(Range<usize>, String)> {
+    let images = html_images(language, value);
     if images.is_empty() {
         return Vec::new();
     }
@@ -332,7 +339,7 @@ fn lines(text: &str) -> Vec<Range<usize>> {
 /// Each image tag in the HTML block `html`, as an HTML parser reads it, and its alternative
 /// text written as HTML. Tags in comments, in attribute values and in elements read as text
 /// are no images.
-fn html_images(html: &str) -> Vec<(Range<usize>, String)> {
+fn html_images(language: Language, html: &str) -> Vec<(Range<usize>, String)> {
     let mut images = Vec::new();
     if find_ignoring_case(html, "<im", 0).is_none() {
         return images;
@@ -354,7 +361,10 @@ fn html_images(html: &str) -> Vec<(Range<usize>, String)> {
                 .map_or(html.len(), |end| at + 1 + end + 1);
         } else if let Some((tag_end, alt)) = image_tag(html, at) {
             let tag = &html[at..tag_end];
-            images.push((at..tag_end, alt_html(&alt, &ends_in(tag, block_ends))));
+            images.push((
+                at..tag_end,
+                alt_html(language, &alt, &ends_in(tag, block_ends)),
+            ));
             at = tag_end;
         } else if rest
             .as_bytes()
@@ -487,8 +497,8 @@ fn ends_in<'a>(tag: &'a str, ends: &[&str]) -> Vec<&'a str> {
 /// The alternative text `raw`, an attribute value as written, as HTML on one line, followed by
 /// comments that hold the `ends` of the HTML block that the tag it replaces held, so that the
 /// block ends where it did. The text view drops comments.
-fn alt_html(raw: &str, ends: &[&str]) -> String {
-    let text = shown(&decode_entities(raw))
+fn alt_html(language: Language, raw: &str, ends: &[&str]) -> String {
+    let text = shown(language, &decode_entities(raw))
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;");
@@ -525,9 +535,9 @@ fn is_one_of(name: &str, tags: &[&str]) -> bool {
 /// `text` on one line, written so that it renders as exactly that text in Markdown: every
 /// ASCII punctuation character is a character reference, so none starts markup or a block.
 /// An empty text is the stand-in for an image.
-fn literal_text(text: &str) -> String {
+fn literal_text(language: Language, text: &str) -> String {
     let mut escaped = String::new();
-    for c in shown(text).chars() {
+    for c in shown(language, text).chars() {
         if c.is_ascii_punctuation() {
             escaped.push_str(&format!("&#{};", c as u32));
         } else {
@@ -592,7 +602,7 @@ pub fn code_block(text: &str) -> String {
 
 /// Renders an image in a paragraph, from Markdown or a lone HTML tag, as its alternative text,
 /// which is selected and copied with the text around it.
-pub struct ImageAlt;
+pub struct ImageAlt(pub Language);
 
 impl MarkdownPlugin for ImageAlt {
     fn name(&self) -> &str {
@@ -600,7 +610,7 @@ impl MarkdownPlugin for ImageAlt {
     }
 
     fn parse(&self, node: &Node, _: &MarkdownParseContext<'_>) -> Option<MarkdownNode> {
-        let alt = alt_text(node)?;
+        let alt = alt_text(self.0, node)?;
         Some(MarkdownNode::new("axon-image-alt", ()).text(alt))
     }
 
@@ -618,7 +628,7 @@ impl MarkdownPlugin for ImageAlt {
 
 /// The alternative text of an image node of a paragraph, or of an HTML node that is a single
 /// `<img>` tag.
-fn alt_text(node: &Node) -> Option<String> {
+fn alt_text(language: Language, node: &Node) -> Option<String> {
     let alt = match node {
         Node::Image(image) => image.alt.clone(),
         Node::ImageReference(image) => image.alt.clone(),
@@ -632,14 +642,14 @@ fn alt_text(node: &Node) -> Option<String> {
         }
         _ => return None,
     };
-    Some(shown(&alt))
+    Some(shown(language, &alt))
 }
 
 /// The alternative text on one line, or the stand-in for an image without one.
-fn shown(alt: &str) -> String {
+fn shown(language: Language, alt: &str) -> String {
     let alt = alt.split_whitespace().collect::<Vec<_>>().join(" ");
     if alt.is_empty() {
-        IMAGE_WITHOUT_ALT.to_string()
+        language.text("markdown.image")
     } else {
         alt
     }
@@ -826,7 +836,7 @@ fn reference(rest: &str) -> Option<(String, usize)> {
 /// The source of every image the text view would still draw: one that never loads.
 pub fn no_image(_: &SharedUri) -> ImageSource {
     ImageSource::Custom(Arc::new(|_, _| {
-        Some(Err(ImageCacheError::Asset("画像は読み込みません".into())))
+        Some(Err(ImageCacheError::Asset("Images are not loaded".into())))
     }))
 }
 
@@ -861,6 +871,7 @@ pub struct Prepared(RefCell<Frames>);
 struct Frames {
     current: HashMap<String, SharedString>,
     last: HashMap<String, SharedString>,
+    language: Option<Language>,
 }
 
 impl Prepared {
@@ -870,15 +881,20 @@ impl Prepared {
         frames.last = std::mem::take(&mut frames.current);
     }
 
-    pub fn get(&self, source: &str) -> SharedString {
+    pub fn get(&self, language: Language, source: &str) -> SharedString {
         let mut frames = self.0.borrow_mut();
+        if frames.language != Some(language) {
+            frames.current.clear();
+            frames.last.clear();
+            frames.language = Some(language);
+        }
         if let Some(prepared) = frames.current.get(source) {
             return prepared.clone();
         }
         let (source, prepared) = frames
             .last
             .remove_entry(source)
-            .unwrap_or_else(|| (source.to_string(), prepare(source).into()));
+            .unwrap_or_else(|| (source.to_string(), prepare(language, source).into()));
         frames.current.insert(source, prepared.clone());
         prepared
     }
@@ -888,6 +904,31 @@ impl Prepared {
 mod tests {
     use super::*;
     use gpui_kit::{Modifiers, MouseClickEvent, MouseDownEvent, MouseUpEvent, point, px};
+
+    #[test]
+    fn image_placeholders_follow_language_without_translating_authored_text() {
+        let prepared = Prepared::default();
+        let source = "<img src=x>\n\n（画像）";
+        assert_eq!(
+            prepared.get(Language::Japanese, source).as_ref(),
+            "（画像）\n\n（画像）"
+        );
+        prepared.next_frame();
+        assert_eq!(
+            prepared.get(Language::English, source).as_ref(),
+            "&#40;image&#41;\n\n（画像）"
+        );
+        let node = Node::Image(markdown::mdast::Image {
+            alt: String::new(),
+            url: "x".into(),
+            title: None,
+            position: None,
+        });
+        assert_eq!(
+            alt_text(Language::English, &node).as_deref(),
+            Some("(image)")
+        );
+    }
 
     /// Every node of the tree of `source` as the text view parses it.
     fn nodes(source: &str) -> Vec<Node> {
@@ -912,21 +953,33 @@ mod tests {
     #[test]
     fn a_line_ending_in_a_paragraph_breaks_the_line() {
         let source = "一行目\n二行目 **強調\nの中** [リンク\nの中](https://example.com)\r\n最後";
-        let prepared = prepare(source);
+        let prepared = prepare(Language::Japanese, source);
         assert_eq!(
             prepared,
             "一行目  \n二行目 **強調  \nの中** [リンク  \nの中](https://example.com)  \r\n最後"
         );
         assert_eq!(breaks(&prepared), 4);
-        assert_eq!(prepare("CR だけの\r改行"), "CR だけの  \r改行");
+        assert_eq!(
+            prepare(Language::Japanese, "CR だけの\r改行"),
+            "CR だけの  \r改行"
+        );
         // Inside quotes and lists too.
-        assert_eq!(prepare("> 引用\n> の続き"), "> 引用  \n> の続き");
-        assert_eq!(prepare("- 項目\n  の続き"), "- 項目  \n  の続き");
+        assert_eq!(
+            prepare(Language::Japanese, "> 引用\n> の続き"),
+            "> 引用  \n> の続き"
+        );
+        assert_eq!(
+            prepare(Language::Japanese, "- 項目\n  の続き"),
+            "- 項目  \n  の続き"
+        );
         // White space before the ending gives way to the break.
-        assert_eq!(prepare("a\t\nb \nc"), "a  \nb  \nc");
-        assert_eq!(breaks(&prepare("a\t\nb \nc")), 2);
+        assert_eq!(prepare(Language::Japanese, "a\t\nb \nc"), "a  \nb  \nc");
+        assert_eq!(breaks(&prepare(Language::Japanese, "a\t\nb \nc")), 2);
         // A hard break already there and paragraphs apart stay.
-        assert_eq!(prepare("a  \nb\\\nc\n\nd"), "a  \nb\\\nc\n\nd");
+        assert_eq!(
+            prepare(Language::Japanese, "a  \nb\\\nc\n\nd"),
+            "a  \nb\\\nc\n\nd"
+        );
     }
 
     #[test]
@@ -941,11 +994,14 @@ mod tests {
             "$$\nmath\nflow\n$$",
         ];
         for source in unchanged {
-            assert_eq!(prepare(source), source, "{source}");
+            assert_eq!(prepare(Language::Japanese, source), source, "{source}");
         }
         // Next to a paragraph, only the paragraph changes.
         assert_eq!(
-            prepare("段落\nの続き\n\n```\nコード\nの続き\n```\n\n    字下げ\n    コード"),
+            prepare(
+                Language::Japanese,
+                "段落\nの続き\n\n```\nコード\nの続き\n```\n\n    字下げ\n    コード"
+            ),
             "段落  \nの続き\n\n```\nコード\nの続き\n```\n\n    字下げ\n    コード"
         );
     }
@@ -960,7 +1016,7 @@ mod tests {
                 .map(|node| format!("{node:?}").split(' ').next().unwrap().to_string())
                 .collect()
         };
-        assert_eq!(kinds(&prepare(source)), kinds(source));
+        assert_eq!(kinds(&prepare(Language::Japanese, source)), kinds(source));
     }
 
     #[test]
@@ -981,9 +1037,12 @@ mod tests {
     #[test]
     fn line_endings_in_math_follow_how_it_renders() {
         // Math nothing renders as math shows the Markdown it holds, line endings and all.
-        assert_eq!(prepare("a $x\n*y*$ b"), "a $x  \n*y*$ b");
+        assert_eq!(
+            prepare(Language::Japanese, "a $x\n*y*$ b"),
+            "a $x  \n*y*$ b"
+        );
         // Math kept as written keeps them as written.
-        assert_eq!(prepare("a $x\ny$ b"), "a $x\ny$ b");
+        assert_eq!(prepare(Language::Japanese, "a $x\ny$ b"), "a $x\ny$ b");
     }
 
     /// The text an inline image of `source`, the first node of its first paragraph, shows.
@@ -994,7 +1053,7 @@ mod tests {
                 Node::Image(_) | Node::ImageReference(_) | Node::Html(_)
             )
         })?;
-        alt_text(&node)
+        alt_text(Language::Japanese, &node)
     }
 
     #[test]
@@ -1035,20 +1094,38 @@ mod tests {
     #[test]
     fn an_html_block_opened_by_an_image_shows_its_alternative_text() {
         assert_eq!(
-            prepare("<img src=a.png alt=画面>\n上の図の *とおり*"),
+            prepare(
+                Language::Japanese,
+                "<img src=a.png alt=画面>\n上の図の *とおり*"
+            ),
             "画面  \n上の図の *とおり*"
         );
         // The images after it are then in a paragraph, where the plugin shows them.
         assert_eq!(
-            prepare("> <img src=a.png alt='a.b'>\n> <img src=b.png>"),
+            prepare(
+                Language::Japanese,
+                "> <img src=a.png alt='a.b'>\n> <img src=b.png>"
+            ),
             "> a&#46;b  \n> <img src=b.png>"
         );
-        assert_eq!(prepare("<img src=a.png>"), IMAGE_WITHOUT_ALT);
-        assert_eq!(prepare("   <img src=a.png alt=図>"), "   図");
-        assert_eq!(prepare("  <id>"), "  \\<id>");
-        assert_eq!(prepare("<id>\rfoo"), "\\<id>  \rfoo");
-        assert_eq!(prepare("<form>\n*x*\n</form>"), "<form>\n*x*\n</form>");
-        assert_eq!(prepare("<!-- <img> -->"), "<!-- <img> -->");
+        assert_eq!(
+            prepare(Language::Japanese, "<img src=a.png>"),
+            IMAGE_WITHOUT_ALT
+        );
+        assert_eq!(
+            prepare(Language::Japanese, "   <img src=a.png alt=図>"),
+            "   図"
+        );
+        assert_eq!(prepare(Language::Japanese, "  <id>"), "  \\<id>");
+        assert_eq!(prepare(Language::Japanese, "<id>\rfoo"), "\\<id>  \rfoo");
+        assert_eq!(
+            prepare(Language::Japanese, "<form>\n*x*\n</form>"),
+            "<form>\n*x*\n</form>"
+        );
+        assert_eq!(
+            prepare(Language::Japanese, "<!-- <img> -->"),
+            "<!-- <img> -->"
+        );
     }
 
     #[test]
@@ -1141,10 +1218,10 @@ mod tests {
             (">\t<img alt=x>", ">\tx"),
         ];
         for (source, prepared) in cases {
-            assert_eq!(prepare(source), prepared, "{source}");
+            assert_eq!(prepare(Language::Japanese, source), prepared, "{source}");
         }
         let strong = |source: &str| {
-            nodes(&prepare(source))
+            nodes(&prepare(Language::Japanese, source))
                 .iter()
                 .any(|node| matches!(node, Node::Strong(_)))
         };
@@ -1152,7 +1229,7 @@ mod tests {
         // An end in a tag running over lines ends the block on the tag's last line, which the
         // text replacing it joins.
         assert_eq!(
-            prepare("<pre>\n<img\nalt=\"</pre>\">\n**x**"),
+            prepare(Language::Japanese, "<pre>\n<img\nalt=\"</pre>\">\n**x**"),
             "<pre>\n<span>&lt;/pre&gt;</span><!--</pre>-->\n**x**"
         );
         assert!(strong("<pre>\n<img\nalt=\"</pre>\">\n**x**"));
@@ -1168,17 +1245,26 @@ mod tests {
             "<div>\n<imgx alt=x>\n</div>",
             "<div><xmp><img alt=x></xmp></div>",
         ] {
-            assert_eq!(prepare(source), source, "{source}");
+            assert_eq!(prepare(Language::Japanese, source), source, "{source}");
         }
     }
 
     #[test]
     fn a_tag_that_would_vanish_shows_as_written() {
-        assert_eq!(prepare("axon show <id> で確認"), "axon show \\<id> で確認");
-        assert_eq!(prepare("# <Entity ID> を開く"), "# \\<Entity ID> を開く");
-        assert_eq!(prepare("<group>\n続き"), "\\<group>  \n続き");
         assert_eq!(
-            prepare("--label <label> と </label>"),
+            prepare(Language::Japanese, "axon show <id> で確認"),
+            "axon show \\<id> で確認"
+        );
+        assert_eq!(
+            prepare(Language::Japanese, "# <Entity ID> を開く"),
+            "# \\<Entity ID> を開く"
+        );
+        assert_eq!(
+            prepare(Language::Japanese, "<group>\n続き"),
+            "\\<group>  \n続き"
+        );
+        assert_eq!(
+            prepare(Language::Japanese, "--label <label> と </label>"),
             "--label \\<label> と \\</label>"
         );
         // HTML an author means stays HTML, and so do comments.
@@ -1188,10 +1274,13 @@ mod tests {
             "<details>\n<summary>詳細</summary>\n</details>",
             "`<id>` と <https://example.com>",
         ] {
-            assert_eq!(prepare(source), source);
+            assert_eq!(prepare(Language::Japanese, source), source);
         }
         // In math, escaping would turn the math back into its literal.
-        assert_eq!(prepare("a $<id> *b*$ c"), "a $<id> *b*$ c");
+        assert_eq!(
+            prepare(Language::Japanese, "a $<id> *b*$ c"),
+            "a $<id> *b*$ c"
+        );
     }
 
     fn click(button: MouseButton) -> ClickEvent {
@@ -1247,12 +1336,12 @@ mod tests {
 
 #[cfg(test)]
 mod rendering {
-    use super::prepare;
+    use super::{Language, prepare};
     use gpui_kit::{AppContext, TestAppContext, base::text::TextViewState};
 
     /// The text the text view shows for `source` once prepared.
     fn rendered(source: &str, cx: &mut TestAppContext) -> String {
-        let prepared = prepare(source);
+        let prepared = prepare(Language::Japanese, source);
         let state = cx.new(|cx| TextViewState::markdown(&prepared, cx));
         cx.run_until_parked();
         cx.read(|cx| state.read(cx).rendered_text().as_str().to_string())

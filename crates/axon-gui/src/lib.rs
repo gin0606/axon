@@ -6,6 +6,14 @@
 //! records of one as values, both without GPUI; [`session`] keeps where the last run left off
 //! for the next start; [`app`] is the window.
 
+// The translation macro reads files itself; include the catalog in Cargo's dependency graph.
+const _: &str = include_str!("../locales/ui.json");
+rust_i18n::i18n!("locales", fallback = "en");
+
+pub mod i18n;
+pub use i18n::Language;
+pub(crate) use i18n::tr;
+
 pub mod app;
 pub mod board;
 pub mod project;
@@ -16,8 +24,8 @@ pub use app::AxonApp;
 use gpui_kit::component::{ActiveTheme, button::Button};
 use gpui_kit::{
     App, AppContext, Bounds, Context, DisplayId, Entity, KeyBinding, Menu, MenuItem, OsAction,
-    Pixels, Render, SharedString, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions,
-    actions, base::input as edit, div, point, prelude::*, px, size,
+    Pixels, Render, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, actions,
+    base::input as edit, div, point, prelude::*, px, size,
 };
 use project::{AppData, InstanceError, InstanceLock, data::LocateError};
 use session::{Placement, SessionFile};
@@ -41,6 +49,12 @@ pub const MIN_WINDOW_SIZE: (f32, f32) = (380., 460.);
 /// Registers the components, key bindings and application menus. Call once before opening
 /// windows.
 pub fn init(cx: &mut App) {
+    init_with_language(Language::system(), cx);
+}
+
+/// Initializes a startup with an explicit language, including menus and components.
+pub fn init_with_language(language: Language, cx: &mut App) {
+    i18n::init(language, cx);
     gpui_kit::init(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
@@ -50,22 +64,42 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("escape", Dismiss, Some(app::APP_CONTEXT)),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
-    cx.set_menus(menus());
+    cx.set_menus(menus(language));
 }
 
 /// The menu bar: the application menu and the standard editing commands that text inputs
 /// handle.
-pub fn menus() -> Vec<Menu> {
+pub fn menus(language: Language) -> Vec<Menu> {
     vec![
-        Menu::new("Axon").items([MenuItem::action("Axon を終了", Quit)]),
-        Menu::new("編集").items([
-            MenuItem::os_action("取り消す", edit::Undo, OsAction::Undo),
-            MenuItem::os_action("やり直す", edit::Redo, OsAction::Redo),
+        Menu::new("Axon").items([MenuItem::action(crate::tr!(language, "menu.quit"), Quit)]),
+        Menu::new(crate::tr!(language, "menu.edit")).items([
+            MenuItem::os_action(
+                crate::tr!(language, "menu.undo"),
+                edit::Undo,
+                OsAction::Undo,
+            ),
+            MenuItem::os_action(
+                crate::tr!(language, "menu.redo"),
+                edit::Redo,
+                OsAction::Redo,
+            ),
             MenuItem::separator(),
-            MenuItem::os_action("カット", edit::Cut, OsAction::Cut),
-            MenuItem::os_action("コピー", edit::Copy, OsAction::Copy),
-            MenuItem::os_action("ペースト", edit::Paste, OsAction::Paste),
-            MenuItem::os_action("すべてを選択", edit::SelectAll, OsAction::SelectAll),
+            MenuItem::os_action(crate::tr!(language, "menu.cut"), edit::Cut, OsAction::Cut),
+            MenuItem::os_action(
+                crate::tr!(language, "menu.copy"),
+                edit::Copy,
+                OsAction::Copy,
+            ),
+            MenuItem::os_action(
+                crate::tr!(language, "menu.paste"),
+                edit::Paste,
+                OsAction::Paste,
+            ),
+            MenuItem::os_action(
+                crate::tr!(language, "menu.select_all"),
+                edit::SelectAll,
+                OsAction::SelectAll,
+            ),
         ]),
     ]
 }
@@ -199,7 +233,31 @@ pub fn windowed_placement(window: &Window, cx: &App) -> Placement {
 pub enum Startup {
     /// The lock, which also gives the data it was taken on.
     Ready(InstanceLock),
-    Refused(String),
+    Refused(StartupRefusal),
+}
+
+/// The reason startup was refused, retaining diagnostics for translation when displayed.
+pub enum StartupRefusal {
+    Locate(LocateError),
+    AlreadyRunning(AppData),
+    Io { data: AppData, error: InstanceError },
+}
+
+impl StartupRefusal {
+    pub fn message(&self, language: Language) -> String {
+        match self {
+            Self::Locate(error) => crate::tr!(language, "startup.locate", error = error),
+            Self::AlreadyRunning(data) => {
+                crate::tr!(language, "startup.running", path = data.dir().display())
+            }
+            Self::Io { data, error } => crate::tr!(
+                language,
+                "startup.io",
+                path = data.dir().display(),
+                error = error
+            ),
+        }
+    }
 }
 
 /// Locates the data directory and takes the single-instance lock. A second instance on the
@@ -212,20 +270,14 @@ pub fn startup() -> Startup {
 pub fn startup_on(data: Result<AppData, LocateError>) -> Startup {
     let data = match data {
         Ok(data) => data,
-        Err(error) => {
-            return Startup::Refused(format!("データの保存場所を決められません: {error}"));
-        }
+        Err(error) => return Startup::Refused(StartupRefusal::Locate(error)),
     };
     match data.lock_instance() {
         Ok(lock) => Startup::Ready(lock),
-        Err(InstanceError::AlreadyRunning) => Startup::Refused(format!(
-            "Axon はすでに起動しています。登録したリポジトリの一覧を二つのアプリから書き換えないよう、こちらは開きません。（データの保存場所: {}）",
-            data.dir().display()
-        )),
-        Err(error @ InstanceError::Io(_)) => Startup::Refused(format!(
-            "データの保存場所を使えません: {}: {error}",
-            data.dir().display()
-        )),
+        Err(InstanceError::AlreadyRunning) => {
+            Startup::Refused(StartupRefusal::AlreadyRunning(data))
+        }
+        Err(error @ InstanceError::Io(_)) => Startup::Refused(StartupRefusal::Io { data, error }),
     }
 }
 
@@ -287,11 +339,12 @@ pub fn open_main_window(
 
 /// A window that only explains why the application did not open its data.
 pub struct Notice {
-    message: SharedString,
+    reason: StartupRefusal,
+    language: Language,
 }
 impl Notice {
-    pub fn message(&self) -> &str {
-        &self.message
+    pub fn message(&self) -> String {
+        self.reason.message(self.language)
     }
 }
 impl Render for Notice {
@@ -306,17 +359,20 @@ impl Render for Notice {
             .p_4()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(div().id("notice-message").child(self.message.clone()))
+            .child(div().id("notice-message").child(self.message()))
             .child(
                 Button::new("quit")
                     .outline()
-                    .label("終了")
+                    .label(crate::tr!(self.language, "common.quit"))
                     .on_click(|_, _, cx| cx.quit()),
             )
     }
 }
 
-pub fn open_notice_window(message: String, cx: &mut App) -> gpui_kit::Result<Entity<Notice>> {
+pub fn open_notice_window(
+    reason: StartupRefusal,
+    cx: &mut App,
+) -> gpui_kit::Result<Entity<Notice>> {
     let bounds = Bounds::centered(None, size(px(480.), px(200.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -328,8 +384,9 @@ pub fn open_notice_window(message: String, cx: &mut App) -> gpui_kit::Result<Ent
     };
     let (_, notice) = gpui_kit::open_window(options, cx, |window, cx| {
         app::style::sync_appearance(window, cx);
-        cx.new(|_| Notice {
-            message: message.into(),
+        cx.new(|cx| Notice {
+            reason,
+            language: Language::of(cx),
         })
     })?;
     Ok(notice)
