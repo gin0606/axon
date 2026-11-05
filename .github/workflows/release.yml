@@ -16,6 +16,7 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-24.04
+    environment: release
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -73,6 +74,7 @@ jobs:
           - runner: macos-15-intel
             target: x86_64-apple-darwin
     runs-on: ${{ matrix.runner }}
+    environment: release
     env:
       MACOSX_DEPLOYMENT_TARGET: "15.0"
       VERSION: ${{ needs.validate.outputs.version }}
@@ -128,6 +130,7 @@ jobs:
   publish:
     needs: [validate, build]
     runs-on: ubuntu-24.04
+    environment: release
     permissions:
       contents: write
       actions: read
