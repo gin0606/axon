@@ -5,30 +5,30 @@ version: 'v0.0.3'
 workflows:
     '.github/workflows/full-verification.yml':
         - 'actions/checkout@v7.0.1'
-        - 'swatinem/rust-cache@v2.9.2'
+        - 'swatinem/rust-cache@v2.9.3'
     '.github/workflows/release.yml':
         - 'actions/checkout@v7.0.1'
-        - 'actions/create-github-app-token@v3.0.0'
-        - 'actions/upload-artifact@v7.0.1'
-        - 'swatinem/rust-cache@v2.9.2'
+        - 'actions/create-github-app-token@v3.3.0'
+        - 'actions/upload-artifact@v7.0.2'
+        - 'swatinem/rust-cache@v2.9.3'
 dependencies:
     'actions/checkout@v7.0.1':
         ref: 'v7.0.1'
         commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
         owner_id: 44036562
         repo_id: 197814629
-    'actions/create-github-app-token@v3.0.0':
-        ref: 'v3.0.0'
-        commit: 'sha1-f8d387b68d61c58ab83c6c016672934102569859'
+    'actions/create-github-app-token@v3.3.0':
+        ref: 'v3.3.0'
+        commit: 'sha1-64ab729a6294000f5aa4a4bc0b73d1f32bc45510'
         owner_id: 44036562
         repo_id: 642580244
-    'actions/upload-artifact@v7.0.1':
-        ref: 'v7.0.1'
-        commit: 'sha1-043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
+    'actions/upload-artifact@v7.0.2':
+        ref: 'v7.0.2'
+        commit: 'sha1-cf430e030ddbb5b0abf93d22962f4752f3646cd9'
         owner_id: 44036562
         repo_id: 192625955
-    'swatinem/rust-cache@v2.9.2':
-        ref: 'v2.9.2'
-        commit: 'sha1-6323deb102c322ba6fcbdcafc7e3dddab59af2b6'
+    'swatinem/rust-cache@v2.9.3':
+        ref: 'v2.9.3'
+        commit: 'sha1-d1527c8f67ef9af357290475d4af4b0fab8f12e0'
         owner_id: 580492
         repo_id: 298565987

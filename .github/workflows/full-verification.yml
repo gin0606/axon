@@ -24,6 +24,6 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup toolchain install
       - name: Restore Cargo cache
-        uses: Swatinem/rust-cache@v2.9.2
+        uses: Swatinem/rust-cache@v2.9.3
       - name: Run full verification
         run: scripts/full-verification
