@@ -72,6 +72,7 @@ fn english_startup_controls_menus_notifications_and_layout(cx: &mut TestAppConte
     assert_eq!(
         menu_names,
         [
+            "Settings…",
             "Quit Axon",
             "Undo",
             "Redo",

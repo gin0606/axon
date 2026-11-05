@@ -595,5 +595,53 @@
   "detail.link_meta": {
     "en": "%{kind} · %{state}",
     "ja": "%{kind}・%{state}"
+  },
+  "menu.settings": {
+    "en": "Settings…",
+    "ja": "設定…"
+  },
+  "settings.title": {
+    "en": "Settings",
+    "ja": "設定"
+  },
+  "settings.language": {
+    "en": "Display language",
+    "ja": "表示言語"
+  },
+  "settings.explanation": {
+    "en": "Changes apply immediately. System language changes apply the next time Axon starts.",
+    "ja": "選択はすぐに反映されます。OS 側の言語変更は次の起動時に反映されます。"
+  },
+  "settings.system": {
+    "en": "Follow system",
+    "ja": "システムに従う"
+  },
+  "settings.warning": {
+    "en": "Language settings need attention. Open Settings to reload or retry saving.",
+    "ja": "言語設定を確認してください。設定から再読み込みや保存の再試行ができます。"
+  },
+  "settings.load_failed": {
+    "en": "Could not load language settings.",
+    "ja": "言語設定を読み込めませんでした。"
+  },
+  "settings.replace_explanation": {
+    "en": "Saving will replace the existing settings with the selected language preference.",
+    "ja": "保存すると、既存の設定を選択中の表示言語で置き換えます。"
+  },
+  "settings.replace": {
+    "en": "Replace settings and save",
+    "ja": "設定を置き換えて保存"
+  },
+  "settings.unreadable": {
+    "en": "Reload the settings before saving. An unreadable file will not be replaced.",
+    "ja": "保存する前に設定を再読み込みしてください。読み取れないファイルは置き換えません。"
+  },
+  "settings.save_failed": {
+    "en": "Could not confirm saving the language preference. The display keeps your selection.",
+    "ja": "言語設定の保存完了を確認できませんでした。表示は選択した言語を維持しています。"
+  },
+  "settings.retry": {
+    "en": "Retry saving",
+    "ja": "保存を再試行"
   }
 }

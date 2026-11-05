@@ -20,7 +20,7 @@ use gpui_kit::{
     WeakEntity, Window,
     base::{
         SelectableText, StyledExt, TestSupportExt, TextSelection, input as edit,
-        text::{SelectionFormat, TextView, TextViewStyle},
+        text::{MarkdownExtensions, SelectionFormat, TextView, TextViewStyle},
     },
     div,
     prelude::*,
@@ -929,7 +929,14 @@ impl AxonApp {
         TextView::markdown(id, self.prepared.get(self.language, source))
             .style(style)
             .selection_format(SelectionFormat::Plain)
-            .plugin(markdown::ImageAlt(self.language))
+            .markdown_extensions(
+                MarkdownExtensions::default()
+                    .parser_revision(match self.language {
+                        Language::Japanese => 1,
+                        Language::English => 2,
+                    })
+                    .plugin(markdown::ImageAlt(self.language)),
+            )
             .image_source(markdown::no_image)
             .on_link_click(|url, event, _, cx| {
                 if markdown::opens_link(url, event) {
@@ -953,7 +960,6 @@ impl AxonApp {
         let id = id.clone();
         let title = title.map(str::to_owned);
         let app = cx.weak_entity();
-        let language = self.language;
         trigger
             .id(named(format!("copy-menu-{id}")))
             .context_menu(move |menu, window, cx| {
@@ -968,7 +974,7 @@ impl AxonApp {
                 };
                 app.update(cx, |app, cx| app.record_copy_menu(opened, cx))
                     .ok();
-                copy_menu(language, menu, &id, title.as_deref())
+                copy_menu(Language::of(cx), menu, &id, title.as_deref())
             })
             .into_any_element()
     }
@@ -977,13 +983,19 @@ impl AxonApp {
     /// either closed already or hidden still waiting to be closed, which no one would do once
     /// it is no longer recorded.
     fn record_copy_menu(&mut self, opened: CopyMenu, cx: &mut Context<Self>) {
-        if let Some(menu) = self
-            .copy_menu
-            .replace(opened)
-            .and_then(|before| before.menu.upgrade())
-        {
+        self.close_copy_menu(cx);
+        self.copy_menu = Some(opened);
+    }
+
+    pub(super) fn close_copy_menu(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<(FocusHandle, FocusArea)> {
+        let opened = self.copy_menu.take()?;
+        if let Some(menu) = opened.menu.upgrade() {
             menu.update(cx, |_, cx| cx.emit(DismissEvent));
         }
+        Some((opened.focus, opened.origin))
     }
 
     /// Closes the last context menu when it holds the focus but was not drawn, and tells the

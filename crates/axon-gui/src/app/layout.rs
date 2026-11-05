@@ -199,6 +199,7 @@ impl AxonApp {
 
     /// Leaves a detail that fills the only column for the list, whose top shows the notice.
     pub(super) fn reveal_notice(&mut self) {
+        self.settings.open = false;
         if self.columns() == Columns::One && self.is_detail_shown() {
             self.layout.detail_shown = false;
             self.moved(Direction::Back, Scope::Screen);
@@ -282,6 +283,11 @@ impl AxonApp {
         let menu = self.close_hidden_menu(window, cx);
         if self.app_focus.contains_focused(window, cx) {
             return false;
+        }
+        if self.settings.open {
+            self.layout.list_awaited = false;
+            window.focus(&self.settings.focus, cx);
+            return true;
         }
         // The list behind the open panel is left alone, as opening the panel does.
         let list = (!self.is_panel_open()).then_some(&self.list_focus);
@@ -437,6 +443,10 @@ impl AxonApp {
 
     /// Escape: closes the panel, or else steps back from the detail on screen.
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.open {
+            self.close_settings(window, cx);
+            return;
+        }
         let detail_on_screen = match self.columns() {
             Columns::One => self.is_detail_shown(),
             _ => self.explorer.detail().is_some(),
@@ -660,7 +670,8 @@ impl AxonApp {
                     .min_w_0()
                     .truncate()
                     .child(bar_title(title)),
-            );
+            )
+            .child(self.settings_button("open-settings", cx));
         div()
             .id("project-pane")
             .flex_1()
@@ -738,6 +749,7 @@ impl AxonApp {
                 .label(label)
                 .on_click(cx.listener(|this, _, window, cx| this.go_back(window, cx))),
         );
+        bar = bar.child(self.settings_button("detail-settings", cx));
         if let Ok(detail) = detail {
             bar = bar.child(
                 div()
@@ -834,7 +846,7 @@ impl AxonApp {
             .into_any_element()
     }
 
-    /// The panel over the list, on a scrim over the whole window whose part beside the panel
+    /// The panel over the list, on a scrim over the content whose part beside the panel
     /// closes it. The panel slides in as the scrim darkens, and both reverse as it closes.
     fn render_panel(&self, window_width: f32, cx: &mut Context<Self>) -> AnyElement {
         // The panel leaves a strip of the window to click back to it.
@@ -848,7 +860,7 @@ impl AxonApp {
         };
         let shown = move |delta: f32| if opening { delta } else { 1. - delta };
         let dim = if cx.theme().is_dark() { 0.5 } else { 0.28 };
-        // The scrim dims the whole window under the panel, so the dimming follows the panel in
+        // The scrim dims the content under the panel, so the dimming follows the panel in
         // step instead of showing first beside it.
         div()
             .id("panel-layer")
@@ -907,6 +919,7 @@ impl Render for AxonApp {
         }
         let one_detail = columns == Columns::One && self.is_detail_shown();
         let sidebar = (columns == Columns::Three).then(|| self.render_sidebar(None, cx));
+        self.restore_settings_focus(window, cx);
         self.watch_focus(window, cx);
         self.focus_awaited_list(!one_detail, window, cx);
         let list = (!one_detail).then(|| self.render_list_column(columns, cx));
@@ -920,6 +933,8 @@ impl Render for AxonApp {
         };
         let panel = (self.layout.panel.open || self.layout.panel.closing)
             .then(|| self.render_panel(width, cx));
+        let settings = self.settings.open.then(|| self.render_settings(cx));
+        let warning = self.render_settings_warning(cx);
         div()
             .id("axon-app")
             .key_context(APP_CONTEXT)
@@ -928,13 +943,23 @@ impl Render for AxonApp {
             .relative()
             .size_full()
             .flex()
-            .flex_row()
+            .flex_col()
             .overflow_hidden()
             .bg(palette.paper)
             .text_color(palette.ink)
-            .children(sidebar)
-            .children(screens)
-            .children(panel)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .flex()
+                    .flex_row()
+                    .children(sidebar)
+                    .children(screens)
+                    .children(panel),
+            )
+            .children(warning)
+            .children(settings)
     }
 }
 

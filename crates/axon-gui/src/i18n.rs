@@ -1,4 +1,4 @@
-//! The startup language and explicitly localized application text.
+//! System language selection and explicitly localized application text.
 
 use gpui_kit::{App, Global};
 use std::sync::Once;
@@ -11,6 +11,10 @@ pub enum Language {
 }
 
 impl Global for Language {}
+
+/// The OS choice at startup, reused when returning to automatic selection.
+pub struct SystemLanguage(pub Language);
+impl Global for SystemLanguage {}
 
 impl Language {
     pub fn code(self) -> &'static str {

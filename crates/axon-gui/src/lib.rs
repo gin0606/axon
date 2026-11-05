@@ -4,7 +4,7 @@
 //! converts core values into display text and GPUI elements here. Nothing from GPUI flows back
 //! into the core crates. [`project`] holds the registered management roots and [`board`] the
 //! records of one as values, both without GPUI; [`session`] keeps where the last run left off
-//! for the next start; [`app`] is the window.
+//! for the next start; [`settings`] keeps display preferences; [`app`] is the window.
 
 // The translation macro reads files itself; include the catalog in Cargo's dependency graph.
 const _: &str = include_str!("../locales/ui.json");
@@ -18,6 +18,7 @@ pub mod app;
 pub mod board;
 pub mod project;
 pub mod session;
+pub mod settings;
 
 pub use app::AxonApp;
 
@@ -35,6 +36,7 @@ actions!(
     axon_gui,
     [
         Quit,
+        OpenSettings,
         SelectNextEntity,
         SelectPreviousEntity,
         OpenSelectedEntity,
@@ -46,18 +48,40 @@ actions!(
 /// [`app::Columns`]).
 pub const MIN_WINDOW_SIZE: (f32, f32) = (380., 460.);
 
-/// Registers the components, key bindings and application menus. Call once before opening
-/// windows.
+/// Registers components and actions using the system language. Production startup uses
+/// [`init_for_startup`] to apply saved preferences before creating menus.
 pub fn init(cx: &mut App) {
     init_with_language(Language::system(), cx);
 }
 
-/// Initializes a startup with an explicit language, including menus and components.
+/// Resolves saved preferences before constructing the first menu or window.
+pub fn init_for_startup(startup: &Startup, cx: &mut App) {
+    let system = Language::system();
+    let loaded = startup.data().map(settings::load);
+    let preference = loaded
+        .as_ref()
+        .and_then(|loaded| loaded.as_ref().ok())
+        .copied()
+        .unwrap_or_default();
+    initialize(preference.resolve(system), system, cx);
+    if let (Startup::Ready(_), Some(loaded)) = (startup, loaded) {
+        cx.set_global(settings::Initial(loaded));
+    }
+}
+
+/// Initializes components and menus with an injected system language. A main window also
+/// applies any saved preference, as production startup does.
 pub fn init_with_language(language: Language, cx: &mut App) {
+    initialize(language, language, cx);
+}
+
+fn initialize(language: Language, system: Language, cx: &mut App) {
+    cx.set_global(i18n::SystemLanguage(system));
     i18n::init(language, cx);
     gpui_kit::init(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("down", SelectNextEntity, Some(app::LIST_CONTEXT)),
         KeyBinding::new("up", SelectPreviousEntity, Some(app::LIST_CONTEXT)),
         KeyBinding::new("enter", OpenSelectedEntity, Some(app::LIST_CONTEXT)),
@@ -71,7 +95,11 @@ pub fn init_with_language(language: Language, cx: &mut App) {
 /// handle.
 pub fn menus(language: Language) -> Vec<Menu> {
     vec![
-        Menu::new("Axon").items([MenuItem::action(crate::tr!(language, "menu.quit"), Quit)]),
+        Menu::new("Axon").items([
+            MenuItem::action(crate::tr!(language, "menu.settings"), OpenSettings),
+            MenuItem::separator(),
+            MenuItem::action(crate::tr!(language, "menu.quit"), Quit),
+        ]),
         Menu::new(crate::tr!(language, "menu.edit")).items([
             MenuItem::os_action(
                 crate::tr!(language, "menu.undo"),
@@ -234,6 +262,18 @@ pub enum Startup {
     /// The lock, which also gives the data it was taken on.
     Ready(InstanceLock),
     Refused(StartupRefusal),
+}
+
+impl Startup {
+    fn data(&self) -> Option<&AppData> {
+        match self {
+            Self::Ready(lock) => Some(lock.data()),
+            Self::Refused(
+                StartupRefusal::AlreadyRunning(data) | StartupRefusal::Io { data, .. },
+            ) => Some(data),
+            Self::Refused(StartupRefusal::Locate(_)) => None,
+        }
+    }
 }
 
 /// The reason startup was refused, retaining diagnostics for translation when displayed.

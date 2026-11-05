@@ -1,12 +1,14 @@
 //! The application data directory: the single-instance lock and the file listing the
 //! registered management roots. Every function here blocks on the filesystem; the window calls
 //! them on the background executor, except for reading and last writing the session file
-//! ([`crate::session`]) as the window opens and closes.
+//! ([`crate::session`]) as the window opens and closes, and reading and writing the small
+//! language settings file ([`crate::settings`]).
 //!
 //! ```text
 //! <data directory>/
 //!     instance.lock   held while the application runs
 //!     roots.json      the registry: the registered management roots
+//!     settings.json   the display language preference
 //!     session.json    where the last run left the window, the root, the filter and the layout
 //! ```
 //!

@@ -15,7 +15,7 @@ fn main() {
         links.send_blocking(urls).ok();
     });
     application.run(|cx| {
-        axon_gui::init(cx);
+        axon_gui::init_for_startup(&startup, cx);
         let app = match axon_gui::open_startup_window(startup, cx) {
             Ok(app) => app,
             Err(error) => {

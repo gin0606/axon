@@ -2,15 +2,16 @@
 //! selected root, and the detail of the selected Entity, side by side as far as the width allows
 //! (see [`layout`]).
 //! The window only reads the records of a root and never changes them; what it changes is the
-//! list of registered roots in the application data directory, and the session the next start
-//! restores ([`crate::session`]). Disk access runs on the background executor, except for
-//! reading the session as the window opens and its last save as the window closes; each
-//! result is applied only while the request that produced it is still the current one. Coming
-//! back to the window reads the records again, as the reload does.
+//! registered roots, display preferences and session in the application data directory.
+//! Disk access runs on the background executor, except for reading the session as the window
+//! opens, flushing the session on exit, and reading and writing language preferences. A
+//! background result is applied only while its request is still current. Coming back to the
+//! window reads the records again, as the reload does.
 
 mod explorer;
 mod layout;
 mod markdown;
+mod settings;
 pub mod style;
 pub mod text;
 
@@ -140,6 +141,7 @@ pub struct AxonApp {
     restoring: bool,
     /// The context menu last opened over a row or a link, until it is found hidden and closed.
     copy_menu: Option<explorer::CopyMenu>,
+    settings: settings::State,
 }
 
 impl AxonApp {
@@ -161,7 +163,34 @@ impl AxonApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let language = Language::of(cx);
+        let settings = settings::State::new(lock.clone(), cx);
+        let language = settings.language();
+        if Language::of(cx) != language {
+            crate::i18n::init(language, cx);
+            cx.set_menus(crate::menus(language));
+        }
+        let settings_app = cx.weak_entity();
+        let main_window = window.window_handle();
+        App::on_action(cx, move |_: &crate::OpenSettings, cx| {
+            if settings_app.upgrade().is_none() {
+                cx.propagate();
+                return;
+            }
+            let app = settings_app.clone();
+            cx.defer(move |cx| {
+                main_window
+                    .update(cx, |_, window, cx| {
+                        app.update(cx, |app, cx| {
+                            if !app.is_choosing_folder() {
+                                window.activate_window();
+                            }
+                            app.open_settings(window, cx);
+                        })
+                        .ok();
+                    })
+                    .ok();
+            });
+        });
         let search = cx.new(|cx| {
             InputState::new(window, cx).placeholder(crate::tr!(language, "search.placeholder"))
         });
@@ -202,7 +231,10 @@ impl AxonApp {
             async {}
         })
         .detach();
-        cx.on_release(|this, _| this.save_now()).detach();
+        cx.on_release(|this, _| {
+            this.save_now();
+        })
+        .detach();
         let mut explorer = Explorer::default();
         explorer.update_filter(|filter| *filter = session.filter());
         explorer.set_layout(session.layout);
@@ -237,6 +269,7 @@ impl AxonApp {
             settle: None,
             restoring: true,
             copy_menu: None,
+            settings,
         };
         // A window restored maximized is zoomed only after this, so it is taken as restored.
         this.placement = match &this.session.placement {
@@ -594,6 +627,7 @@ impl AxonApp {
     /// read is read again first. The outcome of a change that finishes meanwhile stays on screen,
     /// and a root the user switches to meanwhile stays selected.
     pub fn open_root(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.settings.open = false;
         // Only the outcome of a change still running, or one a waiting link took over, is kept
         // for the link to add to.
         if !self.busy && self.requested.is_none() {
@@ -605,6 +639,7 @@ impl AxonApp {
             reread: false,
         });
         self.open_requested(cx);
+        cx.notify();
     }
 
     /// Whether the registry is being read or changed.
@@ -622,6 +657,9 @@ impl AxonApp {
     /// that waited for it. Every change that set `busy` ends here.
     fn finish_change(&mut self, cx: &mut Context<Self>) {
         self.busy = false;
+        if !self.notices.is_empty() {
+            self.reveal_notice();
+        }
         self.open_requested(cx);
         cx.notify();
     }

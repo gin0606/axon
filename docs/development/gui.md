@@ -26,6 +26,8 @@ GPUI は serde_json の `preserve_order` を有効にするため、GUI と同�
 
 翻訳依存は GUI crate だけに置く。アプリのカタログは英語へフォールバックし、両言語のキーと補間引数の一致をテストで検査する。通知は理由と引数を保持して表示時に翻訳する。部品のカタログ拡張は初期化前に一度だけ行う。既存の GUI テストは日本語を明示的に注入し、プロセス共通の部品言語を変更する検証は独立した test binary で直列に行う。macOS bundle の `CFBundleLocalizations` は `resources/Info.plist` を `osx.info_plist_exts` で取り込み、署名前に設定する。
 
+言語の選択は `settings::LanguagePreference`、描画する言語は `i18n::Language` に分け、起動時のシステム言語を保持する。`settings.json` は未知フィールドを拒否する `session.json` と独立させる。`SettingsFile` は単一起動 lock を保持し、mutex と世代番号で同じファイルへの保存を直列化する。rename 後の同期でも失敗し得るため、試みた世代を記録し、古い保存が後から置き換えることを防ぐ。言語選択と明示的な保存・再読み込みは UI thread で完了させる。少量の設定を同期して保存することで、次の終了操作までに保存結果と再試行を表示し、終了中の失敗を見えなくしない。起動時に読み取った設定を最初のメニューとウィンドウで共有する。Markdown の画像代替文言は言語に応じて parser revision を変え、元の本文が同じでも再解析する。
+
 ## 要件
 
 - Rust: 固定した依存の一部が新しい標準ライブラリ API を使うため、GUI は workspace の MSRV より新しい版を自身の `rust-version`（`crates/axon-gui/Cargo.toml`）に宣言し、[scripts/check-msrv](../../scripts/check-msrv) がその版でも検査する。CLI の MSRV は GUI に合わせて上げない。

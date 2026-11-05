@@ -192,6 +192,7 @@ fn menu_bar_offers_quit_and_editing_commands() {
         })
         .collect();
     let expected = [
+        ("設定…", axon_gui::OpenSettings.name()),
         ("Axon を終了", axon_gui::Quit.name()),
         ("取り消す", "input::Undo"),
         ("やり直す", "input::Redo"),
