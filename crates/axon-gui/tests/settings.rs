@@ -15,6 +15,12 @@ use gpui_kit::{
 };
 use std::{fs, sync::Arc};
 
+/// The shortcut gpui-base binds to Copy: Command on macOS, Control elsewhere.
+#[cfg(target_os = "macos")]
+const COPY: &str = "cmd-c";
+#[cfg(not(target_os = "macos"))]
+const COPY: &str = "ctrl-c";
+
 fn data() -> (tempfile::TempDir, Arc<InstanceLock>) {
     let dir = tempfile::tempdir().unwrap();
     let lock = Arc::new(
@@ -297,7 +303,7 @@ fn switching_restart_and_recovery_preserve_viewing_and_explicit_preferences(
     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
         "unchanged clipboard".into(),
     ));
-    with_window(window, cx, |window, cx| window.press("cmd-c", cx));
+    with_window(window, cx, |window, cx| window.press(COPY, cx));
     assert_eq!(
         cx.read_from_clipboard()
             .and_then(|item| item.text())
@@ -305,7 +311,7 @@ fn switching_restart_and_recovery_preserve_viewing_and_explicit_preferences(
         Some("unchanged clipboard")
     );
     with_window(window, cx, |window, cx| window.press("escape", cx));
-    with_window(window, cx, |window, cx| window.press("cmd-c", cx));
+    with_window(window, cx, |window, cx| window.press(COPY, cx));
     assert_eq!(
         cx.read_from_clipboard()
             .and_then(|item| item.text())
