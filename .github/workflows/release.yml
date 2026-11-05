@@ -60,8 +60,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.2
       - name: Run full verification
         run: scripts/full-verification
-      - name: Check MSRV
-        run: scripts/check-msrv
 
   build:
     needs: validate

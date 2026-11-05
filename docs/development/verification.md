@@ -2,7 +2,7 @@
 
 ## Rust toolchain
 
-通常の開発と検証には `rust-toolchain.toml` で固定した Rust を使う。mise を使う場合も Rust の idiomatic version file としてこの指定を読み込む。ソースからのビルドに必要な最低 Rust version（MSRV）は、root の `Cargo.toml` の `workspace.package.rust-version` を正本とし、各 crate はこれを継承する。
+通常の開発と検証には `rust-toolchain.toml` で固定した Rust を使う。mise を使う場合も Rust の idiomatic version file としてこの指定を読み込む。ソースからのビルドもこの版で行い、`Cargo.toml` に最低 Rust version（`rust-version`）は宣言しない。配布物はビルド済みのバイナリで、ソースからのビルドも rustup がこの指定を読むため、別の版での動作を保証する必要がない。
 
 ## Full verification
 
@@ -17,8 +17,6 @@ CIのcacheはCargo dependencyとbuild artifactだけに使い、成功済みのt
 ## Fast pre-commit gate
 
 Rust fileがstagedされているcommitでは、Lefthookが [lefthook.yml](../../lefthook.yml) の高速な検査を実行する。この gate は全 test target を対象にしないため、full verification を代替しない。
-
-リリース前には通常 toolchain の全検証に加え、`scripts/check-msrv` で MSRV での検査を実行する。GUI は依存の要求で workspace の MSRV より新しい版を自身の `rust-version` に宣言し、`scripts/check-msrv` はその版でも GUI を検査する。
 
 ### Plugin version
 

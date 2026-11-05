@@ -2,7 +2,6 @@
 name = "axon"
 version = "0.5.0"
 edition = "2024"
-rust-version.workspace = true
 description = "A local issue tracker for Issues and Groups"
 license = "MIT"
 repository = "https://github.com/gin0606/axon"
@@ -12,9 +11,6 @@ publish = false
 [workspace]
 members = ["crates/axon-core", "crates/axon-recorder", "crates/axon-gui"]
 default-members = [".", "crates/axon-core", "crates/axon-recorder"]
-
-[workspace.package]
-rust-version = "1.89"
 
 [dependencies]
 axon-core = { path = "crates/axon-core" }

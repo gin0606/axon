@@ -5,7 +5,7 @@
 ## 公開する
 
 1. rootと `crates/axon-gui` の `Cargo.toml` の `version` を同じ値に更新し、必要な `Cargo.lock` の変更と一緒にmainへ統合します。自動採番やversion更新commitは行いません。
-2. [検証方針](verification.md) のfull verificationとMSRV検査が通ることを確認します。リリース用スクリプトは `python3 scripts/test-release.py` で公開を伴わずに検証できます。
+2. [検証方針](verification.md) のfull verificationが通ることを確認します。リリース用スクリプトは `python3 scripts/test-release.py` で公開を伴わずに検証できます。
 3. mainの対象commitでversionと未使用タグを確認してからpushします。以下はversionが `0.1.0` の場合です。
 
    ```sh

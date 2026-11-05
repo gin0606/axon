@@ -25,7 +25,7 @@ brew install --cask gin0606/tap/axon-gui
 
 ### 開発者向けのソースビルド
 
-最低Rust versionはrootの `Cargo.toml` の `rust-version`、開発toolchainは [検証方針](../development/verification.md) を参照してください。
+Rustの版は `rust-toolchain.toml` で固定しており、rustupを使っていればcheckout内でこの版が使われます。詳しくは [検証方針](../development/verification.md) を参照してください。
 
 ```sh
 git clone https://github.com/gin0606/axon.git

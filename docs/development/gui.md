@@ -30,7 +30,7 @@ GPUI は serde_json の `preserve_order` を有効にするため、GUI と同�
 
 ## 要件
 
-- Rust: 固定した依存の一部が新しい標準ライブラリ API を使うため、GUI は workspace の MSRV より新しい版を自身の `rust-version`（`crates/axon-gui/Cargo.toml`）に宣言し、[scripts/check-msrv](../../scripts/check-msrv) がその版でも検査する。CLI の MSRV は GUI に合わせて上げない。
+- Rust: CLI と同じく `rust-toolchain.toml` で固定した版を使う（[検証方針](verification.md)）。
 - macOS: 15 以上と Xcode Command Line Tools（GPUI Kit の要件）。
 - Linux: ビルドに `gcc g++ clang libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev` を使う。CI は Ubuntu 24.04 でこれを導入し、ビルド・lint と headless の UI テストだけを行う（[検証方針](verification.md)）。リンクは x86_64 Linux の Rust 既定である LLD を前提にする。window の表示には Wayland または X11 の session と Vulkan driver が要る。
 - Windows: GPUI Kit は Windows 10 以上、MSVC toolchain、Visual Studio 2022 Build Tools、CMake を要件とする。
