@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Install GUI build dependencies
@@ -24,6 +24,6 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup toolchain install
       - name: Restore Cargo cache
-        uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        uses: Swatinem/rust-cache@v2.9.2
       - name: Run full verification
         run: scripts/full-verification
