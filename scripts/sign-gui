@@ -39,12 +39,13 @@ if [ "$status" != Accepted ]; then
   exit 1
 fi
 
-# 公証は済んでいるので、Apple との通信が切れただけの失敗は待って取り直す。
-for attempt in 1 2 3 4 5; do
+# 公証の直後は、添付が通信の切断として 1 分半ほど失敗し続けることがある。公証は
+# 済んでいるので、5 分ほどまで待って取り直す。
+for attempt in $(seq 1 10); do
   if xcrun stapler staple "$app"; then
     break
   fi
-  if [ "$attempt" = 5 ]; then
+  if [ "$attempt" = 10 ]; then
     exit 1
   fi
   echo "stapling failed (attempt $attempt); retrying in 30 seconds" >&2
