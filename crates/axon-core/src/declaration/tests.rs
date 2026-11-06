@@ -291,6 +291,31 @@ fn strict_yaml_rejects_unsupported_constructs_wrong_types_and_invalid_references
         assert!(parse(&bad).is_err(), "accepted {bad}");
     }
 }
+#[test]
+fn yaml_errors_do_not_advise_changing_parser_settings() {
+    let text = example().serialize(&empty_view()).unwrap();
+    for (bad, expected) in [
+        (
+            text.replace(
+                "schema: axon-declaration/v2",
+                "schema: axon-declaration/v2\nschema: axon-declaration/v2",
+            ),
+            "duplicate mapping key",
+        ),
+        (
+            text.replace("    needs: []", "    needs: []\n    <<: {}"),
+            "merge key",
+        ),
+    ] {
+        let e = parse(&bad).unwrap_err().to_string();
+        assert!(e.starts_with("Declaration: schema:"), "{e}");
+        assert!(e.contains(expected), "{e}");
+        assert!(
+            !e.contains("Options") && !e.to_lowercase().contains("policy"),
+            "{e}"
+        );
+    }
+}
 
 #[test]
 fn unsupported_declaration_schemas_name_the_expected_schema() {

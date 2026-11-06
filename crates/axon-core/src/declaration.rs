@@ -165,15 +165,22 @@ pub fn parse_unvalidated(input: &str) -> Result<Declaration> {
     struct SchemaProbe {
         schema: String,
     }
-    let probe: SchemaProbe = serde_saphyr::from_str_with_options(input, options.clone())
-        .map_err(|e| invalid(format!("schema: {e}")))?;
+    let probe: SchemaProbe =
+        serde_saphyr::from_str_with_options(input, options.clone()).map_err(yaml_error)?;
     if probe.schema != SCHEMA {
         return Err(invalid(format!(
             "schema: unsupported schema {}; expected {SCHEMA}",
             probe.schema
         )));
     }
-    serde_saphyr::from_str_with_options(input, options).map_err(|e| invalid(format!("schema: {e}")))
+    serde_saphyr::from_str_with_options(input, options).map_err(yaml_error)
+}
+/// The default rendering advises changing serde-saphyr options, which users of the file cannot do.
+fn yaml_error(e: serde_saphyr::Error) -> Error {
+    invalid(format!(
+        "schema: {}",
+        e.render_with_formatter(&serde_saphyr::UserMessageFormatter)
+    ))
 }
 impl Declaration {
     /// Assigned identities for records whose base has not yet been refreshed by apply.
