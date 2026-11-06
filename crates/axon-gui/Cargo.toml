@@ -20,7 +20,7 @@ info_plist_exts = ["resources/Info.plist"]
 [dependencies]
 axon = { path = "../.." }
 chrono = "0.4.45"
-dirs = "6.0.0"
+dirs = "7.0.0"
 gpui-kit = "=0.7.1"
 markdown = "=1.0.0"
 rust-i18n = "=4.2.4"
