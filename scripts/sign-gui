@@ -39,5 +39,15 @@ if [ "$status" != Accepted ]; then
   exit 1
 fi
 
-xcrun stapler staple "$app"
+# 公証は済んでいるので、Apple との通信が切れただけの失敗は待って取り直す。
+for attempt in 1 2 3 4 5; do
+  if xcrun stapler staple "$app"; then
+    break
+  fi
+  if [ "$attempt" = 5 ]; then
+    exit 1
+  fi
+  echo "stapling failed (attempt $attempt); retrying in 30 seconds" >&2
+  sleep 30
+done
 spctl --assess --type execute --verbose=2 "$app"
