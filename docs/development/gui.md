@@ -12,15 +12,15 @@ macOS で、アイコンと名前を持つアプリ（`Axon.app`）として使�
 
 ## 採用した依存
 
-| crate | 指定 | 役割 |
-| --- | --- | --- |
-| `gpui-kit` | `=0.7.1` | GPUI、GPUI Base、GPUI Component と既定 asset の facade。アプリは GPUI を `gpui_kit` 経由で使う |
-| `sys-locale` | `=0.3.2` | OS の優先言語一覧を取得する。対応言語の選択は GUI 内の純粋関数で行う |
-| `rust-i18n` | `=4.2.4` | 日本語・英語のカタログを埋め込み、実効言語を明示して文言を解決する。GPUI Component の使用中の文言にも日本語訳を補う |
-| `gpui-pre` | `gpui-kit` が `=0.3.8` に固定 | Zed の GPUI の snapshot。直接は依存しない |
-| `markdown` | `=1.0.0`（GPUI Base が使う版） | 本文と Note を描画する前に、GPUI Base と同じ構文の設定で構文木を得て、段落の中の改行を書き換える。画像を代替テキストで描く GPUI Base の Markdown の plugin も、この構文木の節を受け取る。HTML の `<img>` の代替テキストの文字参照も、この crate の HTML5 の名前付き文字参照の表で読む |
+| crate | 役割 |
+| --- | --- |
+| `gpui-kit` | GPUI、GPUI Base、GPUI Component と既定 asset の facade。アプリは GPUI を `gpui_kit` 経由で使う |
+| `sys-locale` | OS の優先言語一覧を取得する。対応言語の選択は GUI 内の純粋関数で行う |
+| `rust-i18n` | 日本語・英語のカタログを埋め込み、実効言語を明示して文言を解決する。GPUI Component の使用中の文言にも日本語訳を補う |
+| `gpui-pre` | Zed の GPUI の snapshot。版は `gpui-kit` が固定し、アプリは直接依存しない |
+| `markdown` | GPUI Base が使う版にそろえる。本文と Note を描画する前に、GPUI Base と同じ構文の設定で構文木を得て、段落の中の改行を書き換える。画像を代替テキストで描く GPUI Base の Markdown の plugin も、この構文木の節を受け取る。HTML の `<img>` の代替テキストの文字参照も、この crate の HTML5 の名前付き文字参照の表で読む |
 
-版は exact 指定と `Cargo.lock` で固定し、開発ブランチや Git 依存には追従しない。更新するときは版を上げる変更として、要件と確認結果も見直す。一次資料は [GPUI Kit の導入手順](https://gpui-kit.com/docs/installation/) と [v0.7.1 の Cargo.toml](https://github.com/longbridge/gpui-kit/blob/v0.7.1/Cargo.toml)。
+版は `crates/axon-gui/Cargo.toml` の exact 指定と `Cargo.lock` で固定し、開発ブランチや Git 依存には追従しない。使っている版はこの二つで確かめる。更新するときは版を上げる変更として、要件と確認結果も見直す。`markdown` は Dependabot の更新対象から外しており、`gpui-kit` を上げるときに GPUI Base が使う版へ手で合わせる。一次資料は [GPUI Kit の導入手順](https://gpui-kit.com/docs/installation/) と、使っている版のタグにある GPUI Kit の `Cargo.toml`。
 
 GPUI は serde_json の `preserve_order` を有効にするため、GUI と同じ build では CLI・コアの serde_json も挿入順の map になる。記録の canonical bytes がこれに依存しないよう、コアは記録者 metadata のキーを整列して書く（`crates/axon-core/src/lifecycle/model.rs` の `serialize_recorder_data`）。
 
