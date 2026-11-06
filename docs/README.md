@@ -33,7 +33,7 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 | [層の依存方向](development/architecture.md) | 層の責務の境界と依存方向の規則 |
 | [検証方針](development/verification.md) | CI、独立fixture、モデル検証の分担 |
 | [デスクトップアプリの開発](development/gui.md) | ビルドの要件、採用依存の固定、`.app` の作成、確認結果 |
-| [リリース](development/releasing.md) | タグ起点の公開、Homebrew配布、tap更新失敗時の復旧 |
+| [リリース](development/releasing.md) | リリースの決めごと、Release用のenvironmentとsecrets、失敗時の復旧 |
 | [設計判断](design/decisions.md) | 現在の契約がその形になっている理由と、採らなかった案 |
 
 記録 file の形式は [codec](../crates/axon-core/src/lifecycle/record/codec.rs)、公開の順序は [file adapter](../src/file.rs)、保存先の探索と初期化は [location](../src/location.rs)、Usageは [Clap定義](../src/cli/args.rs) を正本とします。
