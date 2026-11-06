@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 blake3 = "1.8.2"
 chrono = { version = "0.4.45", features = ["serde"] }
-granit-parser = "1.2.0"
+granit-parser = "2.0.0"
 rand = "0.10.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde-saphyr = { version = "2.0.0", default-features = false, features = ["deserialize"] }
