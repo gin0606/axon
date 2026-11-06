@@ -20,9 +20,9 @@
 
 4. GitHub ActionsのRelease実行で、`validate`、両CPUの `build`、`publish`、両CPUの `verify-homebrew` が成功したことを確認します。
 
-Releaseが使うsecretsは、リポジトリのActions secretsではなく `release` environmentに登録します。このenvironmentは `v*` タグからの実行だけが使えるよう制限しており、`validate`・`build`・`publish` だけがこれを参照します。
+Releaseが使うsecretsとvariablesは、リポジトリではなく `release` environmentに登録します。このenvironmentは `v*` タグからの実行だけが使えるよう制限しており、`validate`・`build`・`publish` だけがこれを参照します。
 
-tapの認証には `APP_ID` と `APP_PRIVATE_KEY` を使います。Appに `gin0606/homebrew-tap` のContents書込権限を与えてください。発行するtokenの対象はこのtapだけです。
+tapの認証には、GitHub AppのClient IDを入れたvariable `APP_CLIENT_ID` と、secret `APP_PRIVATE_KEY` を使います。Client IDは秘密ではないため、値を確かめられるvariableに置きます。Appに `gin0606/homebrew-tap` のContents書込権限を与えてください。発行するtokenの対象はこのtapだけです。
 
 `Axon.app` は [scripts/sign-gui](../../scripts/sign-gui) がDeveloper IDで署名（hardened runtime）し、Appleの公証を受けて結果をbundleに添付します。次のsecretsを使い、`validate` が揃っていることを先に確かめます。
 
