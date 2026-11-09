@@ -1,6 +1,6 @@
 {
   "name": "axon-workflow",
-  "version": "0.1.0+plugin.58f8c62e51892ca7",
+  "version": "0.1.0+plugin.1d5fb7910571c5c9",
   "description": "Axonを計画・実装・検証・commitの流れに組み込む、変更して使えるワークフローのサンプル。",
   "author": {
     "name": "gin0606"
@@ -10,7 +10,7 @@
   "interface": {
     "displayName": "Axon Workflow Sample",
     "shortDescription": "計画からIssue・Groupの完遂までを試せるサンプル",
-    "longDescription": "簡単な計画の登録と、Issue・Groupの実装、必要な検証、完了記録、commitを扱います。独立レビューや別エージェントの起動は必須にせず、自分の運用に合わせて変更できます。axonとaxon-kit pluginが必要です。",
+    "longDescription": "簡単な計画の登録と、Issue・Groupの実装、必要な検証、完了記録、commitを扱います。独立レビューや別エージェントの起動は必須にせず、自分の運用に合わせて変更できます。axon-kit pluginが必要です。",
     "developerName": "gin0606",
     "category": "Productivity",
     "capabilities": [

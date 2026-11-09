@@ -75,7 +75,6 @@ See [Getting started](docs/guide/getting-started.md) for the full workflow and G
 
 Plugins for Claude Code and Codex are included:
 
-- [axon](plugins/axon/skills): ready-to-use workflows for collaboration between you and an agent.
 - [axon-kit](plugins/axon-kit/skills): core operations and contracts for building your own workflows.
 
 The [example workflow](examples/agent-workflow/README.md) includes plugin installation instructions and skills for planning, implementation, verification, and commits. You can use it as-is or adapt it to your workflow.

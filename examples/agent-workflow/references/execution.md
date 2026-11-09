@@ -1,6 +1,6 @@
 # 実行の共通手順
 
-Axonの判断・操作は`axon:conventions`と`axon:work-state`、結果と申し送りの記録は`axon-kit:add-note`を使う。必要なpluginがなければ変更前に導入を案内する。
+Axonの操作は`axon-kit:conventions`と`axon-kit:work-state`、結果と申し送りの記録は`axon-kit:add-note`を使う。必要なpluginがなければ変更前に導入を案内する。
 
 ## 開始と継続
 
@@ -20,4 +20,4 @@ commitやhookの失敗を無視せず、原因を解消して再検証する。�
 
 ## 中断
 
-ユーザー判断を待つ間は状態を維持し、保留・引継ぎでは作業・検証の現在地と残作業をNoteに記録して、着手中のIssueを`axon:work-state`で`axon release`する。
+ユーザー判断を待つ間は状態を維持し、保留・引継ぎでは作業・検証の現在地と残作業をNoteに記録して、着手中のIssueを`axon-kit:work-state`で`axon release`する。

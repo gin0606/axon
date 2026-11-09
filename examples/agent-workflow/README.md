@@ -12,7 +12,7 @@
 
 ## 導入
 
-対応するAxon CLIと、同じmarketplaceの`axon-kit`・`axon` pluginが必要です。その他のworkflow pluginには依存しません。実装・commitを試す対象はGit repositoryを想定しています。CLIと保存先の準備は[導入ガイド](../../docs/guide/getting-started.md)を参照してください。
+対応するAxon CLIと、同じmarketplaceの`axon-kit` pluginが必要です。その他のworkflow pluginには依存しません。実装・commitを試す対象はGit repositoryを想定しています。CLIと保存先の準備は[導入ガイド](../../docs/guide/getting-started.md)を参照してください。
 
 このcheckoutのルートで、利用するホストに応じて実行します。既にmarketplaceや依存pluginを導入している場合は、必要な追加・更新だけを行ってください。
 
@@ -21,7 +21,6 @@ Claude Code:
 ```sh
 claude plugin marketplace add .
 claude plugin install axon-kit@axon --scope user
-claude plugin install axon@axon --scope user
 claude plugin install axon-workflow@axon --scope user
 ```
 
@@ -30,7 +29,6 @@ Codex:
 ```sh
 codex plugin marketplace add .
 codex plugin add axon-kit@axon
-codex plugin add axon@axon
 codex plugin add axon-workflow@axon
 ```
 
@@ -44,7 +42,7 @@ codex plugin add axon-workflow@axon
 $axon-workflow:plan READMEに開発用コマンドの説明を追加する計画を作って
 ```
 
-提示された内容を確認すると、未判断の計画が登録されます。実装する内容が決まったら、対象を明示して採用を依頼します。Groupでは、実行する子Issue・子Groupも採用が必要です。採用には既存の`axon:update`を利用できます。計画の登録だけでは実装は始まりません。
+提示された内容を確認すると、未判断の計画が登録されます。実装する内容が決まったら、対象を明示して採用を依頼します。Groupでは、実行する子Issue・子Groupも採用が必要です。採用には既存の`axon-kit:update`を利用できます。計画の登録だけでは実装は始まりません。
 
 ```text
 $axon-workflow:start <採用済みIssueのID>
@@ -60,7 +58,7 @@ $axon-workflow:start-group <採用済みGroupのID>
 - [start-group](skills/start-group/SKILL.md): Issueの実行順とGroup全体の確認方法を変更する。
 - [実行の共通手順](references/execution.md): commit・継続・中断の方針を変更する。
 
-コピーして独自pluginとして配布する場合は、両manifestの名前とskill内の`axon-workflow:`参照を変更します。`axon`を呼ぶ箇所ではその協業方針に従います。協業方針自体を変えたい箇所は、`axon-kit`の操作契約に従う手順へ置き換えてください。
+コピーして独自pluginとして配布する場合は、両manifestの名前とskill内の`axon-workflow:`参照を変更します。
 
 ## 再浮上条件とcacheexec
 
@@ -76,4 +74,4 @@ brew install gin0606/tap/cacheexec
 cacheexec --ttl 5m --include-codes 0,1 -- ./scripts/check-ready.sh
 ```
 
-`check-ready.sh`は利用先が用意する条件スクリプトです。成立を`0`、未成立を`1`、通信失敗などの判定エラーをそれ以外の終了コードで返します。この例では成立・未成立だけを5分間再利用し、判定エラーはキャッシュしません。検知までに許容できる遅延に合わせてTTLを調整します。条件の設定は`axon:update`で扱います。
+`check-ready.sh`は利用先が用意する条件スクリプトです。成立を`0`、未成立を`1`、通信失敗などの判定エラーをそれ以外の終了コードで返します。この例では成立・未成立だけを5分間再利用し、判定エラーはキャッシュしません。検知までに許容できる遅延に合わせてTTLを調整します。条件の設定は`axon-kit:update`で扱います。

@@ -75,7 +75,6 @@ axon proposals
 
 Claude Code と Codex 向けのプラグインを同梱しています。
 
-- [axon](plugins/axon/skills): 人とエージェントの協業にそのまま使えるワークフロー。
 - [axon-kit](plugins/axon-kit/skills): 独自のワークフローを作るための基本操作と契約。
 
 [ワークフローのサンプル](examples/agent-workflow/README.md) に、プラグインの導入手順と、計画・実装・検証・commit を進めるスキルがあります。そのまま利用することも、自分の運用に合わせて変更することもできます。

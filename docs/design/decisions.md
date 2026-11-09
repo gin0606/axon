@@ -307,7 +307,7 @@ Issue と Group は同じ ID の namespace を使い、kind を ID に埋め込�
 - probe や plugin の定義を repository で追跡する案。定義が見えても、PR が定義ごと書き換えられるため、結局ローカルでの許可が別に必要になる。
 - shell 条件を残し、許可の手順だけを設ける案。自分で書いた条件まで毎回許可が要り、手間が大きい。
 
-agent は `axon condition allow` を自律で実行せず、利用者が入力または確認していない文字列を `--command` に渡さない。public repository では本文などに agent 向けの指示を仕込めるため、許可の判断を利用者に残す。この規則は Axon の意味論ではなく、agent の協業規約（`plugins/axon` と `plugins/axon-kit` の skill）に置く。
+条件の文字列を誰がどう確認して許可するかは、利用側workflowの協業方針で定める。`axon-kit`は許可の意味と操作契約を提供し、呼び出し側が与えた文字列・digestを使う。
 
 許可の意味と評価の契約は [条件の許可](../reference/candidates.md#条件の許可)、表記は [CLIと表示の契約](../reference/cli.md#再浮上条件の許可)、保存場所と形式は [保存と統合の契約](../reference/storage.md#axon-が-axon-の外に書くもの) に定める。
 
@@ -482,8 +482,6 @@ linked worktree での `axon init` は、main worktree に保存先が既にあ�
 依頼が指定する計画範囲、declaration file への反映、保存先への反映を区別する。file の作成・レビューだけの依頼から、保存済み Entity の変更へ広げない。明示された適用の直前で同じ権限を再確認しない。
 
 利用者が所有する file は内容と出典を調べてから扱い、都合のよい `axon export` で上書きしない。呼び出し側が固定した snapshot・候補・digest を保全し、取得後の編集を artifact の再生成で消さない。エージェントが所有する作業 file でも、結果不明の照合に必要な間は保持する。
-
-合意済みの目的・範囲・完了条件から一意に決まる構成の整理は自律できる。新しい目的、採否、独立した完了単位、代替前提の選択は利用者の判断に返す。一括編集という形式は、それらの判断権限を与えない。
 
 本文編集・lifecycle・構造の責務を守る。複数段階になる場合は前段の適用結果を保持し、後段が失敗した後の状態を説明する。自動 rollback や補償の判断を発明しない。
 
