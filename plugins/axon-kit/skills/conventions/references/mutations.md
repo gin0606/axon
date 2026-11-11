@@ -6,11 +6,11 @@
 
 各mutationは単独のshell呼出しにし、その終了コードを個別確認する。後続commandの成功で失敗を隠さない。複数段階の状態・本文・関係変更は一つのtransactionではない。順序、各段階のpostconditionと適用済み範囲を保持する。
 
-本文の `-m/--description` と `-F/--file`、Noteの `-m/--message` と `-F/--file` はそれぞれ排他で、`-F -` はstdin。file/stdinは初回mutation前に正確なUTF-8 bytesを独立snapshotへ保存しdigestを記録する。結果不明の間は保持し、元fileの後の編集を再試行へ混入させない。コマンドに先頭hyphenを含むoption値は `--message='--text'` のように渡す。shellの補間で内容を変えない。
+本文の `-m/--description` と `-F/--file`、Noteの `-m/--message` と `-F/--file` はそれぞれ排他で、`-F -` はstdin。file/stdinは初回mutation前に正確なUTF-8 bytesを独立snapshotへ保存しdigestを記録する。結果不明の間は保持し、元fileの後の編集を再試行へ混入させない。shellの補間で内容を変えない。
 
 ## reasonを渡す
 
-`axon accept|withdraw|start|release|complete|cancel|reconsider|reopen`、`axon write`、`axon label set`、`axon parent set|unset`、`axon dep add|rm`、`axon condition set|unset`、`axon convert`、`axon resolve ID --head RECORD_ID`は任意の`-r/--reason`を受け付ける。呼び出し側から渡されたreasonを対応する操作に添え、渡されていなければ理由なしで操作する。kitでは理由を作ったり入力を要求したりしない。
+`axon accept|withdraw|start|release|complete|cancel|reconsider|reopen`、`axon write`、`axon label set`、`axon parent set|unset`、`axon dep add|rm`、`axon condition set|unset`、`axon convert`、`axon resolve ID --head RECORD_ID`は任意の`-r REASON`（`--reason REASON`）を受け付ける。記録を作らない`axon condition allow`は受け付けない。呼び出し側から渡されたreasonを対応する操作に添え、渡されていなければ理由なしで操作する。kitでは理由を作ったり入力を要求したりしない。
 
 reasonは同値判定より先に検証される。一行で、空白だけの値・改行・制御文字・Unicodeの文字単位で500文字を超える値は拒否される。登録（採用済みを含む）とNote追加にはreason入力がなく、必要な情報はそれぞれの本文へ渡す。`axon import apply`とdeclarationも理由入力の対象外であり、reasonのために別の変更操作を追加しない。
 

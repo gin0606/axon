@@ -5,17 +5,41 @@ description: Axonのdeclarationを`axon export`し、`axon import prepare`・`ax
 
 # Declarationを取得・検査・反映する
 
-`axon-kit:conventions` に従い、呼び出し側が指定したbinaryと管理rootを固定する。`axon export --help`、`axon import prepare|check|apply --help`、`axon docs declaration` で構文と形式を確認する。非対応ならversionと不足する操作を返し、別binaryへの切替、記録fileやheaderの直接編集、逐次の通常CLIによる代用をしない。
+`axon-kit:conventions` に従い、呼び出し側が指定したbinaryと管理rootを固定する。構文と形式はこのskillに従う。非対応なら共通契約に従ってversion・試した構文・対象を返し、別binaryへの切替、記録fileやheaderの直接編集、逐次の通常CLIによる代用をしない。
+
+| 操作 | 構文 |
+| --- | --- |
+| 既存計画の取得 | `axon export ID... > FILE` |
+| 新規計画の雛形 | `axon docs declaration --example > FILE` |
+| 新規IDの確定とcanonical化 | `axon import prepare FILE` |
+| 検査と差分の表示 | `axon import check FILE` |
+| 反映とfileの書戻し | `axon import apply FILE` |
 
 ## 対象と入力を固定する
 
 呼び出し側から計画の対象、declaration fileの作成・編集・書戻し、active storageへの適用の範囲を受け取る。既存fileは内容と出典を読み、元bytesとdigestを独立snapshotへ保存する。適用前には対象root、保存先、完全ID、`axon import prepare`後の入力bytesとdigest、確認した差分を保持し、結果不明の照合が終わるまで破棄しない。同じfileや保存先への未調整のwriter・editor・Git操作を直列化する。衝突か違反のある保存先では`axon import prepare|check|apply`が拒否される。`axon-kit:resolve`での修復が依頼の範囲になければ、拒否と理由を呼び出し側へ返す。途中で止まった反映の再試行は、残りの反映で消える違反では拒否されないので、そのEntityを通常操作で直さない。
 
 - 既存計画は `axon export ID...` のstdoutを未使用のfileへ保存する。Groupは自身と終了済みを含む全子孫、Issueは単体、複数selectorは和集合。`axon export`は保存先を変更せず条件を実行しない。既存の編集fileへリダイレクトして上書きしない。
-- 新規計画は `axon docs declaration --example` から作る。これは保存先を開かない。`id: null`、`base: null`、一意の `key` を持つrecordに、呼び出し側が決めた初期状態 `undecided` または `not-started` とlabelを書く。雛形の初期状態だけから採用判断を、雛形の `label: feat` だけから仕事の種類を推測しない。
-- 対応schemaは `axon-declaration/v2`。それ以外は期待するschemaを示して `unsupported schema` として拒否される。fieldはすべて必須。編集集合は `groups` と `issues` のrecordだけで、載っていないEntityは触らない。recordを消しても削除・`axon cancel`・所属解除・依存解除にならない。各recordはtitle、description、label（[モデルと参照](../conventions/references/model.md#情報を混同しない)の固定集合の値）、親、outgoing dependencyの完全な宣言で、親解除は `parent: null`、依存なしは `needs: []` と書く。
-- 既存のid、base、lifecycle、kindは変えない。`lifecycle`は`references`を含めて保存値で、`axon show --details`・`axon list --lifecycle`が示すGroupの実効値とは異なりうる（保存値`NotStarted`で配下の仕事が始まったGroupも`not-started`のまま）。新規は`axon import prepare`後もkeyを保持する。参照は `{ id: 完全ID }` または `{ key: 別名 }`。`references` は編集集合外への参照の読み取り専用contextで、incoming edgeは含まない。必要なら `axon show ID --details --skip-conditions` で確認する。既存Entityを追加するにはselectorを広げて別fileへ`axon export`を再実行し、保全した編集意図を移す。baseを手作りしない。
+- 新規計画は `axon docs declaration --example` の雛形から作る。これは保存先を開かない。`id: null`、`base: null`、一意の `key` を持つrecordに、呼び出し側が決めた初期状態 `undecided` または `not-started` とlabelを書く。雛形の初期状態だけから採用判断を、雛形の `label: feat` だけから仕事の種類を推測しない。
+- 編集集合は `groups` と `issues` のrecordだけで、載っていないEntityは触らない。recordを消しても削除・`axon cancel`・所属解除・依存解除にならない。各recordはtitle、description、label、親、outgoing dependencyの完全な宣言で、親解除は `parent: null`、依存なしは `needs: []` と書く。
+- 既存のid、base、lifecycle、kindは変えない。`lifecycle`は`references`を含めて保存値で、`axon show --details`・`axon list --lifecycle`が示すGroupの実効値とは異なりうる（保存値`NotStarted`で配下の仕事が始まったGroupも`not-started`のまま）。新規は`axon import prepare`後もkeyを保持する。`references` は編集集合外への参照の読み取り専用contextで、incoming edgeは含まない。必要なら `axon show ID --details --skip-conditions` で確認する。既存Entityを追加するにはselectorを広げて別fileへ`axon export`を再実行し、保全した編集意図を移す。baseを手作りしない。
 - 再浮上条件・Note・履歴の取り込み、既存lifecycleの遷移、未知形式の変換には使わない。既存の条件とNoteは保持される。
+
+## 形式
+
+schemaは `axon-declaration/v2` で、それ以外は期待するschemaを示して `unsupported schema` として拒否される。古いschemaのfileは書き換えて変換せず、既存recordは`axon export`で取り直し、未登録のrecordは現在の形式とlabelで書き直す。parserはstrictで、未知のfield、mapping keyの重複、anchor・alias・merge key、独自tag、複数document、型の違うscalarを拒否する。数値・真偽値・nullに読める文字列（`n`・`yes`・`on`・`1.0`・`123`・`null`・`~`など）をtitle・key・descriptionに書くときは `'...'` で囲む（中の`'`は`''`と書く）。`"..."` の中では `\` がescapeとして解釈される。
+
+- rootは `schema`・`groups`・`issues`・`references` の4 fieldを持ち、すべて必須で空のlistも `[]` と書く。Groupの下に子を入れ子で書かない。
+- `groups` と `issues` の各recordは `id`・`key`・`base`・`lifecycle`・`title`・`description`・`label`・`parent`・`needs` をすべて持つ。fieldの順と書式は`axon import prepare`がcanonicalな形に書き直す。kindは格納したlistで決まり、recordを `groups` と `issues` の間で移すとkindの書換えとして拒否される。
+- `id` は完全IDで、suffixは未解決として拒否される。`axon import prepare` 前の新規recordだけ `null` で、そのrecordは `base: null` と `key` を持つ。
+- `key` はfile内だけの別名で、`^[a-z][a-z0-9-]{0,63}$` に一致し `groups`・`issues` を通じて一意。`axon export` 直後の既存recordは `key: null` で、既存recordに `key` を付けて別名で参照してもよい。
+- `lifecycle` は `undecided`・`not-started`・`in-progress`・`completed`・`cancelled` のどれか。
+- `title` は空・空白だけ・改行や制御文字を含む値・200文字を超える値を拒否する。`description` はMarkdownの本文で、`""` は本文なし。trim・正規化はされず、複数行は `|-`（末尾改行なし）か `|`（末尾改行一つ）のliteral blockで書ける。
+- `label` は [モデルと参照](../conventions/references/model.md#情報を混同しない) の固定集合の値。
+- 参照は `{ id: 完全ID }` か `{ key: 別名 }` のどちらか一方だけを持つmappingで、素の文字列は使わない。`parent` はGroupだけを指す参照か `null`、`needs` は参照のlistで、解決後に同じEntityを指す重複と自己依存は拒否される。
+- `references` は `axon import prepare` が再生成するので編集しない。
+
+`lifecycle` の変更は読み取り専用として拒否される。保存値に戻し、遷移が必要なら`axon import apply`の後に通常の遷移コマンドで行うかを呼び出し側へ返す。`Completed`・`Cancelled`のrecordのtitle・description・labelは編集できず、`axon reopen`・`axon reconsider`で戻すかは呼び出し側が決める。
 
 ## `axon import prepare`・`axon import check`・`axon import apply`
 
@@ -34,4 +58,4 @@ description: Axonのdeclarationを`axon export`し、`axon import prepare`・`ax
 
 編集集合の全Entityが最終値（title、description、label、parent、needs、kind、lifecycle。新規は割当て済みIDで存在し宣言した初期状態）に一致する場合、`axon import apply`の再実行は保存先をno-opにしてrewriteだけを完了する。未適用を確認でき、同じ効果へ収束する場合も固定入力で再試行できる。Entityごとに最終値か`base`のどちらかに一致する途中までの反映は、同じfileの`axon import apply`で残りを反映する。どちらにも一致しないEntityや後続の別変更は競合として返す。照合不能なら結果不明を維持し、観測と入力を返す。
 
-結果不明の解消前に`axon import prepare`を再実行して新規IDを振り直さない。baseの更新・null化や`axon export`の再実行による上書きで競合を隠さず、元artifactを保持して最新状態と意図の比較を呼び出し側へ渡す。エラーの後にfileだけを再生成して適用済みとみなさない。
+結果不明の解消前に`axon import prepare`を再実行して新規IDを振り直さない。`base mismatch`の競合は`axon import apply`全体を止め、`axon import prepare`ではbaseは更新されない。baseの更新・null化や`axon export`の再実行による上書きで競合を隠さず、元artifactを保持し、fileの全recordを別fileへ`axon export`し直した最新状態と意図の比較を呼び出し側へ渡す。エラーの後にfileだけを再生成して適用済みとみなさない。

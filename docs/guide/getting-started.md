@@ -87,7 +87,7 @@ git init
 
 [`axon-kit`](../../plugins/axon-kit/skills) は操作契約を提供します。協業方針は利用側のworkflowで定め、[サンプル](../../examples/agent-workflow/README.md)を出発点にできます。plugin内に必要なreferenceを同梱しているため、利用先repositoryにAxonのソースcheckoutを置く必要はありません。対応するCLIとpluginを対象環境へ導入し、管理するrepositoryで呼び出します。
 
-binaryを指定した場合はその指定を、未指定なら対象環境で発見した `axon` を使います。skillは`axon --version`・`axon --help`で対応を照合して実行ファイルとrootを固定します。対象環境のCLIとsessionに読み込まれたskillのversionが一致しない場合は、その不一致を解決してから操作します。開発版の試用では上記の絶対パスを渡す方法も使えます。
+binaryを指定した場合はその指定を、未指定なら対象環境で発見した `axon` を使い、実行ファイルとrootを固定します。開発版の試用では上記の絶対パスを渡す方法も使えます。skillは扱う操作の構文を本文に持ち、同じrepositoryのCLIに合わせて更新されるため、通常の操作ではhelpを読みません。helpを読むのは、skillに構文のない操作をするときと、コマンドが構文のエラーなどで拒否されたときです。そのbinaryが操作に対応していなければ、別のbinaryへ切り替えず、観測したversion・構文・対象を報告して止まります。CLIとsessionに読み込まれたskillの版がずれていると、この報告で止まることがあります。その場合はCLIとpluginをどちらも最新に更新してください。
 
 同梱skillは、Groupを直接着手せず配下から実効lifecycleを導出する規則（[Group の実効 lifecycle](../reference/lifecycle.md#group-の実効-lifecycle)）、`axon reopen`、記録の集合の保存先と `axon storage check`・`axon resolve`・`axon convert`、必須のlabel（`axon capture --label`・`axon label set`）と `axon-declaration/v2` を前提にします。
 

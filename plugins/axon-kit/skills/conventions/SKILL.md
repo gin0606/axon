@@ -17,9 +17,20 @@ declarationはYAMLの一括宣言を指す。タイトルはtitle、本文はdes
 
 ## 対象環境を固定する
 
-呼び出し側が指定したrepositoryまたは管理rootで操作する。binaryが指定されていればそれを使い、指定がなければその環境の `axon` を発見し、`axon --version` と `axon --help` を確認する。`axon tasks|accept|cancel|reopen|resolve|convert|label`・`axon storage check`・`axon condition unapproved|allow` の有無と必要なleaf helpの構文をこのpluginの契約と照合して、実行ファイルとworking directoryを以後の操作で固定する。別repositoryのソースcheckoutは不要。このplugin内のreferenceと選択したCLIの `axon docs`・helpで手順を完結させる。
+呼び出し側が指定したrepositoryまたは管理rootで操作する。binaryが指定されていればそれを使い、指定がなければその環境の `axon` を発見して、実行ファイルとworking directoryを以後の操作で固定する。別repositoryのソースcheckoutは不要。操作が非対応でも、別のbinaryへの切替や、記録file・header・条件の許可のfileの直接編集で操作を代替しない。実保存先の境界は [保存操作](references/mutations.md) に従う。
 
-コマンドやschemaが非対応なら観測したversion・構文・対象を返す。`axon condition unapproved|allow`がないbinaryは他人が書いた条件を実行しうるため、その旨を返し、条件を評価する`axon proposals|tasks`と既定の`axon show`、条件の保存（`--command`）を行わない。状況の診断にも`--skip-conditions`を付ける。別のbinaryへの切替や、記録file・header・条件の許可のfileの直接編集で操作を代替しない。実保存先の境界は [保存操作](references/mutations.md) に従う。
+`axon condition unapproved|allow`がないbinaryは他人が書いた条件を実行しうる。条件を評価する`axon proposals|tasks`と既定の`axon show`、条件の保存（`--command`）を固定したbinaryで初めて使う前に`axon condition unapproved`を実行する。subcommandがないと拒否されたらその旨を返し、これらの操作を行わず、状況の診断にも`--skip-conditions`を付ける。
+
+## 構文とhelp
+
+各skillとreferenceは、そのskillが扱う操作の構文を書いている。正常系ではその構文で操作し、helpや`axon docs`を読まない。表記は、大文字の語（`ID`・`TEXT`・`FILE`など）が置き換える値、`[...]`が省略できる部分、`a|b`がどれか一つ、`...`が繰り返せる部分を表す。`ID`・`A`・`B`・`G`はEntity IDで、完全IDか一意なsuffixを渡せる（完全IDだけを受け付ける引数はその構文の箇所に書く）。hyphenで始まる値は、optionと解釈されないよう `-m='- 項目'`・`--title='-x'`・`-r='-x'`・`--search='-x'` のように`=`で続けて渡すか、本文なら `-F` で渡す。
+
+helpを読むのは次の場合に限る。読むのは固定したbinaryの `axon COMMAND --help`（`axon note add --help`のようにsubcommandまで指定する）で、保存先を開かない。declarationの形式のエラーでは `axon docs declaration` を、エラーの診断が`axon docs`の手順を案内したときはそれも読む。
+
+- このkitに構文が書かれていない操作をするとき。
+- コマンドが構文・subcommand・option・schemaのエラーで拒否されたとき。保存境界の表示（[保存操作](references/mutations.md)）や前提の拒否はhelpで扱わない。
+
+helpで確かめても操作が非対応なら、`axon --version`で読んだversion、試した構文、対象を返す。
 
 ## 必要な契約を読む
 
@@ -30,6 +41,6 @@ declarationはYAMLの一括宣言を指す。タイトルはtitle、本文はdes
 
 対象、採用判断、作業選択、実装・review・commitの権限は呼び出し側workflowが与える。CLIが操作を受け付けることも権限の根拠ではない。与えられた効果は重ねて確認せず実行できるが、意味を変える未確定な判断は呼び出し側へ返す。
 
-構文の不確実さは保存先不要のhelpで解決する。保存情報は `axon list`・`axon show ID --details --skip-conditions`・`axon log`・`axon note` で調べ、外部条件の評価が必要なときだけ `axon proposals|tasks` と既定の `axon show` を使う。`axon show` は `--skip-conditions` を付けない限り対象の状況に必要な条件を評価する（実行するのは許可された条件だけ）ため、操作前の現在値確認や本文の取得には `--skip-conditions` を付け、状況の診断（浮上していない候補や祖先を含む詰まっている理由）には付けない（上の、`axon condition unapproved|allow`がないbinaryの場合を除く）。任意recorderは認証・lock・生存確認ではない。
+保存情報は `axon list`・`axon show ID --details --skip-conditions`・`axon log ID`・`axon note list ID` で調べ（構文は [モデルと参照](references/model.md#読む目的から入口を選ぶ)）、外部条件の評価が必要なときだけ `axon proposals|tasks` と既定の `axon show` を使う。`axon show` は `--skip-conditions` を付けない限り対象の状況に必要な条件を評価する（実行するのは許可された条件だけ）ため、操作前の現在値確認や本文の取得には `--skip-conditions` を付け、状況の診断（浮上していない候補や祖先を含む詰まっている理由）には付けない（上の、`axon condition unapproved|allow`がないbinaryの場合を除く）。任意recorderは認証・lock・生存確認ではない。
 
 要求した作用、完全ID、保存結果（適用済み・未適用・部分適用・不明）、最終状態と関係への影響を返す。保存結果の確認は [保存操作](references/mutations.md) に従い、確認のためだけの追加mutationはしない。
