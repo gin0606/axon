@@ -1,6 +1,6 @@
 {
   "name": "axon-kit",
-  "version": "0.3.0+plugin.552705bf3182847e",
+  "version": "0.3.0+plugin.55f41410551f2631",
   "description": "Axonの情報モデルとCLI操作契約を提供する基本スキル集。Issue・Groupの登録、更新、状態変更、保存操作を実行・検証し、利用者のワークフローの基盤となる。",
   "author": {
     "name": "gin0606"

@@ -30,6 +30,15 @@ pub enum Error {
         .file.display()
     )]
     NotAStore { root: PathBuf, file: PathBuf },
+    /// The header at `header` names a later format, `found`, than this binary reads.
+    #[error(
+        "store format {found:?} in {} is newer than axon {} reads ({:?}); update axon to read this store. The store is not changed.",
+        // One line, as for unmerged paths: a newline in the path cannot start a line of its own.
+        .header.display().to_string().replace('\n', "\\n"),
+        env!("CARGO_PKG_VERSION"),
+        lifecycle::HEADER_FORMAT
+    )]
+    NewerFormat { header: PathBuf, found: String },
 }
 /// One line per unmerged path; a newline in a path cannot start a line of its own.
 fn unmerged_lines(paths: &[PathBuf]) -> String {

@@ -4,7 +4,7 @@
 //! bytes and therefore the same ID.
 use super::model::{Current, Entry, Header, Note, Record, RecordId, RecordKind};
 use super::{EntityId, Kind, Label, Lifecycle, Nonce, Operation, Recorder, Result, StoreId};
-use crate::lifecycle::invalid;
+use crate::lifecycle::{Error, invalid};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, ser::SerializeStruct};
 use std::collections::BTreeSet;
@@ -294,6 +294,28 @@ struct HeaderRow {
     prefix: String,
 }
 
+/// The one key every format keeps at the top of its header object.
+#[derive(Deserialize)]
+struct FormatRow {
+    format: String,
+}
+
+/// The number N of a format named `axon-records/vN`, in decimal without leading zeros.
+fn format_number(format: &str) -> Option<&str> {
+    let number = format.strip_prefix("axon-records/v")?;
+    let canonical = !number.is_empty()
+        && number.bytes().all(|byte| byte.is_ascii_digit())
+        && (number == "0" || !number.starts_with('0'));
+    canonical.then_some(number)
+}
+
+/// Whether a later axon wrote `format`: the same family with a larger number. An earlier
+/// number or another name is a format no axon converts, so updating would not help.
+fn is_newer_format(format: &str) -> bool {
+    let current = format_number(HEADER_FORMAT).expect("the current format is numbered");
+    format_number(format).is_some_and(|number| (number.len(), number) > (current.len(), current))
+}
+
 pub fn encode_header(header: &Header) -> Result<Vec<u8>> {
     header.validate()?;
     to_line(&HeaderRow {
@@ -321,14 +343,18 @@ pub fn decode_header(bytes: &[u8]) -> Result<Header> {
     if first != b'{' {
         return Err(invalid("header is not a JSON object"));
     }
-    let row: HeaderRow =
-        serde_json::from_slice(bytes).map_err(|error| invalid(format!("header: {error}")))?;
-    if row.format != HEADER_FORMAT {
-        return Err(invalid(format!(
-            "unsupported store format {:?}",
-            row.format
-        )));
+    let header_error = |error: serde_json::Error| invalid(format!("header: {error}"));
+    // The format alone decides first: another format may have other keys.
+    let FormatRow { format } = serde_json::from_slice(bytes).map_err(header_error)?;
+    if format != HEADER_FORMAT {
+        let message = format!("unsupported store format {format:?}");
+        return Err(if is_newer_format(&format) {
+            Error::for_newer_format(message, format)
+        } else {
+            invalid(message)
+        });
     }
+    let row: HeaderRow = serde_json::from_slice(bytes).map_err(header_error)?;
     let header = Header {
         store: row.store,
         prefix: row.prefix,

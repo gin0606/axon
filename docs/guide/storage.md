@@ -14,6 +14,8 @@ Gitが保存先を無視するか追跡するかにAxonは関与しません。`
 
 headerはformatterで複数行に整形されても読めますが、この対応より前のbinary（リリース版では0.4.0まで。デスクトップアプリを含む）は整形されたheaderを破損と判定します。同じ保存先をそれらのbinaryでも使う間は、headerを整形しないか、`.axon/` をformatterの対象外にしてください。
 
+新しいaxonがheaderのformatを上げた保存先を古いbinaryで読むと、そのbinaryは保存先を読まずに、axonの更新が要ることを示して止まります（[保存先の破損](../reference/storage.md#保存先の破損)）。この対応より前のbinary（リリース版では0.5.1まで。デスクトップアプリを含む）は、同じ保存先を破損として報告します。どちらの場合もfileを直さず、axonを更新してください。
+
 Axonの状態の取り消しは `axon reopen`・`axon release`・`axon reconsider` などのlifecycle操作で行い、Gitのrevertに頼らないでください。revertは記録fileを消すだけで、その後に記録が続いていれば親の欠けた記録が残り、状態は戻らずに偽の衝突として見えます。
 
 Gitはuntrackedなfileをcheckout・mergeの上書きから保護しますが、無視されているfileは保護しません。無視されている保存先がある作業directoryで、`.axon/` を追跡しているcommitをcheckout・mergeすると、Gitは警告なしにfileを置き換え、記録が失われます。二つの運用を一つのrepositoryで混ぜなければ起きませんが、Axonはこの混在を検出しません。

@@ -174,9 +174,10 @@ Storage and recovery
   belongs to another user (other than the sudo caller), stops discovery before
   anything in it is read, and init refuses a directory another user owns.
   Corrupt record files and unmerged index entries are errors; no
-  fallback or automatic conversion runs. A record file that is its record with
-  CRLF line endings is reported as such, with a hint that Git converted it and a
-  pointer to the storage guide; the file is not repaired.
+  fallback or automatic conversion runs. A header in a newer format than this
+  axon reads is not damage: update axon to read that store. A record file that
+  is its record with CRLF line endings is reported as such, with a hint that Git
+  converted it and a pointer to the storage guide; the file is not repaired.
   help, docs, actor, completion and version do not require a store.
 
   Preserve retained artifacts on errors. Applied, Not applied and Result unknown
@@ -185,7 +186,8 @@ Storage and recovery
   Note addition are not idempotent. Do not delete locks to bypass another writer.
   After integrating branches, storage check reports corrupt files, conflicted
   Entities (several head records), structural violations and missing parent
-  records, and exits non-zero for the first three. While any Entity is conflicted, the
+  records, and exits non-zero for the first three; a header in a newer format
+  is reported alone and exits non-zero too. While any Entity is conflicted, the
   store accepts only resolve and note add (condition allow, which records
   nothing, still approves the condition of an Entity that is not conflicted);
   resolve ID --head RECORD_ID picks one head. Remaining violations are repaired with ordinary commands such as reopen,

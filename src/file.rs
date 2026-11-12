@@ -331,6 +331,11 @@ impl Store {
         if !fs::symlink_metadata(self.directory())?.file_type().is_dir() {
             return Err(invalid("management directory is not a regular directory"));
         }
+        // A later format may lay out the rest of `.axon/` otherwise, so its header is looked
+        // at first; any other problem with the header is reported when it is read.
+        if let Err(newer @ Error::NewerFormat { .. }) = self.header() {
+            return Err(newer);
+        }
         // The record directory is read and written through as well, so a link there would
         // reach another store, outside its lock.
         if let Ok(meta) = fs::symlink_metadata(self.records_path())
@@ -351,19 +356,29 @@ impl Store {
         self.location.check_index()?;
         self.store()
     }
+    /// The decoded header. A header a later axon wrote is not damage: that axon reads it.
+    fn header(&self) -> Result<Header> {
+        let path = self.header_path();
+        let corrupt = |e: &dyn std::fmt::Display| {
+            invalid(format!(
+                "{CORRUPT_HEADER}{}: {e}; the store is not read until it is repaired",
+                path.display()
+            ))
+        };
+        let bytes = read_regular(&path).map_err(|e| corrupt(&e))?;
+        record::decode_header(&bytes).map_err(|e| match e.newer_format() {
+            Some(found) => Error::NewerFormat {
+                header: path.clone(),
+                found: found.to_owned(),
+            },
+            None => corrupt(&e),
+        })
+    }
     /// Reads the header and every record file, collecting what is not a record instead of
     /// stopping at the first; `read` requires an intact store.
     pub fn load(&self) -> Result<Loaded> {
         self.guard()?;
-        let header_path = self.header_path();
-        let header = read_regular(&header_path)
-            .and_then(|bytes| record::decode_header(&bytes).map_err(Into::into))
-            .map_err(|e| {
-                invalid(format!(
-                    "{CORRUPT_HEADER}{}: {e}; the store is not read until it is repaired",
-                    header_path.display()
-                ))
-            })?;
+        let header = self.header()?;
         let mut records = record::Store::new();
         let mut corruption = Vec::new();
         let base = self.records_path();

@@ -226,7 +226,7 @@ pub(super) enum Docs {
 pub(super) enum Storage {
     /// Report corrupt files, conflicted Entities, structural violations and missing parent records
     #[command(
-        after_help = "Without ROOT the store found by discovery is checked; with ROOT that management root is checked without discovery, but Git is consulted as discovery does: inside a Git worktree an unmerged index under .axon/ is an error naming the unmerged paths and that worktree, reported alone before the header or any damage is looked at, and a Git repository that discovery rejects is an error too.\nCorrupt files, conflicts and violations exit 1; missing parent records (gaps) are reported as information and exit 0.\nNo condition runs and nothing is written."
+        after_help = "Without ROOT the store found by discovery is checked; with ROOT that management root is checked without discovery, but Git is consulted as discovery does: inside a Git worktree an unmerged index under .axon/ is an error naming the unmerged paths and that worktree, reported alone before the header or any damage is looked at, and a Git repository that discovery rejects is an error too.\nA header in a newer format than this axon reads is an error of its own, not counted as corruption: update axon to read that store.\nCorrupt files, conflicts, violations and a newer format exit 1; missing parent records (gaps) are reported as information and exit 0.\nNo condition runs and nothing is written."
     )]
     Check {
         /// The management root holding .axon/ to check instead of the discovered store

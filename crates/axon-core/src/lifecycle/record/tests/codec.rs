@@ -632,6 +632,70 @@ fn header_round_trips_and_rejects_unknown_formats_and_bad_prefixes() {
 }
 
 #[test]
+fn only_a_larger_number_of_the_same_format_is_a_newer_format_whatever_its_keys() {
+    let text = String::from_utf8(encode_header(&Header::new("demo-1").unwrap()).unwrap()).unwrap();
+    let with = |format: &str| text.replacen("axon-records/v2", format, 1);
+    // Keys a later format may add or drop are not checked once the format differs.
+    let added = |format: &str| with(format).replacen('}', ",\"added\":[1]}", 1);
+    let dropped = |format: &str| format!("{{\"format\":{format:?}}}");
+    for format in [
+        "axon-records/v3",
+        "axon-records/v10",
+        "axon-records/v99999999999999999999999",
+    ] {
+        for bytes in [with(format), added(format), dropped(format)] {
+            let error = decode_header(bytes.as_bytes()).unwrap_err();
+            assert_eq!(error.newer_format(), Some(format), "{bytes}");
+            assert!(error.to_string().contains("unsupported store format"));
+        }
+    }
+    for format in [
+        "axon-records/v1",
+        "axon-records/v0",
+        "axon-records/v03",
+        "axon-records/v",
+        "axon-records/v3a",
+        "axon-records/v+3",
+        "axon-records/v３",
+        "axon-records/V3",
+        "axon-lifecycle/v3",
+        "",
+    ] {
+        for bytes in [with(format), added(format), dropped(format)] {
+            let error = decode_header(bytes.as_bytes()).unwrap_err();
+            assert_eq!(error.newer_format(), None, "{bytes}");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("unsupported store format {format:?}")),
+                "{bytes}: {error}"
+            );
+        }
+    }
+    // Without a format string there is no format to name: the header is unreadable.
+    for bytes in [
+        text.replacen("\"format\"", "\"formats\"", 1),
+        text.replacen("\"axon-records/v2\"", "3", 1),
+        text.replacen(
+            "\"format\":",
+            "\"format\":\"axon-records/v3\",\"format\":",
+            1,
+        ),
+    ] {
+        let error = decode_header(bytes.as_bytes()).unwrap_err();
+        assert_eq!(error.newer_format(), None, "{bytes}");
+        assert!(
+            error.to_string().starts_with("header: "),
+            "{bytes}: {error}"
+        );
+    }
+    // The current format still checks every key.
+    let error = decode_header(added(HEADER_FORMAT).as_bytes()).unwrap_err();
+    assert_eq!(error.newer_format(), None);
+    assert!(error.to_string().contains("unknown field"), "{error}");
+}
+
+#[test]
 fn a_header_reformatted_by_a_formatter_still_decodes() {
     let header = Header::new("my-long-project-prefix").unwrap();
     let store = header.store.as_ref();

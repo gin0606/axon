@@ -58,7 +58,11 @@ gap は記録が消せないため解決記録では埋まらない。欠けた�
 - それ以外の、名前が記録 ID の形でない file（OS が作る file を含む）、名前と内容の hash が一致しない file、名前の先頭 2 文字と違う subdirectory にある file、途中で切れた file と空の file、規則外の内容の file（現在値に label がない記録、固定集合の外の label を持つ記録を含む）は保存先の破損とする。読取と `axon storage check` は衝突や違反とは別に破損として報告し、利用者が file を直すまで読取と全操作を止める。破損は Entity に属さないので、違反の免除は当てはまらない。
 - 名前と内容の hash が一致しない file のうち、内容の CRLF を LF に戻すと名前の hash と一致するものは、Git の改行変換が疑われる破損として、その file の理由にその旨を書き、報告の末尾に改行変換の可能性と [保存先と worktree](../guide/storage.md#改行変換と-axongitattributes) への案内を一行添える。読取は内容を戻さず、破損として止める扱いは変えない。
 
-`.axon/` 直下の header・`.gitignore`・`.gitattributes`・lock 以外の file は読まず、報告もしない。header file の欠落、読めない header（空の file、JSON の object でない内容、キーの欠落・未知のキー・重複、規則外の値など）、未知の format は破損と同じく操作を止める。未知の format は変換しない。
+`.axon/` 直下の header・`.gitignore`・`.gitattributes`・lock 以外の file は読まず、報告もしない。header file の欠落、読めない header（空の file、JSON の object でない内容、`format` キーの欠落・文字列でない値、キーの欠落・未知のキー・重複、規則外の値など）、未知の format は、次の段落の新しい format を除いて破損と同じく操作を止める。未知の format は変換しない。
+
+header はまず `format` の値を読み、現在の format と違えば他のキーを検査せずに format で判定する。`axon-records/vN`（N は先頭に 0 を付けない 10 進数）の形で N が現在の format の番号より大きい format は、より新しい axon が書いた保存先として、破損ではなく axon の更新が要ることを示す診断で止める。この判定は `.axon/` の中の他の file と directory を見る前に行う。診断は header の path、見つけた format、binary の version、その binary が読む format、保存先を変更しないことを示し、読取・変更のコマンドと `axon storage check` で同じ文言にする（`store format "axon-records/v3" in <root>/.axon/header.json is newer than axon <version> reads ("axon-records/v2"); update axon to read this store. The store is not changed.`）。`axon storage check` はこれを破損の件数に数えず、この診断だけを示して終了 1 にする。それ以外の format（番号の小さいもの、別の名前のもの）は、更新しても読めないので破損と同じ診断で止める（[新しい format の保存先を破損と分ける理由](../design/decisions.md#新しい-format-の保存先を破損と分ける理由)）。
+
+将来の format でも次の三つは変えない。header の置き場所が `.axon/header.json` であること、header が JSON の object で最上位に文字列の `format` キーを持つこと、format の識別子を `axon-records/vN` の形で N を増やして付けること。
 
 現在の header の format は `axon-records/v2` である（[保存形式ごとに検証規則を固定する理由](../design/decisions.md#保存形式ごとに検証規則を固定する理由)）。
 
@@ -163,6 +167,6 @@ archive の展開など clone 以外で受け取った directory は、`.git` �
 
 ## 検査と解決の入口
 
-`axon storage check [ROOT]` は保存先の破損、衝突、違反、gap を報告し、破損・衝突・違反のいずれかがあれば非 0 で終了する。通常操作を変えず、条件コマンドを実行しない。追跡する運用の CI はこれを保存先に対して実行する。
+`axon storage check [ROOT]` は保存先の破損、衝突、違反、gap を報告し、破損・衝突・違反のいずれかがあれば非 0 で終了する。header の format が binary の読む format より新しい保存先も、[更新を求める診断](#保存先の破損) だけを示して非 0 で終了する。通常操作を変えず、条件コマンドを実行しない。追跡する運用の CI はこれを保存先に対して実行する。
 
 `axon resolve` は衝突中の Entity と head を示し、`axon resolve ID --head RECORD_ID` が解決記録を書く。解決の後に残る違反は、`Reopen`・取り外し・dependency の削除・再採用などの通常操作で直す。入出力は [CLI と表示の契約](cli.md#衝突違反と解決) に定める。統合の検査・解決で外部条件コマンドを実行しない。

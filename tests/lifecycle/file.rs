@@ -620,38 +620,172 @@ fn storage_check_reports_a_missing_or_unreadable_header_by_path() {
     }
 }
 
+/// Writes the store's header with `format` and, when given, one key added and one removed,
+/// as a format with another key layout would.
+fn rewrite_header(f: &Fixture, format: &str, other_keys: bool) {
+    let mut header: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&fs::read(f.header()).unwrap()).unwrap();
+    header.insert("format".into(), format.into());
+    if other_keys {
+        header.remove("prefix");
+        header.insert("added".into(), serde_json::json!([1]));
+    }
+    fs::write(f.header(), serde_json::to_vec(&header).unwrap()).unwrap();
+}
+/// Every command that opens the store, each through discovery or an explicit root.
+fn store_commands(f: &Fixture) -> Vec<Vec<&str>> {
+    vec![
+        vec!["storage", "check"],
+        vec!["storage", "check", f.0.to_str().unwrap()],
+        vec!["list"],
+        vec!["capture", "--label", "chore", "--title", "new"],
+    ]
+}
+
 #[test]
 fn a_store_in_an_unknown_format_is_refused_and_its_records_are_not_read_or_written() {
-    for format in ["axon-records/v1", "axon-records/v3"] {
-        let f = Fixture::new();
-        f.init();
-        f.accepted("kept");
-        let header = fs::read_to_string(f.header()).unwrap();
-        fs::write(f.header(), header.replacen("axon-records/v2", format, 1)).unwrap();
-        // Damage under the records is not looked at: the format alone decides.
-        fs::create_dir(f.records_dir().join("foo")).unwrap();
-        let before = f.record_files();
-        for args in [
-            vec!["storage", "check"],
-            vec!["storage", "check", f.0.to_str().unwrap()],
-            vec!["list"],
-            vec!["capture", "--label", "chore", "--title", "new"],
-        ] {
-            let error = failure(f.run(&args));
-            assert!(
-                error.contains("header.json")
-                    && error.contains("unsupported store format")
-                    && error.contains(format),
-                "{format} {args:?}: {error}"
-            );
-            assert!(!error.contains("foo"), "{format} {args:?}: {error}");
-            assert!(
-                !error.contains("run axon init"),
-                "{format} {args:?}: {error}"
-            );
-            assert!(!error.contains("consistent"), "{format} {args:?}: {error}");
+    // An earlier number or another name: no axon converts it, so it stops like damage.
+    for format in [
+        "axon-records/v1",
+        "axon-lifecycle/v1",
+        "axon-records/v03",
+        "axon-records/v",
+    ] {
+        for other_keys in [false, true] {
+            let f = Fixture::new();
+            f.init();
+            f.accepted("kept");
+            rewrite_header(&f, format, other_keys);
+            // Damage under the records is not looked at: the format alone decides.
+            fs::create_dir(f.records_dir().join("foo")).unwrap();
+            let before = f.record_files();
+            for args in store_commands(&f) {
+                let error = failure(f.run(&args));
+                assert!(
+                    error.contains("corrupt header")
+                        && error.contains("header.json")
+                        && error.contains(&format!("unsupported store format {format:?}")),
+                    "{format} {args:?}: {error}"
+                );
+                if args[0] == "storage" {
+                    // Counted among the corrupt files, unlike a newer format.
+                    assert!(
+                        error.starts_with("Error: storage check: 1 corrupt files under "),
+                        "{format} {args:?}: {error}"
+                    );
+                    assert!(
+                        error.contains("\nCorrupt: header.json: corrupt header "),
+                        "{format} {args:?}: {error}"
+                    );
+                }
+                assert!(!error.contains("update axon"), "{format} {args:?}: {error}");
+                assert!(!error.contains("foo"), "{format} {args:?}: {error}");
+                assert!(
+                    !error.contains("run axon init"),
+                    "{format} {args:?}: {error}"
+                );
+                assert!(!error.contains("consistent"), "{format} {args:?}: {error}");
+            }
+            assert_eq!(f.record_files(), before);
         }
-        assert_eq!(f.record_files(), before);
+    }
+}
+
+/// Every path under `directory` with the bytes of each file, `None` for a directory.
+fn snapshot(directory: &Path) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
+    let mut found = std::collections::BTreeMap::new();
+    for entry in fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            found.insert(path.clone(), None);
+            found.extend(snapshot(&path));
+        } else {
+            found.insert(path.clone(), Some(fs::read(&path).unwrap()));
+        }
+    }
+    found
+}
+
+#[test]
+fn a_store_in_a_newer_format_asks_for_a_newer_axon_instead_of_a_repair() {
+    let tail = format!(
+        "/.axon/header.json is newer than axon {} reads (\"axon-records/v2\"); update axon to read this store. The store is not changed.\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    for format in ["axon-records/v3", "axon-records/v10"] {
+        // A later format may add or drop keys and lay out the rest of `.axon/` otherwise;
+        // the header is read before any of it.
+        for other_keys in [false, true] {
+            for layout in [
+                "records holding a directory",
+                "records a file",
+                "lock a directory",
+            ] {
+                let f = Fixture::new();
+                f.init();
+                f.accepted("kept");
+                rewrite_header(&f, format, other_keys);
+                let lock = f.0.join(".axon/write.lock");
+                let _ = fs::remove_file(&lock);
+                match layout {
+                    "records holding a directory" => {
+                        fs::create_dir(f.records_dir().join("foo")).unwrap()
+                    }
+                    "records a file" => {
+                        fs::remove_dir_all(f.records_dir()).unwrap();
+                        fs::write(f.records_dir(), "").unwrap();
+                    }
+                    _ => fs::create_dir(&lock).unwrap(),
+                }
+                // Not even a lock file is left behind.
+                let before = snapshot(&f.0.join(".axon"));
+                for args in store_commands(&f) {
+                    let output = f.run(&args);
+                    // The same exit status as damage and unmerged paths, so a CI check fails.
+                    assert_eq!(output.status.code(), Some(1), "{format} {layout} {args:?}");
+                    let error = failure(output);
+                    // One line of its own: no count of corrupt files, no repair, nothing beside it.
+                    let (head, rest) = error
+                        .split_once(&format!("store format {format:?} in "))
+                        .unwrap_or_else(|| panic!("{format} {layout} {args:?}: {error}"));
+                    assert!(
+                        head.starts_with("Error: ") && !head.contains('\n'),
+                        "{layout}: {error}"
+                    );
+                    assert!(
+                        rest.ends_with(&tail) && rest.lines().count() == 1,
+                        "{layout}: {error}"
+                    );
+                    assert!(!error.to_lowercase().contains("corrupt"), "{error}");
+                    assert!(!error.contains("repaired"), "{error}");
+                }
+                assert_eq!(snapshot(&f.0.join(".axon")), before, "{format} {layout}");
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_newer_format_stays_one_line_when_the_root_path_has_a_newline() {
+    let f = Fixture::new();
+    let root = f.0.join("a\nCorrupt: x");
+    fs::create_dir(&root).unwrap();
+    success(command(&root).args(["init", "t"]).output().unwrap());
+    let header = root.join(".axon/header.json");
+    let text = fs::read_to_string(&header).unwrap();
+    fs::write(
+        &header,
+        text.replacen("axon-records/v2", "axon-records/v3", 1),
+    )
+    .unwrap();
+    for args in [vec!["storage", "check"], vec!["list"]] {
+        let error = failure(command(&root).args(&args).output().unwrap());
+        assert_eq!(error.lines().count(), 1, "{args:?}: {error}");
+        assert!(
+            error.contains("a\\nCorrupt: x/.axon/header.json is newer"),
+            "{error}"
+        );
     }
 }
 

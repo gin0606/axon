@@ -691,7 +691,7 @@ fn unsupported_corrupt_and_earlier_format_stores_are_rejected_without_changes() 
         let before = fs::read(&path).unwrap();
         let error = failure(f.run(&["list"]));
         let reason = match kind {
-            "wrong-format" => "unsupported store format \"axon-records/v3\"",
+            "wrong-format" => "store format \"axon-records/v3\" in ",
             "corrupt-header" => "corrupt header",
             _ => "not a store",
         };

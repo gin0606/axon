@@ -482,6 +482,34 @@ fn an_unmerged_index_is_reported_before_a_damaged_store_with_a_header() {
     assert!(error.ends_with(&unmerged_header(&f.0)), "{error}");
 }
 
+#[test]
+fn an_unmerged_index_is_reported_before_a_header_in_a_newer_format() {
+    let f = repository();
+    f.init();
+    let header = fs::read_to_string(f.header()).unwrap();
+    fs::write(
+        f.header(),
+        header.replacen("axon-records/v2", "axon-records/v3", 1),
+    )
+    .unwrap();
+    make_index_unmerged(&f.0, &[".axon/header.json"]);
+    let _ = fs::remove_file(f.0.join(".axon/write.lock"));
+    let before = fs::read(f.header()).unwrap();
+    for args in [
+        vec!["storage", "check"],
+        vec!["storage", "check", f.0.to_str().unwrap()],
+        vec!["list"],
+        vec!["capture", "--label", "chore", "--title", "rejected"],
+    ] {
+        let error = failure(f.run(&args));
+        // Reported alone; the format is looked at once Git resolves the header.
+        assert!(error.ends_with(&unmerged_header(&f.0)), "{args:?}: {error}");
+        assert!(!error.contains("newer"), "{args:?}: {error}");
+    }
+    assert!(!f.0.join(".axon/write.lock").exists());
+    assert_eq!(fs::read(f.header()).unwrap(), before);
+}
+
 #[cfg(unix)]
 #[test]
 fn unmerged_paths_that_are_not_utf8_stay_apart() {
