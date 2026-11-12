@@ -762,6 +762,73 @@ fn declaration_label_changes_show_each_side_and_apply_as_one_record() {
     assert!(check.contains("No changes"), "{check}");
 }
 
+fn checked_lines<'a>(text: &'a str, id: &str) -> Vec<&'a str> {
+    let heading = format!("{id}:");
+    text.lines()
+        .skip_while(|line| *line != heading)
+        .skip(1)
+        .take_while(|line| line.starts_with("  "))
+        .collect()
+}
+
+#[test]
+fn declaration_parent_shows_like_label_when_created_kept_or_moved() {
+    let f = Fixture::new();
+    f.ok(&["init", "demo"]);
+    let path = f.0.join("plan.yaml");
+    let check = || f.ok(&["import", "check", path.to_str().unwrap()]);
+    fs::write(
+        &path,
+        declaration::example()
+            .serialize(&view_of(&snapshot(&f)))
+            .unwrap(),
+    )
+    .unwrap();
+    f.ok(&["import", "prepare", path.to_str().unwrap()]);
+    let prepared = declaration::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+    let group = prepared.groups[0].id.clone().unwrap();
+    let child = prepared.issues[0].id.clone().unwrap();
+    let text = check();
+    assert!(
+        checked_lines(&text, &group).contains(&"  parent: null"),
+        "{text}"
+    );
+    let under_group = format!("  parent: {group}");
+    for issue in &prepared.issues {
+        let lines = checked_lines(&text, issue.id.as_deref().unwrap());
+        assert!(lines.contains(&under_group.as_str()), "{text}");
+    }
+    f.ok(&["import", "apply", path.to_str().unwrap()]);
+
+    let exported = declaration::parse(&f.ok(&["export", &group])).unwrap();
+    let edited = |ids: &[&String], edit: fn(&mut declaration::Record)| {
+        let mut d = exported.clone();
+        for r in d.groups.iter_mut().chain(d.issues.iter_mut()) {
+            if ids.contains(&r.id.as_ref().unwrap()) {
+                edit(r);
+            }
+        }
+        fs::write(&path, d.serialize(&view_of(&snapshot(&f))).unwrap()).unwrap();
+    };
+    // The Group keeps having no parent and the Issue keeps the Group.
+    edited(&[&group, &child], |r| r.title = "Retitled".into());
+    let text = check();
+    for id in [&group, &child] {
+        assert!(
+            checked_lines(&text, id).contains(&"  parent: unchanged"),
+            "{text}"
+        );
+    }
+
+    edited(&[&child], |r| r.parent = None);
+    let text = check();
+    let moved = format!("  parent: {group} -> null");
+    assert!(
+        checked_lines(&text, &child).contains(&moved.as_str()),
+        "{text}"
+    );
+}
+
 #[test]
 fn declaration_title_changes_show_each_side_and_reject_control_characters() {
     let f = Fixture::new();

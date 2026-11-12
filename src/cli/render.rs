@@ -711,6 +711,15 @@ pub(super) fn declaration_ids(ids: &[(String, String)]) -> String {
         .collect()
 }
 
+/// A parent as a declaration writes it, where no parent is `null`.
+fn declaration_parent(current: &Current) -> String {
+    current
+        .parent
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "null".into())
+}
+
 pub(super) fn declaration_changes(
     declaration: &axon::declaration::Declaration,
     before_view: &axon::lifecycle::record::View,
@@ -754,15 +763,12 @@ pub(super) fn declaration_changes(
                     }
                 ));
                 out.push_str(&format!(
-                    "  parent: {} -> {}\n",
-                    a.parent
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| "null".into()),
-                    b.parent
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| "null".into())
+                    "  parent: {}\n",
+                    if a.parent == b.parent {
+                        "unchanged".into()
+                    } else {
+                        format!("{} -> {}", declaration_parent(a), declaration_parent(b))
+                    }
                 ));
                 for id in a.needs.difference(&b.needs) {
                     out.push_str(&format!("  needs: - {id}\n"));
@@ -773,13 +779,10 @@ pub(super) fn declaration_changes(
             }
         } else {
             out.push_str(&format!(
-                "  Create {}\n  title: new\n  description: new\n  label: {}\n  parent: null -> {}\n",
+                "  Create {}\n  title: new\n  description: new\n  label: {}\n  parent: {}\n",
                 axon::declaration::kind(b.kind),
                 b.label.name(),
-                b.parent
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| "null".into())
+                declaration_parent(b)
             ));
             for id in &b.needs {
                 out.push_str(&format!("  needs: + {id}\n"));
