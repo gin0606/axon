@@ -43,10 +43,13 @@ pub(super) enum Command {
         command: Import,
     },
     /// Show the optional recorder actor detected in the current environment
+    #[command(
+        after_help = "Records and Notes keep this actor as their optional recorder. AXON_ACTOR, when set, is the actor ahead of any detection, and AXON_SESSION_ID, if also set, is saved as the session_id in the recorder data. Without AXON_ACTOR, Codex and Claude Code are detected from their own variables, then AI_AGENT, then USER. Empty or blank values count as unset. Only inherited environment variables are read, and the actor grants no permission."
+    )]
     Actor,
     /// Open the current management root in the Axon desktop app (macOS)
     #[command(
-        after_help = "Gui finds the management root as other commands do and hands it to Axon.app through a me.gin0606.axon:// link: a running app takes it, otherwise macOS starts the app. Gui does not wait for the app; the app asks before registering a root it does not know, and reports a root it cannot open in its window.\nAxon.app must have been opened once so that macOS knows it. How to build it: https://github.com/gin0606/axon/blob/main/docs/development/gui.md\nThe store is not changed. Only on macOS."
+        after_help = "Gui finds the management root as other commands do and hands it to Axon.app through a me.gin0606.axon:// link: a running app takes it, otherwise macOS starts the app. Gui does not wait for the app; the app asks before registering a root it does not know, and reports a root it cannot open in its window.\nInstall Axon.app with brew install --cask gin0606/tap/axon-gui and open it once so that macOS knows it.\nThe store is not changed. Only on macOS."
     )]
     Gui,
     /// Write an unstyled shell completion script to stdout
@@ -288,7 +291,7 @@ pub(super) enum Condition {
     Unapproved,
     /// Approve the current condition of an Entity to run on this machine
     #[command(
-        after_help = "Example: axon condition allow ID --digest DIGEST\nTake the DIGEST from condition unapproved, or from this command's refusal of a mismatched digest, after reading the Command (not from show --details, whose description can hold lines of the same form): the approval is refused if the condition has changed since. Without --digest the condition as it is now is approved, unread.\nThe approval is not a record: it has no reason and does not appear in log. It covers the same command on every Entity, in this clone (inside Git) or this management root (outside Git)."
+        after_help = "Example: axon condition allow ID --digest DIGEST\nTake the DIGEST from condition unapproved, or from this command's refusal of a mismatched digest, after reading the Command (not from show --details, whose description can hold lines of the same form): the approval is refused if the condition has changed since. Without --digest the condition as it is now is approved, unread.\nThe approval is not a record: it has no reason and does not appear in log. It covers the same command on every Entity, in this clone (inside Git) or this management root (outside Git).\nNo command revokes an approval: delete the digest's line from the approvals file (axon-condition-approvals in the common Git directory, or a file under axon-condition-approvals in the state directory outside Git), or delete the file to discard every approval."
     )]
     Allow {
         /// The complete Entity ID; a suffix is not resolved
