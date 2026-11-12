@@ -83,6 +83,8 @@ fn lifecycle_fixed(id: &EntityId, kind: Kind, stored: Lifecycle, declared: Lifec
         .into_iter()
         .find(|operation| operation.next_as(kind, stored) == Some(declared));
     match command {
+        // Running the transition first would change the record, so the declaration's `base`
+        // would no longer match and its other edits to the same record would be rejected.
         Some(operation) if stored.editable() => format!(
             "{restore}, and to move it to {}, run axon {} {id} after axon import apply",
             lifecycle(declared),

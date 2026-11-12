@@ -17,7 +17,7 @@ brew update
 brew upgrade gin0606/tap/axon
 ```
 
-記録を閲覧するデスクトップアプリ（`Axon.app`）は別のcaskで、`/Applications` に入ります。Developer IDで署名・公証してあるため、初回起動で許可の操作は要りません。CLIと同じversionで公開され、`brew upgrade` で一緒に更新されます。
+記録を閲覧するデスクトップアプリ（`Axon.app`）は別のcaskで、`/Applications` に入ります。Developer IDで署名・公証してあるため、初回起動で許可の操作は要りません。CLIと同じversionで公開され、`brew upgrade` で一緒に更新されます。リポジトリの登録とデータの置き場は [デスクトップアプリ](gui.md) にあります。
 
 ```sh
 brew install --cask gin0606/tap/axon-gui

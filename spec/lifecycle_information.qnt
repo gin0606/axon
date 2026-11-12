@@ -4,7 +4,8 @@
 // 追記列へ抽象化する。
 // 対象外: 包含・dependency・Group の実効 lifecycle と最終確認による追加の制約、Group から Issue への変換が
 // 要求する「子がない」（いずれも group_lifecycle が扱う）、日時・任意の理由・記録者情報、表示順、公開 ID、
-// 永続化と保存失敗。
+// 永続化と保存失敗。label は title・description と同じく終了後に固定され、遷移・包含・dependency・候補集合・
+// 一覧の状況に影響しないため、このモデルに加えず、固定集合の検査・終了後の固定・種類の変換での保持は実装側で検証する。
 // 基本遷移は lifecycle_rules の種類ごとの規則を import するため、このモデルが許す遷移だけで
 // 実際の Group や依存を持つ Issue の操作が許可されるわけではない。
 // 対応する契約: ../docs/reference/lifecycle.md

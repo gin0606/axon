@@ -6,7 +6,13 @@
 // Git の merge・rebase・cherry-pick は、いずれも相手の記録の部分集合を取り込む一つの action で表す。
 // 構造の不整合は「違反」の集合として導出し、通常操作は違反を増やさず、違反に含まれる Entity には
 // 修復のための固定規則の免除を与える。
-// 対象外: file の bytes と file の配置、lock、探索、ID の衝突確率、変換操作、再浮上条件と一覧の状況。
+// 対象外: file の bytes と file の配置、lock、探索、ID の衝突確率、変換操作、再浮上条件と一覧の状況、
+// 3 つ以上の replica。取り込みは記録を増やすだけで、revert による記録の削除とその merge での伝播は扱わない。
+// 削除の結果できる状態は部分取り込みの状態と同じ形なので、gap と偽の衝突の扱いはそこで検査する。
+// lifecycle 操作の前提は、統合の検査に要る範囲へ簡略化した group_lifecycle の前提の部分集合で、
+// lifecycle・包含・dependency の規則は group_lifecycle を正とする。実装の読取側の判定（check_operation）は、
+// 免除を結果が違反を増やさない場合に限って与え、統合で子を持った Issue の終了に直属の子の終了を要求する点で
+// このモデルの前提より狭いが、違反を増やさない検査を合わせた操作の可否はこのモデルと同じ。
 module record_integration {
   type Id = int
   type Replica = int
@@ -584,6 +590,7 @@ module record_integration {
   // 有効な store では修復の免除が働かない（免除は違反に含まれる Entity にだけ与える）。
   val invNoWaiverWhenValid = eachReplica((s, v) => structurallyValid(v) implies ENTITIES.forall(e => not(inViolation(v, e))))
   // 違反があり衝突がない store には、修復を確実に進める通常操作が一つはある（行き止まりがない）。
+  // 有効な状態まで戻れることは進み具合が有限で単調に減ることから従うが、run テストの経路以外で直接は確かめていない。
   val invInvalidStateRepairable = eachReplica((s, v) =>
     (noConflicts(v) and not(structurallyValid(v))) implies repairable(s, v))
   // 全部取り込みは値を捏造しない。取り込み後に settled な Entity の現在値は、取り込み前の自分か相手の現在値。

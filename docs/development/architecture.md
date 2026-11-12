@@ -1,6 +1,6 @@
 # 層の依存方向
 
-振る舞いの契約は [docs/reference](../reference/lifecycle.md) の各文書、状態と遷移のモデルは [spec](../../spec/README.md) にある。crate と module の配置は [Cargo.toml](../../Cargo.toml) と各 crate の `lib.rs` から辿る。この文書は、コードの配置からは読み取れない層の境界と依存方向の規則を示す。
+横断的な保証は [docs/reference](../reference/) の各文書、状態と遷移のモデルは [spec](../../spec/README.md) にある。crate と module の配置は [Cargo.toml](../../Cargo.toml) と各 crate の `lib.rs` から辿る。この文書は、コードの配置からは読み取れない層の境界と依存方向の規則を示す。
 
 ## 層の責務
 
@@ -8,7 +8,7 @@
 - 保存 adapter（root の `axon` library）は、記録 file・保存先の探索と初期化・declaration file の I/O を担い、検査と記録の生成はコアに任せる。
 - CLI（`axon` binary）は、引数、描画、端末、外部条件の process、終了コードを担う。
 - 記録者取得（`crates/axon-recorder`）は、継承された環境から任意の記録者情報を返すだけで、lifecycle の判断と保存を持たない。
-- デスクトップアプリ（`crates/axon-gui`）は、登録した管理 root の記録を root library で読み、コアの値を表示用の文字列と GPUI の要素に変換する。記録を書かず、書くのはアプリのデータ領域にある登録の一覧と、次の起動で復元する画面の状態だけである。`axon gui` がアプリへ渡すリンクの形式は、CLI とアプリが同じ定義を使うよう root library が持つ。
+- デスクトップアプリ（`crates/axon-gui`）は、登録した管理 root の記録を root library で読み、コアの値を表示用の文字列と GPUI の要素に変換する。記録を書かず、書くのはアプリのデータ領域にある登録の一覧（`roots.json`）、表示言語の設定（`settings.json`、`crates/axon-gui/src/settings.rs`）、次の起動で復元する画面の状態（`session.json`）と単一起動の lock だけである。`axon gui` がアプリへ渡すリンクの形式は、CLI とアプリが同じ定義を使うよう root library が持つ。
 
 ## 依存方向の規則
 

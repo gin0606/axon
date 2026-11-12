@@ -1,6 +1,7 @@
 // 単独 Issue の lifecycle と再浮上条件を扱う基本モデル。
 // 条件定義は一つに固定して抽象化し、成立・不成立だけを外部入力として与える。
-// 対象外: 包含、dependency、Group、登録操作、条件の種類と設定操作、一覧への表示、CLI、永続化。
+// 対象外: 包含、dependency、Group、登録操作、declaration による編集、履歴の保存、記録者による権限判定、
+// 条件の種類と設定操作、一覧への表示、浮上と着手許可の接続、CLI、永続化。
 // 遷移規則は lifecycle_rules を import する。包含と dependency は group_lifecycle が扱う。
 // 対応する契約: ../docs/reference/lifecycle.md
 module issue_lifecycle {

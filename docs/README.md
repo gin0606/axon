@@ -1,6 +1,6 @@
 # ドキュメント
 
-Axon の振る舞いの契約は `reference/` の各文書、状態と遷移のモデルは [spec](../spec/README.md)、層の境界と依存方向は [層の依存方向](development/architecture.md) です。
+変えると既存の記録・利用者の安全・他のツールとの互換が壊れる横断的な保証は `reference/` の各文書、状態と遷移のモデルは [spec](../spec/README.md)、層の境界と依存方向は [層の依存方向](development/architecture.md) にあります。それ以外の振る舞いは実装とテストを正本とします。
 
 利用は [使い始める](guide/getting-started.md) から確認してください。
 
@@ -11,7 +11,8 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 | [使い始める](guide/getting-started.md) | 試用手順、保存先の作り方、同梱skill |
 | [日常の操作](guide/usage.md) | 候補、状態変更、label、Group最終確認、記録参照、計画の一括登録・編集 |
 | [状態と用語](guide/concepts.md) | lifecycle、label、関係 |
-| [保存先とworktree](guide/storage.md) | 無視する運用と追跡する運用、探索・初期化の境界 |
+| [保存先とworktree](guide/storage.md) | 無視する運用と追跡する運用、記録の欠け、改行変換への対処、保存先の選ばれ方 |
+| [デスクトップアプリ](guide/gui.md) | リポジトリの登録と `axon gui`、アプリのデータの置き場 |
 | [Agentからのアクセス](guide/codex.md) | ホスト権限と保存先 |
 
 ## 契約
@@ -20,29 +21,30 @@ Axon の振る舞いの契約は `reference/` の各文書、状態と遷移の�
 | --- | --- |
 | [lifecycle](reference/lifecycle.md) | 状態と遷移、Groupの実効lifecycle、再浮上条件、計画と包含、種類の変換、dependency、候補集合、label、文面・Note・状態変更履歴・記録者 |
 | [候補と外部条件](reference/candidates.md) | `axon tasks`の行と状況、`axon proposals|tasks|show`の評価と、条件コマンドの実行 |
-| [CLI入出力](reference/cli.md) | ID・引数・一覧と詳細・英語表示・装飾・保存結果 |
-| [保存と統合](reference/storage.md) | 記録と現在値の導出、衝突・違反・gap、保存先の探索と初期化、Git統合の範囲 |
+| [CLI入出力](reference/cli.md) | 識別子と値の検証、skillが読む状況・節の語、条件の許可の表記と結果、外から届く文字列の表示、保存結果と終了コード |
+| [保存と統合](reference/storage.md) | 記録と現在値の導出、衝突・違反・gap、破損と保存形式の版、保存先の探索と初期化、`.axon/` の外に書くもの |
 | [一括declaration](reference/declaration.md) | 計画全体の取得と一括編集のfile形式、`axon export`・`axon import` |
-| [デスクトップアプリ](reference/gui.md) | 閲覧専用アプリの登録の一覧、操作、`axon gui` からのリンクの扱い |
+| [デスクトップアプリ](reference/gui.md) | 閲覧専用の範囲、アプリのデータfile、`axon gui` からのリンクの扱い |
 
 ## 開発者向け
 
 | 文書 | 定義する範囲 |
 | --- | --- |
-| [モデル](../spec/README.md) | Quintモデルの対象範囲、検証する性質、再現手順 |
+| [モデル](../spec/README.md) | Quintモデルの一覧、検査の実行と成功の判定、検証結果 |
 | [層の依存方向](development/architecture.md) | 層の責務の境界と依存方向の規則 |
-| [検証方針](development/verification.md) | CI、独立fixture、モデル検証の分担 |
-| [デスクトップアプリの開発](development/gui.md) | ビルドの要件、採用依存の固定、`.app` の作成、確認結果 |
+| [検証方針](development/verification.md) | CI、独立fixture、モデル検証の分担、設計変更の進め方 |
+| [デスクトップアプリの開発](development/gui.md) | ビルドの要件、採用依存の固定、`.app` の作成、実機での確認・計時と未確認の範囲 |
 | [リリース](development/releasing.md) | リリースの決めごと、Release用のenvironmentとsecrets、失敗時の復旧 |
-| [設計判断](design/decisions.md) | 現在の契約がその形になっている理由と、採らなかった案 |
+| [設計判断](design/decisions.md) | 保証と実装がその形になっている理由と、採らなかった案 |
 
 記録 file の形式は [codec](../crates/axon-core/src/lifecycle/record/codec.rs)、公開の順序は [file adapter](../src/file.rs)、保存先の探索と初期化は [location](../src/location.rs)、Usageは [Clap定義](../src/cli/args.rs) を正本とします。
 
 ## 更新するとき
 
-- 現在のルールは担当する契約文書で定義する。別の文書で説明するときは要約とリンクにする。
+- reference には、変えると Quint モデルが前提にしている意味論、保存したデータの版をまたぐ互換性、利用者の安全、skill や script が依存する入出力のどれかが壊れる保証だけを書く（各基準の範囲は [設計変更の進め方](development/verification.md#設計変更の進め方)）。それ以外の詳細（表示の体裁、文言、上限値、GUI の操作など）は Group・Issue で決め、実装とテストを正本として reference に書き写さない。
+- 保証は担当する reference の文書で定義する。別の文書で説明するときは要約とリンクにする。
 - 契約は現在形で書く。理解に必要な短い理由は契約の近くに残し、長い比較や判断の背景は design に置く。
-- development は、コードからは読み取れない層の境界・依存方向と検証の方針だけを示す。module の配置、保存形式の項目、関数の処理順、テストの入口やコマンドなど、コード・設定・script を読めば分かる内容は書かず、必要ならリンクする。実装に固有の不変条件はその処理の隣のコメントに置き、振る舞いとして保証するものは reference に置く。
+- development は、コードからは読み取れない層の境界・依存方向と検証の方針だけを示す。module の配置、保存形式の項目、関数の処理順、テストの入口やコマンドなど、コード・設定・script を読めば分かる内容は書かず、必要ならリンクする。実装に固有の不変条件はその処理の隣のコメントに置き、上の基準に当たる保証は reference に置く。
 - 検証方法は development、検証結果には実施時点と対象・条件を記す。
 - 未決事項の採否や作業状況は Axon で管理し、docs に現況一覧を複製しない。
 - 文書を移動・分割したら、README、AGENTS.md、モデル冒頭などの参照元も更新する。

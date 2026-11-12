@@ -931,6 +931,8 @@ impl AxonApp {
             .selection_format(SelectionFormat::Plain)
             .markdown_extensions(
                 MarkdownExtensions::default()
+                    // ImageAlt's text depends on the language, so a language change must
+                    // re-parse source that has not changed.
                     .parser_revision(match self.language {
                         Language::Japanese => 1,
                         Language::English => 2,

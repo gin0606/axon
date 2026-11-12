@@ -22,6 +22,12 @@ Gitはuntrackedなfileをcheckout・mergeの上書きから保護しますが、
 
 `axon init` は `.axon/` の外については手順を表示するだけで、repository rootの `.gitignore`、`.gitattributes`、Git configを作成も編集もせず、stage・commitもしません。
 
+### 記録の欠け（gap）
+
+Axonの記録を含むcommitを後から部分的に取り消す（revert、rebaseでのdrop）か拾う（cherry-pick）と、後続の記録が親として参照する記録fileが保存先から欠けることがあります。未commitの記録fileを残したまま別のcommitへ移った場合（checkout・reset・stash）も同じです。merge・rebase・squash merge・rebase mergeは記録を追加するだけで、それ自体では欠けを作りませんが、片側がrevertで消した記録fileの削除はmergeで他側にも伝わり、他側にその記録を親とする後続の記録があれば欠けになります。後続の記録がない記録のrevertは記録を消すだけで、欠けにも衝突にもなりません。
+
+欠けがあるEntityは、実際には古い記録と新しい記録なのに衝突として見えることがあります。`axon resolve` は新しい可能性が高い側に `parent missing; likely newer` と示し、新しい方を選んで解決すれば正しい値になります。欠けた記録fileは、Gitの履歴から `git checkout <commit> -- <path>` で戻せば埋まります。戻さなくても読取と操作は続けられ、`axon storage check` は欠けを情報として報告して終了0のままです。
+
 ## 改行変換と `.axon/.gitattributes`
 
 記録IDは記録fileのbytes全体のhashなので、Gitの改行変換（repository rootの `* text=auto eol=crlf`、Git for Windowsのsystemの設定にある `core.autocrlf=true` など）がcheckout時にLFをCRLFへ変えると、保存先の破損として読取と全操作が止まります。`axon init` が書く `.axon/.gitattributes` の `* -text` がこの変換を止めます。この属性のない保存先が変換されたときは、読取と `axon storage check` が破損の報告に、改行を戻せば名前と一致するfileであることと、改行変換の可能性とこの節への案内を添えます。この属性は改行変換を止めるだけで、統合には関わりません。防げない設定（repositoryごとの `info/attributes` での `text` 属性の指定、`filter`・`ident`・`working-tree-encoding` の属性など）を含む規則は [保存と統合の契約](../reference/storage.md#保存先と初期化) にあります。
@@ -53,9 +59,11 @@ Git内では現在のrepositoryの中だけを探し、次の順で保存先を�
 1. 現在のworktree rootの `.axon`。
 2. main worktreeの `.axon`。現在のworktreeがlinked worktreeで、Git common directoryがmain worktree直下の `.git` directoryである場合だけ探します。bare repositoryに付けたworktreeとsubmoduleでは探しません。
 
-各段では `header.json` があればそこに決まります。Git内でheaderのない段では、まずそのworktreeのGit indexを調べ、`.axon/` の下にunmergedなpathがあれば次へ進まずに停止してunmergedを示します。そうでなければ、中断した初期化の残骸しかない `.axon` では次へ進み、headerがないのに記録やその他のfileがあれば停止します。決まった保存先が破損・読取不能であれば停止し、別の保存先へは切り替えません。Git外では最寄りの保存先を祖先から探し、`.axon` のある祖先のdirectoryか `.axon` の所有者が自分でなければ停止します（`sudo` でrootとして実行した場合は、rootに加えて元のユーザーの所有も自分の所有とみなします）。
+各段では `header.json` があればそこに決まり、決まった保存先が破損・読取不能であれば停止して、別の保存先へは切り替えません。統合が未解決で `.axon/` の下がunmergedなときと、headerがないのに記録などのfileがあるときも停止します。Git外では最寄りの保存先を祖先から探し、`.axon` のある祖先のdirectoryか `.axon` の所有者が自分でなければ停止します。判定の順序と詳細は [探索](../reference/storage.md#探索) にあります。
 
 追跡する運用では、保存先を持たないbranch（`axon init` より前に分岐したbranchなど）のlinked worktreeから操作すると、2によってmain worktreeの追跡対象の保存先に記録を書きます。変更はmain worktreeの差分として見え、記録は失われないため、この副作用は許容しています。
+
+追跡する運用で、保存先を持たないbranchをmain worktreeでcheckoutすると、Axonは未初期化として扱います。既存のstoreを使うには保存先をGitで取り込んでください。そこで `axon init` を実行すると別のstoreができ、後から一つの保存先に統合できません。
 
 linked worktreeでの `axon init` は、main worktreeに保存先が既にあれば拒否します。無視する運用では手前に作られた保存先へ読み書きが気づかないまま切り替わり、追跡する運用では別のstoreができて後から統合できなくなるためです。main worktreeに保存先がなければ作成し、他のworktreeからは見えないことを表示します。ただしmain worktreeのGit indexで `.axon/` の下がunmergedなら拒否します。
 

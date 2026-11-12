@@ -2,13 +2,11 @@
 
 この文書は、指定したIssue・Groupを一つのYAMLのdeclarationとして取得し、一括で登録・編集するときの契約を定める。コマンドの入出力は [CLIと表示の契約](cli.md)、保存境界の扱いは [保存と統合の契約](storage.md) に従う。
 
-## 目的と用途
-
-指定したIssueと、指定したGroupおよびその全子孫を一つの declaration として取得し、登録・修正できるようにする。主な用途は二つある。新しく大きめの計画を一括で登録すること、登録後に不備が見つかったときに計画全体を取得して context に入れ、役割・完了条件・依存の矛盾を直してまとめて反映することである。Issue 単位の操作だけでは、エージェントが他の Issue の内容を見落とし、矛盾に気付けない。取得した declaration はファイルとして別のレビューにも渡せる。
+## 保証と扱わないもの
 
 満たす安全性は、計画全体と変更差分を保存前に検査できること、取得後に編集の前提が変わっていたら競合として止めること、部分適用を作らないこと、障害後の再実行で新規 Entity を重複作成しないことである。
 
-この機能は lifecycle・包含・dependency・終了構成の制約を迂回せず、通常操作と同じ共通コアの検査を通す。衝突中の Entity か構造の違反がある保存先では `prepare`・`check`・`apply` を拒否し（途中で止まった反映の [再試行](#再試行) だけは残りの反映で消える違反を除く）、先に `axon resolve` と通常操作で直す。通常操作は無関係な違反があっても進むが、一括反映は多数の Entity に触れ、違反を増やさない判定を Entity ごとに説明しにくいため、違反のない保存先だけを対象にする（[保存と統合の契約](storage.md#衝突と通常操作)）。`axon export` は選んだ Entity か参照先が衝突中なら拒否し、違反では拒否しない。再浮上条件と Note は扱わない。既存 Entity の lifecycle 遷移と種類の変換も扱わず、`axon accept|start|complete|cancel|reopen`・`axon convert` などの通常コマンドに任せる。
+この機能は lifecycle・包含・dependency・終了構成の制約を迂回せず、通常操作と同じ共通コアの検査を通す。衝突中の Entity か構造の違反がある保存先では `prepare`・`check`・`apply` を拒否し（途中で止まった反映の [再試行](#再試行) だけは残りの反映で消える違反を除く）、先に `axon resolve` と通常操作で直す。通常操作は無関係な違反があっても進むが、一括反映は多数の Entity に触れ、違反を増やさない判定を Entity ごとに説明しにくいため、違反のない保存先だけを対象にする（[保存と統合の契約](storage.md#構造の違反と修復)）。`axon export` は選んだ Entity か参照先が衝突中なら拒否し、違反では拒否しない。再浮上条件と Note は扱わない。既存 Entity の lifecycle 遷移と種類の変換も扱わず、`axon accept|start|complete|cancel|reopen`・`axon convert` などの通常コマンドに任せる。
 
 ## 対象範囲と編集集合
 
@@ -83,9 +81,9 @@ root は `schema`、`groups`、`issues`、`references` の 4 field だけをこ�
 | `key` | string または null | file 内のみ | file-local の別名。`^[a-z][a-z0-9-]{0,63}$` に一致し、`groups`・`issues` を通じて file 内で一意。保存先には保存しない |
 | `base` | fingerprint または null | 読み取り専用 | `axon export` 時点の値の fingerprint。未適用の新規 Entity だけ null |
 | `lifecycle` | `undecided` / `not-started` / `in-progress` / `completed` / `cancelled` | 既存は読み取り専用 | 保存された lifecycle（保存値）。Group の実効値は書かないため、Group は `in-progress` にならない。新規 Entity は `undecided` か `not-started` のどちらかを書く |
-| `title` | string | 編集可 | 空または空白だけの値、改行や制御文字を含む値、200 文字を超える値を拒否する。それ以外は保存値をそのまま扱う |
+| `title` | string | 編集可 | 通常操作が受け付けない値（空または空白だけの値、改行や制御文字を含む値など）を拒否する。それ以外は保存値をそのまま扱う |
 | `description` | string | 編集可 | Markdown 本文。空文字は本文なし。trim・正規化をしない |
-| `label` | string | 編集可 | [label](lifecycle.md#label) の固定集合の値のどれか（`bug`・`feat`・`chore`・`docs`・`test`・`refactor`・`spike`）。必須で、null・空文字・集合外の値を拒否する。新規 Entity は登録時の label を書く |
+| `label` | string | 編集可 | [label](lifecycle.md#label) の固定集合の値のどれか。必須で、null・空文字・集合外の値を拒否する。新規 Entity は登録時の label を書く |
 | `parent` | 参照 または null | 編集可 | 親 Group。Issue を親にする参照は拒否する |
 | `needs` | 参照の list | 編集可 | outgoing dependency。空なら `[]` |
 
@@ -139,7 +137,7 @@ fingerprint には declaration が見せる項目だけを含める。記録 ID 
 
 `axon export ID...` は一貫した記録の集合から selector の和集合を編集集合として選び、canonical YAML を stdout へ出す。編集集合の各 Entity は現在値と `base` を持ち、`key` は null になる。取得した直後は `key` を復元できないため、参照はすべて ID 参照になる。`references` は編集集合外の参照先から計算する。参照先が保存先に存在しない（親の不在・依存先の不在の違反）場合はその参照を `references` に載せずに出し、`prepare`・`check`・`apply` はその不在を診断して拒否する。選んだ Group の子が衝突中なら、その子を含めずに出すのではなく拒否する。保存先を変更せず、再浮上条件を実行しない。
 
-新規計画の雛形は`axon docs declaration --example`で取得する。新規 Group 一件、その子 Issue 二件、子 Issue 間の dependency 一本を含む完全な YAML だけを stdout に出し、`id` と `base` は null、`lifecycle` は `not-started` とする。`axon docs declaration`は field、新規と既存の違い、`prepare` → `check` → `apply` の手順を説明する。両者は保存先を開かず、管理 root、ネットワーク、ソース checkout に依存しない。引数なしの`axon docs`は状態モデルと基本の workflow を説明し、declaration の説明へ案内する。
+新規計画の雛形は`axon docs declaration --example`で取得する。新規 Entity だけからなる canonical な YAML だけを stdout に出し、`id` と `base` は null とする。保存先を開かず、管理 root、ネットワーク、ソース checkout に依存しない。
 
 ## prepare、check、apply
 
@@ -147,18 +145,15 @@ fingerprint には declaration が見せる項目だけを含める。記録 ID 
 
 `axon import prepare FILE` は保存先を変更せず、file だけを置き換える。strict YAML と局所規則（field、key、参照の形、重複、自己依存、親が Group であること）を検証し、既存 Entity の record の ID が保存先に存在し kind が一致すること、編集集合外の参照先が保存先に存在することを確認し、`id: null` の各 Entity に保存先と file の両方で衝突しない最終 ID を割り当てる。いずれかに失敗すれば file を変更しない。`base: null` の record の割り当て済み ID が保存先に存在する場合は後述の適用済み判定を行い、該当すればその ID を保持し、該当しなければ `conflict: ID: new id already exists` として file と保存先を変更せず拒否する。適用済みの可能性があるため、別 file へ `axon export ID` で取り直して編集を移す。意図して新規作成する場合は、その新規 record に `id: null` を明示する。保存先で未使用の割り当て済み ID は保持する。Entity の記録がなく Note だけが残る ID は予約済みとして再割り当てする。key 参照は保持する。`key` はそのまま残し、`base` は null のままにする。`references` を現在値から再生成し、canonical 形式で元の場所へ atomic に置き換える。置き換えは記録 file の公開と同じ手順に従い、temporary への書込と sync の後、file の bytes が読み取り時と同じであることを再照合してから rename し、directory を sync する。再照合前の失敗と bytes の変化は file を変更せず、rename 後の sync 失敗は file の結果不明として報告する。再照合後の非協調な editor 書込は、記録 file の保存契約と同じく対象外とする。Note だけが残る予約済み ID を除き、すでに全 ID が割り当て済みなら新しい ID を発行せず、同じ入力への `prepare` は同じ内容を返す。既存 Entity の `base` の競合判定は `prepare` の対象ではない。成功時は新規 record の `key -> 完全ID` の対応を一行ずつ表示する。
 
-`prepare`・`check`・`apply` の `new id already exists` 診断は、対象 ID と、`axon export` での取り直し・編集の移行、および意図した新規作成には `id: null` を使う対処を示す。
-
 `axon import check FILE` は file と保存先を変更しない。全 Entity に ID があり、file が canonical 形式であることを要求し、違えば `prepare` が必要であることを報告して暗黙に書き換えない。検証は次の順に行う。
 
 1. strict schema、identity、参照の局所検証と、既存 Entity の ID が保存先に存在し kind が一致すること。`references` に記載された外部 Entity の存在と kind の一致も、再試行の適用済み判定より前に検証する
 2. `base` と保存先の現在値の照合、および新規 Entity の割り当て済み ID が保存先に存在しないことの確認。不一致または存在があれば後述の再試行の適用済み判定を行い、該当すれば以降の検証を省いて適用済みとして扱い、該当しなければ競合とする。`base` が一致するのに file の `lifecycle` が現在値と異なれば、読み取り専用項目の書き換えとして拒否する
 3. 参照先の存在
 4. 検証に使う記録の集合へ編集を共通コアの通常操作として仮に適用し、包含・dependency・終了構成・固定された文面と label の制約を通常操作と同じ意味で検査
-5. 作成、title の変更前後（改行を `\n`、制御文字を可視 escape とする一覧と同じ一行表示）、description の変更有無、label の前後、parent の前後、`needs` の増減を Entity ごとに表示。title・label・parent は変わらなければ `unchanged` と表示し、新規 Entity の label と parent は作成時の値だけ（親がなければ `parent: null`）を表示する。label だけが異なる場合も差分として表示する。差分がなければその旨を表示
-6. 適用後の状況欄を保存情報から導出できる範囲で表示
+5. 作成、title・label・parent の前後、description の変更有無、`needs` の増減を Entity ごとに表示し、適用後の状況欄を保存情報から導出できる範囲で表示
 
-description の全文差分は file 自体の git diff に任せ、CLI では変更の有無に留める。再浮上条件は実行しない。一件でも error があれば適用可能とは表示しない。
+再浮上条件は実行しない。一件でも error があれば適用可能とは表示しない。
 
 `axon import apply FILE` は保存先の書き込み lock を取得したあとに file の bytes を読んで digest を保持し、その内容と新しい記録の集合に対して `check` と同じ検証を同じ優先順位で再実行し、差分を共通コアの通常操作の列に変換して、一回の lock の下で記録として反映する。一件でも拒否されれば全件適用せず、保存先を変えない。保存する記録は変更のある Entity ごとに一つで、新規 Entity は最終値を持つ登録の記録、既存 Entity は title・description・label・parent・needs の最終値をまとめて持つ一つの記録（`axon log` では declaration の適用として示す）とし、検証に使った通常操作の列を個々の記録にはしない。記録は 1 件 1 file なので、反映は検証済みの全記録の一時 file を書いてから順に公開する形になり、公開の途中で rename が失敗するか process が失われた場合だけ一部の Entity の記録が公開された状態になりうる。公開は新規 Entity の登録を親と依存先が先になる順に、次いで既存 Entity の変更の順に行う。Entity ごとに記録が一つなので、各 Entity は最終値か元の値のどちらかにある。この場合は結果不明として扱い（rename の失敗なら診断に示し、process の喪失なら利用者が結果不明として扱う）、[再試行](#再試行) で残りを反映する。操作の適用順は実装が決め、有効な最終状態を中間状態の循環や前提不足で弾かないようにし、入力の並びで適用結果を変えない。たとえば親の解除と依存の削除を追加より先に行う。新規 Entity は `lifecycle` が示す初期状態と `label` の値で作成し、架空の採用履歴を作らない。再浮上条件は既存 Entity では現在値を保持し、新規 Entity では未設定とする。同じ値の再指定は差分ではなく成功した no-op とする。
 
@@ -178,19 +173,10 @@ description の全文差分は file 自体の git diff に任せ、CLI では変
 - `base` の不一致、または新規 Entity の割り当て済み ID が保存先に存在すること（再試行の Entity ごとの適用済み判定に該当する場合を除く）。保存先の変更と入力側の `base` の改変・null 化は区別せず、いずれも競合として扱う
 - `Completed`・`Cancelled` の title・description・label の差分、`Completed` の `needs` の差分、終了した Group の構成を変える所属変更、終了した Group を親にする作成・所属変更、実効値が `InProgress` か `Completed` の Entity を、移動先の Group 自身かその祖先に採用済みでないものがある場合に、その下へ移す変更、包含の循環、dependency の循環など、共通コアが通常操作でも拒否する変更。新規作成の親は終了していない Group であればよく、採用済みや着手済みである必要はない
 
-`key` の書式違反と重複は別の診断にし、どちらも入力された `key` の値を引用して示し、書式違反の診断には `key` の書式も示す。
+読み取り専用項目の書き換えと `base` の不一致の診断は、対象 ID と代わりに行う操作を示す。取り直しを示す場合は、file 全体の record を`axon export`で別 file へ取り直して編集を移すよう示す。対象の record だけを取り直すと、元の file には一致しない `base` が残るためである。`prepare` は既存 Entity の `base` を更新しないため、`base` の不一致を解消しない。
 
-読み取り専用項目の書き換えと `base` の不一致の診断は、対象 ID に加えて代わりに行う操作を示す。取り直しを示す場合は、file 全体の record を`axon export`で別 file へ取り直して編集を移すよう示す。対象の record だけを取り直すと、元の file には一致しない `base` が残るためである。
-
-- 既存 Entity の `lifecycle` の書き換えは、書き換えたすべての Entity について、file の値を保存値へ戻すことを示す。保存値から宣言値へ一つの通常コマンド（`axon accept|withdraw|start|release|complete|cancel|reconsider|reopen`）で遷移できる場合はそのコマンドも示す。保存値が終了していなければ `axon import apply` の後に実行するよう示す。同じ record の他の項目も編集していると、前に実行すれば `base` が一致しなくなるためである。保存値が `Completed`・`Cancelled` なら title・description・label の編集も拒否されるため、先に実行してから取り直すよう示し、他に変更がなければ戻して実行するだけで足りることも示す。一つのコマンドで遷移できなければその旨を示し、Group の `in-progress` には保存されない実効値であることを示す。コマンドの前提（依存先の完了など）や、他の編集が遷移後にだけ通ること（採用前の Group の下への移動など）は判定しないため、示した手順がそれらで拒否されることはある
-- 既存 Entity の kind の不一致は、record を移したなら元の list へ戻すこと、種類を変えるなら`axon convert`を使うこと、変換の後、または`axon export`の後に保存先で変換されていた場合は取り直すことを示す。record の移動と保存先での変換は区別できないため、両方を示す。Group の record を `issues` へ移すと子の親が Issue を指して局所規則の検証に失敗するが、移した record を元の list へ戻せばその検証を通る場合は、kind の不一致として診断する
-- `references` の kind の不一致は、`axon import prepare FILE` での再生成を示す。`prepare`・`check`・`apply` の局所規則（親が Group であること）は、編集集合外の親を、`references` の kind と保存先の現在値のどちらかが Group なら通す。このため、`parent` に指定した参照先が`axon export`の後に Group へ変換されても、`check`・`apply` はこの不一致として診断し、`prepare` は `references` を再生成する。逆に Issue へ変換された参照先を親にした場合は、`check`・`apply` はこの不一致として診断し、`prepare` は再生成した kind での検証で親が Group でないとして拒否する
-- `base` の不一致は、保存先の Entity が `base` と一致しないこと（`axon export` の後の変更か `base` の改変で、両者は区別しない）と、取り直しを示す。`prepare` は既存 Entity の `base` を更新しないため、この競合を解消しない
+`prepare`・`check`・`apply` の局所規則（親が Group であること）は、編集集合外の親を、`references` の kind と保存先の現在値のどちらかが Group なら通す。`references` の kind と保存先の現在値の不一致は `check`・`apply` が拒否し、`prepare` は `references` を再生成したうえで検証する。
 
 終了した Entity を別の読み取り専用セクションに分けない。共通コアは`Cancelled`の dependency 編集を許し、終了していない Group の間での終了 Entity の所属変更を許す（`Completed` の Entity の移動先は、所属なしか、自身と全祖先が採用済みの Group に限る）ため、終了 Entity にも編集できる項目が残る。同じ list に置き、項目単位で拒否する。
 
-保存境界の失敗は [CLIと表示の契約](cli.md#mutationの結果) と同じく Applied、Not applied、Result unknown を区別する。参照先の存在しない ID は保存先の不存在として、file 内で未解決の key とは別の診断にする。
-
-## CLI と skill の責務
-
-CLI は形式の検証、競合検知、共通コアによる制約検査、原子的な保存、再試行の判定を担う。skill は何を変えるかの判断、declaration の編集、check 結果の読み取り、apply の実行判断を担う。skill は保存 file を直接編集せず、一括操作を逐次の通常 CLI で代用しない。file 作成・レビューだけの依頼を保存済み Entity の変更へ広げず、`apply` の直前で同じ権限を再確認しない。個人 workflow の判断境界は[設計判断](../design/decisions.md#一括-declaration-の設計判断)に置く。
+保存境界の失敗は [CLIと表示の契約](cli.md#mutationの結果) と同じく Applied、Not applied、Result unknown を区別する。

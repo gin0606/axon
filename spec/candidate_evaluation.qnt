@@ -141,7 +141,8 @@ module candidate_evaluation {
   // 評価できるのは祖先がすべて浮上した未評価の Entity だけで、各 Entity は1回の取得で最大一回。
   // 未設定は常に成立とする。開始時の許可の集合にない外部コマンドは実行せず Unapproved とし、
   // 未設定と同じく1回の観測ステップとして数える。判定失敗はその場で取得全体を失敗にし、
-  // 途中の候補を公開しない。
+  // 途中の候補を公開しない。独立した枝の評価順は非決定的で、失敗したときにどの枝まで評価したかは保証しない。
+  // 外部の結果は Entity ごとの評価時に選ぶため、異なる Entity の条件を同一瞬間に観測する保証も置かない。
   action evaluateEntity(e: Id, result: ObservationResult): bool = all {
     listing.status == Running,
     pending(entitySet, listing).contains(e),
@@ -206,6 +207,7 @@ module candidate_evaluation {
   }
   // Entity e の現在の条件の許可。axon condition allow と、保存値と同じ文字列の axon condition set（記録を作らない）を表す。
   // 評価を呼ばず、取得の途中でも起きうるが、取得は開始時に読んだ許可の集合を使うため、その取得の結果は変わらない。
+  // 条件の読取と許可を一つの action にしており、lock を取らない axon condition allow で読取の後に条件が変わる競合は含めない。
   // 衝突中の Entity と digest の照合はこのモデルの対象外で、実装側で検証する。
   pure def commandOf(setting: Setting): Set[int] = match setting {
     | ExternalCommand(c) => Set(c)

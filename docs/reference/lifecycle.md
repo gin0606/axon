@@ -2,7 +2,7 @@
 
 この文書は、Issue・Group が持つ lifecycle の状態と遷移、Group の実効 lifecycle、再浮上条件、Groupによる包含、種類の変換、dependency、候補集合、label、文面・Note・状態変更履歴の契約を定める。一覧の行と状況、候補一覧の評価順と外部コマンドの実行は [候補と外部条件](candidates.md)、識別子・引数・表示・保存結果は [CLIと表示の契約](cli.md)、計画全体の一括編集は [Declaration](declaration.md)、記録の保存と Git 統合は [保存と統合の契約](storage.md) に定める。
 
-対応する実行可能なモデルは [`spec/lifecycle_rules.qnt`](../../spec/lifecycle_rules.qnt)、[`spec/issue_lifecycle.qnt`](../../spec/issue_lifecycle.qnt)、[`spec/group_lifecycle.qnt`](../../spec/group_lifecycle.qnt)、[`spec/lifecycle_reachability.qnt`](../../spec/lifecycle_reachability.qnt)、[`spec/candidate_evaluation.qnt`](../../spec/candidate_evaluation.qnt)、[`spec/lifecycle_information.qnt`](../../spec/lifecycle_information.qnt) にある。モデルが前提とする規則の一覧、各モデルの対象範囲・検証する性質・再現手順は [モデルの読み方](../../spec/README.md#モデルが表す規則) を参照する。
+対応する実行可能なモデルは [`spec/lifecycle_rules.qnt`](../../spec/lifecycle_rules.qnt)、[`spec/issue_lifecycle.qnt`](../../spec/issue_lifecycle.qnt)、[`spec/group_lifecycle.qnt`](../../spec/group_lifecycle.qnt)、[`spec/lifecycle_reachability.qnt`](../../spec/lifecycle_reachability.qnt)、[`spec/candidate_evaluation.qnt`](../../spec/candidate_evaluation.qnt)、[`spec/lifecycle_information.qnt`](../../spec/lifecycle_information.qnt) にある。各モデルの対象範囲と検証する性質は各 `.qnt` の冒頭と定義の横のコメントに、検査の実行方法は [Quintモデル](../../spec/README.md) にある。
 
 ## 状態
 
@@ -19,8 +19,6 @@ Issue・Group は一つの lifecycle を持つ。状態の種類は Issue と Gr
 `Completed` と `Cancelled` を終了とする。登録直後は `Undecided` または `NotStarted` から始まる。`Undecided` は記録済みの提案であり、実施の約束を意味しない。`Accept` によって `NotStarted` へ進む。
 
 保存される lifecycle（保存値）と、表示や前提の判定に使う lifecycle（実効値）を区別する。Issue の実効値は保存値と同じである。Group は保存値として `InProgress` を持たず、実効値を子から導出する（[Group の実効 lifecycle](#group-の実効-lifecycle)）。この文書で「採用済み」は保存値が `NotStarted` であることを指し、`Undecided` と終了した Entity を含まない。
-
-採否を決めるためのまとまった調査は、別の Issue として採用・着手する。元の改善案は `Undecided` のままにできる。この使い分けのために状態を増やさず、複数 Entity の関係は包含と dependency で扱う。
 
 ## 遷移
 
@@ -45,7 +43,7 @@ Group は `Start`・`Release` を持たない。Group の着手は配下の Issu
 
 Group の実効値は、保存値が `NotStarted` で、直属の子のうち実効値が `InProgress` か `Completed` のものがあれば `InProgress`、それ以外は保存値と同じとする。子 Group の実効値も同じ規則で決まるため、孫の Issue の `Start` は `NotStarted` の子 Group を通じて祖父の Group まで `InProgress` にする。`Cancelled` の子だけでは `InProgress` にならない。
 
-実効値は保存せず、子の変化に応じて導出が変わるだけである。配下の Issue を `Start` しても、Group の保存値と履歴は変わらない。一覧と詳細の状況欄と `axon list --lifecycle` の絞り込みは Group の実効値に基づき、保存値は詳細で読める。表記は [CLIと表示の契約](cli.md) に定める。
+実効値は保存せず、子の変化に応じて導出が変わるだけである。配下の Issue を `Start` しても、Group の保存値と履歴は変わらない。一覧と詳細の状況欄と `axon list --lifecycle` の絞り込みは Group の実効値に基づく。
 
 ## 再浮上条件
 
@@ -59,7 +57,7 @@ Group の実効値は、保存値が `NotStarted` で、直属の子のうち実
 
 Issue・Group とも所属は最大一つで、所属なしも許す。Group も最大一つの親 Group を持ち、Issue と子 Group を同じ階層に置ける。所属先は Group に限り、Issue は子を持たない。Group の自己包含と、子孫の下への移動による循環を禁止する。所属変更は既存の親子の制約を壊さない限り許可し、lifecycle を変えない。
 
-終了した Group への追加と、そこからの取り外しは不可とする。Group の最終確認は完了の時点で固定した子の集合について行うため、終了後に構成が変わると、確認したGroupの構成と現在の構成が食い違う。構成を変えるには、`Completed` の Group は `Reopen`、`Cancelled` の Group は `Reconsider` で戻してから操作する。どちらの戻しも、その Group の親が終了していれば行えない。
+終了した Group への追加と、そこからの取り外しは不可とする。構成を変えるには、`Completed` の Group は `Reopen`、`Cancelled` の Group は `Reconsider` で戻してから操作する。どちらの戻しも、その Group の親が終了していれば行えない。
 
 終了した Group の配下の lifecycle も固定する。終了した Group の配下にある Entity の lifecycle 操作は、`Reopen`・`Reconsider` を含めてすべて無効になる。`Completed` の Group 配下にある `Cancelled` の Issue は、Group を `Reopen` するまで `Reconsider` も取り外しもできない。理由は [終了した Group の構成と配下の状態を固定する理由](../design/decisions.md#終了した-group-の構成と配下の状態を固定する理由) に記す。
 
@@ -69,7 +67,7 @@ Issue の `Start` には、Issue 自身が `NotStarted` であることに加え
 
 Group の `Complete`・`Cancel` には直属の Issue・子 Group がすべて終了している必要があり、`Undecided` の子もその妨げになる。子の終了は `Completed`・`Cancelled` のどちらでも満たす。直属の子がない Group と、子がすべて `Cancelled` の Group も `Complete` できる。
 
-Group の `Complete` にはさらに、そのGroup全体の成果の最終確認が通ったという入力を要求する。画面単位の子 Group にも、機能全体の親 Group にも、それぞれ独立した最終確認がある。Group に対する `axon complete ID` の実行自体を最終確認済みの明示入力とし、別のレビュー済み状態や必須フラグを設けない。確認手順は呼び出し側の skill・運用で扱う。空の Group でもこの確認を省略しない。子の終了だけで親を自動的に終了しない。
+Group の `Complete` にはさらに、そのGroup全体の成果の最終確認が通ったという入力を要求する。Group に対する `axon complete ID` の実行自体を最終確認済みの明示入力とし、別のレビュー済み状態や必須フラグを設けない。空の Group でもこの確認を省略しない。子の終了だけで親を自動的に終了しない。
 
 包含と dependency から各操作が要求する前提は次のとおりとする。すべての lifecycle 操作は、これに加えて親が終了していないことを要求する。
 
@@ -112,7 +110,7 @@ Group の移動は、その Group の親だけを付け替える。配下の所�
 
 変換は lifecycle・所属・dependency・文面・label・再浮上条件・Note・ID を変えない。変換した Entity を参照する所属と dependency はそのまま残る。Issue から変換した Group は子を持たないため、実効値は保存値と同じになる。
 
-変換は lifecycle 遷移ではないが記録として残り、変換前後の種類が読める。lifecycle 遷移の記録の妥当性は、その遷移の時点の種類（直前の記録の現在値の種類。登録時の種類を、その遷移より前の変換の記録で進めたもの）の規則で判定し、Entity の現在の種類では判定しない。遷移は種類を変えないため、遷移の記録が持つ操作後の種類がその時点の種類でもある。Issue として `Start`・`Release` してから Group に変換した履歴と、Group として `NotStarted` から `Complete` し `Reopen` してから Issue に変換した履歴は、この判定で妥当になる。現在の種類で全記録を判定すると、Group が `Start` を持たず、Issue が `NotStarted` から完了しないため不正になる。`axon log` は変換を lifecycle 遷移と区別し、変換前後の種類とともに示す（[CLIと表示の契約](cli.md#noteと履歴)）。
+変換は lifecycle 遷移ではないが記録として残り、変換前後の種類が読める。lifecycle 遷移の記録の妥当性は、その遷移の時点の種類（直前の記録の現在値の種類。登録時の種類を、その遷移より前の変換の記録で進めたもの）の規則で判定し、Entity の現在の種類では判定しない。遷移は種類を変えないため、遷移の記録が持つ操作後の種類がその時点の種類でもある。Issue として `Start`・`Release` してから Group に変換した履歴と、Group として `NotStarted` から `Complete` し `Reopen` してから Issue に変換した履歴は、この判定で妥当になる。
 
 ## dependency
 
@@ -138,7 +136,7 @@ Group から Issue への依存を許す。Issue・Group から別の Group へ�
 | 着手候補 | 着手可能で、自身とすべての祖先が浮上している Issue |
 | 着手中 | `InProgress` の Issue と、それを子孫に持つ保存値が `NotStarted` の Group。自身・祖先の浮上状態や、追加された未完了の依存に関係なく含む。完了済みの子孫だけで実効値が `InProgress` の Group は含まない |
 
-`axon proposals` は判断候補を返す。`axon tasks` は着手候補に限定せず、浮上した未着手と着手中を合わせた平らな一覧を返すため、依存先の完了待ちや祖先の採用待ちも含む。`InProgress` の Issue を子孫に持つ Group は浮上した未着手と着手中の両方に当たりうるが、一覧には一行だけ出る。一覧の行の状況と詰まっている理由は [候補と外部条件](candidates.md#一覧の行と状況)、その表記は [CLIと表示の契約](cli.md) に定める。
+`axon proposals` は判断候補を返す。`axon tasks` は着手候補に限定せず、浮上した未着手と着手中を合わせた平らな一覧を返すため、依存先の完了待ちや祖先の採用待ちも含む。`InProgress` の Issue を子孫に持つ Group は浮上した未着手と着手中の両方に当たりうるが、一覧には一行だけ出る。一覧の行の状況と詰まっている理由は [候補と外部条件](candidates.md#一覧の行と状況) に定める。
 
 Group は `Start` を持たないため、着手可能・着手候補にならない。Group に置いた dependency と祖先の採否は、配下の Issue の着手可能性を通じて効く。
 
@@ -150,23 +148,11 @@ Group は `Start` を持たないため、着手可能・着手候補になら�
 
 ## label
 
-label は、Entity が表す仕事の種類を固定集合の値で分類する属性である。Issue・Group とも必ず一つの label を持ち、未設定の状態はない。集合は次の 7 値で、これ以外の値は拒否する。集合を設定で変える経路はない。
+label は、Entity が表す仕事の種類を固定集合の値で分類する属性である。Issue・Group とも必ず一つの label を持ち、未設定の状態はない。集合は `bug`・`feat`・`chore`・`docs`・`test`・`refactor`・`spike` の 7 値で、これ以外の値は拒否する。集合を設定で変える経路はない。各値の意味は `axon help capture` が示し、集合を変えるときの互換性は [設計判断](../design/decisions.md#集合を変えるとき) にある。
 
-| label | 意味 |
-| --- | --- |
-| `bug` | 期待と異なる振る舞いを直す |
-| `feat` | 新しい振る舞いや機能を加える |
-| `chore` | 依存の更新、CI、設定など、振る舞いを変えない保守 |
-| `docs` | 文書・help・skill を整備する |
-| `test` | テストを追加・整理する |
-| `refactor` | 振る舞いを変えずに構造を整理する |
-| `spike` | 決めるために調べる（要検討の事項、仕様・計画・方針の検討） |
+Group の label は配下の label から導出せず、配下と一致することも要求しない。label は登録時に必ず与え、後から別の値へ変更できる。解除はない。編集できる状態は title・description と同じで、終了後は固定する（[情報の役割と編集範囲](#情報の役割と編集範囲)）。変更は記録として残る。
 
-Group の label は、そのGroup全体の仕事の主な種類を表す。配下の label から導出せず、配下と一致することも要求しない。
-
-label は登録時に必ず与え、後から別の値へ変更できる。解除はない。編集できる状態は title・description と同じで、`Undecided`・`NotStarted`・`InProgress` では状態を変えずに変更でき、終了後は固定する（[情報の役割と編集範囲](#情報の役割と編集範囲)）。変更は記録として残る。
-
-label は分類であり、優先度ではない。lifecycle 遷移の前提、包含と dependency の制約、候補集合、一覧の状況、再浮上条件の評価のいずれにも影響しない。種類の変換は label を変えない。一覧での表示と絞り込みは [CLIと表示の契約](cli.md#一覧) に定める。理由は [label を固定集合の必須属性にした理由](../design/decisions.md#label-を固定集合の必須属性にした理由) に記す。
+label は分類であり、優先度ではない。lifecycle 遷移の前提、包含と dependency の制約、候補集合、一覧の状況、再浮上条件の評価のいずれにも影響しない。種類の変換は label を変えない。理由は [label を固定集合の必須属性にした理由](../design/decisions.md#label-を固定集合の必須属性にした理由) に記す。
 
 ## 文面・Note・状態変更履歴
 
@@ -174,24 +160,20 @@ label は分類であり、優先度ではない。lifecycle 遷移の前提、�
 
 Issue・Group とも、title・description・label は現在の内容を保持する。`Undecided`・`NotStarted`・`InProgress` は状態を変えずに編集でき、終了後は固定する。`Cancelled` の Entity は `Reconsider` で `Undecided` へ、`Completed` の Entity は `Reopen` で `NotStarted` へ戻せば編集できる。完了した結果を保ったままの訂正・補足は Note に追記する。この規則は title・description・label の規則であり、所属・dependency は上に定めた変更条件に従う。
 
-文面の編集は編集後の現在値を持つ記録として残り、`axon log` で編集があったことが読める。採用した時点の文面を別に保存することはせず、Axon は編集の差分を示さない。着手中の計画の具体化・修正のために、作業の解放や採用撤回を要求しない。完了条件をエージェントが都合よく緩和・削除することへの対処は、skill による運用とセッションログでの確認に任せる。操作に対応する判断理由は任意の reason として操作と一体で残し、必要な詳しい補足は Note に書く。本文は現在の作業定義の正本なので、reason や Note に書いた有効な制約や判断も本文へ反映する。入力範囲・検証と表示は [CLI契約](cli.md) に従う。
+文面の編集は編集後の現在値を持つ記録として残る。採用した時点の文面を別に保存することはしない。着手中の計画の具体化・修正のために、作業の解放や採用撤回を要求しない。操作に対応する判断理由は任意の reason として操作と一体で残す。入力の検証は [CLIと表示の契約](cli.md#タイトルと理由) に従う。
 
-Note は、調査結果・作業結果・申し送り・訂正など、状態変更と独立した情報を残す。どの状態でも追加でき、追加しても状態は変えない。追記専用とし、既存の Note は編集・削除せず、訂正は新しい Note とする。同じ内容の追記も、それぞれ別の記録として残す。Note は互いに因果を持たない集合で、表示順は日時、同じ日時なら記録 ID で決める。
+Note は、調査結果・作業結果・申し送り・訂正など、状態変更と独立した情報を残す。どの状態でも追加でき、追加しても状態は変えない。追記専用とし、既存の Note は編集・削除せず、訂正は新しい Note とする。同じ内容の追記も、それぞれ別の記録として残す。Note は互いに因果を持たない集合である。
 
-状態変更履歴は Note と別の役割を持ち、成功した lifecycle 遷移ごとに、操作・変更後の状態・日時・任意の理由を持つ記録を自動で残す。変更前の状態は直前の記録の現在値として読める。状態変更と記録の追加は一体で確定し、片方だけを保存しない。拒否された遷移は記録を作らない。記録は不変で、後からの理由の補足・訂正は Note に追記する。文面編集・label の設定・関係の変更・条件の設定・種類の変換・衝突の解決も同じ記録の列に残るが、lifecycle 遷移とは区別して表示する。記録が持つ項目と、記録の集合からの現在値の導出は [保存と統合の契約](storage.md#記録) に定める。
-
-Note と Note 以外の記録は別々の入口で表示する。保存上の区別は、実際に起きた操作を自動記録することと、自由な補足を追加することの区別である。
+状態変更履歴は Note と別の役割を持ち、成功した lifecycle 遷移ごとに、操作・変更後の状態・日時・任意の理由を持つ記録を自動で残す。変更前の状態は直前の記録の現在値として読める。状態変更と記録の追加は一体で確定し、片方だけを保存しない。拒否された遷移は記録を作らない。記録は不変で、後からの理由の補足・訂正は Note に追記する。文面編集・label の設定・関係の変更・条件の設定・種類の変換・衝突の解決も同じ記録の列に残る。記録が持つ項目と、記録の集合からの現在値の導出は [保存と統合の契約](storage.md#記録) に定める。
 
 ### 記録者情報とエージェント連携
 
-Note・状態変更履歴には、任意の記録者情報 `{ actor: string, data: object }` を添えられる。`actor` は `codex`・`claude`・人間など記録元を示す文字列で、固定の列挙型にはしない。`data` は連携側が用途に応じた情報を入れるオブジェクトとし、例えば `{"actor":"codex","data":{"session_id":"..."}}` のように元の作業をたどる手掛かりを保持する。通常表示は actor を中心とし、詳細確認時には data も取得できる。`data` の値の入れ子（配列とオブジェクト）は128段までとし、超える記録は書込みで拒否し、読取では破損として拒否する。一つの記録 file がすべての読取をスタック溢れで止めないためである。
+Note・状態変更履歴には、任意の記録者情報 `{ actor: string, data: object }` を添えられる。`actor` は `codex`・`claude-code`・人間など記録元を示す文字列で、固定の列挙型にはしない。`data` は連携側が用途に応じた情報を入れるオブジェクトとし、例えば `{"actor":"codex","data":{"session_id":"..."}}` のように元の作業をたどる手掛かりを保持する。`data` の値の入れ子（配列とオブジェクト）は128段までとし、超える記録は書込みで拒否し、読取では破損として拒否する。一つの記録 file がすべての読取をスタック溢れで止めないためである。
 
-記録者情報は、連携側が環境変数などから取得できる範囲を自動で埋める。利用者が操作のたびに session ID 付きでコマンドを呼ぶことは要求しない。actor が分かり session ID が取れない場合は取得できた範囲を残し、記録元も分からない場合は記録者情報を省略できる。情報が取得できないことだけを理由に、Note 追加や状態変更を失敗させない。保存した記録者情報（`data` を含む）は記録とともに保持し、Git で追跡すれば他の worktree とも共有される。
-
-エージェント固有の検出・メタデータ構築は、状態モデルや記録の保存処理から分離し、Axon core に依存しない Rust の crate が担う。環境変数 `AXON_ACTOR` を設定すると、エージェントの自動検出より優先してその値を actor にし、`AXON_SESSION_ID` があれば `data` の `session_id` に入れる。明示した actor に別のエージェントの session を混ぜない。空・空白のみ・非 UTF-8 の値は未設定とみなす。自動検出する環境変数とその順位は [記録者取得の実装](../../crates/axon-recorder/src/lib.rs) にある。いずれも継承された環境を読むだけで、資格情報・ログ・プロセス一覧・ネットワークを探索しない。Axon 本体は受け取った情報を保持・表示し、エージェントごとの必須項目や session の探索・生存確認・ログ解析は持たない。メタデータは記録時点の手掛かりであり、ログの存続やセッションの再開を保証しない。
+記録者情報は環境変数から取得できる範囲を自動で埋め、取得できないことだけを理由に Note 追加や状態変更を失敗させない。環境変数 `AXON_ACTOR` を設定すると、エージェントの自動検出より優先してその値を actor にし、`AXON_SESSION_ID` があれば `data` の `session_id` に入れる。明示した actor に別のエージェントの session を混ぜない。空・空白のみ・非 UTF-8 の値は未設定とみなす。自動検出する環境変数とその順位は [記録者取得の実装](../../crates/axon-recorder/src/lib.rs) にある。いずれも継承された環境を読むだけで、資格情報・ログ・プロセス一覧・ネットワークを探索しない。エージェント固有の検出は Axon core に依存しない crate が担い、Axon 本体はエージェントごとの必須項目や session の探索・生存確認・ログ解析を持たない。
 
 ### 予約状態と作業所有者を独立して持たない
 
-複数のエージェント・セッションによる別々の Issue の並行作業は想定するが、独立した予約状態や作業所有者は持たない。重複着手は、現在の状態と既存の前提を確認して `NotStarted` から `InProgress` へ原子的に更新することで防ぐ。先に着手された同じ Entity への二度目の `Start` は拒否する。
+独立した予約状態や作業所有者は持たない。重複着手は、現在の状態と既存の前提を確認して `NotStarted` から `InProgress` へ原子的に更新することで防ぎ、先に着手された同じ Entity への二度目の `Start` は拒否する。
 
-記録者情報は履歴をたどるために使い、`Complete`・`Release` などの操作権限や排他制御には使わない。`InProgress` の Issue の現在値は着手した actor を含むが、これは Git で分岐した保存先を統合したときに並行した `Start` を衝突として見せるためのもので（[現在値の導出](storage.md#現在値の導出)）、操作の権限には使わない。現在の作業の経緯を調べる場合も履歴を参照し、履歴と別に現在の作業者の情報を持たない。自動的な解放や、作業者がいなくなったことを理由とする自動的な状態変更も行わない。
+記録者情報は `Complete`・`Release` などの操作権限や排他制御には使わない。`InProgress` の Issue の現在値は着手した actor を含むが、これは Git で分岐した保存先を統合したときに並行した `Start` を衝突として見せるためのもので（[現在値の導出](storage.md#現在値の導出)）、操作の権限には使わない。自動的な解放や、作業者がいなくなったことを理由とする自動的な状態変更も行わない。

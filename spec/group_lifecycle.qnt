@@ -3,7 +3,10 @@
 // Issue と Group は一つの ID 空間を共有し、各 Entity は種類（kind）を現在値として持つ。
 // Group は保存される lifecycle（stored）として InProgress を持たず、実効 lifecycle を子から導出する。
 // 固定 ID 5件の範囲で探索する。未登録の枠は探索領域を有限にする仕組みであって、新しい lifecycle ではない。
-// 対象外: 文面・Note・状態変更履歴（lifecycle_information）、条件の種類・設定と評価失敗（candidate_evaluation）、CLI と表示、ID 発行、永続化。
+// 登録できるのはこの枠の1件だけで、それ以上の登録が無効になるのは探索上の上限であり、製品が追加件数を制限する意味ではない。
+// ID の再利用と削除は扱わない。
+// 対象外: 文面・Note・状態変更履歴（lifecycle_information）、条件の種類・設定と評価失敗（candidate_evaluation）、CLI と表示、ID 発行、永続化、
+// 記録の集合と統合（record_integration）。
 // 基本遷移は lifecycle_rules を import し、到達しにくい経路は lifecycle_reachability が補う。
 // 対応する契約: ../docs/reference/lifecycle.md
 module group_lifecycle {
@@ -196,6 +199,7 @@ module group_lifecycle {
   // 移動先の Group 自身を含む全祖先の stored が NotStarted であること。
   // 自己包含と子孫の下への移動、変更後の通常完了経路が循環する移動は拒否する。
   // 移動は lifecycle を変えず、Group は配下ごと部分木全体が移る。
+  // 同じ所属の再指定は無効な操作として探索から外す（CLI では同値の指定は No changes の成功）。
   pure def applyMove(s: EntitySetState, id: Id, parent: Parent): EntitySetState =
     { ...s, entities: s.entities.set(id, { ...s.entities.get(id), parent: parent }) }
   pure def canMove(s: EntitySetState, id: Id, parent: Parent): bool = and {
