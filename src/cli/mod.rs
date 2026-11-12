@@ -9,8 +9,9 @@ mod write;
 use args::{Cli, Command, Notes, operation_label};
 use axon::{Result, lifecycle::Operation};
 use clap::{
-    CommandFactory, Parser,
-    error::{ContextKind, ContextValue},
+    CommandFactory, Parser, ValueHint,
+    builder::StyledStr,
+    error::{ContextKind, ContextValue, ErrorKind},
 };
 use render::render_root_help;
 use std::io::Write;
@@ -119,6 +120,198 @@ fn run(command: Command) -> Result<Output> {
     }
 }
 
+/// How Axon changes Clap's tips for a parse error.
+enum Tip {
+    Keep,
+    /// Clap's only tip is to pass the unexpected argument after `--`, where it would not be taken
+    /// as the value it may have been meant as.
+    Remove,
+    /// The argument rejected is a value starting with a hyphen.
+    HyphenValue,
+}
+
+/// Whether Clap rejected a value starting with a hyphen that the argument it was meant for
+/// accepts, and so whether its tip to pass the argument after `--` is replaced or left out. Such a
+/// value is written apart from its option and is not a flag of the command; Clap failed at it when
+/// the arguments up to it give the same error, but not with the value attached by `=`. Without
+/// one, an unexpected hyphen-prefixed argument may be a positional value, or after `--` a value
+/// meant for an option, unless Clap suggests a flag for it.
+fn hyphen_value_tip_for(
+    error: &clap::Error,
+    cli: &clap::Command,
+    args: &[std::ffi::OsString],
+) -> Tip {
+    let Some(ContextValue::String(rejected)) = error.get(ContextKind::InvalidArg) else {
+        return Tip::Keep;
+    };
+    let mut command = cli.clone();
+    command.build();
+    let tokens: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
+    let written = |arg: &clap::Arg, token: &str| {
+        arg.get_long()
+            .is_some_and(|long| token.strip_prefix("--") == Some(long))
+            || arg.get_short().is_some_and(|short| {
+                token
+                    .strip_prefix('-')
+                    .is_some_and(|rest| rest.chars().eq([short]))
+            })
+    };
+    // Subcommands are named before any argument but a flag.
+    let mut invoked = &command;
+    let mut path = Vec::new();
+    for token in &tokens {
+        if let Some(subcommand) = invoked.find_subcommand(token.as_ref()) {
+            invoked = subcommand;
+            path.push(subcommand.get_name().to_owned());
+        } else if !invoked
+            .get_arguments()
+            .any(|arg| !arg.get_action().takes_values() && written(arg, token))
+        {
+            break;
+        }
+    }
+    // A flag of the command, alone or as `--name=VALUE`.
+    let flag = |token: &str| {
+        let name = token.split_once('=').map_or(token, |(name, _)| name);
+        invoked
+            .get_arguments()
+            .any(|arg| written(arg, token) || name.starts_with("--") && written(arg, name))
+    };
+    // A value from a fixed set never starts with a hyphen, so the tip would not help.
+    let open =
+        |arg: &clap::Arg| arg.get_action().takes_values() && arg.get_possible_values().is_empty();
+    let run = |command: clap::Command, args: Vec<&std::ffi::OsString>| {
+        command.try_get_matches_from(std::iter::once(&"axon".into()).chain(args))
+    };
+    let parse = |args: Vec<&std::ffi::OsString>| run(command.clone(), args);
+    let same_error = |result: &std::result::Result<clap::ArgMatches, clap::Error>| {
+        result.as_ref().is_err_and(|again| {
+            again.kind() == error.kind()
+                && again.get(ContextKind::InvalidArg) == error.get(ContextKind::InvalidArg)
+        })
+    };
+    // Whether the arguments pass a value to its option, which may still reject it or be given
+    // already.
+    let accepts = |result: &std::result::Result<clap::ArgMatches, clap::Error>| {
+        !matches!(result, Err(again) if matches!(
+            again.kind(),
+            ErrorKind::InvalidValue
+                | ErrorKind::ValueValidation
+                | ErrorKind::InvalidUtf8
+                | ErrorKind::ArgumentConflict
+        ))
+    };
+    let options = tokens
+        .iter()
+        .position(|token| token == "--")
+        .unwrap_or(tokens.len());
+    // Where Clap failed at an option's value: whether the option takes it once attached.
+    let failed = (0..options).find_map(|at| {
+        // Clap's default tip, `-- VALUE`, puts the value after a `--` that follows the option.
+        let value = match tokens.get(at + 1)? {
+            next if next == "--" && at + 2 < tokens.len() => at + 2,
+            next if !flag(next) => at + 1,
+            _ => return None,
+        };
+        if !invoked
+            .get_arguments()
+            .any(|arg| arg.get_action().takes_values() && written(arg, &tokens[at]))
+            || !tokens[value].starts_with('-')
+            || !same_error(&parse(args[..=value].iter().collect()))
+        {
+            return None;
+        }
+        let mut attached = args[at].clone();
+        attached.push("=");
+        attached.push(&args[value]);
+        let attached = parse(args[..at].iter().chain([&attached]).collect());
+        (!same_error(&attached)).then(|| accepts(&attached))
+    });
+    let value = match failed {
+        Some(accepted) => accepted,
+        None => {
+            error.kind() == ErrorKind::UnknownArgument
+                && rejected.starts_with('-')
+                && error.get(ContextKind::SuggestedArg).is_none()
+                && if options == args.len() || same_error(&parse(args[..options].iter().collect()))
+                {
+                    // Before `--`, the value helps only if a positional takes it, as it would after
+                    // a `--`. Taking hyphen values, positionals may also take an unknown flag or
+                    // a short option with its value attached, which leaves no tip.
+                    let moved = run(
+                        hyphen_positionals(cli.clone(), &path),
+                        args.iter().collect(),
+                    );
+                    accepts(&moved)
+                        && moved
+                            .as_ref()
+                            .err()
+                            .is_none_or(|again| again.kind() != ErrorKind::UnknownArgument)
+                } else {
+                    // After `--`, a flag of the command was placed there by mistake, and a value
+                    // helps only if an option of the command takes it.
+                    // The value as written, which Clap shows lossily.
+                    let written = args[options + 1..]
+                        .iter()
+                        .find(|arg| arg.to_string_lossy() == *rejected);
+                    !flag(rejected)
+                        && written.is_some_and(|written| {
+                            invoked
+                                .get_arguments()
+                                // A file option takes a path, not the value.
+                                .filter(|arg| {
+                                    open(arg)
+                                        && !matches!(
+                                            arg.get_value_hint(),
+                                            ValueHint::AnyPath | ValueHint::FilePath
+                                        )
+                                })
+                                .filter_map(|arg| arg.get_long())
+                                .any(|long| {
+                                    let mut attached =
+                                        std::ffi::OsString::from(format!("--{long}="));
+                                    attached.push(written);
+                                    let moved = args[..options].iter().chain([&attached]).collect();
+                                    accepts(&parse(moved))
+                                })
+                        })
+                }
+        }
+    };
+    if value {
+        Tip::HyphenValue
+    // Clap gives this tip only where the command takes a positional value.
+    } else if error.kind() == ErrorKind::UnknownArgument
+        && invoked.get_positionals().next().is_some()
+    {
+        Tip::Remove
+    } else {
+        Tip::Keep
+    }
+}
+
+/// The command whose subcommand at `path` takes hyphen-prefixed positional values.
+fn hyphen_positionals(command: clap::Command, path: &[String]) -> clap::Command {
+    match path.split_first() {
+        Some((name, rest)) => {
+            command.mut_subcommand(name, |subcommand| hyphen_positionals(subcommand, rest))
+        }
+        None => command.mut_args(|arg| {
+            if arg.is_positional() {
+                arg.allow_hyphen_values(true)
+            } else {
+                arg
+            }
+        }),
+    }
+}
+
+fn hyphen_value_tip(valid: &clap::builder::styling::Style) -> StyledStr {
+    StyledStr::from(format!(
+        "pass a value starting with '-' to an option as {valid}--option='VALUE'{valid:#} or, for a description or Note, from a file with {valid}-F{valid:#}; put a positional value after {valid}--{valid:#}, following the options"
+    ))
+}
+
 pub(crate) fn main() -> std::process::ExitCode {
     let mut args = std::env::args_os();
     let program = args.next().expect("process has a program name");
@@ -164,7 +357,9 @@ pub(crate) fn main() -> std::process::ExitCode {
             Ok(cli) => cli,
             Err(error) => {
                 let color = display::cli_color(error.use_stderr());
-                let mut error = error.with_cmd(&Cli::command().color(color));
+                let command = Cli::command().color(color);
+                let mut error = error.with_cmd(&command);
+                let tip = hyphen_value_tip_for(&error, &command, &args);
                 // Clap quotes the rejected arguments in its message. Escape them as one-line
                 // values before it renders, so Axon's own decoration stays intact.
                 let escaped: Vec<_> = error
@@ -189,6 +384,19 @@ pub(crate) fn main() -> std::process::ExitCode {
                 }
                 for (kind, value) in escaped {
                     error.insert(kind, value);
+                }
+                // Clap's tip to pass an unexpected argument after `--` makes a value meant for
+                // an option positional instead. Replace it with the forms that pass the value
+                // where it belongs, or leave it out where no such value can be passed.
+                match tip {
+                    Tip::Keep => {}
+                    Tip::Remove => {
+                        error.remove(ContextKind::Suggested);
+                    }
+                    Tip::HyphenValue => {
+                        let tip = hyphen_value_tip(command.get_styles().get_valid());
+                        error.insert(ContextKind::Suggested, ContextValue::StyledStrs(vec![tip]));
+                    }
                 }
                 error.exit();
             }
