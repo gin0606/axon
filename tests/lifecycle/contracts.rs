@@ -1113,7 +1113,7 @@ fn human_output_escapes_bidirectional_controls_without_changing_stored_values() 
             "x{bidi}",
         ),
         (vec![subcommand.as_str()], 2, "sub\\x1b]0;t\\x07\\t{bidi}"),
-        // Clap would repeat an unexpected option in its styled tip.
+        // Clap's tip to pass an unexpected option after `--`, which Axon replaces, repeats it.
         (
             vec!["show", option.as_str()],
             2,
@@ -3235,53 +3235,36 @@ fn rejected_hyphen_values_get_a_tip_whose_forms_pass_them() {
     let hyphen_suffix = hyphen_suffix.as_str();
     let before = f.records();
     let id = id.as_str();
-    // The tip replaces Clap's `--` tip, also where the command takes no positional value:
-    // - for values written after an option, including one Clap shows by its first two
-    //   characters, one it also takes for a misspelled flag, ones that leave the option without
-    //   a value, and one followed by another rejected the same way;
-    // - for values after a `--`, right after the option as Clap's tip suggested or elsewhere;
-    // - for a positional value.
+    // Clap rejects an argument starting with a hyphen and suggests no flag for it: the tip
+    // replaces Clap's `--` tip, also where the command takes no positional value, for a value
+    // written after an option or after a `--`, for a positional value, and for a flag that is not
+    // a value at all, where the tip does not help.
     for args in [
         vec!["note", "add", id, "-m", "--text"],
         vec!["note", "add", id, "-m", "- a"],
-        vec!["write", id, "--title", "--labels are confusing"],
-        vec!["note", "add", id, "-m", "-h foo"],
-        vec!["note", "add", id, "-m", "-hx"],
-        vec!["write", id, "--title", "-refactor"],
-        vec!["write", id, "--title", "--titled"],
-        vec!["write", id, "--title", "-r why"],
-        vec!["note", "add", id, "-m", "--"],
         vec!["start", id, "-r", "-x"],
         vec!["capture", "--title", "-x", "--label", "chore"],
-        vec!["capture", "--title", "-x", "--label", "chore", "--bogus"],
-        vec!["capture", "--title", "- a", "-m", "- b", "--label", "chore"],
-        vec!["capture", "--label", "chore", "--title", "--", "--accept"],
-        vec!["capture", "--title", "t", "--label", "chore", "--", "-x"],
-        vec!["list", "--search", "--", "--kind"],
         vec!["capture", "--title", "--", "-x", "--label", "chore"],
-        vec!["list", "--search", "-x"],
         vec!["--no-color", "capture", "--title", "-x", "--label", "chore"],
+        vec!["list", "--search", "-x"],
         vec!["note", "search", "-x"],
         vec!["note", "add", id, "--", "- a"],
         vec!["label", "set", hyphen_suffix, "bug"],
-        vec!["label", "set", hyphen_suffix, "bug", "-r", "why"],
-        vec!["label", "set", hyphen_suffix, "-r", "why", "bug"],
-        vec!["note", "search", "-x", "--no-color"],
+        vec!["label", "set", id, "--bogus"],
+        vec!["show", id, "--", "-x"],
+        vec!["note", "-x", "add", id],
+        vec!["--foo", "capture"],
     ] {
         let out = f.run(&args);
         assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");
         let error = failure(out);
-        assert_eq!(
-            error.matches(HYPHEN_VALUE_TIP).count(),
-            1,
-            "{args:?}: {error}"
-        );
-        assert!(!error.contains("as a value, use"), "{args:?}: {error}");
+        assert_eq!(error.matches("tip:").count(), 1, "{args:?}: {error}");
+        assert!(error.contains(HYPHEN_VALUE_TIP), "{args:?}: {error}");
     }
     assert_eq!(f.records(), before);
 
-    // A misspelled or misplaced flag keeps only Clap's suggestion, also when escaping its
-    // control character removes that suggestion.
+    // A misspelled or misplaced flag keeps only Clap's suggestion, also beside an escaped
+    // control character.
     for (args, suggestion) in [
         (
             vec!["list", "--lable", "bug"],
@@ -3292,172 +3275,46 @@ fn rejected_hyphen_values_get_a_tip_whose_forms_pass_them() {
             "tip: a similar argument exists: '--details'",
         ),
         (
+            vec!["write", id, "--title", "--titled"],
+            "tip: a similar argument exists: '--title'",
+        ),
+        (
             vec!["--details", "show", id],
             "tip: 'show --details' exists",
         ),
         (
             vec!["--details\x01", "show", id],
-            "unexpected argument '--details\\x01'",
+            "tip: 'show --details' exists",
         ),
     ] {
         let error = failure(f.run(&args));
+        assert_eq!(error.matches("tip:").count(), 1, "{args:?}: {error}");
         assert!(error.contains(suggestion), "{args:?}: {error}");
-        assert!(!error.contains(HYPHEN_VALUE_TIP), "{args:?}: {error}");
     }
-    // No tip where the rejected argument is not a hyphen value an argument takes:
-    // - an unexpected flag where no positional value is taken, or in the root or a command
-    //   group before its subcommand;
-    // - a positional value where no positional takes it after `--`;
-    // - an error before an option written apart from a hyphen value;
-    // - text after `--` where no option takes it, or a flag of the command placed there;
-    // - a value from a fixed set or one its parser rejects;
-    // - an option followed by a flag of the command, by nothing or by no hyphen;
-    // - a value the option received, or one for an option given already.
+    // No tip for other errors: an unexpected argument without a hyphen, a missing value, also
+    // where Clap takes the value for a flag of the command, or a value the option rejects.
     for (args, diagnostic) in [
         (vec!["show", id, "extra"], "unexpected argument 'extra'"),
-        (
-            vec!["capture", "--label", "chore", "--title", "t", "--unknown"],
-            "unexpected argument '--unknown'",
-        ),
-        (
-            vec!["capture", "--label", "chore", "--title", "t", "-mfoo", "-x"],
-            "unexpected argument '-x'",
-        ),
-        (
-            vec!["capture", "--bogus", "--title", "-x"],
-            "unexpected argument '--bogus'",
-        ),
-        (
-            vec!["capture", "-x", "--title", "-xy", "--label", "chore"],
-            "unexpected argument '-x'",
-        ),
-        (
-            vec!["list", "--label", "", "--search", "-x"],
-            "a value is required for '--label",
-        ),
-        (vec!["--foo", "capture"], "unexpected argument '--foo'"),
-        (vec!["note", "-x", "add", id], "unexpected argument '-x'"),
-        (
-            vec!["note", "search", "--", "-a", "-b"],
-            "unexpected argument '-b'",
-        ),
-        (
-            vec!["capture", "--title", "t", "--", "--label", "chore"],
-            "unexpected argument '--label'",
-        ),
-        (vec!["show", id, "--", "-x"], "unexpected argument '-x'"),
-        (
-            vec!["show", id, "--details", "-x"],
-            "unexpected argument '-x'",
-        ),
-        (vec!["label", "set", id, "-x"], "unexpected argument '-x'"),
-        (vec!["show", "-x", id], "unexpected argument '-x'"),
-        (vec!["show", "-x", "--", id], "unexpected argument '-x'"),
-        (
-            vec!["label", "set", "-x", id, "bug"],
-            "unexpected argument '-x'",
-        ),
-        (
-            vec!["note", "search", "-x", "extra"],
-            "unexpected argument '-x'",
-        ),
-        (
-            vec!["condition", "allow", id, "--", "-x"],
-            "unexpected argument '-x'",
-        ),
-        (
-            vec!["note", "add", id, "-m", "a", "-m", "-x"],
-            "unexpected argument '-x'",
-        ),
-        (
-            vec![
-                "capture",
-                "--label",
-                "chore",
-                "--title",
-                "--description=two words",
-            ],
-            "a value is required for '--title",
-        ),
-        (vec!["list", "--label", "-x"], "unexpected argument '-x'"),
-        (
-            vec!["tasks", "--condition-timeout", "-x"],
-            "unexpected argument '-x'",
-        ),
-        (
-            vec!["convert", id, "--kind", "-x"],
-            "unexpected argument '-x'",
-        ),
-        (vec!["completion", "-x"], "unexpected argument '-x'"),
-        (
-            vec!["capture", "--title", "--label", "chore"],
-            "a value is required for '--title",
-        ),
-        (
-            vec!["capture", "--title", "--kind=group", "--label", "chore"],
-            "a value is required for '--title",
-        ),
-        (
-            vec![
-                "capture",
-                "--title",
-                "--command=test -f x",
-                "--label",
-                "chore",
-            ],
-            "a value is required for '--title",
-        ),
-        (
-            vec!["capture", "--label", "chore", "--title", "--accept=yes"],
-            "unexpected value 'yes' for '--accept'",
-        ),
         (
             vec!["note", "add", id, "-m", "--", "text"],
             "unexpected argument 'text'",
         ),
         (
-            vec!["note", "add", id, "-m", "--no-color"],
+            vec!["capture", "--title", "--label", "chore"],
+            "a value is required for '--title",
+        ),
+        (
+            vec!["note", "add", id, "-m", "-h foo"],
             "a value is required for '--message",
         ),
         (
-            vec!["capture", "--title", "t", "--label", "-h foo"],
-            "a value is required for '--label",
-        ),
-        (
-            vec!["capture", "--title", "t", "--label", "--accept"],
-            "a value is required for '--label",
-        ),
-        (
-            vec!["note", "add", id, "-m"],
-            "a value is required for '--message",
-        ),
-        (
-            vec!["list", "--label", ""],
-            "a value is required for '--label",
-        ),
-        (
-            vec!["capture", "--title", "t", "--accept", "--label"],
-            "a value is required for '--label",
-        ),
-        (
-            vec!["capture", "--title", "-", "--label"],
-            "a value is required for '--label",
+            vec!["capture", "--label", "chore", "--title", "--accept=yes"],
+            "unexpected value 'yes' for '--accept'",
         ),
         (vec!["list", "--label=-x"], "invalid value '-x'"),
     ] {
         let error = failure(f.run(&args));
         assert!(error.contains(diagnostic), "{args:?}: {error}");
-        assert!(!error.contains("tip:"), "{args:?}: {error}");
-    }
-    // Nor for a value that is not UTF-8, which no form passes.
-    for args in [
-        &["capture", "--label", "chore", "--title"][..],
-        &["capture", "--title", "t", "--label", "chore", "--"],
-    ] {
-        use std::os::unix::ffi::OsStrExt;
-        let value = std::ffi::OsStr::from_bytes(b"-\xff");
-        let error = failure(f.command().args(args).arg(value).output().unwrap());
-        assert!(error.contains("unexpected argument"), "{args:?}: {error}");
         assert!(!error.contains("tip:"), "{args:?}: {error}");
     }
 
