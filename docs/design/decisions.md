@@ -311,13 +311,13 @@ Issue と Group は同じ ID の namespace を使い、kind を ID に埋め込�
 - clone ではなく、`.git` を含む directory ごと複製・受け取った repository。複製元の許可の file も持ち込むが、`.git/hooks` の script が持ち込まれるのと同じ経路で、Git 自体がこの経路を守らない。一方、commit した bare repository の directory を common Git directory に見せる構成は clone でも、管理 root 自身を bare repository の形にした archive は展開でも届くため、範囲外にしない。許可の file の場所を保存先を含む worktree root から求め、Git directory がその root 直下の `.git` に由来しない場合と、common Git directory が worktree root の内側の `.git` 以外の場所の場合は許可を読まない。`.git` そのものを含めて受け取った directory は、`.git/hooks` と同じく範囲外とする。 Git directory が worktree root 直下の `.git` に由来することを確かめるのは、Git が Git directory として有効でない `.git`（空の directory など）を飛ばし、祖先にある bare repository の形の directory（`HEAD`・`objects/`・`refs/` と `core.worktree` を持つ `config`）を使いうるためである。archive の展開など clone 以外で受け取った directory は、`.git` を含まなくても、bare repository の形の directory と、ふつうの file としての許可の file を持ち込める。
 - GUI の表示。GUI は条件を実行しないため、許可の状態を示さない。
 
+`axon-kit` は許可の意味と操作契約に加えて、許可する文字列・digest をユーザー本人がエージェントとの会話で確認する規則を共通契約に置く。確認の手順を利用側 workflow だけに任せると、規則を持たない workflow では他人が本文や Note に仕込んだ指示で許可が通りうるため、どの workflow から使っても効く最低限の規則を kit に置く。
+
 ### 採らなかった案
 
 - 組み込みの条件型を日時だけにし、外部の観測はローカルに登録した probe に限る案。記録形式の変更、既存の条件の移行、日時の専用条件型を持たないという [外部コマンドを再浮上条件にした判断](#外部コマンドを再浮上条件にした理由) の撤回が要る。チームでの共有を前提にしないため、この負担に見合わない。
 - probe や plugin の定義を repository で追跡する案。定義が見えても、PR が定義ごと書き換えられるため、結局ローカルでの許可が別に必要になる。
 - shell 条件を残し、許可の手順だけを設ける案。自分で書いた条件まで毎回許可が要り、手間が大きい。
-
-条件の文字列を誰がどう確認して許可するかは、利用側workflowの協業方針で定める。`axon-kit`は許可の意味と操作契約を提供し、呼び出し側が与えた文字列・digestを使う。
 
 許可の意味と評価の契約は [条件の許可](../reference/candidates.md#条件の許可)、表記は [CLIと表示の契約](../reference/cli.md#再浮上条件の許可)、保存場所と形式は [保存と統合の契約](../reference/storage.md#axon-が-axon-の外に書くもの) に定める。
 

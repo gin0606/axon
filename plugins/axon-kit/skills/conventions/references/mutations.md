@@ -18,7 +18,7 @@ reasonは同値判定より先に検証される。一行で、空白だけの�
 
 保存先は探索で確定した管理rootの `.axon/`（記録のdirectory、header、lock）。無視する運用では現在のworktree外にあるmain worktreeの保存先をworktree間で共有し、追跡する運用では現在のworktreeの保存先（保存先を持たないbranchのlinked worktreeではmain worktreeの保存先）を使い、他worktreeの未統合の記録は観測できない。Git外は最寄りの管理root。別worktreeは独立fixtureではない。
 
-意図した保存先への当該mutationだけがsandboxに拒否された場合は、そのcommandだけをホストの許可機構へ渡す。無関係な読み取りやprogram、別binary、別の保存先への切替まで許可範囲を広げない。変更fileをstage/commitする権限は呼び出し側が別に与える。
+意図した保存先への当該mutationだけがsandboxに拒否された場合は、そのcommandだけをホストの許可機構へ渡す（許可を書く操作は[共通契約](../SKILL.md#再浮上条件の許可をユーザー本人に確認する)に従い本人の確認を経る）。無関係な読み取りやprogram、別binary、別の保存先への切替まで許可範囲を広げない。変更fileをstage/commitする権限は呼び出し側が別に与える。
 
 ## 成功とno-op
 
@@ -34,7 +34,7 @@ reasonは同値判定より先に検証される。一行で、空白だけの�
 
 保存境界は操作により大文字の `Not applied:`・`Result unknown:` とも、小文字の `not applied: …`・`result unknown after publication …` とも表示される。`Applied:` と `not applied` を取り違えない。`Applied:` または `storage applied; output failed` は保存済み。出力失敗を未適用と解釈して作成・Noteを繰り返さない。`Not applied:` は示された保存段階の未適用で、前段の成功まで否定しない。記録fileのrename後の同期失敗など `Result unknown:` は成功でも未適用でもない。
 
-元processの終了を確認し、同じbinary/rootで現在値・記録を再読する。reasonを渡した操作は、固定した引数・payloadとlogから操作・reason両方の保存状況を照合し、未確認のまま再実行やNote追記をしない。`axon storage check` で保存先の検査も行う。現在値を同じ効果へ収束させる操作は、現在状態と反復契約が合う場合に限り原因を修正して再試行できる。ただし`--command`を含む操作と`axon condition allow`の再試行は許可を書くため、呼び出し側が認めた場合だけ行う。`axon condition allow`は記録を作らないので、この再読と`axon storage check`ではなく、`axon condition unapproved`で許可の状態を読む。lifecycleは対象状態とlogを照合し、別状態へ進んでいれば再送しない。追加操作の照合は [作成](creation.md) または `axon-kit:add-note` の事前集合・固定payloadの手順に従う。
+元processの終了を確認し、同じbinary/rootで現在値・記録を再読する。reasonを渡した操作は、固定した引数・payloadとlogから操作・reason両方の保存状況を照合し、未確認のまま再実行やNote追記をしない。`axon storage check` で保存先の検査も行う。現在値を同じ効果へ収束させる操作は、現在状態と反復契約が合う場合に限り原因を修正して再試行できる。ただし`--command`を含む操作と`axon condition allow`の再試行は許可を書くため、[共通契約](../SKILL.md#再浮上条件の許可をユーザー本人に確認する)に従ってユーザー本人の確認を経て行う。`axon condition allow`は記録を作らないので、この再読と`axon storage check`ではなく、`axon condition unapproved`で許可の状態を読む。lifecycleは対象状態とlogを照合し、別状態へ進んでいれば再送しない。追加操作の照合は [作成](creation.md) または `axon-kit:add-note` の事前集合・固定payloadの手順に従う。
 
 競合・一致候補複数・欠損した事前証拠などで結論できなければ不明として返し、payloadと観測を保持する。記録は追記専用で、結果不明のまま別の作用を重ねると適用済み範囲を確定できなくなるため、補償遷移、取消、rollback、別保存先へ作成で「修復」しない。
 
