@@ -57,7 +57,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends gcc g++ clang libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev
       - name: Install pinned Rust toolchain
         run: rustup toolchain install
+      # タグの実行は default branch のキャッシュを読めるが、タグで保存したキャッシュは後のタグから
+      # 読めない。full-verification.yml と同じ shared-key で main のキャッシュを読み、保存はしない。
       - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          shared-key: full-verification
+          save-if: false
       - name: Run full verification
         run: scripts/full-verification
 
@@ -77,7 +82,6 @@ jobs:
         run: |
           rustup toolchain install
           rustup target add "$TARGET"
-      - uses: Swatinem/rust-cache@v2.9.3
       - name: Build and check the binary
         run: |
           cargo build --locked --release --bin axon --target "$TARGET"

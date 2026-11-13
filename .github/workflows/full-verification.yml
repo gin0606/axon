@@ -23,7 +23,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends gcc g++ clang libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev
       - name: Install pinned Rust toolchain
         run: rustup toolchain install
+      # release.yml の validate がこのキャッシュを読む。ランナー、ここまでの導入手順、環境変数を
+      # validate とそろえておく。
       - name: Restore Cargo cache
         uses: Swatinem/rust-cache@v2.9.3
+        with:
+          shared-key: full-verification
       - name: Run full verification
         run: scripts/full-verification
