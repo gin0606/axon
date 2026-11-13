@@ -508,8 +508,10 @@ pub(super) fn show(value: &read::Detail<'_>, details: bool, approval: Option<App
     }
     out
 }
+/// The recorder the next record made here receives, exactly as `--recorder-details` shows a
+/// stored one, so the two can be compared as strings.
 pub(super) fn actor(context: &Context) -> String {
-    actor_of(context.recorder.as_ref())
+    recorder_display(context.recorder.as_ref(), true)
 }
 fn actor_of(recorder: Option<&Recorder>) -> String {
     recorder

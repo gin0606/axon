@@ -21,7 +21,7 @@
 | --- | --- |
 | [lifecycle](reference/lifecycle.md) | 状態と遷移、Groupの実効lifecycle、再浮上条件、計画と包含、種類の変換、dependency、候補集合、label、文面・Note・状態変更履歴・記録者 |
 | [候補と外部条件](reference/candidates.md) | `axon tasks`の行と状況、`axon proposals|tasks|show`の評価と、条件コマンドの実行 |
-| [CLI入出力](reference/cli.md) | 識別子と値の検証、skillが読む状況・節の語、条件の許可の表記と結果、外から届く文字列の表示、保存結果と終了コード |
+| [CLI入出力](reference/cli.md) | 識別子と値の検証、skillが読む状況・節の語、条件の許可の表記と結果、現在の記録者の表示、外から届く文字列の表示、保存結果と終了コード |
 | [保存と統合](reference/storage.md) | 記録と現在値の導出、衝突・違反・gap、破損と保存形式の版、保存先の探索と初期化、`.axon/` の外に書くもの |
 | [一括declaration](reference/declaration.md) | 計画全体の取得と一括編集のfile形式、`axon export`・`axon import` |
 | [デスクトップアプリ](reference/gui.md) | 閲覧専用の範囲、アプリのデータfile、`axon gui` からのリンクの扱い |

@@ -1,6 +1,6 @@
 # CLIと表示の契約
 
-この文書は、公開コマンドが受け取る識別子と値の検証、skill や script が読む表示の語、条件の許可の表記、保存結果と終了コード、外から届く文字列の表示の契約を定める。状態・遷移・包含・種類の変換・dependency・候補集合の意味は [lifecycleと構造の契約](lifecycle.md)、一覧の行と状況の導出と条件の評価は [候補と外部条件](candidates.md)、declarationの形式と `axon export`・`axon import prepare|check|apply` は [計画全体の取得と一括編集](declaration.md)、記録・衝突・違反と `axon storage check`・`axon resolve`・`axon init` は [保存と統合の契約](storage.md) に従う。使い方と構文は `axon help` と `axon docs` が示す。
+この文書は、公開コマンドが受け取る識別子と値の検証、skill や script が読む表示の語、条件の許可の表記、現在の記録者の表示、保存結果と終了コード、外から届く文字列の表示の契約を定める。状態・遷移・包含・種類の変換・dependency・候補集合の意味は [lifecycleと構造の契約](lifecycle.md)、一覧の行と状況の導出と条件の評価は [候補と外部条件](candidates.md)、declarationの形式と `axon export`・`axon import prepare|check|apply` は [計画全体の取得と一括編集](declaration.md)、記録・衝突・違反と `axon storage check`・`axon resolve`・`axon init` は [保存と統合の契約](storage.md) に従う。使い方と構文は `axon help` と `axon docs` が示す。
 
 ## 識別子と入力
 
@@ -93,6 +93,10 @@ Groupは、衝突中なら `Conflicted`、保存値が `Undecided`・`Completed`
 `axon note search <語句>` は管理root内の全Entity（`Completed`・`Cancelled`を含む）のNote本文を、条件を実行せずに検索する。元の保存文字列にcase-sensitiveなliteral部分一致を適用し、trim・Unicode正規化をしない。空文字は構文エラー（終了2）、該当なしはstdout空・stderrに案内を出して終了0。
 
 同じNote内の複数一致も1 Note＝1行とし、所属Entityの完全ID、完全なNote ID、日時、`Excerpt:` 付きの最初の一致の抜粋を示す。Entityは`axon list`と同じ順、Entity内は`axon note list`と同じ日時順（同時刻は記録ID順）で並べる。抜粋は原文を省略した側に `…` を示し、改行を `\n`、元のバックスラッシュを `\\` として可視化し、他の制御文字は[表示とstream](#表示とstream)の規則に従う。固定列・区切りや機械向けの出力形式は保証しない。
+
+## 現在の記録者の表示
+
+`axon actor` は、現在の環境から取得した記録者情報、つまりこの環境で次に作る記録に付く記録者情報を一行で出力する。その一行は、`axon log`・`axon note list`・`axon note show` に `--recorder-details` を付けたときの記録者の表示と同じ形式で、同じ記録者情報なら同じ文字列になる。skill はこの一致に依存し、`axon actor` の出力を履歴の記録者の表示とそのまま見比べる。記録者を取得できないときは `—` を出力する。どちらも終了0とする。記録者情報の取得と、権限・排他に使わないことは [記録者情報](lifecycle.md#記録者情報とエージェント連携) に従う。
 
 ## 表示とstream
 

@@ -18,6 +18,7 @@
 | Noteの本文 | `axon note list ID` |
 | 状態変更の経緯 | `axon log ID` |
 | 記録者の詳細 | `axon log ID --recorder-details` / `axon note list ID --recorder-details` |
+| この環境で次の記録に付く記録者（[記録者の詳細と同じ形式](../reference/cli.md#現在の記録者の表示)） | `axon actor` |
 
 一覧と `axon show` の先頭行は `ID  Kind  Situation  Label  Title` の順です。`axon tasks` にはIssueとGroupが平らに並び、依存や祖先の採用待ちも含まれます。表示の状況を読み、着手できると決めつけないでください。Groupの状況は配下から導出され、`Empty` は計画を書く段階、`Confirmable` は最終確認して完了できる段階、`Ready` は配下に着手できる浮上したIssueがある段階です（再浮上条件を評価しない `axon list`・`axon show --skip-conditions` では浮上を問いません）。`InProgress` は配下の仕事が始まっていること、`Blocked` はそれ以外を示します。完了できず、配下に着手できるIssueも着手中のIssueもないGroupは、`axon show` の `Stalled` 節で理由を確認できます。`axon show` は `axon tasks` と同じく再浮上条件を評価するので、条件で隠れているIssueは `Unsurfaced`、隠れたIssueしか持たないGroupは `Blocked` と `Unsurfaced candidate:`、Group自身の条件で隠れていることは `Own condition unsatisfied:` で読めます。条件を実行せずに読むときは `--skip-conditions` を付けます。候補に出ないことは操作禁止やEntityの不存在を意味しません。
 

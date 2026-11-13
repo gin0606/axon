@@ -1869,6 +1869,51 @@ fn recorder_help_is_available_without_a_store() {
     assert!(!f.0.join(".axon").exists());
 }
 
+#[test]
+fn actor_matches_the_recorder_details_of_records_made_in_the_same_environment() {
+    let f = Fixture::new();
+    f.init();
+    for (session, expected) in [
+        (
+            Some("session-1"),
+            r#"worker  data: {"session_id":"session-1"}"#,
+        ),
+        (None, "worker  data: {}"),
+    ] {
+        let run = |args: &[&str]| {
+            let mut command = f.command();
+            command.env("AXON_ACTOR", "worker");
+            if let Some(session) = session {
+                command.env("AXON_SESSION_ID", session);
+            }
+            success(command.args(args).output().unwrap())
+        };
+        let actor = run(&["actor"]);
+        assert_eq!(actor, format!("{expected}\n"));
+        let actor = actor.trim_end();
+        let id = run(&["capture", "--label", "chore", "--title", "recorded"]);
+        let id = id.split_whitespace().next().unwrap();
+        let log = f.ok(&["log", id, "--recorder-details"]);
+        let created = log.lines().next().unwrap();
+        assert!(
+            created.ends_with(&format!("  {actor}  Created: Undecided")),
+            "{actor:?} in {created:?}"
+        );
+        let note = run(&["note", "add", id, "-m", "noted"]);
+        let note = note.split_whitespace().nth(2).unwrap();
+        for args in [
+            vec!["note", "list", id, "--recorder-details"],
+            vec!["note", "show", id, note, "--recorder-details"],
+        ] {
+            let shown = f.ok(&args);
+            assert!(
+                shown.contains(&format!("  {actor}\n")),
+                "{actor:?} in {shown:?}"
+            );
+        }
+    }
+}
+
 #[path = "lifecycle/file.rs"]
 mod file_lifecycle;
 

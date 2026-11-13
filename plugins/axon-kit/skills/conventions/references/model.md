@@ -33,7 +33,7 @@ Groupの行の状況は、保存値が`Undecided`・`Completed`・`Cancelled`な
 
 `axon note search QUERY` は終了Entityを含む全Note本文を条件実行なしで横断検索する。hyphenで始まる語句は `axon note search -- '--text'` と渡す。case-sensitiveなliteral部分一致でtrim・Unicode正規化はせず、空文字は構文エラー、非一致はstdout空・stderr案内で正常終了する。完全Entity ID・安定Note ID・日時・最初の一致の抜粋を1 Note＝1行で示し、`axon list`と同じEntityの順序と、Entity内の日時順（同時刻は記録ID順）を保つ。抜粋の省略側は…、改行・バックスラッシュ・制御文字は可視化する。原文は`axon note show ID NOTE_ID`で読む。`axon list`/`axon tasks`/`axon proposals`の検索にはNote本文を含めない。
 
-`axon note list ID` は全Noteの本文・安定ID・日時・actor、`axon note show ID NOTE_ID` は個別Noteを読む（`NOTE_ID`は完全な記録ID）。`axon log ID` は状態変更・編集・labelの設定・種類の変換・解決の経緯で、reasonを含みNoteを含まない。分岐の記録を時刻で一本の操作列へ並べ直さない。三つとも `--recorder-details` を付けると保存済みの記録者dataを取得する。`axon actor` は現在環境の任意actorを表示するだけで、過去の記録者・所有者・今のwriterの終了を立証しない。
+`axon note list ID` は全Noteの本文・安定ID・日時・actor、`axon note show ID NOTE_ID` は個別Noteを読む（`NOTE_ID`は完全な記録ID）。`axon log ID` は状態変更・編集・labelの設定・種類の変換・解決の経緯で、reasonを含みNoteを含まない。分岐の記録を時刻で一本の操作列へ並べ直さない。三つとも `--recorder-details` を付けると保存済みの記録者dataを取得する。`axon actor` は現在環境から取得した記録者、つまりこの環境で次に作る記録に付く記録者を、`--recorder-details` 付きの記録者の表示と同じ形式で示す（取得できなければ`—`）。`axon log ID --recorder-details` の記録者と見比べると、別のセッションが残した記録が分かる。読んだだけのセッションは記録を残さないので、その関与は分からない。dataの`session_id`は任意情報で欠けうり、欠けると同じactorの別のセッションと表示が一致して区別できない。actorだけを表示する古いbinaryの`axon actor`は、この見比べに使えない。`axon actor` は過去の記録者・所有者・今のwriterの終了を立証しない。
 
 ## 情報を混同しない
 

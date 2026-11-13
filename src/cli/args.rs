@@ -42,9 +42,9 @@ pub(super) enum Command {
         #[command(subcommand)]
         command: Import,
     },
-    /// Show the optional recorder actor detected in the current environment
+    /// Show the optional recorder (actor and data) detected in the current environment
     #[command(
-        after_help = "Records and Notes keep this actor as their optional recorder. AXON_ACTOR, when set, is the actor ahead of any detection, and AXON_SESSION_ID, if also set, is saved as the session_id in the recorder data. Without AXON_ACTOR, Codex and Claude Code are detected from their own variables, then AI_AGENT, then USER. Empty or blank values count as unset. Only inherited environment variables are read, and the actor grants no permission."
+        after_help = "The line is the recorder that records and Notes made here receive, in the same form as log, note list and note show with --recorder-details (actor  data: JSON), or — when no recorder is detected. Comparing it with axon log ID --recorder-details tells records made by another session apart. A session that only read an Entity leaves no record, so it cannot be seen this way. The session_id in the data is optional and may be missing; without it, another session with the same actor shows the same line.\n\nAXON_ACTOR, when set, is the actor ahead of any detection, and AXON_SESSION_ID, if also set, is saved as the session_id in the recorder data. Without AXON_ACTOR, Codex and Claude Code are detected from their own variables, then AI_AGENT, then USER. Empty or blank values count as unset. Only inherited environment variables are read, and the recorder grants no permission."
     )]
     Actor,
     /// Open the current management root in the Axon desktop app (macOS)

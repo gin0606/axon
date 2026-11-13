@@ -1081,6 +1081,7 @@ fn human_output_escapes_bidirectional_controls_without_changing_stored_values() 
         &ok(&["note", "list", &id, "--recorder-details"]),
         &["note{bidi}", "actor{bidi}", "session{bidi}"],
     );
+    visible(&ok(&["actor"]), &["actor{bidi}", "session{bidi}"]);
     visible(&ok(&["note", "show", &id, &note]), &["note{bidi}"]);
     let traced = run(&["tasks", "--trace-conditions"]).output().unwrap();
     assert!(traced.status.success(), "{traced:?}");
