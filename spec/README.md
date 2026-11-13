@@ -1,6 +1,6 @@
 # Quintモデル
 
-Axon の lifecycle、包含と dependency、Group の実効 lifecycle、候補一覧の評価、文面・Note・状態変更履歴、記録の集合の Git 統合の意味論を、実行可能な Quint のモデルとして置きます。契約は [lifecycle](../docs/reference/lifecycle.md)、[候補と外部条件](../docs/reference/candidates.md)、[保存と統合](../docs/reference/storage.md) が定義します。各モデルの対象外と探索の前提は各 `.qnt` の冒頭に、検査する性質は各定義の横のコメントにあります。
+Axon の lifecycle、包含と dependency、Group の実効 lifecycle、候補一覧の評価、文面・Note・状態変更履歴、記録の集合の Git 統合の意味論を、実行可能な Quint のモデルとして置きます。契約は [lifecycle](../docs/reference/lifecycle.md)、[候補と外部条件](../docs/reference/candidates.md)、[保存と統合](../docs/reference/storage.md) が定義します。各モデルの対象外は各 `.qnt` の冒頭に、探索の前提は冒頭か各定義の横に、検査する性質は各定義の横のコメントにあります。ただし、到達性を補う探索入口の `lifecycle_reachability`・`record_integration_paths` と、`run` テストの `record_integration_test` は、取り込むモデルの初期状態と操作をそのまま使うため、冒頭に対象外を持たず、取り込むモデルのものに従います。
 
 ## モデル一覧
 

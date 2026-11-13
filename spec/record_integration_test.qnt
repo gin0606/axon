@@ -1,6 +1,7 @@
 // record_integration の特定の経路を固定した順序で再現するテスト。
 // 独立 review で見つかった経路（終了した Group どうしの循環、完了済みの相互依存、二重登録、
 // 親が欠けた取り込み）も、修復できることの確認として残す。
+// 対応する契約: ../docs/reference/storage.md
 module record_integration_test {
   import record_integration.* from "record_integration"
 

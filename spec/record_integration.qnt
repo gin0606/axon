@@ -6,13 +6,16 @@
 // Git の merge・rebase・cherry-pick は、いずれも相手の記録の部分集合を取り込む一つの action で表す。
 // 構造の不整合は「違反」の集合として導出し、通常操作は違反を増やさず、違反に含まれる Entity には
 // 修復のための固定規則の免除を与える。
-// 対象外: file の bytes と file の配置、lock、探索、ID の衝突確率、変換操作、再浮上条件と一覧の状況、
+// 対象外: file の bytes と file の配置、lock、保存先の探索、ID の衝突確率、変換操作、再浮上条件と一覧の状況、
 // 3 つ以上の replica。取り込みは記録を増やすだけで、revert による記録の削除とその merge での伝播は扱わない。
 // 削除の結果できる状態は部分取り込みの状態と同じ形なので、gap と偽の衝突の扱いはそこで検査する。
-// lifecycle 操作の前提は、統合の検査に要る範囲へ簡略化した group_lifecycle の前提の部分集合で、
+// lifecycle 操作の前提は group_lifecycle と同じ条件に、衝突・記録の欠け・違反の扱いを加えたもので
+// （「通常操作の前提と効果」と「通常操作」の節に書く）、直属の子の終了は Group にだけ求める。
 // lifecycle・包含・dependency の規則は group_lifecycle を正とする。実装の読取側の判定（check_operation）は、
 // 免除を結果が違反を増やさない場合に限って与え、統合で子を持った Issue の終了に直属の子の終了を要求する点で
 // このモデルの前提より狭いが、違反を増やさない検査を合わせた操作の可否はこのモデルと同じ。
+// 到達しにくい経路は record_integration_paths が補う。
+// 対応する契約: ../docs/reference/storage.md
 module record_integration {
   type Id = int
   type Replica = int
@@ -192,8 +195,9 @@ module record_integration {
   }
   pure def structurallyValid(v: View): bool = v.violations.size() == 0
   pure def valid(v: View): bool = noConflicts(v) and structurallyValid(v)
-  // 違反に含まれる Entity。修復のため、この Entity については終了した親の配下の固定と
-  // Completed の dependency の固定を免除する。
+  // 違反に含まれる Entity。修復のため、この Entity については親が終了しているか現在値を持たない場合の固定と、
+  // Completed の dependency の固定（Completed の Entity の dependency の削除と、Completed の依存元を持つ Entity の
+  // Reopen）を免除する。
   pure def inViolation(v: View, e: Id): bool = v.violations.exists(x => violated(x) == e)
 
   // ---- 通常操作の前提と効果（一つの replica の settled な現在値に対して）----

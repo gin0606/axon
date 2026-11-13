@@ -3,6 +3,7 @@
 // 通常探索では、同じ Entity への両側の操作と取り込みが噛み合う経路や、
 // 構造の不整合を作ってから直す経路に到達しにくいため、それらを狙う。
 // 探索の選び方であって、製品の workflow を定めるものではない。
+// 対応する契約: ../docs/reference/storage.md
 module record_integration_paths {
   import record_integration.* from "record_integration"
 
