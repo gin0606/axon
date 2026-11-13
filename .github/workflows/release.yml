@@ -90,9 +90,11 @@ jobs:
           cp "target/$TARGET/release/axon" LICENSE "$directory/"
           tar -czf "$directory.tar.gz" "$directory"
       - name: Install cargo-bundle
+        # 入れる時間を縮めるため debug ビルドで入れる。最適化しないのは cargo-bundle 自身だけで、
+        # アプリは cargo-bundle が中で `cargo build --release` して作る。
         run: |
           version=$(sed -n 's/^"cargo:cargo-bundle" = "\(.*\)"$/\1/p' mise.toml)
-          cargo install cargo-bundle --locked --version "$version"
+          cargo install cargo-bundle --locked --debug --version "$version"
       - name: Build and check the desktop app
         run: |
           scripts/bundle-gui --target "$TARGET"
