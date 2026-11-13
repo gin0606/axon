@@ -24,11 +24,7 @@ Rust fileがstagedされているcommitでは、Lefthookが [lefthook.yml](../..
 
 ## Rust coverage
 
-`mise.toml` で固定した `cargo-llvm-cov` を使い、全target・全featureを次の一つのcommandで計測する。数値thresholdは設けず、未到達箇所を次の改善判断へ使う。
-
-```sh
-cargo llvm-cov --locked --all-targets --all-features --summary-only
-```
+coverageは [scripts/coverage](../../scripts/coverage) で計測する。数値thresholdは設けず、未到達箇所を次の改善判断へ使う。
 
 全test targetを実行し、coverage用にtest自体をskipしない。意図的に途中終了させる子processだけは、merge不能なprofileを生成しないようcoverage出力を破棄する。親testは通常どおり実行し、終了code、lock解放、公開済みfileの完全性、失敗境界を検証する。通常の `cargo test` ではこのprofile制御は作用しない。
 

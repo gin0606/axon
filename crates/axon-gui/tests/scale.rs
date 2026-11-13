@@ -4,6 +4,8 @@
 //! ```sh
 //! AXON_GUI_SCALE_DIR=<dir> cargo test --release -p axon-gui --test scale -- --ignored --nocapture
 //! ```
+//!
+//! Quit any app that has `<dir>/data` open first: the test takes the same single-instance lock.
 
 use axon_gui::{AxonApp, board::Layout, project::AppData};
 use gpui_kit::test::TestWindowExt;

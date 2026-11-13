@@ -52,7 +52,7 @@ headless UI テストで確かめている振る舞いは `crates/axon-gui` の�
 
 2026-10-07、macOS 27.0.1（Apple M6、メモリ 32 GB）、Rust 1.98.0、release build で、閲覧専用にした版（記録を変更する操作と、詳細の操作の可否の検査を取り除いた後）の大量の記録での資源使用を次のように測った。比較に挙げる 2026-10-06 の値は、macOS 27.0.1（Apple Silicon）で、合成した記録を当時のアプリ専用の保存先に置く手順で同じ形のデータを測ったもので、「対策後」は一覧が表示範囲の行だけを組み立て、詳細が操作の可否の検査を含んでいた版、「対策前」は一覧が全行を組み立て、詳細の検査ごとに記録全体から view を導出し直していた版である。
 
-- データ: 一時的な管理 root に library で合成した 5,000 Entity（上位 Group 110 がそれぞれ Group 4 × Issue 10 を持ち、上位 Issue 50）、Note 3,300、記録 12,700 件。完了・着手中・未着手・未判断の Issue と Group 内の依存を含む。比較に同じ形の 500 Entity（上位 Group 10、記録 1,200 件）も使った。合成と純粋な導出の計時は `cargo run --release -p axon-gui --example scale -- <dir> [上位 Group 数]` で行う。`<dir>` は絶対パスで、なければ管理 root `<dir>/root` に合成し、データの保存場所 `<dir>/data` に登録してから測る。window の描画と操作の計時は、同じ `<dir>` を開いたアプリを閉じてから（計時も単一起動 lock を取るため） `AXON_GUI_SCALE_DIR=<dir> cargo test --release -p axon-gui --test scale -- --ignored --nocapture` で行い、実機では `AXON_GUI_DATA_DIR=<dir>/data cargo run --release -p axon-gui` で開く。
+- データ: 一時的な管理 root に library で合成した 5,000 Entity（上位 Group 110 がそれぞれ Group 4 × Issue 10 を持ち、上位 Issue 50）、Note 3,300、記録 12,700 件。完了・着手中・未着手・未判断の Issue と Group 内の依存を含む。比較に同じ形の 500 Entity（上位 Group 10、記録 1,200 件）も使った。合成と計時の手順は [examples/scale.rs](../../crates/axon-gui/examples/scale.rs) と [tests/scale.rs](../../crates/axon-gui/tests/scale.rs) の冒頭にある。
 - 読込（保存先の読み取り・解析・view の導出、background）: 5,000 Entity で 218 ms（うち view の導出 22 ms）、500 Entity で 19 ms（同 1.3 ms）。続く board（一覧と詳細の元になる値）の導出は 8.2 ms / 0.53 ms。
 - 絞り込み・検索・階層とフラットの切り替え（行の並びの導出）: 5,000 Entity で、条件ごとの中央値が 0.36〜0.60 ms（最大 0.75 ms）。
 - 詳細の導出（UI thread）: 5,000 Entity で 0.37〜0.47 ms、500 Entity で 0.02〜0.07 ms。2026-10-06 の対策後の版では 23〜150 ms、対策前は 130〜310 ms だった。

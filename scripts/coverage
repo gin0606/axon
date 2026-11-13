@@ -1,0 +1,8 @@
+#!/bin/sh
+# mise.toml で固定した cargo-llvm-cov で、Rust の全 target・全 feature の coverage を計測する。
+# 引数は cargo llvm-cov にそのまま渡す。
+set -eu
+
+cd "$(dirname "$0")/.."
+
+exec cargo llvm-cov --locked --all-targets --all-features --summary-only "$@"
