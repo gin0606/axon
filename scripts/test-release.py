@@ -61,16 +61,19 @@ class ReleaseTests(unittest.TestCase):
         git("commit", "--allow-empty", "-m", "Unmerged change")
         self.assertNotEqual(validate("v0.1.0").returncode, 0)
 
-    def test_formula_checksums_and_rollback_guard(self):
+    def test_formula_is_apple_silicon_only_with_rollback_guard(self):
         formula = self.root / "axon.rb"
-        for cpu in ("aarch64", "x86_64"):
-            (self.root / f"axon-v0.2.0-{cpu}-apple-darwin.tar.gz").write_bytes(cpu.encode())
+        (self.root / "axon-v0.2.0-aarch64-apple-darwin.tar.gz").write_bytes(b"aarch64")
         formula.write_text('  version "0.1.9"\n')
         release.write_formula("0.2.0", self.root, formula)
         text = formula.read_text()
-        for cpu in ("aarch64", "x86_64"):
-            self.assertIn(hashlib.sha256(cpu.encode()).hexdigest(), text)
-            self.assertIn(f"{cpu}-apple-darwin.tar.gz", text)
+        self.assertIn(f'sha256 "{hashlib.sha256(b"aarch64").hexdigest()}"', text)
+        self.assertIn("-aarch64-apple-darwin.tar.gz", text)
+        self.assertEqual((text.count("  url "), text.count("  sha256 ")), (1, 1))
+        self.assertLess(text.index('  version "0.2.0"'), text.index("  url "))
+        self.assertNotIn("x86_64", text)
+        self.assertNotIn("intel", text)
+        self.assertIn("depends_on arch: :arm64", text)
         self.assertIn("depends_on macos: :sequoia", text)
         release.check_formula_version("0.2.0", formula)
         release.check_formula_version("0.10.0", formula)
@@ -81,22 +84,24 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             release.check_formula_version("0.2.0", formula)
 
-    def test_cask_checksums_per_cpu_and_rollback_guard(self):
+    def test_cask_is_apple_silicon_only_with_rollback_guard(self):
         cask = self.root / "Casks/axon-gui.rb"
-        for cpu in ("aarch64", "x86_64"):
-            (self.root / f"axon-gui-v0.2.0-{cpu}-apple-darwin.zip").write_bytes(cpu.encode())
+        (self.root / "axon-gui-v0.2.0-aarch64-apple-darwin.zip").write_bytes(b"aarch64")
         release.write_cask("0.2.0", self.root, cask)
         text = cask.read_text()
-        self.assertIn(f'arm:   "{hashlib.sha256(b"aarch64").hexdigest()}"', text)
-        self.assertIn(f'intel: "{hashlib.sha256(b"x86_64").hexdigest()}"', text)
+        self.assertIn(f'sha256 "{hashlib.sha256(b"aarch64").hexdigest()}"', text)
+        self.assertIn("-aarch64-apple-darwin.zip", text)
+        self.assertEqual((text.count("  url "), text.count("  sha256 ")), (1, 1))
+        self.assertNotIn("x86_64", text)
+        self.assertNotIn("intel", text)
         self.assertIn('version "0.2.0"', text)
         self.assertIn('app "Axon.app"', text)
+        self.assertIn("depends_on arch: :arm64", text)
         self.assertIn("depends_on macos: :sequoia", text)
         with self.assertRaises(ValueError):
             release.write_cask("0.1.9", self.root, cask)
         self.assertEqual(cask.read_text(), text)
         (self.root / "axon-gui-v0.3.0-aarch64-apple-darwin.zip").write_bytes(b"")
-        (self.root / "axon-gui-v0.3.0-x86_64-apple-darwin.zip").write_bytes(b"x")
         with self.assertRaises(ValueError):
             release.write_cask("0.3.0", self.root, cask)
 
@@ -119,9 +124,8 @@ elif args[:2] == ["release", "download"]:
         gh.chmod(0o755)
         artifacts = self.root / "artifacts"
         artifacts.mkdir()
-        for cpu in ("aarch64", "x86_64"):
-            (artifacts / f"axon-v0.1.0-{cpu}-apple-darwin.tar.gz").write_bytes(b"rebuilt bytes")
-            (artifacts / f"axon-gui-v0.1.0-{cpu}-apple-darwin.zip").write_bytes(b"rebuilt bytes")
+        (artifacts / "axon-v0.1.0-aarch64-apple-darwin.tar.gz").write_bytes(b"rebuilt bytes")
+        (artifacts / "axon-gui-v0.1.0-aarch64-apple-darwin.zip").write_bytes(b"rebuilt bytes")
         result = subprocess.run(
             ["bash", str(SCRIPTS / "publish-release.sh")], cwd=self.root,
             env={**os.environ, "PATH": f"{self.root}:{os.environ['PATH']}",
@@ -135,7 +139,7 @@ elif args[:2] == ["release", "download"]:
     def test_published_assets_are_only_downloaded_on_retry(self):
         result, calls = self.publish("published")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual([call[:2] for call in calls[1:]], [["release", "download"]] * 4)
+        self.assertEqual([call[:2] for call in calls[1:]], [["release", "download"]] * 2)
         release.write_formula("0.1.0", self.root / "published", self.root / "axon.rb")
         self.assertIn(hashlib.sha256(b"published bytes").hexdigest(), (self.root / "axon.rb").read_text())
         release.write_cask("0.1.0", self.root / "published", self.root / "axon-gui.rb")
@@ -155,9 +159,9 @@ elif args[:2] == ["release", "download"]:
         result, calls = self.publish("")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([call[:2] for call in calls[1:]], [
-            ["release", "create"], ["run", "download"], ["run", "download"],
-            *[["release", "upload"]] * 4,
-            ["release", "edit"], *[["release", "download"]] * 4,
+            ["release", "create"], ["run", "download"],
+            *[["release", "upload"]] * 2,
+            ["release", "edit"], *[["release", "download"]] * 2,
         ])
 
 

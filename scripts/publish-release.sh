@@ -5,9 +5,7 @@ set -euo pipefail
 tag="v${VERSION}"
 expected=(
   "axon-${tag}-aarch64-apple-darwin.tar.gz"
-  "axon-${tag}-x86_64-apple-darwin.tar.gz"
   "axon-gui-${tag}-aarch64-apple-darwin.zip"
-  "axon-gui-${tag}-x86_64-apple-darwin.zip"
 )
 
 # A failed API request must not be mistaken for an absent release.
@@ -21,9 +19,7 @@ esac
 
 if [ "$state" != published ]; then
   mkdir -p artifacts
-  for target in aarch64-apple-darwin x86_64-apple-darwin; do
-    gh run download "$GITHUB_RUN_ID" --name "axon-$target" --dir artifacts
-  done
+  gh run download "$GITHUB_RUN_ID" --name axon-aarch64-apple-darwin --dir artifacts
   for name in "${expected[@]}"; do
     test -s "artifacts/$name"
   done

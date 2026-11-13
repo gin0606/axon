@@ -76,4 +76,4 @@ headless UI テストで確かめている振る舞いは `crates/axon-gui` の�
 - `AXON_GUI_DATA_DIR` を指定しない、既定の保存場所での実機の起動。
 - 実機の画面での大量の記録のスクロールとフレーム時間。
 - Linux と Windows でのウィンドウ表示と入力。Linux は CI のビルドと headless テストだけを対象にする。
-- macOS 15・26 と Intel Mac での起動。
+- macOS 15・26 での起動。

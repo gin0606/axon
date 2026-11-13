@@ -38,7 +38,7 @@ axon condition set ID --command 'test -f ready.txt'
 
 ## インストール
 
-macOS 15（Sequoia）以上の Apple Silicon / Intel と [Homebrew](https://brew.sh) が必要です。
+macOS 15（Sequoia）以上の Apple Silicon と [Homebrew](https://brew.sh) が必要です。
 
 ```sh
 brew install gin0606/tap/axon

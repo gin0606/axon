@@ -4,7 +4,7 @@ AxonはIssueとGroupを一つのlifecycleで管理します。以下はHomebrew�
 
 ## インストールと対応環境
 
-配布バイナリはmacOS 15（Sequoia）以上のApple Silicon / Intelに対応します。[Homebrew](https://brew.sh)で導入でき、Rustは不要です。LinuxとWSL2はソースビルドでの未検証のbest effort、native Windowsは非対応です。
+配布バイナリはmacOS 15（Sequoia）以上のApple Siliconに対応します。[Homebrew](https://brew.sh)で導入でき、Rustは不要です。LinuxとWSL2はソースビルドでの未検証のbest effort、native Windowsは非対応です。
 
 ```sh
 brew install gin0606/tap/axon

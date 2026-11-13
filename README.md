@@ -38,7 +38,7 @@ Only conditions approved on this machine run. Setting one approves it; a conditi
 
 ## Install
 
-On macOS 15 (Sequoia) or later, with Apple Silicon or Intel and [Homebrew](https://brew.sh):
+On macOS 15 (Sequoia) or later, with Apple Silicon and [Homebrew](https://brew.sh):
 
 ```sh
 brew install gin0606/tap/axon

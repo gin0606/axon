@@ -63,20 +63,12 @@ jobs:
 
   build:
     needs: validate
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            target: aarch64-apple-darwin
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-15
     environment: release
     env:
       MACOSX_DEPLOYMENT_TARGET: "15.0"
       VERSION: ${{ needs.validate.outputs.version }}
-      TARGET: ${{ matrix.target }}
+      TARGET: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -119,10 +111,10 @@ jobs:
         run: ditto -c -k --keepParent "target/$TARGET/release/bundle/osx/Axon.app" "axon-gui-v${VERSION}-${TARGET}.zip"
       - uses: actions/upload-artifact@v7.0.2
         with:
-          name: axon-${{ matrix.target }}
+          name: axon-${{ env.TARGET }}
           path: |
-            axon-v${{ env.VERSION }}-${{ matrix.target }}.tar.gz
-            axon-gui-v${{ env.VERSION }}-${{ matrix.target }}.zip
+            axon-v${{ env.VERSION }}-${{ env.TARGET }}.tar.gz
+            axon-gui-v${{ env.VERSION }}-${{ env.TARGET }}.zip
           if-no-files-found: error
 
   publish:
@@ -181,11 +173,7 @@ jobs:
 
   verify-homebrew:
     needs: [validate, publish]
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-15, macos-15-intel]
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-15
     env:
       VERSION: ${{ needs.validate.outputs.version }}
     steps:

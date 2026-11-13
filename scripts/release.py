@@ -26,14 +26,10 @@ def check_formula_version(version, formula):
             raise ValueError(f"tap already contains newer version {current[1]}")
 
 
-def checksums(assets, name):
-    result = {}
-    for cpu in ("aarch64", "x86_64"):
-        archive = assets / name(cpu)
-        if archive.stat().st_size == 0:
-            raise ValueError(f"empty archive: {archive}")
-        result[cpu] = hashlib.sha256(archive.read_bytes()).hexdigest()
-    return result
+def checksum(archive):
+    if archive.stat().st_size == 0:
+        raise ValueError(f"empty archive: {archive}")
+    return hashlib.sha256(archive.read_bytes()).hexdigest()
 
 
 def validate_tag(tag):
@@ -53,24 +49,18 @@ def validate_tag(tag):
 
 def write_formula(version, assets, formula):
     check_formula_version(version, formula)
-    sums = checksums(assets, lambda cpu: f"axon-v{version}-{cpu}-apple-darwin.tar.gz")
+    sha256 = checksum(assets / f"axon-v{version}-aarch64-apple-darwin.tar.gz")
+    # The url interpolates #{version}, which is empty until version is declared.
     formula.write_text(f'''class Axon < Formula
   desc "Local issue tracker for Issues and Groups"
   homepage "https://github.com/gin0606/axon"
   version "{version}"
+  url "https://github.com/gin0606/axon/releases/download/v#{{version}}/axon-v#{{version}}-aarch64-apple-darwin.tar.gz"
+  sha256 "{sha256}"
   license "MIT"
 
+  depends_on arch: :arm64
   depends_on macos: :sequoia
-
-  on_macos do
-    if Hardware::CPU.arm?
-      url "https://github.com/gin0606/axon/releases/download/v#{{version}}/axon-v#{{version}}-aarch64-apple-darwin.tar.gz"
-      sha256 "{sums['aarch64']}"
-    elsif Hardware::CPU.intel?
-      url "https://github.com/gin0606/axon/releases/download/v#{{version}}/axon-v#{{version}}-x86_64-apple-darwin.tar.gz"
-      sha256 "{sums['x86_64']}"
-    end
-  end
 
   def install
     bin.install "axon"
@@ -89,20 +79,18 @@ end
 
 def write_cask(version, assets, cask):
     check_formula_version(version, cask)
-    sums = checksums(assets, lambda cpu: f"axon-gui-v{version}-{cpu}-apple-darwin.zip")
+    sha256 = checksum(assets / f"axon-gui-v{version}-aarch64-apple-darwin.zip")
     cask.parent.mkdir(parents=True, exist_ok=True)
     cask.write_text(f'''cask "axon-gui" do
-  arch arm: "aarch64", intel: "x86_64"
-
   version "{version}"
-  sha256 arm:   "{sums['aarch64']}",
-         intel: "{sums['x86_64']}"
+  sha256 "{sha256}"
 
-  url "https://github.com/gin0606/axon/releases/download/v#{{version}}/axon-gui-v#{{version}}-#{{arch}}-apple-darwin.zip"
+  url "https://github.com/gin0606/axon/releases/download/v#{{version}}/axon-gui-v#{{version}}-aarch64-apple-darwin.zip"
   name "Axon"
   desc "Desktop app for browsing Axon issue trackers"
   homepage "https://github.com/gin0606/axon"
 
+  depends_on arch: :arm64
   depends_on macos: :sequoia
 
   app "Axon.app"
