@@ -71,7 +71,7 @@ axon import check new-plan.yaml
 axon import apply new-plan.yaml
 ```
 
-`axon import prepare` は保存先を変えず、最終IDを割り当て、外部参照を再生成して同じfileをcanonical形式に置き換えます。新規recordの `key -> 完全ID` の対応も一行ずつ表示します。コメントは保持しません。`axon import check` はfileも保存先も変えず、作成・titleの前後・descriptionの変更有無・labelの前後・親の前後・依存の増減を表示します。titleの改行や制御文字は`axon list`と同じ規則で可視化され、一行で表示されます。本文の全文はfile自体の差分で確認してください。`axon import apply` は最新の保存状態で再検証して全件を原子的に反映し、成功後に同じfileの `base` などを更新し、更新前に新規だったrecordの `key -> 完全ID` も表示します。終了コード0と期待した成功出力で反映を確認できれば、確認のための再 `axon import check` は不要です。
+`axon import prepare` は保存先を変えず、最終IDを割り当て、外部参照を再生成して同じfileをcanonical形式に置き換えます。新規recordの `key -> 完全ID` の対応も一行ずつ表示します。コメントは保持しません。`axon import check` はfileも保存先も変えず、Entityごとに作成か、title・description・label・親・依存の変更を表示します。保存先にあるEntityは、title・description・label・親のうち変わらない項目を`unchanged`、内容が同じなら`No changes.`と示します（表示の詳細は[Declaration](../reference/declaration.md#preparecheckapply)）。titleの改行や制御文字は`axon list`と同じ規則で可視化され、一行で表示されます。本文の全文はfile自体の差分で確認してください。`axon import apply` は最新の保存状態で再検証して全件を原子的に反映し、成功後に同じfileの `base` などを更新し、更新前に新規だったrecordの `key -> 完全ID` も表示します。終了コード0と期待した成功出力で反映を確認できれば、確認のための再 `axon import check` は不要です。
 
 ### 登録後の計画を修正する
 

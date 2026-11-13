@@ -151,7 +151,7 @@ fingerprint には declaration が見せる項目だけを含める。記録 ID 
 2. `base` と保存先の現在値の照合、および新規 Entity の割り当て済み ID が保存先に存在しないことの確認。不一致または存在があれば後述の再試行の適用済み判定を行い、該当すれば以降の検証を省いて適用済みとして扱い、該当しなければ競合とする。`base` が一致するのに file の `lifecycle` が現在値と異なれば、読み取り専用項目の書き換えとして拒否する
 3. 参照先の存在
 4. 検証に使う記録の集合へ編集を共通コアの通常操作として仮に適用し、包含・dependency・終了構成・固定された文面と label の制約を通常操作と同じ意味で検査
-5. 作成、title・label・parent の前後、description の変更有無、`needs` の増減を Entity ごとに表示し、適用後の状況欄を保存情報から導出できる範囲で表示
+5. Entity ごとに差分を表示し、適用後の状況欄を保存情報から導出できる範囲で表示。保存先にある Entity は、内容が同じなら `No changes.`、違えば title・label・parent を変わらなければ `unchanged`、変われば前後（title は改行・制御文字を可視化して一行）で、description を `changed`・`unchanged` で、`needs` の増減を `+ ID`・`- ID` で示す。保存先にまだない Entity は `Create` と kind に続けて、title・description を `new`、label・parent を値で、`needs` を `+ ID` で示す。parent がなければ `null` と示す。全 Entity の保存先の値が宣言の最終値と一致し、いずれかが file の `base` と異なる場合（中断した `apply` の [再試行](#再試行) など）は、最初に `Already applied.` を示す
 
 再浮上条件は実行しない。一件でも error があれば適用可能とは表示しない。
 

@@ -33,9 +33,15 @@ final value. Prepare, Check and Apply reject a different value as a conflict:
 new id already exists. It may already have been applied: export that ID into a
 separate file with axon export and transfer your edits. To intentionally create
 a new Entity, set id: null on the new record.
-Check shows old -> new titles on one line (newlines as \n and controls escaped),
-description changed/unchanged, old -> new labels, and relationship changes
-without writing.
+Check writes nothing. For an Entity already in storage it shows title, label
+and parent as unchanged or old -> new (titles on one line, newlines as \n and
+controls escaped), description as changed or unchanged, and needs as + ID or
+as - ID; one with no difference shows No changes. An Entity not yet in storage
+shows Create and its kind, title: new, description: new, its label and parent,
+and + ID per need. A missing parent shows as null. Each Entity ends with its
+situation after the apply, without evaluating conditions. When every Entity
+is already stored with its declared final value and some differs from its base,
+as on a retry of an interrupted apply, the first line is Already applied.
 Apply validates everything, saves one stored record file per changed Entity
 and rewrites the declaration; a retry finishes an interrupted save per Entity.
 Exit status 0 and the success output confirm the apply; no follow-up check is

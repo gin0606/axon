@@ -201,7 +201,7 @@ pub(super) enum Import {
     },
     /// Validate canonical FILE and display changes without writing or running conditions
     #[command(
-        after_help = "Example: axon import check plan.yaml\nReview title changes, description change indicators, label changes and relationship changes.\nNext, after reviewing: axon import apply plan.yaml"
+        after_help = "Example: axon import check plan.yaml\nReview each Entity's creation or its title, description, label, parent and needs changes.\nNext, after reviewing: axon import apply plan.yaml"
     )]
     Check {
         /// Declaration YAML file prepared by axon import prepare
