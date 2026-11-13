@@ -94,7 +94,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual((text.count("  url "), text.count("  sha256 ")), (1, 1))
         self.assertNotIn("x86_64", text)
         self.assertNotIn("intel", text)
-        self.assertIn('version "0.2.0"', text)
+        self.assertLess(text.index('  version "0.2.0"'), text.index("  url "))
         self.assertIn('app "Axon.app"', text)
         self.assertIn("depends_on arch: :arm64", text)
         self.assertIn("depends_on macos: :sequoia", text)
