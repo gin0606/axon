@@ -17,18 +17,6 @@
       "category": "Productivity"
     },
     {
-      "name": "axon",
-      "source": {
-        "source": "local",
-        "path": "./plugins/axon"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Productivity"
-    },
-    {
       "name": "axon-workflow",
       "source": {
         "source": "local",
