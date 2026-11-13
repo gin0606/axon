@@ -33,7 +33,26 @@ Groupの行の状況は、保存値が`Undecided`・`Completed`・`Cancelled`な
 
 `axon note search QUERY` は終了Entityを含む全Note本文を条件実行なしで横断検索する。hyphenで始まる語句は `axon note search -- '--text'` と渡す。case-sensitiveなliteral部分一致でtrim・Unicode正規化はせず、空文字は構文エラー、非一致はstdout空・stderr案内で正常終了する。完全Entity ID・安定Note ID・日時・最初の一致の抜粋を1 Note＝1行で示し、`axon list`と同じEntityの順序と、Entity内の日時順（同時刻は記録ID順）を保つ。抜粋の省略側は…、改行・バックスラッシュ・制御文字は可視化する。原文は`axon note show ID NOTE_ID`で読む。`axon list`/`axon tasks`/`axon proposals`の検索にはNote本文を含めない。
 
-`axon note list ID` は全Noteの本文・安定ID・日時・actor、`axon note show ID NOTE_ID` は個別Noteを読む（`NOTE_ID`は完全な記録ID）。`axon log ID` は状態変更・編集・labelの設定・種類の変換・解決の経緯で、reasonを含みNoteを含まない。分岐の記録を時刻で一本の操作列へ並べ直さない。三つとも `--recorder-details` を付けると保存済みの記録者dataを取得する。`axon actor` は現在環境から取得した記録者、つまりこの環境で次に作る記録に付く記録者を、`--recorder-details` 付きの記録者の表示と同じ形式で示す（取得できなければ`—`）。`axon log ID --recorder-details` の記録者と見比べると、別のセッションが残した記録が分かる。読んだだけのセッションは記録を残さないので、その関与は分からない。dataの`session_id`は任意情報で欠けうり、欠けると同じactorの別のセッションと表示が一致して区別できない。actorだけを表示する古いbinaryの`axon actor`は、この見比べに使えない。`axon actor` は過去の記録者・所有者・今のwriterの終了を立証しない。
+`axon note list ID` は全Noteの本文・安定ID・日時・actor、`axon note show ID NOTE_ID` は個別Noteを読む（`NOTE_ID`は完全な記録ID）。`axon log ID` は状態変更・編集・labelの設定・所属・dependency・条件の変更・種類の変換・解決の経緯で、reasonを含みNoteを含まない。分岐の記録を時刻で一本の操作列へ並べ直さない。三つとも `--recorder-details` を付けると保存済みの記録者dataを取得する。`axon actor` は現在環境から取得した記録者、つまりこの環境で次に作る記録に付く記録者を、`--recorder-details` 付きの記録者の表示と同じ形式で示す（取得できなければ`—`）。`axon log ID --recorder-details` の記録者と見比べると、別のセッションが残した記録が分かる。読んだだけのセッションは記録を残さないので、その関与は分からない。dataの`session_id`は任意情報で欠けうり、欠けると同じactorの別のセッションと表示が一致して区別できない。actorだけを表示する古いbinaryの`axon actor`は、この見比べに使えない。`axon actor` は過去の記録者・所有者・今のwriterの終了を立証しない。
+
+## 読み取りで分かる範囲
+
+各手段で分かることと分からないことは次のとおり。成功出力で足りる場合と読み直す場合は [保存操作](mutations.md#成功とno-op) に従う。
+
+| 手段 | 分かること | 分からないこと |
+| --- | --- | --- |
+| 成功出力 | 対象ID、適用した作用、遷移後の保存lifecycle、作成・Note追記で振られたID | Groupの実効lifecycle（対象・祖先とも）、直接dependent・候補一覧などへの波及、入力した本文などの全項目 |
+| `axon list` | 終了を含む全Entityの行（ID・種類・状況・label・タイトル）。`--lifecycle`は実効値で絞り込む | 本文、関係、Note、履歴。条件を評価しない |
+| `axon show ID` | 本文、Note件数、所属、未充足の前提、Groupの全子孫ツリー。`--details`は未充足の前提の代わりに、条件、親・全直接dependency・直接dependent、Groupの実効値と保存値を示す | Noteの本文（`axon note list`）、履歴 |
+| `axon log ID` | 状態変更・編集・labelの設定・所属・dependency・条件の変更・種類の変換・解決の経緯、reason、記録者 | Note、編集後の本文、子孫によるGroupの実効lifecycleの変化（下の限界） |
+| `axon export ID...` | 対象と（Groupなら終了済みを含む）全子孫のtitle・description・label・親・needs・保存lifecycle、編集集合外の参照 | 実効lifecycle、条件、Note、履歴、編集集合外の直接dependent |
+| `axon storage check` | 保存先の破損・衝突・違反・gap | 個々のEntityの値 |
+
+読み取りには次の限界がある。
+
+- `axon log`は本文の編集を項目名（`Edited: title, description`など）だけで示す。変更後の内容は`axon show`か`axon export`で読む。
+- 子孫の着手・完了はGroup自身の記録を作らないため、Groupの実効lifecycleの変化はGroupの`axon log`に現れない。実効値は`axon show ID --details`や`axon list --lifecycle`などの導出済みの表示で読む。
+- 事前の読み取りは、読んだ後に保存値が変わらないことを保証しない。別writerが間に書き込みうる。状態遷移の可否と構造の制約は、CLIが書込時にlockの下で検査し、満たさなければ拒否する（[保存先と復旧](storage.md#通常writerと検査)）。
 
 ## 情報を混同しない
 

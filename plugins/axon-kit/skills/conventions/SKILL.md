@@ -39,7 +39,7 @@ helpで確かめても操作が非対応なら、`axon --version`で読んだver
 - 新規登録前に [作成と照合](references/creation.md)。
 - 初期化、統合後の検査、file障害では [保存先と復旧](references/storage.md)。
 
-対象、採用判断、作業選択、実装・review・commitの権限は呼び出し側workflowが与える。CLIが操作を受け付けることも権限の根拠ではない。与えられた効果は重ねて確認せず実行できるが、意味を変える未確定な判断は呼び出し側へ返す。
+対象、採用判断、作業選択、実装・review・commitの権限は呼び出し側workflowが与える。操作の前にいつ何を読むかも呼び出し側workflowが決め、kitは各読み取り手段で分かる範囲を [モデルと参照](references/model.md#読み取りで分かる範囲) で示す。ただし、各skillとreferenceが操作の前に明示的に求める確認・調査・保持（影響の調査、Groupの最終確認、結果不明に備えたID集合の保持など）は省かない。CLIが操作を受け付けることも権限の根拠ではない。与えられた効果は重ねて確認せず実行できるが、意味を変える未確定な判断は呼び出し側へ返す。
 
 保存情報は `axon list`・`axon show ID --details --skip-conditions`・`axon log ID`・`axon note list ID` で調べ（構文は [モデルと参照](references/model.md#読む目的から入口を選ぶ)）、外部条件の評価が必要なときだけ `axon proposals|tasks` と既定の `axon show` を使う。`axon show` は `--skip-conditions` を付けない限り対象の状況に必要な条件を評価する（実行するのは許可された条件だけ）ため、操作前の現在値確認や本文の取得には `--skip-conditions` を付け、状況の診断（浮上していない候補や祖先を含む詰まっている理由）には付けない（上の、`axon condition unapproved|allow`がないbinaryの場合を除く）。任意recorderは認証・lock・生存確認ではない。
 

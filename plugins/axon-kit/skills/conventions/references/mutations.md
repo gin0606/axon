@@ -2,7 +2,7 @@
 
 ## 初回実行前
 
-対象root・binary・引数・payloadを固定し、保存情報を読む。Entityは `axon show ID --details --skip-conditions`、判断理由はlog・必要なNote、構造変更やterminal化は親・子孫・直接dependentまで調べる。別writerやGit/editor操作との未調整競合があれば先に直列化または分離する。
+対象root・binary・引数・payloadを固定する。kitは一律の事前の読み取りを求めない（[共通契約](../SKILL.md#必要な契約を読む)）。構造変更やterminal化では、影響を受ける親・子孫・直接dependentを調べる。別writerやGit/editor操作との未調整競合があれば先に直列化または分離する。
 
 各mutationは単独のshell呼出しにし、その終了コードを個別確認する。後続commandの成功で失敗を隠さない。複数段階の状態・本文・関係変更は一つのtransactionではない。順序、各段階のpostconditionと適用済み範囲を保持する。
 

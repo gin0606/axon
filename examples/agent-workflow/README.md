@@ -56,7 +56,7 @@ $axon-workflow:start-group <採用済みGroupのID>
 - [plan](skills/plan/SKILL.md): 計画の作り方や本文の書式を変更する。
 - [start](skills/start/SKILL.md): 実装・検証の手順や、必要ならレビューを追加する。
 - [start-group](skills/start-group/SKILL.md): Issueの実行順とGroup全体の確認方法を変更する。
-- [実行の共通手順](references/execution.md): commit・継続・中断の方針を変更する。
+- [実行の共通手順](references/execution.md): Axonの操作前後の確認、commit・継続・中断の方針を変更する。
 
 コピーして独自pluginとして配布する場合は、両manifestの名前とskill内の`axon-workflow:`参照を変更します。
 
