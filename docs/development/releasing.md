@@ -4,7 +4,8 @@
 
 ## 決めごと
 
-- rootと `crates/axon-gui` の `Cargo.toml` の `version` を同じ値に手で上げ、mainへ統合してから、mainのcommitにタグを付けます。自動採番やversion更新commitは使いません。
+- versionは [Semantic Versioning](https://semver.org/) に従います。1.0.0より前は、Cargoと同じく互換性を壊す変更でminor、それ以外でpatchを上げます。
+- rootと `crates/axon-gui` の `Cargo.toml` の `version` を同じ値に手で上げ、mainへ統合してから、mainのcommitにタグを付けます。versionの自動採番や、ツールが作るversion更新commitは使いません。
 - 公開済みのものを直すときは、タグを付け直さず、新しいversionで公開します。
 
 ## リポジトリの外にある設定
